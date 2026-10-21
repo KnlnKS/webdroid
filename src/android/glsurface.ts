@@ -5,10 +5,9 @@ import { awaited, rt, JObj, stubs, driven, peerField, getDeclared, setDeclared, 
 import { vcall, type JThread, curThread, scall, after, iof, linkClass } from "../jvm/natives/jentry.ts";
 import { deref, handle, ownedHandle, release } from "./handles.ts";
 import { uptimeMillis } from "../guest-clock.ts";
-import { gl, tables, untracked } from "./gl.ts";
+import { gl, tables, untracked, activate, bindContext, currentContext } from "../native/gl-context.ts";
 import { vsync } from "./vsync.ts";
 import { perf } from "../perf.ts";
-import { bindEglCurrent, boundEglCurrent, glSurfaces } from "../native/egl-current.ts";
 import { nativeSurface, glSurfaceOf, type Surface } from "./surfaceflinger.ts";
 import { detached } from "../jvm/natives/jthrowable.ts";
 
@@ -54,7 +53,7 @@ export class EglContext {
     if (!this.gl || this.gl.isContextLost()) return false;
     if (s) this.fit(s);
     this.target = s;
-    bindEglCurrent(thread, this);
+    bindContext(thread, this);
     return true;
   }
   /** the drawing buffer takes the surface's buffer size; a new geometry applies from the next frame */
@@ -77,7 +76,7 @@ export class EglContext {
   }
 }
 export function setEglSwapInterval(interval: number, thread = curThread): number {
-  const context = boundEglCurrent(thread);
+  const context = currentContext(thread);
   if (!context) return eglFailure(0x3006, 0, thread);
   if (!context.target) return eglFailure(0x300d, 0, thread);
   context.target.swapInterval = Math.max(0, Math.min(1, interval));
@@ -147,8 +146,8 @@ export class NativeSurfaceTexture {
     detached(() => scall(SURFACE_TEXTURE, "postEventFromNative", "(Ljava/lang/ref/WeakReference;)V", this.weak));
   }
   /** EGLConsumer::checkAndUpdateEglStateLocked: the first use records the current context */
-  private eglState(contextCheck: boolean): boolean {
-    const current = glSurfaces.current;
+  private eglState(thread: object, contextCheck: boolean): boolean {
+    const current = activate(thread);
     if (!contextCheck) this.context ??= current;
     return current !== null && this.context === current;
   }
@@ -160,9 +159,9 @@ export class NativeSurfaceTexture {
     gl.bindTexture(gl.TEXTURE_2D, texture);
     if (texture && frame) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, frame);
   }
-  update(): number {
+  update(thread: object = curThread): number {
     if (this.abandoned) return NO_INIT;
-    if (!this.eglState(false)) return INVALID_OPERATION;
+    if (!this.eglState(thread, false)) return INVALID_OPERATION;
     const s = this.surface;
     if (!s.present || s.frames === this.latched) { this.bind(null); return 0; }
     this.latched = s.frames;
@@ -174,7 +173,7 @@ export class NativeSurfaceTexture {
   }
   releaseTexImage(): number {
     if (this.abandoned) return NO_INIT;
-    if (this.attached && !this.eglState(true)) return INVALID_OPERATION;
+    if (this.attached && !this.eglState(curThread, true)) return INVALID_OPERATION;
     if (this.current) {
       this.current = false;
       this.timestamp = 0n;
@@ -183,9 +182,9 @@ export class NativeSurfaceTexture {
     return 0;
   }
   /** a detach deletes the texture in the current context; an attach binds the current image to a new one */
-  detach(): number {
+  detach(thread: object = curThread): number {
     if (this.abandoned) return NO_INIT;
-    const current = glSurfaces.current;
+    const current = activate(thread);
     if (!this.attached || (this.context && this.context !== current)) return INVALID_OPERATION;
     const t = tables().textures;
     if (current && gl && t[this.texName]) { gl.deleteTexture(t[this.texName]!); t[this.texName] = null; }
@@ -193,9 +192,9 @@ export class NativeSurfaceTexture {
     this.attached = false;
     return 0;
   }
-  attach(texName: number): number {
+  attach(texName: number, thread: object = curThread): number {
     if (this.abandoned) return NO_INIT;
-    const current = glSurfaces.current;
+    const current = activate(thread);
     if (this.attached || !current) return INVALID_OPERATION;
     this.texName = texName;
     this.bind(this.current ? this.surface.present : null);
@@ -210,7 +209,8 @@ export class NativeSurfaceTexture {
     s.present?.close();
     s.present = null;
     s.onFrame = undefined;
-    if (glSurfaces.current?.target === s) glSurfaces.current.target = null;
+    const current = currentContext(curThread);
+    if (current?.target === s) current.target = null;
   }
 }
 const SURFACE_TEXTURE = "android/graphics/SurfaceTexture";
@@ -358,13 +358,13 @@ rt.register({
     "eglMakeCurrent(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLSurface;Ljavax/microedition/khronos/egl/EGLSurface;Ljavax/microedition/khronos/egl/EGLContext;)Z":
       (display: unknown, draw: JEGLSurface | null, _r: unknown, ctx: JEGLContext | null) => {
         if (!egl10DisplayValid(display)) return eglFailure(EGL_BAD_DISPLAY, 0);
-        if (!ctx || ctx === noEglContext) { bindEglCurrent(curThread, null); return 1; }
+        if (!ctx || ctx === noEglContext) { bindContext(curThread, null); return 1; }
         if (!ctx.egl.makeCurrent(draw?.surf ?? null)) return eglFailure(ctx.egl.gl?.isContextLost() ? 0x300e : 0x3006, 0);
         return 1;
       },
     "eglSwapBuffers(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLSurface;)Z":
       driven(function* (display: unknown, s: JEGLSurface | null): Gen {
-        const thread = curThread, c = glSurfaces.current;
+        const thread = curThread, c = currentContext(thread);
         if (!egl10DisplayValid(display)) return eglFailure(EGL_BAD_DISPLAY, 0, thread);
         if (!s?.surf || c?.target !== s.surf) return eglFailure(0x300d, 0, thread);
         return (yield* awaited(c.swap())) ? 1 : eglFailure(0x300e, 0, thread);
@@ -377,7 +377,7 @@ rt.register({
       },
     "eglDestroyContext(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLContext;)Z": (display: unknown, ctx: JEGLContext | null) => {
       if (!egl10DisplayValid(display)) return eglFailure(EGL_BAD_DISPLAY, 0);
-      if (ctx && boundEglCurrent(curThread) === ctx.egl) bindEglCurrent(curThread, null);
+      if (ctx && currentContext(curThread) === ctx.egl) bindContext(curThread, null);
       return 1;
     },
     "eglDestroySurface(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLSurface;)Z":
@@ -385,9 +385,9 @@ rt.register({
     "eglTerminate(Ljavax/microedition/khronos/egl/EGLDisplay;)Z":
       (display: unknown) => egl10DisplayValid(display) ? 1 : eglFailure(EGL_BAD_DISPLAY, 0),
     ...stubs(1, "eglWaitGL()Z", "eglWaitNative(ILjava/lang/Object;)Z"),
-    "eglGetCurrentDisplay()Ljavax/microedition/khronos/egl/EGLDisplay;": () => glSurfaces.current ? egl10Display : noEglDisplay,
+    "eglGetCurrentDisplay()Ljavax/microedition/khronos/egl/EGLDisplay;": () => currentContext(curThread) ? egl10Display : noEglDisplay,
     "eglGetCurrentContext()Ljavax/microedition/khronos/egl/EGLContext;": () => {
-      const current = glSurfaces.current;
+      const current = currentContext(curThread);
       if (!current) return noEglContext;
       let c = eglContexts.get(current);
       if (!c) { c = new JEGLContext(); c.egl = current; eglContexts.set(current, c); }
@@ -476,13 +476,13 @@ rt.registerJnis("android/opengl/EGL14", {
   "_eglCreateWindowSurfaceTexture(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLConfig;Ljava/lang/Object;[II)Landroid/opengl/EGLSurface;": windowSurface14,
   "eglMakeCurrent(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLSurface;Landroid/opengl/EGLSurface;Landroid/opengl/EGLContext;)Z": (display: JObj, draw: JObj, _read: JObj, context: JObj) => {
     if (!isDefault(display)) return eglFailure(0x3008, 0);
-    if (!handleOf(context)) { glSurfaces.current = null; return 1; }
+    if (!handleOf(context)) { bindContext(curThread, null); return 1; }
     const egl = ctxOf(context)?.egl;
     if (!egl || !egl.makeCurrent(surfOf(draw)?.surf ?? null)) return eglFailure(egl?.gl?.isContextLost() ? 0x300e : 0x3006, 0);
     return 1;
   },
   "eglGetCurrentContext()Landroid/opengl/EGLContext;": () => {
-    const current = glSurfaces.current;
+    const current = currentContext(curThread);
     if (!current) return noContext();
     let ctx = egl14Contexts.get(current);
     if (!ctx) egl14Contexts.set(current, ctx = { egl: current });
@@ -496,13 +496,13 @@ rt.registerJnis("android/opengl/EGL14", {
     if (attribute === 0x3028) value = 1;
     else if (attribute === 0x3097) value = 0x30a0;
     else if (attribute === 0x3098) value = egl.major;
-    else if (attribute === 0x3086) value = boundEglCurrent(curThread) === egl && egl.target ? 0x3084 : 0x3038;
+    else if (attribute === 0x3086) value = currentContext(curThread) === egl && egl.target ? 0x3084 : 0x3038;
     else return eglFailure(0x3004, 0);
     eglOut(out, offset, value);
     return 1;
   },
   "eglSwapBuffers(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLSurface;)Z": driven(function* (_display: JObj, surface: JObj): Gen {
-    const thread = curThread, context = glSurfaces.current, surf = surfOf(surface)?.surf;
+    const thread = curThread, context = currentContext(thread), surf = surfOf(surface)?.surf;
     if (!surf || context?.target !== surf) return eglFailure(0x300d, 0);
     return (yield* awaited(context.swap())) ? 1 : eglFailure(0x300e, 0, thread);
   }),
@@ -511,17 +511,18 @@ rt.registerJnis("android/opengl/EGL14", {
   "eglDestroySurface(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLSurface;)Z": (_display: JObj, surface: JObj) => {
     const s = surfOf(surface);
     if (!s?.surf) return eglFailure(0x300d, 0);
-    if (glSurfaces.current?.target === s.surf) glSurfaces.current.target = null;
+    const current = currentContext(curThread);
+    if (current?.target === s.surf) current.target = null;
     if (s.owned) s.surf.present?.close();
     s.surf = null; release(handleOf(surface)); return 1;
   },
   "eglDestroyContext(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLContext;)Z": (_display: JObj, context: JObj) => {
     const ctx = ctxOf(context);
     if (!ctx?.egl) return eglFailure(0x3006, 0);
-    if (glSurfaces.current === ctx.egl) glSurfaces.current = null;
+    if (currentContext(curThread) === ctx.egl) bindContext(curThread, null);
     egl14Contexts.delete(ctx.egl); ctx.egl = null; release(handleOf(context)); return 1;
   },
-  "eglReleaseThread()Z": () => { glSurfaces.current = null; takeEglError(); return 1; },
+  "eglReleaseThread()Z": () => { bindContext(curThread, null); takeEglError(); return 1; },
   "eglTerminate(Landroid/opengl/EGLDisplay;)Z": (display: JObj) => isDefault(display) ? 1 : eglFailure(0x3008, 0),
   "eglGetError()I": takeEglError,
 });

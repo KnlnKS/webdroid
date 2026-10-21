@@ -1,7 +1,8 @@
 // android.opengl.* → WebGL2. GL int handles ↔ WebGL objects via id tables.
 
 import { rt, isWaiting, noEffect, waits } from "../jvm/runtime.ts";
-import { curThread, threadSwitch } from "../jvm/natives/jentry.ts";
+import { curThread } from "../jvm/natives/jentry.ts";
+import { gl, tables, put, takeError, untracked, activate, type GL } from "../native/gl-context.ts";
 import { type JBuffer, readRemainingBytes, readBufferBytes, writeRemainingBytes, checkedRemainingOffset, position, limit, elementShift } from "../jvm/natives/jnio.ts";
 import { bitmapOf, ALPHA_8, RGB_565, ARGB_4444, ARGB_8888, RGBA_F16 } from "./bitmap.ts";
 import { gles1String } from "../native/gles1.ts";
@@ -10,89 +11,21 @@ import { activeUniformInfo, externalSamplersAs2D, textureTarget } from "../nativ
 import { pixelStore, pixelArray } from "../native/gles3-pixels.ts";
 import { perf } from "../perf.ts";
 
-// GL dispatch follows the cooperative Java/native thread without a lookup on every GL call.
-type GL = WebGL2RenderingContext | WebGLRenderingContext;
-export let gl: GL | null = null;
-
-// handle tables: index 1.. → object (0 = null/none, matching GL semantics). They belong to the
-// context that minted the handles, as EGL objects do: setGL re-selecting a context must keep
-// last frame's VBOs and textures, and a context seen for the first time starts empty — the
-// "EGL context lost" case renderers already reload from in onSurfaceCreated.
-type Tables = {
-  programs: (WebGLProgram | null)[]; shaders: (WebGLShader | null)[]; buffers: (WebGLBuffer | null)[];
-  textures: (WebGLTexture | null)[]; uniforms: (WebGLUniformLocation | null)[];
-  vaos: (WebGLVertexArrayObject | null)[]; fbos: (WebGLFramebuffer | null)[]; rbos: (WebGLRenderbuffer | null)[];
-  samplers: (WebGLSampler | null)[]; queries: (WebGLQuery | null)[]; syncs: (WebGLSync | null)[]; tfs: (WebGLTransformFeedback | null)[];
-  ids: WeakMap<object, number>; // object → handle, for the *_BINDING queries
-  /** the context's error flags: one raised host-side, reported before WebGL's; `clean` while WebGL
-   *  has latched none since it last answered NO_ERROR; `mixed` once a caller outside gles3 (whose
-   *  state tracking proves calls error-free) has used it */
-  err: number; clean: boolean; mixed: boolean;
-};
-const freshTables = (): Tables => ({ programs: [null], shaders: [null], buffers: [null], textures: [null], uniforms: [null],
-  vaos: [null], fbos: [null], rbos: [null], samplers: [null], queries: [null], syncs: [null], tfs: [null], ids: new WeakMap(), err: 0, clean: false, mixed: false });
-const tablesOf = new WeakMap<GL, Tables>();
-let T: Tables = freshTables();
-export const tables = (): Tables => T;
-const threadGL = new WeakMap<object, GL>();
-threadSwitch.hook = (thread) => selectGL(threadGL.get(thread) ?? null);
-export function setGL(ctx: GL | null, thread: object = curThread) {
-  if (ctx) threadGL.set(thread, ctx); else threadGL.delete(thread);
-  selectGL(ctx);
-}
-export function selectGL(ctx: GL | null) {
-  if (ctx === gl) return;
-  gl = ctx;
-  if (!ctx) return;
-  let t = tablesOf.get(ctx);
-  if (!t) tablesOf.set(ctx, t = freshTables());
-  T = t;
-}
-/**
- * glGetError. WebGL's getError waits for every queued GPU command (after a present, the whole
- * frame), so while the context is clean NO_ERROR is answered here. GL lets OUT_OF_MEMORY surface
- * late, and WebGL keeps its flags latched until asked, so an allocation that gles3 validated as
- * WebGL does reports a real OOM at the next query that reaches WebGL; Chrome usually loses the
- * context instead, which is always asked.
- */
-export function takeError(): number {
-  const e = T.err;
-  if (e) { T.err = 0; return e; }
-  if (!gl || (T.clean && !gl.isContextLost())) return 0;
-  const w = gl.getError();
-  T.clean = w === 0 && !T.mixed;
-  return w;
-}
-/** a call gles3 does not track reached the current context */
-export function untracked(): void { T.clean = false; T.mixed = true; }
-/** a tracked call WebGL may reject reached it: the next glGetError asks WebGL */
-export function unsure(): void { T.clean = false; }
-/** an error GL raises that WebGL would not: kept until glGetError, the first one winning as in GL */
-export function raise(e: number): void { T.err ||= e; }
-/** the Java bindings' natives, each marking the context untracked */
+/** the Java bindings' natives, each acting in its caller's context and marking it untracked */
 function bindings(table: Record<string, (...a: never[]) => unknown>): Record<string, (...a: never[]) => unknown> {
   return Object.fromEntries(Object.entries(table).map(([sig, fn]) => {
-    if (sig === "glGetError()I" || sig === "_nativeClassInit()V") return [sig, fn];
-    const bound = (...a: never[]) => { untracked(); return fn(...a); };
+    if (sig === "_nativeClassInit()V") return [sig, fn];
+    const bound = sig === "glGetError()I" ? (...a: never[]) => { activate(curThread); return fn(...a); }
+      : (...a: never[]) => { activate(curThread); untracked(); return fn(...a); };
     return [sig, isWaiting(fn) ? waits(bound) : bound];
   }));
 }
-export function put<O extends object>(tbl: (O | null)[], obj: O | null): number {
-  tbl.push(obj);
-  if (obj) T.ids.set(obj, tbl.length - 1);
-  return tbl.length - 1;
-}
 
-/** RPC continuations run before Wasm restores the strand's current GL context. */
+/** an RPC continuation acts in the context of the thread that waited for it */
 function afterGL<A,R>(value: A | Promise<A>, use: (value: A) => R): R | Promise<R> {
   if (!(value instanceof Promise)) return use(value);
-  const context = gl, table = T;
-  return value.then(value => {
-    const previous = gl, previousTable = T;
-    gl = context; T = table;
-    try { return use(value); }
-    finally { gl = previous; T = previousTable; }
-  });
+  const thread = curThread;
+  return value.then(value => { activate(thread); return use(value); });
 }
 function bytesFrom<R>(buf: JBuffer | null, use: (bytes: Uint8Array<ArrayBuffer> | null) => R, size?: number): R | Promise<R> {
   const remaining = buf ? (limit(buf) - position(buf)) * 2 ** elementShift(buf) : 0;
@@ -119,7 +52,7 @@ function integerValues(name: number): number | ArrayLike<number> {
   const v = gl?.getParameter(name);
   if (v && typeof v === "object") {
     if ("length" in v) return v as ArrayLike<number>;
-    return T.ids.get(v) ?? 0;
+    return tables().ids.get(v) ?? 0;
   }
   return Number(v ?? 0);
 }
@@ -133,7 +66,7 @@ function getIntegers(name: number, out: Int32Array, off: number): void {
 function getActive(query: (p: WebGLProgram, i: number) => WebGLActiveInfo | null) {
   return (p: number, idx: number, bufsize: number, length: Int32Array, lengthOff: number, size: Int32Array, sizeOff: number,
     type: Int32Array, typeOff: number, name: Int8Array, nameOff: number) => {
-    const info = gl && query(T.programs[p]!, idx);
+    const info = gl && query(tables().programs[p]!, idx);
     if (!info) return;
     const n = Math.min(info.name.length, bufsize - 1);
     for (let i = 0; i < n; i++) name[nameOff + i] = info.name.charCodeAt(i);
@@ -186,55 +119,55 @@ rt.registerJnis("android/opengl/GLES20", bindings({
   "glPolygonOffset(FF)V": (factor: number, units: number) => gl?.polygonOffset(factor, units),
   "glActiveTexture(I)V": (t: number) => gl?.activeTexture(t),
   "glPixelStorei(II)V": (name: number, p: number) => { if (gl) pixelStore(gl, name, p); },
-  "glCreateProgram()I": () => put(T.programs, gl?.createProgram() ?? null),
-  "glCreateShader(I)I": (type: number) => put(T.shaders, gl?.createShader(type) ?? null),
-  "glShaderSource(ILjava/lang/String;)V": (sh: number, src: string) => gl?.shaderSource(T.shaders[sh]!, externalSamplersAs2D(T.shaders[sh]!, src)),
-  "glCompileShader(I)V": (sh: number) => gl?.compileShader(T.shaders[sh]!),
-  "glAttachShader(II)V": (p: number, sh: number) => gl?.attachShader(T.programs[p]!, T.shaders[sh]!),
-  "glLinkProgram(I)V": (p: number) => gl?.linkProgram(T.programs[p]!),
-  "glUseProgram(I)V": (p: number) => gl?.useProgram(p ? T.programs[p]! : null),
+  "glCreateProgram()I": () => put(tables().programs, gl?.createProgram() ?? null),
+  "glCreateShader(I)I": (type: number) => put(tables().shaders, gl?.createShader(type) ?? null),
+  "glShaderSource(ILjava/lang/String;)V": (sh: number, src: string) => gl?.shaderSource(tables().shaders[sh]!, externalSamplersAs2D(tables().shaders[sh]!, src)),
+  "glCompileShader(I)V": (sh: number) => gl?.compileShader(tables().shaders[sh]!),
+  "glAttachShader(II)V": (p: number, sh: number) => gl?.attachShader(tables().programs[p]!, tables().shaders[sh]!),
+  "glLinkProgram(I)V": (p: number) => gl?.linkProgram(tables().programs[p]!),
+  "glUseProgram(I)V": (p: number) => gl?.useProgram(p ? tables().programs[p]! : null),
   // A deleted slot is dropped: WebGL rejects a deleted object where GL would silently mint a
   // fresh one under the same name, so a stale slot would turn the next bind into an error.
-  "glDeleteShader(I)V": (sh: number) => { const o = T.shaders[sh]; if (o) { gl?.deleteShader(o); T.shaders[sh] = null; } },
-  "glDeleteProgram(I)V": (p: number) => { const o = T.programs[p]; if (o) { gl?.deleteProgram(o); T.programs[p] = null; } },
+  "glDeleteShader(I)V": (sh: number) => { const o = tables().shaders[sh]; if (o) { gl?.deleteShader(o); tables().shaders[sh] = null; } },
+  "glDeleteProgram(I)V": (p: number) => { const o = tables().programs[p]; if (o) { gl?.deleteProgram(o); tables().programs[p] = null; } },
   "glGetShaderiv(II[II)V": (sh: number, pname: number, out: Int32Array, off: number) => {
-    out[off] = glParamToInt(gl?.getShaderParameter(T.shaders[sh]!, pname));
+    out[off] = glParamToInt(gl?.getShaderParameter(tables().shaders[sh]!, pname));
   },
   "glGetProgramiv(II[II)V": (p: number, pname: number, out: Int32Array, off: number) => {
-    out[off] = glParamToInt(gl?.getProgramParameter(T.programs[p]!, pname));
+    out[off] = glParamToInt(gl?.getProgramParameter(tables().programs[p]!, pname));
   },
-  "glGetShaderInfoLog(I)Ljava/lang/String;": (sh: number) => gl?.getShaderInfoLog(T.shaders[sh]!) ?? "",
-  "glGetProgramInfoLog(I)Ljava/lang/String;": (p: number) => gl?.getProgramInfoLog(T.programs[p]!) ?? "",
-  "glGetAttribLocation(ILjava/lang/String;)I": (p: number, name: string) => gl?.getAttribLocation(T.programs[p]!, name) ?? -1,
-  "glBindAttribLocation(IILjava/lang/String;)V": (p: number, idx: number, name: string) => gl?.bindAttribLocation(T.programs[p]!, idx, name),
+  "glGetShaderInfoLog(I)Ljava/lang/String;": (sh: number) => gl?.getShaderInfoLog(tables().shaders[sh]!) ?? "",
+  "glGetProgramInfoLog(I)Ljava/lang/String;": (p: number) => gl?.getProgramInfoLog(tables().programs[p]!) ?? "",
+  "glGetAttribLocation(ILjava/lang/String;)I": (p: number, name: string) => gl?.getAttribLocation(tables().programs[p]!, name) ?? -1,
+  "glBindAttribLocation(IILjava/lang/String;)V": (p: number, idx: number, name: string) => gl?.bindAttribLocation(tables().programs[p]!, idx, name),
   "glGetUniformLocation(ILjava/lang/String;)I": (p: number, name: string) => {
-    const loc = gl?.getUniformLocation(T.programs[p]!, name) ?? null;
-    return loc ? put(T.uniforms, loc) : -1;
+    const loc = gl?.getUniformLocation(tables().programs[p]!, name) ?? null;
+    return loc ? put(tables().uniforms, loc) : -1;
   },
-  "glUniform1i(II)V": (loc: number, v: number) => { if (loc >= 0) gl?.uniform1i(T.uniforms[loc]!, v); },
-  "glUniform1f(IF)V": (loc: number, v: number) => { if (loc >= 0) gl?.uniform1f(T.uniforms[loc]!, v); },
-  "glUniform2f(IFF)V": (loc: number, x: number, y: number) => { if (loc >= 0) gl?.uniform2f(T.uniforms[loc]!, x, y); },
-  "glUniform3f(IFFF)V": (loc: number, x: number, y: number, z: number) => { if (loc >= 0) gl?.uniform3f(T.uniforms[loc]!, x, y, z); },
-  "glUniform4f(IFFFF)V": (loc: number, a: number, b: number, c: number, d: number) => { if (loc >= 0) gl?.uniform4f(T.uniforms[loc]!, a, b, c, d); },
-  "glUniform2fv(II[FI)V": (loc: number, n: number, values: Float32Array, off: number) => { if (loc >= 0) gl?.uniform2fv(T.uniforms[loc]!, values.subarray(off, off + n * 2)); },
-  "glUniform3fv(II[FI)V": (loc: number, n: number, values: Float32Array, off: number) => { if (loc >= 0) gl?.uniform3fv(T.uniforms[loc]!, values.subarray(off, off + n * 3)); },
-  "glUniform4fv(II[FI)V": (loc: number, n: number, values: Float32Array, off: number) => { if (loc >= 0) gl?.uniform4fv(T.uniforms[loc]!, values.subarray(off, off + n * 4)); },
-  "glUniform2iv(II[II)V": (loc: number, n: number, values: Int32Array, off: number) => { if (loc >= 0) gl?.uniform2iv(T.uniforms[loc]!, values.subarray(off, off + n * 2)); },
-  "glUniform4iv(II[II)V": (loc: number, n: number, values: Int32Array, off: number) => { if (loc >= 0) gl?.uniform4iv(T.uniforms[loc]!, values.subarray(off, off + n * 4)); },
-  "glUniformMatrix3fv(IIZ[FI)V": (loc: number, n: number, transpose: number, values: Float32Array, off: number) => { if (loc >= 0) gl?.uniformMatrix3fv(T.uniforms[loc]!, !!transpose, values.subarray(off, off + n * 9)); },
+  "glUniform1i(II)V": (loc: number, v: number) => { if (loc >= 0) gl?.uniform1i(tables().uniforms[loc]!, v); },
+  "glUniform1f(IF)V": (loc: number, v: number) => { if (loc >= 0) gl?.uniform1f(tables().uniforms[loc]!, v); },
+  "glUniform2f(IFF)V": (loc: number, x: number, y: number) => { if (loc >= 0) gl?.uniform2f(tables().uniforms[loc]!, x, y); },
+  "glUniform3f(IFFF)V": (loc: number, x: number, y: number, z: number) => { if (loc >= 0) gl?.uniform3f(tables().uniforms[loc]!, x, y, z); },
+  "glUniform4f(IFFFF)V": (loc: number, a: number, b: number, c: number, d: number) => { if (loc >= 0) gl?.uniform4f(tables().uniforms[loc]!, a, b, c, d); },
+  "glUniform2fv(II[FI)V": (loc: number, n: number, values: Float32Array, off: number) => { if (loc >= 0) gl?.uniform2fv(tables().uniforms[loc]!, values.subarray(off, off + n * 2)); },
+  "glUniform3fv(II[FI)V": (loc: number, n: number, values: Float32Array, off: number) => { if (loc >= 0) gl?.uniform3fv(tables().uniforms[loc]!, values.subarray(off, off + n * 3)); },
+  "glUniform4fv(II[FI)V": (loc: number, n: number, values: Float32Array, off: number) => { if (loc >= 0) gl?.uniform4fv(tables().uniforms[loc]!, values.subarray(off, off + n * 4)); },
+  "glUniform2iv(II[II)V": (loc: number, n: number, values: Int32Array, off: number) => { if (loc >= 0) gl?.uniform2iv(tables().uniforms[loc]!, values.subarray(off, off + n * 2)); },
+  "glUniform4iv(II[II)V": (loc: number, n: number, values: Int32Array, off: number) => { if (loc >= 0) gl?.uniform4iv(tables().uniforms[loc]!, values.subarray(off, off + n * 4)); },
+  "glUniformMatrix3fv(IIZ[FI)V": (loc: number, n: number, transpose: number, values: Float32Array, off: number) => { if (loc >= 0) gl?.uniformMatrix3fv(tables().uniforms[loc]!, !!transpose, values.subarray(off, off + n * 9)); },
   "glUniformMatrix4fv(IIZ[FI)V": (loc: number, count: number, transpose: number, mat: Float32Array, off: number) => {
-    if (loc >= 0) gl?.uniformMatrix4fv(T.uniforms[loc]!, !!transpose, mat.subarray(off, off + count * 16));
+    if (loc >= 0) gl?.uniformMatrix4fv(tables().uniforms[loc]!, !!transpose, mat.subarray(off, off + count * 16));
   },
   "glUniformMatrix4fv(IIZLjava/nio/FloatBuffer;)V": waits((loc: number, count: number, transpose: number, buf: JBuffer) => bytesFrom(buf,b => {
     if (loc < 0 || !b) return;
     const n = count * 16;
     // a Float32Array view needs a 4-aligned byteOffset; a sliced buffer position may not be
     const f32 = b.byteOffset & 3 ? new Float32Array(b.slice(0, n * 4).buffer) : new Float32Array(b.buffer, b.byteOffset, n);
-    gl?.uniformMatrix4fv(T.uniforms[loc]!, !!transpose, f32);
+    gl?.uniformMatrix4fv(tables().uniforms[loc]!, !!transpose, f32);
   })),
-  "glGenBuffers(I[II)V": (n: number, out: Int32Array, off: number) => genInto(T.buffers, () => gl?.createBuffer(), n, out, off),
-  "glGenBuffers(ILjava/nio/IntBuffer;)V": waits((n: number, buf: JBuffer) => genIntoBuffer(T.buffers, () => gl?.createBuffer(), n, buf)),
-  "glBindBuffer(II)V": (target: number, b: number) => gl?.bindBuffer(target, b ? T.buffers[b]! : null),
+  "glGenBuffers(I[II)V": (n: number, out: Int32Array, off: number) => genInto(tables().buffers, () => gl?.createBuffer(), n, out, off),
+  "glGenBuffers(ILjava/nio/IntBuffer;)V": waits((n: number, buf: JBuffer) => genIntoBuffer(tables().buffers, () => gl?.createBuffer(), n, buf)),
+  "glBindBuffer(II)V": (target: number, b: number) => gl?.bindBuffer(target, b ? tables().buffers[b]! : null),
   "glBufferData(IILjava/nio/Buffer;I)V": waits((target: number, size: number, data: JBuffer | null, usage: number) => bytesFrom(data,b => {
     if (b) gl?.bufferData(target, b, usage);
     else gl?.bufferData(target, size, usage);
@@ -242,12 +175,12 @@ rt.registerJnis("android/opengl/GLES20", bindings({
   "glBufferSubData(IIILjava/nio/Buffer;)V": waits((target: number, off: number, size: number, data: JBuffer) => bytesFrom(data,b => {
     if (b) gl?.bufferSubData(target, off, b);
   },size)),
-  "glDeleteBuffers(I[II)V": (n: number, arr: Int32Array, off: number) => deleteAll(T.buffers, (o) => gl?.deleteBuffer(o), n, arr, off),
-  "glGenTextures(I[II)V": (n: number, out: Int32Array, off: number) => genInto(T.textures, () => gl?.createTexture(), n, out, off),
-  "glGenTextures(ILjava/nio/IntBuffer;)V": waits((n: number, buf: JBuffer) => genIntoBuffer(T.textures, () => gl?.createTexture(), n, buf)),
-  "glBindTexture(II)V": (target: number, t: number) => gl?.bindTexture(textureTarget(target), t ? T.textures[t]! : null),
-  "glIsTexture(I)Z": (t: number) => (t && gl?.isTexture(T.textures[t] ?? null) ? 1 : 0),
-  "glDeleteTextures(I[II)V": (n: number, arr: Int32Array, off: number) => deleteAll(T.textures, (o) => gl?.deleteTexture(o), n, arr, off),
+  "glDeleteBuffers(I[II)V": (n: number, arr: Int32Array, off: number) => deleteAll(tables().buffers, (o) => gl?.deleteBuffer(o), n, arr, off),
+  "glGenTextures(I[II)V": (n: number, out: Int32Array, off: number) => genInto(tables().textures, () => gl?.createTexture(), n, out, off),
+  "glGenTextures(ILjava/nio/IntBuffer;)V": waits((n: number, buf: JBuffer) => genIntoBuffer(tables().textures, () => gl?.createTexture(), n, buf)),
+  "glBindTexture(II)V": (target: number, t: number) => gl?.bindTexture(textureTarget(target), t ? tables().textures[t]! : null),
+  "glIsTexture(I)Z": (t: number) => (t && gl?.isTexture(tables().textures[t] ?? null) ? 1 : 0),
+  "glDeleteTextures(I[II)V": (n: number, arr: Int32Array, off: number) => deleteAll(tables().textures, (o) => gl?.deleteTexture(o), n, arr, off),
   "glTexParameterf(IIF)V": (target: number, pname: number, v: number) => gl?.texParameterf(textureTarget(target), pname, v),
   "glTexParameteri(III)V": (target: number, pname: number, v: number) => gl?.texParameteri(textureTarget(target), pname, v),
   "glTexImage2D(IIIIIIIILjava/nio/Buffer;)V": waits((target: number, level: number, internalFormat: number, w: number, h: number, border: number, format: number, type: number, data: JBuffer | null) => bytesFrom(data,b => {
@@ -257,10 +190,10 @@ rt.registerJnis("android/opengl/GLES20", bindings({
     if (b) gl?.texSubImage2D(target, level, xo, yo, w, h, format, type, b);
   })),
   "glCopyTexSubImage2D(IIIIIIII)V": (target: number, level: number, xo: number, yo: number, x: number, y: number, w: number, h: number) => gl?.copyTexSubImage2D(target, level, xo, yo, x, y, w, h),
-  "glGenFramebuffers(I[II)V": (n: number, out: Int32Array, off: number) => genInto(T.fbos, () => gl?.createFramebuffer(), n, out, off),
-  "glBindFramebuffer(II)V": (target: number, handle: number) => gl?.bindFramebuffer(target, T.fbos[handle] ?? null),
-  "glFramebufferTexture2D(IIIII)V": (target: number, attachment: number, texTarget: number, texture: number, level: number) => gl?.framebufferTexture2D(target, attachment, textureTarget(texTarget), T.textures[texture] ?? null, level),
-  "glDeleteFramebuffers(I[II)V": (n: number, arr: Int32Array, off: number) => deleteAll(T.fbos, (o) => gl?.deleteFramebuffer(o), n, arr, off),
+  "glGenFramebuffers(I[II)V": (n: number, out: Int32Array, off: number) => genInto(tables().fbos, () => gl?.createFramebuffer(), n, out, off),
+  "glBindFramebuffer(II)V": (target: number, handle: number) => gl?.bindFramebuffer(target, tables().fbos[handle] ?? null),
+  "glFramebufferTexture2D(IIIII)V": (target: number, attachment: number, texTarget: number, texture: number, level: number) => gl?.framebufferTexture2D(target, attachment, textureTarget(texTarget), tables().textures[texture] ?? null, level),
+  "glDeleteFramebuffers(I[II)V": (n: number, arr: Int32Array, off: number) => deleteAll(tables().fbos, (o) => gl?.deleteFramebuffer(o), n, arr, off),
   "glReadPixels(IIIIIILjava/nio/Buffer;)V": waits((x: number, y: number, w: number, h: number, format: number, type: number, data: JBuffer) => {
     if (!gl) return;
     return afterGL(readRemainingBytes(data),b => {

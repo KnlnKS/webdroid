@@ -2,7 +2,7 @@
 // draw, which WebGL cannot, so each draw streams what it reaches into reused buffers.
 
 import { mem } from "./mem.ts";
-import { raise } from "../android/gl.ts";
+import { raise } from "./gl-context.ts";
 import { g, contextState, type ContextState, type ClientArray } from "./gles3-state.ts";
 import { view, u32, u8 } from "./gles3-pixels.ts";
 import { recAt, boundStorage, contents, ARRAY, ELEM } from "./gles3-buffers.ts";

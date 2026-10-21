@@ -71,14 +71,10 @@ rt.su = releaseThread;
 export const threadExit = { hook: null as ((t: JThread) => void) | null };
 /** whether another thread is blocked on a lock or class initialization `t` holds */
 export const threadContended = { hook: null as ((t: JThread) => boolean) | null };
-export const threadSwitch = { hook: null as ((t: JThread) => void) | null };
 /** run as strand `s` from here: the code that follows owns the turn as its thread and chain */
 export function resumeAs(s: Strand): void {
   rt.cur = s;
-  const t = s.thread as JThread;
-  if (t === curThread) return;
-  curThread = t;
-  threadSwitch.hook?.(t);
+  curThread = s.thread as JThread;
 }
 /** run as `t` from here, as Java no entry gave a chain of its own */
 export const setCurThread = (t: JThread): void => resumeAs(t.root);

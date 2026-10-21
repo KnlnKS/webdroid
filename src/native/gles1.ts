@@ -10,9 +10,8 @@ import type { Cpu } from "./cpu.ts";
 import { glCommon, glProbe } from "./gles3.ts";
 import { readGuestPixels, pixelStore } from "./gles3-pixels.ts";
 import { vertexTypeBytes, guestIndices, indexBounds } from "./gles3-client-arrays.ts";
-import { gl, takeError, untracked, raise } from "../android/gl.ts";
+import { gl, takeError, untracked, raise, activate } from "./gl-context.ts";
 import { perf } from "../perf.ts";
-import { activateEglCurrent } from "./egl-current.ts";
 
 type GL = WebGL2RenderingContext | WebGLRenderingContext;
 /** a 4x4 column-major inverse into inv; 0 when singular */
@@ -152,7 +151,7 @@ function ctxFor(g: GL): Ctx {
   ctxs.set(g, c);
   return c;
 }
-/** the GLES1 state for the current context (the Java EGL path selected it via setGL) */
+/** the GLES1 state for the current context */
 function cur(): Ctx | null {
   if (!gl) return null;
   if (!C || C.gl !== gl) C = ctxFor(gl);
@@ -315,7 +314,7 @@ export function gles1Init(): void {
   const noCtx = () => { calledMissing.add("gles1:call without a current context"); };
   /** wrap: current-context guard + optional getError probe */
   const W = (name: string, fn: (c: Ctx, a: ArgReader, cpu: Cpu) => HostRet): HostFn => (cpu, a) => {
-    activateEglCurrent(cpu.jthread);
+    activate(cpu.jthread);
     const c = cur();
     if (!c) { noCtx(); return 0; }
     untracked();

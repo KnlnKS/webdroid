@@ -9,9 +9,8 @@ import { lookupHost, hostFn, type ArgReader, hostLib, vaList } from "../src/nati
 import { libcInit } from "../src/native/libc.ts";
 import { kernelInit } from "../src/native/syscall.ts";
 import { eglInit } from "../src/native/egl.ts";
-import { gl } from "../src/android/gl.ts";
 import { EglContext } from "../src/android/glsurface.ts";
-import { bindEglCurrent, boundEglCurrent, glSurfaces } from "../src/native/egl-current.ts";
+import { gl, bindContext, currentContext } from "../src/native/gl-context.ts";
 import { gles3Init } from "../src/native/gles3.ts";
 
 
@@ -137,18 +136,18 @@ describe("native-egl-thread-current", () => {
 
     gles3Init();
     eglInit();
-    bindEglCurrent(cpuA.jthread, contextA);
-    bindEglCurrent(cpuB.jthread, contextB);
+    bindContext(cpuA.jthread, contextA);
+    bindContext(cpuB.jthread, contextB);
     const makeCurrent = hostFn("libEGL.so", "eglMakeCurrent");
     if (!makeCurrent) throw new Error("EGL host is not registered");
     makeCurrent(cpuA as Cpu, args([1, 0, 0, 0]));
-    expect(glSurfaces.current).toBeNull();
+    expect(currentContext(cpuA.jthread)).toBeNull();
 
     const activeTexture = hostFn("libGLESv2.so", "glActiveTexture");
     if (!activeTexture) throw new Error("GLES host is not registered");
     activeTexture(cpuB as Cpu, args([0x84c1]));
 
-    expect(boundEglCurrent(cpuB.jthread)).toBe(contextB);
+    expect(currentContext(cpuB.jthread)).toBe(contextB);
     expect(gl).toBe(contextB.gl);
     expect(calls).toEqual([0x84c1]);
   });
@@ -171,14 +170,14 @@ describe("native-egl-thread-current", () => {
       const eglContext = await vcall(egl, "eglCreateContext", "(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLConfig;Ljavax/microedition/khronos/egl/EGLContext;[I)Ljavax/microedition/khronos/egl/EGLContext;", display, null, null, null);
       const surface = await vcall(egl, "eglCreatePbufferSurface", "(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLConfig;[I)Ljavax/microedition/khronos/egl/EGLSurface;", display, null, null);
       expect(await vcall(egl, "eglMakeCurrent", "(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLSurface;Ljavax/microedition/khronos/egl/EGLSurface;Ljavax/microedition/khronos/egl/EGLContext;)Z", display, surface, surface, eglContext)).toBe(1);
-      expect(boundEglCurrent(thread)).toBe((eglContext as { egl: EglContext }).egl);
+      expect(currentContext(thread)).toBe((eglContext as { egl: EglContext }).egl);
 
       const activeTexture = hostFn("libGLESv2.so", "glActiveTexture");
       if (!activeTexture) throw new Error("GLES host is not registered");
       activeTexture(cpu, args([0x84c2]));
       expect(calls).toEqual([0x84c2]);
     } finally {
-      bindEglCurrent(thread, null);
+      bindContext(thread, null);
       setCurThread(previous);
       if (original) Object.defineProperty(globalThis, "OffscreenCanvas", original);
       else Reflect.deleteProperty(globalThis, "OffscreenCanvas");
@@ -200,8 +199,8 @@ describe("native-gles-errors", () => {
     const contextB = Object.assign(Object.create(EglContext.prototype), { gl: glB, target: null, major: 3 });
     const cpuA = { jthread: {} } as Cpu, cpuB = { jthread: {} } as Cpu;
     gles3Init();
-    bindEglCurrent(cpuA.jthread, contextA);
-    bindEglCurrent(cpuB.jthread, contextB);
+    bindContext(cpuA.jthread, contextA);
+    bindContext(cpuB.jthread, contextB);
     const call = (cpu: Cpu, name: string, ints: number[] = []) => hostFn("libGLESv2.so", name)!(cpu, args(ints));
     const names = mem.malloc(4);
 

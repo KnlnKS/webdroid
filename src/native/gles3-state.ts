@@ -2,7 +2,7 @@
 // of each texture's binding and storage), programs' sampler maps for texture swizzles, the buffer
 // and vertex array bindings, and the default vertex array's client arrays.
 
-import { gl as current } from "../android/gl.ts";
+import { gl as current } from "./gl-context.ts";
 import { uniformBase, visibleUniforms, IDENTITY_SWIZZLE, type SwizzleRewrite, type VisibleUniforms } from "./swizzle.ts";
 import type { BufRec } from "./gles3-buffers.ts";
 

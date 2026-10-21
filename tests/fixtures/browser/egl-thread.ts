@@ -1,8 +1,7 @@
 import "../../../src/natives.ts";
 import { rt } from "../../../src/jvm/runtime.ts";
-import { JThread, setCurThread, mainThread, vcall, vcallOn, newObj, linkInit, scall, classNameOf } from "../../../src/jvm/natives/jentry.ts";
-import { gl, tables, put } from "../../../src/android/gl.ts";
-import { glSurfaces } from "../../../src/native/egl-current.ts";
+import { JThread, setCurThread, mainThread, curThread, vcall, vcallOn, newObj, linkInit, scall, classNameOf } from "../../../src/jvm/natives/jentry.ts";
+import { gl, tables, put, activate, currentContext } from "../../../src/native/gl-context.ts";
 import { EglContext, presentSurface, surfaceTextureOf, type GlSurface } from "../../../src/android/glsurface.ts";
 import { mem } from "../../../src/native/mem.ts";
 import { Cpu, setA64 } from "../../../src/native/cpu.ts";
@@ -230,7 +229,7 @@ async function probe() {
   gl?.clearColor(1, 0, 0, 1);
   const suspended = vcall(e10, "eglSwapBuffers", `(${E10}EGLDisplay;${E10}EGLSurface;)Z`, display10, surface10);
   rt.st(second.root);
-  const emptySecond = gl === null && glSurfaces.current === null;
+  const emptySecond = activate(curThread) === null && gl === null;
   const display14 = await call14("eglGetDisplay", "(I)" + E14 + "EGLDisplay;", 0);
   const configs: unknown[] = [null];
   await call14("eglChooseConfig", `(${E14}EGLDisplay;[II[${E14}EGLConfig;II[II)Z`, display14, null, 0, configs, 0, 1, new Int32Array(1), 0);
@@ -243,6 +242,7 @@ async function probe() {
   await call14("eglGetDisplay", "(I)" + E14 + "EGLDisplay;", 99);
   rt.st(first.root);
   const firstError = await vcall(e10, "eglGetError", "()I");
+  activate(curThread);
   const restored = gl === firstGL && tables() === firstTables;
   const sameContext10 = await vcall(e10, "eglGetCurrentContext", "()" + E10 + "EGLContext;") === context10;
   rt.st(second.root);
@@ -252,18 +252,20 @@ async function probe() {
   await call14("eglReleaseThread", "()Z");
   await suspended;
   rt.st(first.root);
+  activate(curThread);
   const restoredAfterRelease = gl === firstGL;
   gl?.clear(gl.COLOR_BUFFER_BIT);
   const swapped = await vcall(e10, "eglSwapBuffers", `(${E10}EGLDisplay;${E10}EGLSurface;)Z`, display10, surface10);
   rt.st(first.root);
   const canvas = new OffscreenCanvas(4, 4), ctx = canvas.getContext("2d")!;
-  ctx.drawImage(glSurfaces.current!.target!.present!, 0, 0);
+  ctx.drawImage(currentContext(curThread)!.target!.present!, 0, 0);
   const pixel = [...ctx.getImageData(1, 1, 1, 1).data];
   rt.su();
-  const mainEmpty = gl === null;
+  const mainEmpty = activate(curThread) === null && gl === null;
   let callbackRestored = false;
-  await vcallOn(first, listener("java/lang/Runnable", "run", "()V", () => { callbackRestored = gl === firstGL; }), "run", "()V");
+  await vcallOn(first, listener("java/lang/Runnable", "run", "()V", () => { activate(curThread); callbackRestored = gl === firstGL; }), "run", "()V");
   setCurThread(mainThread);
+  activate(curThread);
   return { bound10, interval10, bound14, emptySecond, isolated, restored, sameContext10, sameContext14,
     firstError, secondError, restoredAfterRelease, swapped, pixel, mainEmpty, callbackRestored, mainStillEmpty: gl === null,
     nativeWindow: await nativeWindow(), readback: readback(), uploads: uploadExtents(),

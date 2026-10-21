@@ -1,18 +1,17 @@
 // OpenGL ES 3.0 over WebGL2, registered as libGLESv2.so and libGLESv3.so. Closed: a name outside
 // ES 3.0 core (KHR_debug, the ES 3.1 entry points) is NULL from dlsym and eglGetProcAddress, so
-// an engine feature-gates as on a device. Handles are gl.ts's per-context tables, shared with the
+// an engine feature-gates as on a device. Handles are gl-context.ts's per-context tables, shared with the
 // Java GLES20 bindings. Pointer arguments are guest memory, or offsets while a pixel or element
 // buffer is bound, as in GL. The state kept beside WebGL is gles3-state.ts's, with its buffers,
 // pixels, client arrays and validation in the gles3-* modules beside it.
 
 import { mem } from "./mem.ts";
 import { hostLib, cstr, PTR, ldp, stp, calledMissing, type HostFn, type ArgReader } from "./host.ts";
-import { gl as current, tables as T, put, takeError, raise, unsure } from "../android/gl.ts";
+import { gl as current, tables as T, put, takeError, raise, unsure, activate } from "./gl-context.ts";
 import { yieldToLoop } from "../jvm/yield.ts";
 import { perf } from "../perf.ts";
 import { utf8 } from "../jvm/abi.ts";
 import { rewriteTextureSwizzles } from "./swizzle.ts";
-import { activateEglCurrent } from "./egl-current.ts";
 import {
   g, H, TEXTURE0, UNBOUND, contextState, textureRec, texRecs, textureTarget, externalSamplersAs2D, activeUniformInfo, boundTexture, linkProgram,
   prepareDraw, setSamplerUnits, glForTextureFormat, shaderRecs, programRecs, samplerSlots, uniformHandles, pbo, type GL, type ContextState,
@@ -591,11 +590,11 @@ export function gles3Init(): void {
   // (MapLibre deletes its textures on a GLThread whose context is already released)
   const noContext = new WeakSet<object>();
   for (const [name, fn] of Object.entries(G)) G[name] = keptClean(fn) ? (cpu, args) => {
-    activateEglCurrent(cpu.jthread);
+    activate(cpu.jthread);
     if (current) return fn(cpu, args);
     return noCurrent(cpu, name);
   } : (cpu, args) => {
-    activateEglCurrent(cpu.jthread);
+    activate(cpu.jthread);
     if (current) { unsure(); return fn(cpu, args); }
     return noCurrent(cpu, name);
   };
