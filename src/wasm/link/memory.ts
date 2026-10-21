@@ -5,7 +5,7 @@
 // an external mapping or a higher plane, which the production natives answer.
 import { Code, OP } from "../compiler/code.ts";
 import { T } from "../compiler/wasmbin.ts";
-import { rtfns } from "../compiler/rtfns.ts";
+import { rtfns, type RtName } from "../compiler/rtfns.ts";
 import { kindVT, type Compiler, type Intrinsic } from "../compiler/j2w.ts";
 import type { MethodInfo } from "../compiler/program.ts";
 import { elemKindOf } from "../compiler/consts.ts";
@@ -33,7 +33,7 @@ export function memoryScalarMethod(cx: Compiler, peek: boolean, bits: 8 | 16 | 3
 }
 /** The view bridge inlines pure guest operations so cooperative lazy links cannot split an atomic access. */
 export function emitMemoryScalar(cx: Compiler, c: Code, m: MethodInfo, peek: boolean, bits: 8 | 16 | 32 | 64, inlineRuntime = false): void {
-  const call = (name: string) => {
+  const call = (name: RtName) => {
     if (!inlineRuntime) { cx.callRt(c, name); return; }
     const d = rtfns.get(name)!;
     c.call(cx.defineFn(`memory:inline:${name}`, d.params.map(kindVT), d.ret === "V" ? [] : [kindVT(d.ret)], (body) => d.body(cx, body)));

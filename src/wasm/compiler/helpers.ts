@@ -9,9 +9,11 @@ import { Block, Sync, emitBlock, emitSync } from "./hostcalls.ts";
 import type { Compiler } from "./j2w.ts";
 
 interface Helper { params: VT[]; results: VT[]; body: (c: Code) => void }
+export type HelperName = `${"i" | "l"}${"div" | "rem"}` | `cmp${"l" | "g"}${"f" | "d"}` | "cast" | "castImpl" | "castArr" | "iof" | "implements" | "imtslow"
+  | `aput:${ElemKind}` | "hash" | "menter" | "mexit" | "newLen" | "allocSlow" | "vtab" | "acmp" | "shash";
 /** by name, a helper's signature and body in a Compiler's module */
-export const helpers = new Map<string, (cx: Compiler) => Helper>();
-const def = (name: string, make: (cx: Compiler) => Helper) => { helpers.set(name, make); };
+export const helpers = new Map<HelperName, (cx: Compiler) => Helper>();
+const def = (name: HelperName, make: (cx: Compiler) => Helper) => { helpers.set(name, make); };
 const L = T.anyref;
 
 for (const [name, wide, rem] of [["idiv", false, false], ["irem", false, true], ["ldiv", true, false], ["lrem", true, true]] as const) def(name, (cx) => {
@@ -33,7 +35,7 @@ for (const [name, W, lt, gt, eq, nanGreater] of [["cmplf", T.f32, OP.f32_lt, OP.
   c.end();
 } }));
 /** obj when it is null or passes `test` (of obj, class id and any depth), else ClassCastException */
-const cast = (name: string, params: VT[], test: (cx: Compiler, c: Code) => void) => def(name, (cx) => ({ params: [L, T.i32, ...params], results: [L], body: (c) => {
+const cast = (name: HelperName, params: VT[], test: (cx: Compiler, c: Code) => void) => def(name, (cx) => ({ params: [L, T.i32, ...params], results: [L], body: (c) => {
   c.lget(0).refIsNull().raw(OP.i32_eqz).if_();
   test(cx, c);
   c.raw(OP.i32_eqz).if_().lget(0).call(cx.helper("vtab")).i32(H.ID).arrayGet(cx.tVT).lget(1); cx.callThrower(c, "cce"); c.end();
@@ -83,7 +85,7 @@ def("imtslow", (cx) => ({ params: [refNull(cx.tVT), T.i32], results: [T.i32], bo
   c.lget(slot);
 } }));
 // aput:<element kind>(array, index, value): the store of an array element out of line, for code that runs once (method.ts emitAput)
-for (const k of ["i8", "i16", "i32", "i64", "ref"] as ElemKind[]) def("aput:" + k, (cx) => ({ params: [L, T.i32, k === "ref" ? L : k === "i64" ? T.i64 : T.i32], results: [], body: (c) => {
+for (const k of ["i8", "i16", "i32", "i64", "ref"] as ElemKind[]) def(`aput:${k}`, (cx) => ({ params: [L, T.i32, k === "ref" ? L : k === "i64" ? T.i64 : T.i32], results: [], body: (c) => {
   const data = c.newLocal(ref(cx.tData[k])), index = () => c.lget(1);
   c.lget(0); cx.arrayData(c, k).lset(data);
   cx.boundsCheck(c, index, () => c.lget(data).arrayLen());

@@ -11,12 +11,12 @@ import { Invoke } from "../../jvm/opcodes.ts";
 import { inferTyping, type Typing } from "./infer.ts";
 import { compileMethod } from "./method.ts";
 import type { ClassRt, World } from "../link/world.ts";
-import { rtfns } from "./rtfns.ts";
+import { rtfns, type RtName } from "./rtfns.ts";
 import type { LinkFailure } from "./linkage.ts";
 import { FUEL } from "./hostcalls.ts";
 import { SLOT, INIT_DONE, THROWERS, MAX_DEPTH, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, WARM_AT, type Thrower } from "./exc.ts";
 import { STRING, StructStrings } from "./strings.ts";
-import { helpers as HELPERS } from "./helpers.ts";
+import { helpers as HELPERS, type HelperName } from "./helpers.ts";
 import type { NativeBinder } from "../link/hostapi.ts";
 
 export interface Intrinsic { (cx: Compiler, m: MethodInfo, c: Code): void }
@@ -454,8 +454,9 @@ export class Compiler implements Base {
   }
   idOf(name: string): number { return this.w.idOf(name); }
   /** calls the runtime function `name` (see rtfns.ts) with its arguments already pushed */
-  callRt(c: Code, name: string): void {
-    const d = rtfns.get(name)!;
+  callRt(c: Code, name: RtName): void {
+    const d = rtfns.get(name);
+    if (!d) throw new Error(`runtime function ${name} is not registered: the link module that defines it is not loaded`);
     c.i32(this.w.synthSlot(name, d)).callIndirect(this.sig(d.params, d.ret));
     if (d.pure) c.indirect--;
   }
@@ -614,12 +615,10 @@ export class Compiler implements Base {
   }
 
   // ---------- module-local helpers, defined on first use
-  helper(name: string): number {
+  helper(name: HelperName): number {
     const f = this.helpers.get(name);
     if (f !== undefined) return f;
-    const make = HELPERS.get(name);
-    if (!make) throw new Error("unknown helper " + name);
-    const { params, results, body } = make(this);
+    const { params, results, body } = HELPERS.get(name)!(this);
     return this.defineFn(name, params, results, body, true);
   }
 

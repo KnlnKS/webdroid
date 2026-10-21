@@ -562,7 +562,7 @@ export class MC {
     // a static initializer runs once, and its long array literals take the engine longer to compile than to run: their stores are a call
     if (this.m.name === "<clinit>") {
       this.nonNull(ins.b); this.get("I", ins.c); this.get(kind, ins.a);
-      c.call(cx.helper("aput:" + k));
+      c.call(cx.helper(`aput:${k}`));
       return;
     }
     const d = this.dloc(k), index = () => this.get("I", ins.c);
@@ -809,7 +809,7 @@ export class MC {
     if (lit) c.i32(ins.c); else this.num(wideShift ? KI : k, y);
     if (fmod) { if (k === KF) c.raw(OP.f64_promote_f32); c.call(this.cx.imp.fmod); if (k === KF) c.raw(OP.f32_demote_f64); }
     // Wasm traps on a zero divisor and on MIN / -1, where Java throws or wraps: the helpers do as Java does, unless a literal rules both out
-    else if ((name === "div" || name === "rem") && (k === KI || k === KJ) && !(lit && ins.c !== 0 && ins.c !== -1)) c.call(this.cx.helper((k === KI ? "i" : "l") + name));
+    else if ((name === "div" || name === "rem") && (k === KI || k === KJ) && !(lit && ins.c !== 0 && ins.c !== -1)) c.call(this.cx.helper(`${k === KI ? "i" : "l"}${name}`));
     else { if (wideShift) c.raw(OP.i64_extend_i32_u); c.raw(WASM_BINOP[k][name]!); }
     this.setNum(k);
   }
