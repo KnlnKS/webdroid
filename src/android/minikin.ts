@@ -18,60 +18,29 @@ import { isLead, isTrail } from "../jvm/natives/jstring.ts";
 import { handle, deref, release, FINALIZER } from "./handles.ts";
 import { perf } from "../perf.ts";
 import { type NativePaint, paintAt, fontTop, fontBottom, setFontMetrics } from "./paint.ts";
-import { type NativeTypeface, withFonts } from "./fonts.ts";
+import { withFonts } from "./fonts.ts";
 import {
   type Hyphenator, hyphenatorFor, hyphenate, intProperty, isLineBreakingHyphen, editForThisLine, editForNextLine, packHyphenEdit, startHyphenString,
   endHyphenString, DONT_BREAK, BREAK_AND_DONT_INSERT_HYPHEN, START_NO_EDIT, END_NO_EDIT,
 } from "./hyphenator.ts";
-import { type ShapeStyle, type Piece, measurePiece, shapeStyle, pieceEnd, JOINING, f32, graphemes, isBidiControl } from "./shaping.ts";
+import { type ShapeStyle, pieceOf, shapeStyle, pieceEnd, JOINING, f32, graphemes, isBidiControl } from "./shaping.ts";
 import { setEdges } from "./graphics.ts";
 
 // ── advances ─────────────────────────────────────────────────────────────────────────────
-// Advances are a pure function of (typeface, shaping state, piece). Pieces repeat (they are
-// words), so the cache is capped and cleared wholesale rather than evicted per entry.
-const PIECES_MAX = 20000;
-let pieces = new WeakMap<NativeTypeface, Map<string, Map<string, Piece>>>(), pieceCount = 0;
-function pieceOf(s: TextStyle, piece: string, startEdit = 0, endEdit = 0): Piece {
-  let byTf = pieces.get(s.tf);
-  if (!byTf) pieces.set(s.tf, byTf = new Map());
-  let byStyle = byTf.get(s.key);
-  if (!byStyle) byTf.set(s.key, byStyle = new Map());
-  const key = startEdit || endEdit ? `\0${startEdit}${endEdit}${piece}` : piece;
-  let out = byStyle.get(key);
-  if (out) return out;
-  perf.measureTextMiss++;
-  out = measurePiece(piece, s, startEdit, endEdit);
-  if (++pieceCount > PIECES_MAX) { pieces = new WeakMap([[s.tf, byTf = new Map([[s.key, byStyle = new Map()]])]]); pieceCount = 1; }
-  byStyle.set(key, out);
-  return out;
-}
-
-/** what measuring text under a paint depends on, taken when a run is added: the paint changes after */
-export interface TextStyle extends ShapeStyle { key: string; letterSpacing: number; wordSpacing: number }
-export function styleOf(p: NativePaint): TextStyle {
-  const s = shapeStyle(p);
-  return { ...s, key: `${s.size} ${s.scaleX} ${+s.hinted} ${s.lang} ${s.features}`, letterSpacing: p.letterSpacingEm * s.size * s.scaleX, wordSpacing: p.wordSpacing };
-}
-
-/** control characters other than tab shape to nothing; a tab has HarfBuzz's space fallback, and
- *  no letter spacing (as the device measures them) */
-const CONTROL = /[\0-\x08\x0a-\x1f\x7f-\x9f]/;
-/** MinikinUtils::measureText: the advances of text[start,end) into out[at...], and their sum.
- *  Letter spacing is added to every other cluster, as minikin's layout does, and word spacing to
- *  every space (isWordSpace: U+0020 and U+00A0). `extents` takes each character's piece's ascent
- *  and descent, two values a character, from `at`. Hyphen edits apply to the first and last piece. */
-export function advances(style: TextStyle, text: string, start: number, end: number, out: Float32Array | null = null, at = 0,
+/** MinikinUtils::measureText: the advances of text[start,end) into out[at...], and their sum, each
+ *  piece's as shaping.ts lays it out (in the direction HarfBuzz guesses), with word spacing added
+ *  to every space (isWordSpace: U+0020 and U+00A0). `extents` takes each character's piece's
+ *  ascent and descent, two values a character, from `at`. Hyphen edits apply to the first and last
+ *  piece. A style is taken when a run is added: the paint changes after. */
+export function advances(style: ShapeStyle, text: string, start: number, end: number, out: Float32Array | null = null, at = 0,
   extents: Float32Array | null = null, startEdit = 0, endEdit = 0): number {
   let total = 0;
   for (let i = start; i < end;) {
-    const e = Math.min(pieceEnd(text, i, end), end), piece = text.slice(i, e);
-    const p = pieceOf(style, piece, i === start ? startEdit : 0, e === end ? endEdit : 0), w = p.advances;
+    const e = Math.min(pieceEnd(text, i, end), end), p = pieceOf(style, text, i, e, i === start ? startEdit : 0, e === end ? endEdit : 0), w = p.advances;
     if (extents) for (let k = (at + i - start) * 2; k < (at + e - start) * 2; k += 2) { extents[k] = p.ascent; extents[k + 1] = p.descent; }
-    const ls = JOINING.test(piece) ? 0 : style.letterSpacing, controls = CONTROL.test(piece);
     for (let j = 0; j < w.length; j++) {
-      const c = piece.charCodeAt(j);
-      let a = controls && CONTROL.test(piece[j]) ? 0 : c === TAB ? w[j] : w[j] && f32(w[j] + ls);
-      if (style.wordSpacing && (c === 0x20 || c === 0xa0)) a = f32(a + style.wordSpacing);
+      const c = text.charCodeAt(i + j);
+      const a = style.wordSpacing && (c === 0x20 || c === 0xa0) ? f32(w[j] + style.wordSpacing) : w[j];
       if (out) out[at + i - start + j] = a;
       total = f32(total + a);
     }
@@ -82,7 +51,7 @@ export function advances(style: TextStyle, text: string, start: number, end: num
 /** the advance of `text` under `p`: what Paint.measureText answers and hwui draws the run across */
 export function paintAdvance(p: NativePaint, text: string): number {
   perf.measureText++;
-  return advances(styleOf(p), text, 0, text.length, null, 0, null, p.startHyphenEdit, p.endHyphenEdit);
+  return advances(shapeStyle(p), text, 0, text.length, null, 0, null, p.startHyphenEdit, p.endHyphenEdit);
 }
 
 // ── grapheme breaks ───────────────────────────────────────────────────────────────────────
@@ -283,7 +252,7 @@ const PUNCT_OR_SYMBOL = /[\p{P}\p{S}]/u, WORD_END_STRIPPED = /[\p{Zs}\p{P}\p{Cc}
 
 // ── MeasuredText ──────────────────────────────────────────────────────────────────────────
 /** a style run has a style; a replacement run (a ReplacementSpan) has only its width */
-export interface Run { start: number; end: number; style: TextStyle | null; width: number; lang: string; lbStyle: number; lbWordStyle: number; hyphenate: boolean }
+export interface Run { start: number; end: number; style: ShapeStyle | null; width: number; lang: string; lbStyle: number; lbWordStyle: number; hyphenate: boolean }
 /** HyphenBreak: a hyphenation point, and the widths of the word's pieces before it (with the
  *  hyphen) and after it */
 interface HyphenBreak { offset: number; type: number; first: number; second: number }
@@ -310,7 +279,7 @@ rt.registerJnis("android/graphics/text/MeasuredText$Builder", {
   "nFreeBuilder(J)V": release,
   "nAddStyleRun(JJIIZIIZ)V": (h: bigint, p: bigint, lbStyle: number, lbWordStyle: number, canHyphenate: number, start: number, end: number) => {
     const paint = paintAt(p);
-    deref<Run[]>(h).push({ start, end, style: styleOf(paint), width: 0, lang: paint.language, lbStyle, lbWordStyle, hyphenate: !!canHyphenate });
+    deref<Run[]>(h).push({ start, end, style: shapeStyle(paint), width: 0, lang: paint.language, lbStyle, lbWordStyle, hyphenate: !!canHyphenate });
   },
   "nAddReplacementRun(JJIIF)V": (h: bigint, p: bigint, start: number, end: number, width: number) => {
     deref<Run[]>(h).push({ start, end, style: null, width, lang: paintAt(p).language, lbStyle: LB_NONE, lbWordStyle: LW_NONE, hyphenate: false });
@@ -361,10 +330,10 @@ const hyphenBreaks = driven(function* hyphenBreaks(m: Measured, fast: boolean): 
   }
 });
 /** StyleRun::measureHyphenPiece: text[start,end) measured on its own with hyphen edits at its ends */
-const hyphenPiece = (style: TextStyle, text: string, start: number, end: number, startEdit: number, endEdit: number) =>
+const hyphenPiece = (style: ShapeStyle, text: string, start: number, end: number, startEdit: number, endEdit: number) =>
   advances(style, text.slice(start, end), 0, end - start, null, 0, null, startEdit, endEdit);
 /** StyleRun::measureText: a hyphen's advance */
-const measureAlone = (style: TextStyle, s: string) => advances(style, s, 0, s.length);
+const measureAlone = (style: ShapeStyle, s: string) => advances(style, s, 0, s.length);
 
 rt.registerJnis("android/graphics/text/MeasuredText", {
   "nGetReleaseFunc()J": () => FINALIZER,
@@ -709,7 +678,7 @@ const LEFT_EDGE = 0x2000, RIGHT_EDGE = 0x4000;
 /** the advances of text[start, start+count), indexed from start. A run TextLine marks as a line's
  *  edge loses half its letter spacing there (Layout::measureText's adjustAdvanceLetterSpacingEdge). */
 function measure(h: bigint, text: string, start: number, count: number): Float32Array {
-  const p = paintAt(h), style = styleOf(p), out = new Float32Array(count);
+  const p = paintAt(h), style = shapeStyle(p), out = new Float32Array(count);
   advances(style, text, start, start + count, out, 0, null, p.startHyphenEdit, p.endHyphenEdit);
   const half = f32(style.letterSpacing * 0.5), edge = (i: number) => {
     const cp = text.codePointAt(start + i)!;
@@ -813,7 +782,7 @@ const offsetFor = (h: bigint, text: string, start: number, count: number, advanc
  *  uses, its top and bottom widened to them */
 const metricsForText = (h: bigint, text: string, start: number, count: number, fm: object) => withFonts(() => {
   const p = paintAt(h), extents = new Float32Array(count * 2);
-  advances(styleOf(p), text, start, start + count, null, 0, extents);
+  advances(shapeStyle(p), text, start, start + count, null, 0, extents);
   const [ascent, descent] = extent(extents, 0, count);
   setFontMetrics(fm, true, Math.floor(Math.min(ascent, fontTop(p))), Math.round(ascent), Math.round(descent), Math.ceil(Math.max(descent, fontBottom(p))), 0);
 });
