@@ -63,7 +63,7 @@ const nodeRun = (b: string) => (cfg: G1Config): G1Result => {
   return result;
 };
 async function chromeRun() {
-  const { launchBrowser } = await import("../browser.ts");
+  const { launchBrowser } = await import("../page.ts");
   const script = await bundleFor("browser", join(here, "g1run.ts"));
   const aotDir = process.env.WEBDROID_AOT;
   const preload = [dex, ...PLATFORM_PATHS];

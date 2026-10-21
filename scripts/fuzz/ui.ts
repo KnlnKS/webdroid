@@ -5,7 +5,9 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { PNG } from "pngjs";
 import { diffImages } from "../../tests/e2e/lib/diff.ts";
 import { savePng, type Img } from "../../tests/e2e/lib/png.ts";
-import { diagnosed, readProcesses } from "../../tests/e2e/lib/processes.ts";
+import { diagnosed } from "../../tests/e2e/lib/processes.ts";
+import { readProcesses } from "../page.ts";
+import { deadline } from "../util.ts";
 import type { UiNode } from "../../tests/e2e/types.ts";
 import { Random } from "./random.ts";
 import { matchIdentity, semanticKeys, validateUiAction, type UiAction } from "./ui-model.ts";
@@ -73,13 +75,6 @@ function screenSize(nodes: readonly UiNode[]): { width: number; height: number }
   };
 }
 
-function withDeadline<T>(work: Promise<T>, label: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout>;
-  return Promise.race([work, new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${label} timed out after ${STEP_DEADLINE_MS}ms`)), STEP_DEADLINE_MS);
-  })]).finally(() => clearTimeout(timer));
-}
-
 function treeDivergence(android: readonly UiNode[], web: readonly UiNode[]): string | undefined {
   const expected = new Set(semanticKeys(android)), actual = new Set(semanticKeys(web));
   if (expected.size < 2) return undefined;
@@ -141,10 +136,10 @@ async function runApk(app: UiApp, options: UiOptions, apkIndex: number, plan: Ui
       const preDivergence = androidNodes ? treeDivergence(androidNodes, webNodes) : undefined;
       const structuralDivergence = missingTarget ? `target absent: ${stable(action.target)}` : preDivergence;
       try {
-        if (!structuralDivergence) await withDeadline(Promise.all([
+        if (!structuralDivergence) await deadline(Promise.all([
           android ? android.act(action, sourceSize) : Promise.resolve(),
           web.act(action, webNodes),
-        ]).then(() => undefined), `UI step ${index}`);
+        ]), STEP_DEADLINE_MS, `UI step ${index} timed out after ${STEP_DEADLINE_MS}ms`);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (state && plan.kind === "explore") {

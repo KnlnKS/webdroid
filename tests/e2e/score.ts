@@ -10,7 +10,8 @@ import { parseArgs } from "./lib/args.ts";
 import { flowSchemaHash, screenOf, screenParam, uiFileFor, type Flow, type Manifest, type RecordedStep, type Step, type UiNode } from "./types.ts";
 import { diffTrees } from "./lib/tree.ts";
 import type { FlowRun } from "./capture-webdroid.ts";
-import { E2E_DIR, readJson, runQueue, sha1 } from "./lib/util.ts";
+import { E2E_DIR, readJson, sha1 } from "./lib/util.ts";
+import { runQueue } from "../../scripts/util.ts";
 
 /**
  * The device half of the structural comparison. A full hierarchy if the recorder captured one;

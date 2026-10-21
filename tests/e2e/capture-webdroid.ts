@@ -8,7 +8,8 @@ import { E2E_DIR, readJson } from "./lib/util.ts";
 import { PINNED_CLOCK_MS, evidenceOf, flowSchemaHash, isMotionWait, screenOf, screenParam, uiFileFor, type ExecutionFlow, type ExecutionStep, type Flow, type Manifest, type WaitPolicy } from "./types.ts";
 import { parseScreen } from "../../src/shell/config.ts";
 import type { Act, Hang, Settled, StepResult } from "./lib/probe.ts";
-import { readProcesses, type ProcessSnapshot } from "./lib/processes.ts";
+import type { ProcessSnapshot } from "./lib/processes.ts";
+import { readProcesses } from "../../scripts/page.ts";
 
 export type StepRun = {
   id: string; index: number; file: string;

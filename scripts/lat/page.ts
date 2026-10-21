@@ -4,7 +4,7 @@
 import { installLatencyObserver } from "./observe.ts";
 import { compileDeltas, matchesState, type Expectation } from "./expect.ts";
 import type { Ev } from "../../src/timeline.ts";
-import { ERROR_LINE, pageDiagnostics } from "../../tests/e2e/lib/processes.ts";
+import { ERROR_LINE, appUp, pageDiagnostics, workerDiagnostics, workerRows, type ProcessSnapshot, type WorkerProcess } from "../../tests/e2e/lib/processes.ts";
 
 /** what run.ts hands a launch's page: `steps` are the scenario's (scripts/lat/scenarios); `E` is the timeline's events, passed rather than
  *  imported so the bundle leaves out the timeline's ring */
@@ -20,8 +20,8 @@ export type Tap = { intended: number | null; response?: First; timeline?: { answ
 export type Launch = { demand?: [string, boolean, boolean, boolean][] | null; firstApp: unknown; renderedApp: unknown; compileCounters: any[]; compileCounterAt: number; firstFrame: number;
   idle: number; perf: Record<string, number>; marks: string[]; timeline: number[][] };
 export type Fps = { m: string; ms: number; presents: number; fps: number; p50: number | null; p95: number | null; p99: number | null; over25: number; longTasks: number; longTaskMs: number; frames?: any };
-/** what the page read of its own realm and of every process Worker */
-export type Diagnostics = { at: number; frames: ({ url: string } & ReturnType<typeof pageDiagnostics>)[]; workers: { snapshot?: { logs: string[] }; error?: string }[] };
+/** what the page read of its own realm and of every process Worker, as readProcesses (scripts/page.ts) reads them */
+export type Diagnostics = { at: number; aotKey: string | null; processes: ProcessSnapshot[] };
 export type Capture = { launch?: Launch; taps: Tap[]; fps?: Fps[]; processesBefore?: Diagnostics; processesAfter?: Diagnostics;
   presentation?: { firstApp: unknown; renderedApp?: unknown };
   codeReadiness?: { phase: "saved" | "attached"; realms: unknown[] }; error?: string };
@@ -34,11 +34,15 @@ async function run() {
   const result: Capture = w.__wdLat = { taps: [] };
   // a process Worker's state reaches the page over its control port
   const foreground = async () => (await w.wd.foregroundWorkerSnapshot())?.snapshot ?? null;
-  const diagnostics = w.__wdLatRead = async () => {
-    let workers;
-    try { workers = w.wd?.workerProcesses ? await w.wd.workerProcesses() : []; }
-    catch (error) { workers = [{ error: String(error) }]; }
-    return { at: performance.now(), frames: [{ url: location.href, aotKey: globalThis.__wdWasm?.aotKey ?? null, ...pageDiagnostics(ERROR_LINE.source) }], workers };
+  /** `settled` reads again while a Worker is starting (workerRows), which the reads around a tap do not wait for */
+  const diagnostics = w.__wdLatRead = async (settled = false): Promise<Diagnostics> => {
+    let workers: ProcessSnapshot[];
+    try {
+      const rows: WorkerProcess[] = settled ? await workerRows() : await w.wd.workerProcesses();
+      workers = rows.map((row) => ({ url: `worker:${row.url}#pid=${row.pid}`, diagnostics: workerDiagnostics(row) }));
+    } catch (error) { workers = [{ url: "worker:" + location.origin, diagnostics: { status: "failure", message: String(error) } }]; }
+    return { at: performance.now(), aotKey: globalThis.__wdWasm?.aotKey ?? null,
+      processes: [{ url: location.href, diagnostics: pageDiagnostics(ERROR_LINE.source) }, ...workers] };
   };
   const workerReadiness = async (save: boolean) => {
     const code = await w.wd.foreground()?.codeReadiness(save);
@@ -287,18 +291,12 @@ async function run() {
     return s && { perf: s.perf, queued: s.main.queued };
   };
   const snapshot = async () => { const perf = (await app())?.perf; return Object.fromEntries(counters.map((k) => [k, perf?.[k] ?? 0])); };
-  /** the exception of a process of the launched app (the first one started) that crashed: the launch ends with it rather than with the scenario's timeout */
-  const launchCrash = async (): Promise<string | undefined> => {
-    const procs: { pid: number; pkg: string; terminal?: { record?: { crash?: { exceptionClassName: string; exceptionMessage: string } } } }[] = await w.wd.workerProcesses?.() ?? [];
-    const first = procs.reduce<typeof procs[number] | undefined>((a, b) => a && a.pid < b.pid ? a : b, undefined);
-    const crash = procs.find((p) => p.pkg === first?.pkg && p.terminal?.record?.crash)?.terminal!.record!.crash;
-    return crash && `${crash.exceptionClassName}: ${crash.exceptionMessage}`;
+  /** the launch ends with the app process's first frame, or with how it ended rather than with the scenario's timeout */
+  const up = async (until: "drawn" | "presented", ms: number, pollMs: number) => {
+    const shown = await appUp({ until, ms, pollMs });
+    if (shown !== true) throw new Error(shown);
   };
-  for (let n = 1; !((await app())?.perf.draws > 0); n++) {
-    const crash = n % 100 ? undefined : await launchCrash();
-    if (crash) throw new Error("the app process died while launching: " + crash);
-    await sleep(5);
-  }
+  await up("drawn", 300_000, 5);
   const firstFrame = Math.round(performance.now()), launchPerf = Object.fromEntries(Object.entries(await snapshot()).filter(([, v]) => v));
   // the Worker's timeline up to the first frame, as far back as its ring holds
   const launchTimeline = ((await w.wd.foreground()?.timeline(performance.timeOrigin) ?? []) as number[][]).map(([t, e, a]) => [Math.round((t - performance.timeOrigin) * 100) / 100, e, a]);
@@ -322,11 +320,7 @@ async function run() {
       await sleep(100);
     }
   };
-  const presented = async () => (await app())!.perf.presentations > 0;
-  for (const until = performance.now() + 60_000; !await presented();) {
-    if (performance.now() > until) throw new Error("First app presentation unavailable");
-    await sleep(50);
-  }
+  await up("presented", 60_000, 50);
   result.presentation = { firstApp: observer.firstApp };
   const renderedApp = await intended(expectedLaunch, 0, []);
   result.presentation.renderedApp = renderedApp;
@@ -451,12 +445,12 @@ async function run() {
     ev("pointerup", x, y);
     await sleep(300); await idle();
   }
-  result.processesAfter = await diagnostics();
+  result.processesAfter = await diagnostics(true);
   if (save) result.codeReadiness = { phase: "saved", realms: [await workerReadiness(true)] };
   document.title = "DONE";
 }
 if (location.pathname === "/") addEventListener("DOMContentLoaded", () => run().catch(async e => {
   const result = w.__wdLat; result.error = String(e);
-  try { result.processesAfter = await w.__wdLatRead(); } catch (error) { result.diagnosticError = String(error); }
+  try { result.processesAfter = await w.__wdLatRead(true); } catch (error) { result.diagnosticError = String(error); }
   document.title = "DONE";
 }));

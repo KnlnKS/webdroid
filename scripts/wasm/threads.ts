@@ -26,6 +26,7 @@ import { classIntrinsics } from "../../src/wasm/link/classes.ts";
 import { CORE_PATHS, JAVA, ROOT } from "./paths.ts";
 import { checker } from "./tools.ts";
 import { fixture, jdkTool } from "../java.ts";
+import { deadline } from "../util.ts";
 
 const out = fixture({ sources: [join(JAVA, "Th.java"), join(JAVA, "Ref.java")], release: 11, minApi: 34, classes: /^Th.*\.class$/ });
 
@@ -86,8 +87,7 @@ await startProcess(w);
 const callbackEntry = wasmEntry(w);
 
 const suite = checker("threads");
-const timed = <T,>(p: Promise<T>, ms = Number(process.env.J2W_TIMEOUT ?? 60000)): Promise<T> => Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`timed out after ${ms} ms`)), ms).unref())]);
-const show = async (f: () => unknown) => { try { return String(await timed(Promise.resolve(f()))); } catch (e) { const t = w.throwable(e); return t ? "java " + w.classNameOf(t) : "throw " + String(e).slice(0, 100); } };
+const show = async (f: () => unknown) => { try { return String(await deadline(Promise.resolve(f()), Number(process.env.J2W_TIMEOUT ?? 60000))); } catch (e) { const t = w.throwable(e); return t ? "java " + w.classNameOf(t) : "throw " + String(e).slice(0, 100); } };
 const expect = (what: string, got: unknown, want: unknown) => suite.check(what, String(got), String(want));
 
 // ---------- the Java cases against the JDK

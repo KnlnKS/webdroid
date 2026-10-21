@@ -6,8 +6,7 @@
 // weights for fwtest, tests/fixtures/textwidths-device.txt). Line ends and hyphen edits must match,
 // and a hyphenated line's glyphs; widths and line extents are reported.
 import { readFileSync, writeFileSync } from "node:fs";
-import { setTimeout } from "node:timers/promises";
-import { BASE_URL, CONTEXT_OPTS, launchBrowser } from "./browser.ts";
+import { CONTEXT_OPTS, bootApp, launchBrowser, openWebdroid } from "./page.ts";
 import { adb, runDex } from "./adb.ts";
 import { tempDir } from "./java.ts";
 
@@ -50,15 +49,9 @@ if (process.argv.includes("--record")) {
 const apk = process.argv.slice(2).find((a) => !a.startsWith("--")) ?? "FitNotes.apk";
 const browser = await launchBrowser();
 const page = await browser.newPage(CONTEXT_OPTS);
-const resp = await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
-if (!resp?.ok()) throw new Error(`dev server not reachable at ${BASE_URL}`);
-await page.waitForFunction(() => !!globalThis.wd, null, { timeout: 60_000 });
-await page.evaluate(() => document.fonts.ready);
-await page.evaluate((a) => void globalThis.wd.boot(a), apk);
-await page.waitForFunction(() => globalThis.wd.perf.bootMs > 0, null, { timeout: 120_000 });
-// LineBreakConfig reads the application's target SDK: wait for bindApplication, which follows boot
-while (!await page.evaluate(async () => await globalThis.wd.scall("android/app/ActivityThread", "currentApplication", "()Landroid/app/Application;") !== null))
-  await setTimeout(250);
+await openWebdroid(page);
+// the layouts run in the page's realm, system_server's, whose Application ActivityThread.systemMain made before the app's process started
+await bootApp(page, apk, { ms: 120_000 });
 const ours: string[] = await page.evaluate(async (paras) => {
   const wd = globalThis.wd, out: string[] = [], P = "Landroid/graphics/Paint;", B = "Landroid/text/StaticLayout$Builder;";
   const config = await wd.vcall(await wd.vcall(await wd.vcall(await wd.newObj("android/graphics/text/LineBreakConfig$Builder", "()V"),

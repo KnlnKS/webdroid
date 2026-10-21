@@ -38,8 +38,8 @@ import type { Capture, Diagnostics, LatConfig, Tap } from "./page.ts";
 import { cli } from "../args.ts";
 import { Ev } from "../../src/timeline.ts";
 import { bundle } from "../bundle.ts";
-import { BASE_URL, CONTEXT_OPTS, SOFTWARE_GL, chromeArgs } from "../browser.ts";
-import { ERROR_LINE } from "../../tests/e2e/lib/processes.ts";
+import { BASE_URL, CONTEXT_OPTS, SOFTWARE_GL, chromeArgs } from "../page.ts";
+import { diagnosticErrors } from "../../tests/e2e/lib/processes.ts";
 
 const LIMIT_MS = 150;
 const SCREEN = "1080x2160@480";
@@ -242,9 +242,8 @@ function repeatMedians(taps: Tap[]) {
 }
 type Report = Capture & { repeats?: ReturnType<typeof repeatMedians>; engine: string; browser?: string; scenario: string; apk?: string; warm: boolean; ecores: boolean; query: string; expectedTaps?: string[]; preparation?: Capture;
   accepted: false; intendedObservation: string; instrumentation: string; launchProxy: string; browserErrors?: string[] };
-/** every realm's error lines */
-const browserErrors = (after?: Diagnostics): string[] => [...after?.frames.flatMap((f) => f.status === "ok" ? f.errors ?? [] : []) ?? [],
-  ...after?.workers.flatMap((w) => w.snapshot?.logs.filter((l) => ERROR_LINE.test(l)) ?? []) ?? []];
+/** every realm's error lines, and each realm whose diagnostics did not arrive */
+const browserErrors = (after?: Diagnostics): string[] => after ? diagnosticErrors(after.processes) : [];
 const report: Report[] = [];
 let failed = false;
 for (const name of names) {

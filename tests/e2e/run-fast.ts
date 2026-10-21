@@ -1,4 +1,4 @@
-import { diagnostics, browserFailures } from "./lib/diagnostics.ts";
+import { diagnostics } from "./lib/diagnostics.ts";
 import { existsSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { captureFlow, launchFor, loadManifest, CaptureAborted, type StepRun } from "./capture-webdroid.ts";
@@ -7,7 +7,8 @@ import { FLOWS } from "./flows/index.ts";
 import type { Flow } from "./types.ts";
 import { loadPng } from "./lib/png.ts";
 import { diffImages } from "./lib/diff.ts";
-import { E2E_DIR, readJson, runQueue } from "./lib/util.ts";
+import { E2E_DIR, readJson } from "./lib/util.ts";
+import { runQueue } from "../../scripts/util.ts";
 import { executionFlow, sameScreen, screenOf, screenParam, waitHorizonMs, type CaptureScreen, type Manifest } from "./types.ts";
 
 // Live flows depend on upstream content and networks, so they join the lane only when named or
@@ -75,11 +76,8 @@ async function checkFlow(flow: Flow): Promise<Checked> {
     await driver.close();
   }
   const visual = await visualEvidence(selected, manifest, driver.screen);
-  const observed = diagnostics(selected, runs);
-  const browserErrors = browserFailures(flow, driver.errors);
-  return { flow, runs, visual: visual.checks,
-    errors: [...captureErrors, ...observed.errors, ...visual.errors, ...(flow.clock === "live" ? [] : browserErrors)],
-    gaps: [...observed.gaps, ...(flow.clock === "live" ? browserErrors : [])] };
+  const observed = diagnostics(selected, runs, driver.errors);
+  return { flow, runs, visual: visual.checks, errors: [...captureErrors, ...observed.errors, ...visual.errors], gaps: observed.gaps };
 }
 
 console.log(`fast flows: ${flows.map((flow) => flow.app).join(", ")} (${jobs} at a time)`);

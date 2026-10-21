@@ -7,9 +7,8 @@ import { COMPILED_CODE_DIR } from "../../src/shell/hostfs.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright";
-import { BASE_URL, CONTEXT_OPTS, launchOptions } from "../browser.ts";
+import { BASE_URL, CONTEXT_OPTS, launchOptions, openWebdroid, readProcesses, waitForApp, webdroidUrl } from "../page.ts";
 import { AOT_ROOT } from "../aot-key.ts";
-import { readProcesses } from "../../tests/e2e/lib/processes.ts";
 import type { AotProfile } from "../../src/shell/aot-profile.ts";
 
 const classes = process.argv.includes("--classes");
@@ -39,24 +38,12 @@ for (const apk of apks.length ? apks : ["FitNotes.apk", "calculatorm.apk", "miho
       const page = lastPage = await context.newPage();
       const errors: string[] = [];
       page.on("pageerror", error => errors.push(error.message));
-      const url = new URL(BASE_URL);
+      const url = webdroidUrl({ apk });
       url.pathname = "/";
-      url.searchParams.set("apk", apk);
       if (!url.searchParams.has("screen")) url.searchParams.set("screen", "1080x2160@480");
       const deadline = Date.now() + 90_000;
-      await page.goto(url.href);
-      await page.evaluate(async () => {
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        try {
-          await Promise.race([(async () => {
-            for (;;) {
-              const wd = globalThis.wd, foreground = await wd?.foregroundWorkerSnapshot?.();
-              if (wd && (foreground?.snapshot.perf ?? wd.perf).presentations > 0) return;
-              await new Promise(resolve => setTimeout(resolve, 200));
-            }
-          })(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("First presentation timed out")), 90_000); })]);
-        } finally { clearTimeout(timer); }
-      });
+      await openWebdroid(page, url);
+      await waitForApp(page, { until: "presented", ms: 90_000 });
       await page.waitForTimeout(SETTLE_MS);
       const {processes,profiles} = await collectLaunch(page, deadline, errors);
       for (const realm of [page, ...page.workers()] as Pick<import("playwright").Worker, "evaluate">[]) for (const slot of await realm.evaluate(() => globalThis.__wdWasm?.ran?.() ?? []).catch(() => [] as number[])) warm.add(slot);
