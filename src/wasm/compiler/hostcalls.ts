@@ -15,7 +15,7 @@ export const ROOT = 1;
 export const Sync = { Try: 1, Exit: 2, Notify: 3, NotifyAll: 4, Unpark: 5, Interrupt: 6, Interrupted: 7, IsInterrupted: 8, Holds: 9, Create: 10, Status: 11, InitDone: 12, Bind: 13, Plain: 14, Resume: 15, IsMain: 16, ContextDeferred: 17, ContextSet: 18, SystemLoaderReady: 19, CanSuspend: 20, Rename: 21, Ended: 22 } as const;
 export type Sync = (typeof Sync)[keyof typeof Sync];
 /** operations that may wait (`host.block`, Suspending) */
-export const Block = { Enter: 1, Wait: 2, Sleep: 3, Park: 4, Yield: 5, Init: 6, Net: 7 } as const;
+export const Block = { Enter: 1, Wait: 2, Sleep: 3, Park: 4, Yield: 5, Init: 6, Net: 7, Collect: 8 } as const;
 export type Block = (typeof Block)[keyof typeof Block];
 
 export const sidOf = (cx: Compiler) => cx.global("rt", "sid", T.i32, true);

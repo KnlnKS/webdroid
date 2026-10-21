@@ -2,6 +2,7 @@
 // and platform Program; what is the realm's own is the app's dex files, its classes' statics and its heap.
 import { mark, perf } from "../../perf.ts";
 import { switchValue } from "../../switches.ts";
+import { wallMillis } from "../../guest-clock.ts";
 import { note } from "../../timeline.ts";
 import { FetchStore } from "./aotstore.ts";
 import { rt } from "../../jvm/runtime.ts";
@@ -17,7 +18,7 @@ import { PLATFORM_JARS, hostWhole } from "../../jvm/provenance.ts";
 import { parkTimeout, unparkTimeout, turnElapsed, wakeSoon, yieldToLoop, yieldStats, sinceInput, answeringFor } from "../../jvm/yield.ts";
 import { World, type WorldOptions } from "../link/world.ts";
 import { objectOfLoader } from "../link/loaders.ts";
-import type { HostLoop } from "../link/sched.ts";
+import { TURN_MS, type HostLoop } from "../link/sched.ts";
 import type { Numbering } from "../link/numbers.ts";
 import { externs, intrinsics } from "../link/intrinsics.ts";
 import { endWaits } from "../link/module.ts";
@@ -60,8 +61,9 @@ let aheading = false;
 /** timers and turns of the event loop for threads that wait: the shell's own, so a thread's wait is a timed park an idle observer ignores and a yield keeps the main looper's order */
 export const hostLoop: HostLoop = {
   yield: (soon) => soon ? wakeSoon() : yieldToLoop(),
-  due: () => turnElapsed() >= 8,
+  due: () => turnElapsed() >= TURN_MS,
   after: (ms, fn) => { const id = parkTimeout(fn, ms); return () => unparkTimeout(id); },
+  now: () => wallMillis(),
 };
 
 /** the options of every World that runs Java in a realm, the tier's own and the harnesses': the registered natives and the host's network, loop and native memory */

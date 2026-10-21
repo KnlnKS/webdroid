@@ -7,6 +7,7 @@
 // initialization waits, the fuel yield) and the Sched that answers `host.sync` and `host.block`.
 import type { Code } from "../compiler/code.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
+import type { Kind } from "../compiler/program.ts";
 import { rt } from "../compiler/rtfns.ts";
 import { OP } from "../compiler/code.ts";
 import { T } from "../compiler/wasmbin.ts";
@@ -140,17 +141,22 @@ for (const cls of ["jdk/internal/misc/Unsafe", "sun/misc/Unsafe"]) {
 export interface HostLoop {
   /** the next turn of the event loop; `soon` ahead of strands that only yielded */
   yield(soon: boolean): Promise<void>;
-  /** whether the current turn has held the thread long enough that a yield is due */
+  /** whether the current turn has held the thread for TURN_MS, when a yield is due */
   due(): boolean;
   /** runs `fn` after `ms`; the function cancels */
   after(ms: number, fn: () => void): () => void;
+  /** the wall clock Java reads (System.currentTimeMillis), which `after` keeps time by */
+  now(): number;
 }
+/** how long a strand runs before it gives other strands and the event loop their turn (ms) */
+export const TURN_MS = 8;
 let turnStart = 0;
 /** the loop of a World given none, which only compiles: timers alone. The hosts that run Java pass their own (boot.ts) */
 export const defaultLoop: HostLoop = {
   yield: () => new Promise<void>((r) => setTimeout(() => { turnStart = performance.now(); r(); }, 0)),
-  due: () => performance.now() - turnStart >= 8,
+  due: () => performance.now() - turnStart >= TURN_MS,
   after: (ms, fn) => { const id = setTimeout(fn, ms); return () => clearTimeout(id); },
+  now: Date.now,
 };
 
 /** what the host knows of a Java Thread */
@@ -234,21 +240,34 @@ export class Sched {
     this.synchronousEntries++;
     try { return run(); } finally { this.synchronousEntries--; }
   }
+  /** `fn`, a Wasm export or a host import, as a plain call from the host into Java */
+  plain<A extends unknown[], R>(fn: (...a: A) => R): (...a: A) => R {
+    return (...a) => { this.synchronousEntries++; try { return fn(...a); } finally { this.synchronousEntries--; } };
+  }
   /** `fn` as the two imports a call site chooses between by whether it can wait: plain, and Suspending */
   importPair<A extends unknown[], R>(fn: (...a: A) => Promise<R> | R): [plain: (...a: A) => Promise<R> | R, wait: (...a: A) => R] {
-    return [(...a) => { this.synchronousEntries++; try { return fn(...a); } finally { this.synchronousEntries--; } }, this.suspending(fn)];
+    return [this.plain(fn), this.suspending(fn)];
   }
   /** a native answered a Promise: the call site that called it settles it, waiting on this strand's stack */
   parkNative(p: Promise<unknown>): void { this.pending = p; this.g.wait.value = 1; }
+  /** gives up the turn for `reason`. A collection waits for a turn of the timer queue, between which the engine runs its finalizers; a yield (a loop's fuel,
+   *  Thread.yield) and a lazy link wait for the event loop once the turn is due. Before then the main thread runs on, and another thread's yield lets the strands
+   *  that became ready run first */
+  turn(reason: "yield" | "collect" | "link"): St | Promise<St> {
+    if (reason === "collect") return new Promise<St>((r) => { this.loop.after(0, () => r(St.Ok)); });
+    const main = this.current().thread === this.main;
+    if (this.loop.due()) return this.loop.yield(main).then(() => St.Ok);
+    return main || reason === "link" ? St.Ok : Promise.resolve(St.Ok);
+  }
   /** Lazy links share the turn budget: many short methods can compile without reaching a loop fuel check.
    * Delivery preparation may wait before the turn expires. Restore the caller before compilation and again in the resumed stub. */
   admitLink(run: () => void, prepare?: () => Promise<void> | undefined): void | Promise<void> {
     const s = this.current();
     if (!this.canWait(s)) return run();
     const thr = this.g.thr.value, depth = this.g.depth.value;
-    const delivery = prepare?.(), due = this.loop.due();
-    if (!delivery && !due) return run();
-    const pending = due ? Promise.all([delivery, this.loop.yield(s.thread === this.main)]) : delivery!;
+    const delivery = prepare?.(), turn = this.turn("link");
+    if (!delivery && turn === St.Ok) return run();
+    const pending = turn === St.Ok ? delivery! : Promise.all([delivery, turn]);
     this.suspensions++; s.nested = 0;
     this.idle();
     return pending.then(() => { this.become(s, depth, thr); run(); }, error => { this.become(s, depth, thr); throw error; });
@@ -262,7 +281,6 @@ export class Sched {
   private initWaiters = new Map<number, { go: () => void }[]>();
   private promised = new WeakMap<Function, Function>();
   private synchronousExports = new WeakMap<Function, Function>();
-  private fns = new Map<string, Function>();
 
   constructor(w: World, g: Globals, loop: HostLoop) {
     this.w = w; this.g = g; this.loop = loop;
@@ -340,7 +358,7 @@ export class Sched {
   }
   /** Host calls are plain; a strand entry unwraps the same export before WebAssembly.promising. */
   synchronousExport(raw: Function): Function {
-    const host = (...args: unknown[]) => { this.synchronousEntries++; try { return raw(...args); } finally { this.synchronousEntries--; } };
+    const host = this.plain(raw as (...a: unknown[]) => unknown);
     this.synchronousExports.set(host, raw);
     return host;
   }
@@ -368,7 +386,7 @@ export class Sched {
   sync(op: number, obj: object | null, a: number): number {
     const s = this.current();
     switch (op as Sync) {
-      case Sync.Try: return this.plain(this.monitors.tryEnter(obj!, s));
+      case Sync.Try: return this.tried(this.monitors.tryEnter(obj!, s));
       case Sync.Exit: return this.monitors.exit(obj!, s);
       case Sync.Notify: case Sync.NotifyAll: return this.monitors.notify(obj!, s, op === Sync.NotifyAll);
       case Sync.Holds: return +this.monitors.holds(obj!, s);
@@ -400,7 +418,7 @@ export class Sched {
       case Sync.Ended: return +waitsEnded();
     }
   }
-  private plain(st: St): St { if (st === St.Nbs) this.blockedPlain++; return st; }
+  private tried(st: St): St { if (st === St.Nbs) this.blockedPlain++; return st; }
   /** the Thread.State ordinal of a Thread */
   private status(obj: object, started: boolean): number {
     const r = this.threads.get(obj);
@@ -416,9 +434,8 @@ export class Sched {
       case Block.Wait: return a < 0 || b < 0 ? St.Neg : b > 999999 ? St.Nanos : this.monitors.wait(obj!, s, a, false);
       case Block.Sleep: return this.monitors.wait(obj!, s, a, true);
       case Block.Park: return this.park(s, a, b !== 0);
-      // b: a turn of the timer queue rather than of the yield channel, which the engine runs its finalizers between
-      // before its turn is due the main thread keeps running; other threads let any strand that became ready run first
-      case Block.Yield: return b ? new Promise<St>((r) => { this.loop.after(0, () => r(St.Ok)); }) : this.loop.due() ? this.loop.yield(s.thread === this.main).then(() => St.Ok) : s.thread === this.main ? St.Ok : Promise.resolve(St.Ok);
+      case Block.Yield: return this.turn("yield");
+      case Block.Collect: return this.turn("collect");
       case Block.Init: return this.initWait(s, a);
       case Block.Net: return (this.w.opts.net?.wait?.(this.w) ?? Promise.resolve()).then(() => St.Ok);
     }
@@ -432,7 +449,7 @@ export class Sched {
     return new Promise<St>((resolve) => {
       let cancel: (() => void) | null = null;
       const done = () => { cancel?.(); th.parked = null; th.waiting = 0; th.permit = false; resolve(St.Ok); };
-      if (timed) cancel = this.loop.after(absolute ? Math.max(0, time - Date.now()) : time / 1e6, done);
+      if (timed) cancel = this.loop.after(absolute ? Math.max(0, time - this.loop.now()) : time / 1e6, done);
       th.parked = done; th.waiting = timed ? 4 : 3;
     });
   }
@@ -446,35 +463,32 @@ export class Sched {
     queueMicrotask(() => void this.run(s, obj));
     return 0;
   }
-  private threadFn(name: string, build: () => Function): Function { let f = this.fns.get(name); if (!f) this.fns.set(name, f = build()); return f; }
   /** ART's thread start: `run`, then the thread's handler for an exception nothing caught, then `exit`, the peer cleared and the threads joined to it woken */
   private async run(s: Strand, obj: object): Promise<void> {
-    const w = this.w, virtual = (name: string, desc: string) => {
+    const w = this.w, call = (name: string, params: Kind[], body: (cx: Compiler, c: Code, arg: (i: number) => void) => void, ...args: unknown[]) => w.helpers.callFn(name, params, "V", body)(s, ...args);
+    const virtual = (name: string, desc: string, ...args: unknown[]) => {
       const m = w.prog.implFor(w.classNameOf(obj), name, desc)!;
-      return this.threadFn(`${m.cls}.${name}${desc}`, () => w.helpers.hostFn(`thr:${m.cls}.${name}${desc}`, ["L", ...m.params.map(() => "L" as const)], "V", (cx, c) => {
-        c.lget(0); if (m.params.length) c.lget(1);
-        cx.callMethod(c, m);
-      }));
+      return call(`thr:${m.cls}.${name}${desc}`, ["L", ...m.params.map(() => "L" as const)], (cx, c, arg) => { arg(0); if (m.params.length) arg(1); cx.callMethod(c, m); }, obj, ...args);
     };
-    try { await s.call(virtual("run", "()V"), obj); }
+    try { await virtual("run", "()V"); }
     catch (e) {
       const t = w.throwable(e);
       if (!t) console.error("[wasm thread]", e);
-      else try { await s.call(virtual("dispatchUncaughtException", "(Ljava/lang/Throwable;)V"), obj, t); } catch { /* the handler's own failure ends the thread, as in ART */ }
+      else try { await virtual("dispatchUncaughtException", "(Ljava/lang/Throwable;)V", t); } catch { /* the handler's own failure ends the thread, as in ART */ }
     } finally {
-      const exit = this.threadFn("exit", () => w.helpers.hostFn("thr:exit", ["L"], "V", (cx, c) => { c.lget(0); cx.callMethod(c, w.prog.resolve(THREAD, "exit", "()V")!); }));
-      try { await s.call(exit, obj); } catch { /* a failing exit leaves the thread over all the same */ }
+      try { await call("thr:exit", ["L"], (cx, c, arg) => { arg(0); cx.callMethod(c, w.prog.resolve(THREAD, "exit", "()V")!); }, obj); } catch { /* a failing exit leaves the thread over all the same */ }
       // a thread that join wakes is TERMINATED when it asks: the flag goes before the peer is cleared and the joiners notified
       s.thread.alive = false; this.started.delete(s.thread);
-      const done = this.threadFn("finish", () => w.helpers.hostFn("thr:finish", ["L"], "V", (cx, c) => {
-        const st = cx.structFor(THREAD), l = c.newLocal(T.anyref);
-        c.lget(0); setPeer(cx, c, 0n);
-        c.lget(0).refCast(st).structGet(st, threadField(cx, "lock", "Ljava/lang/Object;")).lset(l);
-        c.lget(l).call(cx.helper("menter"));
-        emitSync(cx, c, Sync.NotifyAll, () => c.lget(l)); c.drop();
-        c.lget(l).call(cx.helper("mexit"));
-      }));
-      try { await s.call(done, obj); } catch (e) { console.error("[wasm thread exit]", e); }
+      try {
+        await call("thr:finish", ["L"], (cx, c, arg) => {
+          const st = cx.structFor(THREAD), l = c.newLocal(T.anyref);
+          arg(0); setPeer(cx, c, 0n);
+          arg(0); c.refCast(st).structGet(st, threadField(cx, "lock", "Ljava/lang/Object;")).lset(l);
+          c.lget(l).call(cx.helper("menter"));
+          emitSync(cx, c, Sync.NotifyAll, () => c.lget(l)); c.drop();
+          c.lget(l).call(cx.helper("mexit"));
+        }, obj);
+      } catch (e) { console.error("[wasm thread exit]", e); }
       s.end();
       this.hooks.ended(s.thread);
     }
@@ -502,10 +516,11 @@ export class Sched {
     for (const id of this.initWaiters.keys()) if (this.strands[this.w.initWord(id) >>> 2]?.thread === thread) return true;
     return false;
   }
-  /** whether `holder` waits, through the strands it waits for, on `waiter` */
+  /** whether `holder` waits, through the strands it waits for, on `waiter`; a cycle that does not reach `waiter` is others' deadlock, which `waiter` waits behind */
   private waitsFor(holder: Strand, waiter: Strand): boolean {
     if (waiter.root) return false;
-    for (let c: Strand | null = holder, n = 0; c && !c.root; c = c.waitsOn) if (c === waiter || ++n > 64) return true;
+    const seen = new Set<Strand>();
+    for (let c: Strand | null = holder; c && !c.root && !seen.has(c); c = c.waitsOn) { if (c === waiter) return true; seen.add(c); }
     return false;
   }
   private initDone(id: number): number {
