@@ -118,8 +118,7 @@ function checkPts(pts: Float32Array, off: number, n: number) {
 }
 /** SkDraw::drawPoints' lines through a path effect: each a path, always stroked */
 function effectedLines(nc: NativeCanvas, pts: ArrayLike<number>, off: number, n: number, p: NativePaint) {
-  const q = new NativePaint();
-  copyPaint(p, q); q.style = 1;
+  const q = nc.restyle(p, 1);
   for (let i = off, end = off + (n & ~3); i < end; i += 4) {
     const g = new NativePath();
     g.moveTo(pts[i], pts[i + 1]); g.lineTo(pts[i + 2], pts[i + 3]);
@@ -129,9 +128,7 @@ function effectedLines(nc: NativeCanvas, pts: ArrayLike<number>, off: number, n:
 const NOOP = () => {};
 /** SkDraw::drawPoints: lines stroked (style 1) and points filled (0), whatever the paint's style */
 function drawAs(nc: NativeCanvas, p: NativePaint, style: number, draw: (c: Ctx2D, clip?: boolean) => void, plan?: DrawPlan) {
-  const was = p.style;
-  p.style = style;
-  try { nc.drawShape(p, style ? NOOP : draw, style ? draw : NOOP, undefined, plan); } finally { p.style = was; }
+  nc.drawShape(nc.restyle(p, style), style ? NOOP : draw, style ? draw : NOOP, undefined, plan);
 }
 function drawLine(nc: NativeCanvas, x0: number, y0: number, x1: number, y1: number, p: NativePaint) {
   if (p.pathEffect && !p.dash) return effectedLines(nc, [x0, y0, x1, y1], 0, 4, p);
@@ -328,23 +325,25 @@ const onPath = new PathMeasure(), posTan = new Float32Array(4);
 function drawTextOnPath(nc: NativeCanvas, s: string, path: NativePath, hOffset: number, vOffset: number, p: NativePaint) {
   cssFont(s, p);
   onPath.setPath(path, false);
-  const advance = paintAdvance(p, s), align = p.textAlignN;
-  if (align) hOffset += (align === 1 ? -0.5 : -1) * (advance - onPath.length());
-  p.textAlignN = 0;
-  try {
-    let x = 0;
-    for (const { segment } of graphemes.segment(s)) {
-      const w = paintAdvance(p, segment), half = w / 2, at = hOffset + x + half;
-      let px = at, py = vOffset, tx = 1, ty = 0;
-      if (onPath.getPosTan(at, posTan, posTan.subarray(2))) { px = posTan[0]; py = posTan[1]; tx = posTan[2]; ty = posTan[3]; }
-      nc.ctx.save();
-      try {
-        nc.ctx.transform(tx, ty, -ty, tx, px - ty * vOffset - half * tx, py + tx * vOffset - half * ty);
-        drawText(nc, segment, 0, 0, p);
-      } finally { nc.ctx.restore(); }
-      x += w;
-    }
-  } finally { p.textAlignN = align; }
+  const align = p.textAlignN;
+  let q = p;
+  if (align) {
+    hOffset += (align === 1 ? -0.5 : -1) * (paintAdvance(p, s) - onPath.length());
+    copyPaint(p, q = new NativePaint());
+    q.textAlignN = 0;
+  }
+  let x = 0;
+  for (const { segment } of graphemes.segment(s)) {
+    const w = paintAdvance(q, segment), half = w / 2, at = hOffset + x + half;
+    let px = at, py = vOffset, tx = 1, ty = 0;
+    if (onPath.getPosTan(at, posTan, posTan.subarray(2))) { px = posTan[0]; py = posTan[1]; tx = posTan[2]; ty = posTan[3]; }
+    nc.ctx.save();
+    try {
+      nc.ctx.transform(tx, ty, -ty, tx, px - ty * vOffset - half * tx, py + tx * vOffset - half * ty);
+      drawText(nc, segment, 0, 0, q);
+    } finally { nc.ctx.restore(); }
+    x += w;
+  }
 }
 /** the text a run names, without a copy for the whole string */
 const run = (s: string, start: number, end: number) => (start === 0 && end === s.length ? s : s.slice(start, end));

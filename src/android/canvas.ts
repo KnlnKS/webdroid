@@ -213,6 +213,15 @@ export class NativeCanvas {
       if (p.style === 1 || p.style === 2 && p.strokeWidth !== 0) { this.prep(p, true); stroke(ctx); }
     } finally { endPaint(ctx, undo); }
   }
+  private restyled: NativePaint | null = null;
+  /** `p` for a draw that sets its own style, as SkDraw strokes lines and fills points: the paint, or
+   *  the canvas's copy restyled */
+  restyle(p: NativePaint, style: number): NativePaint {
+    if (p.style === style) return p;
+    const q = this.restyled ??= new NativePaint();
+    copyPaint(p, q); q.style = style;
+    return q;
+  }
   private effected: NativePaint | null = null;
   /** SkCanvas::drawPath through a path effect other than a lone dash: the geometry it makes, filled
    *  when the effect makes a fill (PathDashPathEffect), else drawn as the paint draws */
@@ -228,8 +237,9 @@ export class NativeCanvas {
     const bounds = canvasLocalBounds(this.ctx);
     if (!bounds) return;
     const [l, t, r, b] = bounds;
-    copyPaint(paint, paintScratch); paintScratch.style = 0; paintScratch.maskFilter = null;
-    this.drawShape(paintScratch, (c, clip) => { if (!clip) c.fillRect(l, t, r - l, b - t); }, () => {});
+    const q = this.restyled ??= new NativePaint();
+    copyPaint(paint, q); q.style = 0; q.maskFilter = null;
+    this.drawShape(q, (c, clip) => { if (!clip) c.fillRect(l, t, r - l, b - t); }, () => {});
   }
   /** a fill by a shader the 2D context cannot fill with, a bitmap's or a gradient under a local
    *  matrix (Canvas2D gradients have no transform of their own): the plane under the matrix,
@@ -437,7 +447,6 @@ export class NativeCanvas {
     this.narrow(Math.floor(d[0]), Math.floor(d[1]), Math.ceil(d[2]), Math.ceil(d[3]));
   }
 }
-const paintScratch = new NativePaint();
 /** clip everything away: the context's clip only narrows, so it is intersected with a pixel off the target */
 function clipNothing(ctx: Ctx2D) {
   const m = ctx.getTransform();
