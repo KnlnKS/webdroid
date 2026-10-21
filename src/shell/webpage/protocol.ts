@@ -16,6 +16,8 @@ export type FrameDocument = { src: string; init?: FrameInit } | { html: string; 
 
 /** a renderer document's announcement: its bridge and, for a subframe, its token */
 export type RendererReady = { kind: "ready"; bridge: string | null; sub: string | null };
+/** a subframe's renderer document to the page that frames it, ahead of its load (frames.ts) */
+export const FRAME_BOOTSTRAP = { wdFrame: "bootstrap" } as const;
 /** the page a renderer document loads, and the context its page script and worker read */
 export interface LoadMessage {
   kind: "load"; page: string; userAgent: string; intercept: boolean; interfaces: Record<string, Record<string, boolean>>;
@@ -25,16 +27,27 @@ export interface LoadMessage {
  *  IndexedDB and file systems ("origin"), with its localStorage ("data"), or everything ("all") */
 export type StorageOp = "usage" | "origin" | "data" | "all";
 export type RendererTask = LoadMessage | { kind: "storage"; op: StorageOp };
-/** the load's context, as the renderer bootstrap answers its worker */
-export type RendererContext = { id: string; page: string; agent: string; interfaces: LoadMessage["interfaces"]; cookies: DocumentCookie[];
-  clientHints: ClientHints; sharedThread: boolean | undefined; intercept: boolean; sub: boolean; frames: string; fonts: WebFonts };
+/** the load's context, as the renderer bootstrap answers its worker: its bridge, and whether it is a subframe */
+export type RendererContext = Omit<LoadMessage, "kind" | "document"> & { id: string; sub: boolean };
 /** what the renderer bootstrap leaves the page script: the context, and the port to the app */
 export type PageConfig = RendererContext & { port: MessagePort };
 
 export type Invoke = { kind: "invoke"; object: string; method: string; args: unknown[] };
-export type BridgeCall = Invoke | { kind: "probe" }
-  | { kind: "request"; url: string; method: string; main: boolean; headers: Record<string, string> }
+/** a request as the app's shouldInterceptRequest sees it */
+export type WebRequest = { url: string; method: string; main: boolean; headers: Record<string, string> };
+/** a WebResourceResponse, or the answer of the app's own server; its body base64 */
+export type WebResponse = { body: string; status: number; reason: string; headers: Record<string, string> };
+export type BridgeCall = Invoke | { kind: "probe" } | ({ kind: "request" } & WebRequest)
   | { kind: "loopback"; url: string; method: string; headers: Record<string, string>; body?: string };
+/** the app's answer to a BridgeCall: a method's value (`void` when it returns none), a WebResponse or
+ *  null, or why it failed */
+export type BridgeReply<T = unknown> = { value: T } | { void: true } | { error: string };
+/** a call or its reply on the bridge's socket, numbered so that the reply finds its call */
+export const encodeFrame = (seq: number | string, body: string) => seq + "\n" + body;
+export function decodeFrame(message: string): { seq: string; body: string } | null {
+  const at = message.indexOf("\n");
+  return at < 1 ? null : { seq: message.slice(0, at), body: message.slice(at + 1) };
+}
 /** a page's message to the app; "subframe", "webasset" and "webcookies" come with a port for the answer */
 export type PageMessage = Invoke
   | { kind: "script-ready" }
@@ -79,6 +92,11 @@ export function request<M extends { kind: keyof Answers }>(message: M, post: (me
     port1.onmessage = ({ data }) => settle(() => resolve(data));
     post(message, port2);
   });
+}
+/** answer `message`, which came with `port` */
+export function respond<M extends { kind: keyof Answers }>(_message: M, port: MessagePort, value: Answers[M["kind"]]): void {
+  port.postMessage(value);
+  port.close();
 }
 /** `html` with `script` first: after its doctype, or the document goes quirks */
 export function withPageScript(html: string, script: string): string {

@@ -10,7 +10,7 @@ import { newAudioSessionId } from "./audio-output.ts";
 import { dataSourceFile, fdSlice, nativePeer, postNativeEvent } from "./media-native.ts";
 import { guestEndpoint } from "../native/net-address.ts";
 import { deviceFetch } from "../shell/devicefetch.ts";
-import { nextHop, proxyStatus, type ProxyRequest } from "../shell/webpage/redirect.ts";
+import { fromProxyHeaders, nextHop, proxyPath, proxyStatus, type ProxyRequest } from "../shell/webpage/proxywire.ts";
 import { nativeParcel, writeInt } from "./parcel.ts";
 
 const IDLE = 1, INITIALIZED = 2, PREPARING = 4, PREPARED = 8, STARTED = 16, PAUSED = 32, STOPPED = 64, COMPLETE = 128, ERROR = 0;
@@ -131,10 +131,7 @@ const loadFrom = (p: Player, source: FileSource | null) => {
  *  so the request's travel in the URL), or for a URL the device serves itself, read whole from the app's
  *  loopback server as the media server reads it, after its redirects */
 function mediaSource(request: ProxyRequest, hops = 0): string | Promise<string> {
-  if (!guestEndpoint(request.url)) {
-    const headers = [...request.headers].map(([k, v]) => [k.slice(5), v]);
-    return `/proxy?url=${encodeURIComponent(request.url)}&headers=${encodeURIComponent(JSON.stringify(headers))}`;
-  }
+  if (!guestEndpoint(request.url)) return proxyPath({ url: request.url, headers: [...fromProxyHeaders(request.headers)] });
   return deviceFetch(request.url, request).then(async (response) => {
     const next = hops < 20 ? nextHop(response, request) : null;
     if (next) {

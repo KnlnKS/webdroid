@@ -1,12 +1,10 @@
 import { loopbackFetch } from "./devicefetch.ts";
-import { parseBridgeCall, type BridgeCall, type Invoke } from "./webpage/protocol.ts";
+import { decodeFrame, encodeFrame, parseBridgeCall, type BridgeCall, type BridgeReply, type Invoke, type WebRequest, type WebResponse } from "./webpage/protocol.ts";
 
 /** a JavaScript interface method; `returns`: the Java method returns a value */
 export type WebMethod = ((...args: unknown[]) => Promise<unknown>) & { returns: boolean };
 /** each interface's methods */
 export type WebInterfaces = Record<string, Record<string, WebMethod>>;
-export type WebRequest = { url: string; method: string; main: boolean; headers: Record<string, string> };
-export type WebResponse = { body: string; status: number; reason: string; headers: Record<string, string> };
 
 export class WebBridge {
   private ifaces: WebInterfaces;
@@ -28,12 +26,11 @@ export class WebBridge {
     });
     this.ready = Promise.all([connected, origin]).then(([, origin]) => origin);
     socket.onmessage = (event) => {
-      if (typeof event.data !== "string") return;
-      const at = event.data.indexOf("\n"), seq = event.data.slice(0, at);
-      if (at < 1) return;
+      const frame = typeof event.data === "string" ? decodeFrame(event.data) : null;
+      if (!frame) return;
       let call: BridgeCall | null = null;
-      try { call = parseBridgeCall(JSON.parse(event.data.slice(at + 1))); } catch { /* answered as invalid */ }
-      const reply = (value: object) => { if (socket.readyState === WebSocket.OPEN) socket.send(seq + "\n" + JSON.stringify(value)); };
+      try { call = parseBridgeCall(JSON.parse(frame.body)); } catch { /* answered as invalid */ }
+      const reply = (value: BridgeReply) => { if (socket.readyState === WebSocket.OPEN) socket.send(encodeFrame(frame.seq, JSON.stringify(value))); };
       const answer = async () => {
         if (socket.readyState !== WebSocket.OPEN) return;
         try { reply(await this.answer(call, intercept)); }
@@ -46,12 +43,12 @@ export class WebBridge {
       else this.queue = this.queue.then(answer);
     };
   }
-  private async answer(call: BridgeCall | null, intercept: ((request: WebRequest) => Promise<WebResponse | null>) | undefined): Promise<object> {
+  private async answer(call: BridgeCall | null, intercept: ((request: WebRequest) => Promise<WebResponse | null>) | undefined): Promise<BridgeReply> {
     if (call?.kind === "request") return { value: await intercept?.(call) ?? null };
     if (call?.kind === "loopback") {
       const response = await loopbackFetch(call.url, { method: call.method, headers: new Headers(call.headers), body: call.body === undefined ? undefined : Uint8Array.fromBase64(call.body) });
       return { value: response && { status: response.status, reason: response.statusText, headers: Object.fromEntries(response.headers),
-        body: new Uint8Array(await response.arrayBuffer()).toBase64() } };
+        body: new Uint8Array(await response.arrayBuffer()).toBase64() } satisfies WebResponse | null };
     }
     if (call?.kind !== "invoke") throw new Error("Invalid bridge call");
     const value = await this.call(call);

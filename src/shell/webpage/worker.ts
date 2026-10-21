@@ -1,23 +1,21 @@
 // The renderer origin's service worker: a WebView page's requests go through the app's proxy as the
 // WebView's network stack sends them (its user agent, client hints, cookie jar and client), and its
 // apk assets and device fonts come from the app.
-import { webViewBrands } from "./clienthints.ts";
+import type { ClientHints } from "./clienthints.ts";
 import { request as ask, type Answers, type RendererContext } from "./protocol.ts";
-import { nextHop, type ProxyRequest } from "./redirect.ts";
+import { nextHop, parseProxyQuery, proxyPath, readAnswer, writeAnswer, type ProxyRequest } from "./proxywire.ts";
 
 type Client = { id: string; url: string; type: string; postMessage(data: unknown, transfer: Transferable[]): void };
 type FetchEvent = Event & { request: Request; clientId: string; respondWith(response: Promise<Response>): void };
 type ExtendableEvent = Event & { waitUntil(work: Promise<unknown>): void };
-const worker = globalThis as unknown as { location: Location; navigator: Navigator & { userAgentData?: { brands?: { brand: string; version: string }[] } };
+const worker = globalThis as unknown as { location: Location;
   skipWaiting(): Promise<void>; clients: { claim(): Promise<void>; get(id: string): Promise<Client | undefined> };
   addEventListener(type: "install" | "activate", listener: (event: ExtendableEvent) => void): void;
   addEventListener(type: "fetch", listener: (event: FetchEvent) => void): void };
 
-// Sec-CH-UA's defaults name Android WebView at the host's Chromium, as the page's userAgentData does
-const brands = webViewBrands(worker.navigator.userAgentData?.brands?.find((b) => b.brand === "Chromium")?.version
-  ?? /Chrome\/(\d+)/.exec(worker.navigator.userAgent)?.[1] ?? "120", false);
-const clientHints = [["x-wd-sec-ch-ua", brands.map((b) => '"' + b.brand + '";v="' + b.version + '"').join(", ")],
-  ["x-wd-sec-ch-ua-mobile", "?1"], ["x-wd-sec-ch-ua-platform", '"Android"']];
+/** the client hints a browser sends a secure origin by default, of the WebView whose metadata the page's userAgentData reports */
+const defaultHints = (hints: ClientHints | null) => hints?.brands ? [["x-wd-sec-ch-ua", hints.brands.map((b) => '"' + b.brand + '";v="' + b.version + '"').join(", ")],
+  ["x-wd-sec-ch-ua-mobile", "?1"], ["x-wd-sec-ch-ua-platform", '"Android"']] : [];
 worker.addEventListener("install", (event) => event.waitUntil(worker.skipWaiting()));
 worker.addEventListener("activate", (event) => event.waitUntil(worker.clients.claim()));
 // each client's load, which its renderer bootstrap answers
@@ -49,25 +47,25 @@ worker.addEventListener("fetch", (event) => {
     return;
   }
   const localProxy = original.origin === worker.location.origin && original.pathname === "/proxy";
-  if (original.origin === worker.location.origin && ["/webview", "/webview-worker.js"].includes(original.pathname)) return;
+  const query = localProxy ? parseProxyQuery(original.searchParams) : null;
+  // a malformed proxy request is the proxy's to refuse
+  if (original.origin === worker.location.origin && ["/webview", "/webview-worker.js"].includes(original.pathname) || localProxy && !query) return;
   event.respondWith((async () => {
     const client = await worker.clients.get(event.clientId);
-    if (!client) return fetch(request);
-    // JVM/compiler Workers have no document renderer context. Their local modules
-    // and archives keep the shell fetch path, as before resource URL translation.
-    if (original.origin === worker.location.origin && !localProxy && client.type !== "window") return fetch(request);
-    // the shell's own page (its Java networking) is no WebView: nothing to rewrite
-    if (!client.url.includes("__wd_bridge") && new URL(client.url).pathname === "/") return fetch(request);
-    const { page, agent, id, intercept, sub } = await context(client), isolated = !!id;
+    // Only a WebView page's renderer document names its bridge (Client.url is the URL it was created at,
+    // which replaceState leaves). The shell's page and Workers, under this worker for a local apk's assets,
+    // and a page's own Workers have no renderer to ask: they fetch as they are.
+    if (!client?.url.includes("__wd_bridge")) return fetch(request);
+    const { page, userAgent, clientHints, id, intercept, sub } = await context(client), isolated = !!id, hints = defaultHints(clientHints);
     const headers = new Headers();
     // client hints describe the host browser, not the WebView the user agent names
-    request.headers.forEach((value, name) => { if (!name.startsWith("sec-ch-")) headers.set(name.startsWith("x-wd-") ? name : "x-wd-" + name, value); });
-    if (agent) headers.set("x-wd-user-agent", agent);
+    request.headers.forEach((value, name) => { if (!name.startsWith("sec-ch-")) headers.set("x-wd-" + name, value); });
+    if (userAgent) headers.set("x-wd-user-agent", userAgent);
     // fetch metadata the browser adds past the worker; the frame's fetch of its document is its navigation
-    const frame = localProxy && original.searchParams.get("frame") === "1";
+    const frame = !!query?.frame;
     headers.set("x-wd-sec-fetch-mode", frame ? "navigate" : request.mode);
     headers.set("x-wd-sec-fetch-dest", frame ? "document" : request.destination || "empty");
-    let target = (localProxy ? original.searchParams.get("url") : request.url)!;
+    let target = query?.url ?? request.url;
     // A script cached on the renderer can resolve resources against its own URL.
     // Those paths still belong to the document's upstream site, not the DOM owner.
     if (original.origin === worker.location.origin && !localProxy) {
@@ -84,7 +82,7 @@ worker.addEventListener("fetch", (event) => {
     for (let redirects = 0; redirects <= 20; redirects++) {
       const { url, headers } = hop;
       // a browser sends them to secure origins
-      for (const [name, value] of clientHints) if (new URL(url).protocol === "https:") headers.set(name, value); else headers.delete(name);
+      for (const [name, value] of hints) if (new URL(url).protocol === "https:") headers.set(name, value); else headers.delete(name);
       const include = isolated && (localProxy || request.credentials === "include" || request.credentials === "same-origin" && page && new URL(page).origin === new URL(url).origin);
       headers.delete("x-wd-cookie");
       if (include) {
@@ -94,14 +92,17 @@ worker.addEventListener("fetch", (event) => {
       if (isolated && (frame || request.destination === "script") && !request.integrity) {
         headers.delete("x-wd-if-none-match"); headers.delete("x-wd-if-modified-since");
       }
-      const response = await fetch("/proxy?manual=1&url=" + encodeURIComponent(url) + (frame ? "&frame=1" + (sub ? "&sub=1" : "") : "") + (isolated ? "&bridge=" + encodeURIComponent(id) + (intercept && !redirects ? "&intercept=1" : "") : "") + (isolated && !request.integrity && /^https?:/.test(page) ? "&webview=1" : ""), { method: hop.method, headers, body: hop.body, credentials: "omit" });
-      const values = response.headers.get("x-wd-set-cookie");
-      if (include && values) await message(client, { kind: "webcookies", url, values: JSON.parse(values) });
+      const response = await fetch(proxyPath({ url, manual: true, frame: frame ? sub ? "sub" : "main" : undefined, bridge: isolated ? id : undefined,
+        intercept: isolated && intercept && !redirects, webview: isolated && !request.integrity && /^https?:/.test(page) }),
+        { method: hop.method, headers, body: hop.body, credentials: "omit" });
+      const answer = readAnswer(response);
+      if (include && answer.setCookie.length) await message(client, { kind: "webcookies", url, values: answer.setCookie });
       const next = nextHop(response, hop);
       if (!next) {
-        const clean = new Headers(response.headers);
-        clean.delete("x-wd-set-cookie"); clean.delete("x-wd-status");
-        return new Response(response.body, { status: response.status, statusText: response.statusText, headers: clean });
+        // the page sees the upstream response; the renderer learns where its document landed
+        const out = new Headers(answer.headers.filter(([name]) => name !== "set-cookie"));
+        if (frame && answer.finalUrl) writeAnswer(out, { finalUrl: answer.finalUrl });
+        return new Response(response.body, { status: answer.status, statusText: answer.statusText, headers: out });
       }
       await response.body?.cancel();
       hop = next;

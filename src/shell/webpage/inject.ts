@@ -7,7 +7,7 @@ import { routeSubframes } from "./frames.ts";
 import { installWebHistory } from "./history.ts";
 import { installWebLocation } from "./location.ts";
 import { snapshotDocument } from "./snapshot.ts";
-import { request, type AppMessage, type PageConfig, type PageMessage, type WebFonts } from "./protocol.ts";
+import { request, respond, type AppMessage, type BridgeReply, type PageConfig, type PageMessage, type WebFonts } from "./protocol.ts";
 
 /** the WebView settings' faces, by their families, and the rules that use them, before the page's own */
 function installWebFonts(fonts: WebFonts): void {
@@ -19,7 +19,7 @@ function installWebFonts(fonts: WebFonts): void {
 }
 
 function start(config: PageConfig | undefined) {
-  const ua = config?.agent;
+  const ua = config?.userAgent;
   if (ua) {
     Object.defineProperty(navigator, "userAgent", { value: ua });
     Object.defineProperty(navigator, "appVersion", { value: ua.startsWith("Mozilla/") ? ua.slice(8) : ua });
@@ -53,9 +53,9 @@ function start(config: PageConfig | undefined) {
     xhr.setRequestHeader("Content-Type", "application/json");
     xhr.send(JSON.stringify(body));
     if (xhr.status !== 200) throw Error("WebView bridge unavailable: " + xhr.status);
-    const result = JSON.parse(xhr.responseText);
-    if (result.error) throw Error(result.error);
-    return result.value;
+    const result = JSON.parse(xhr.responseText) as BridgeReply;
+    if ("error" in result) throw Error(result.error);
+    return "value" in result ? result.value : undefined;
   };
   // Chromium reports the content's size as it changes: a WebView measured by it lays out again
   let width = -1, height = -1;
@@ -111,10 +111,10 @@ function start(config: PageConfig | undefined) {
     if (data.kind === "eval") {
       let value = "null";
       try { value = JSON.stringify((0, eval)(data.script)) ?? "null"; } catch {}
-      answer?.postMessage(value);
+      if (answer) respond(data, answer, value);
     } else if (data.kind === "stop") window.stop();
     else if (data.kind === "cookies") { if (data.ack >= written) cookies = data.list; }
-    else if (data.kind === "snapshot") snapshotDocument(document).then((result) => answer?.postMessage(result), (error) => answer?.postMessage({ error: String(error) }));
+    else if (data.kind === "snapshot" && answer) snapshotDocument(document).then((result) => respond(data, answer, result), (error) => respond(data, answer, { error: String(error) }));
   };
   send({ kind: "script-ready" });
 }
