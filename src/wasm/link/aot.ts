@@ -18,6 +18,7 @@ import type { DexFile } from "../../jvm/dex.ts";
 import type { Loader, MethodInfo } from "../compiler/program.ts";
 import type { FnTrace } from "../compiler/j2w.ts";
 import { methodOf } from "../compiler/ids.ts";
+import { COUNT_SLOTS } from "../compiler/exc.ts";
 import { LebReader } from "./module.ts";
 
 /** the files of a build, read synchronously: a page fetches them (and may compile them) before the code that needs them runs */
@@ -410,6 +411,15 @@ export class AotRuntime {
   }
   /** whether the attached app build has `slot`'s code loaded */
   fromAppBuild(slot: number): boolean { return this.loadedFrom(slot) >= this.appFrom; }
+  /** the slots whose code from a loaded module has run here (a method's count restarts once a unit replaces its code), the platform build's and the app build's
+   *  apart: what a later launch has the engine compile ahead (host/warm-worker.ts) */
+  ranSlots(): { platform: number[]; app: number[] } {
+    const tiers = this.w.tiers, counts = tiers.counts(), ran = { platform: [] as number[], app: [] as number[] };
+    const add = (slot: number) => { const c = this.loadedFrom(slot); if (c >= 0) (c >= this.appFrom ? ran.app : ran.platform).push(slot); };
+    for (let slot = 0; slot < COUNT_SLOTS; slot++) if (counts[slot]) add(slot);
+    for (const slot of tiers.unitSlots()) if (slot < COUNT_SLOTS && !counts[slot]) add(slot);
+    return ran;
+  }
   private preparation = new Map<number, Promise<void>>();
   private prepared = new Set<number>();
   private preparationModule(slot: number): number {

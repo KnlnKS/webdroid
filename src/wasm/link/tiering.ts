@@ -349,14 +349,6 @@ export class Tiering {
     if (this.countView?.buffer !== this.w.mem.buffer) this.countView = new Int32Array(this.w.mem.buffer, COUNT_BASE, COUNT_SLOTS);
     return this.countView;
   }
-  /** the slots whose code from a loaded build module has run here (a method's count restarts once a unit replaces its code), the platform build's and the app
-   *  build's apart: what a later launch has the engine compile ahead (host/warm-worker.ts) */
-  ranBuildSlots(): { platform: number[]; app: number[] } {
-    const aot = this.w.aot, counts = this.counts(), ran = { platform: [] as number[], app: [] as number[] };
-    if (!aot) return ran;
-    const add = (slot: number) => { if (aot.loadedFrom(slot) >= 0) (aot.fromAppBuild(slot) ? ran.app : ran.platform).push(slot); };
-    for (let slot = 0; slot < COUNT_SLOTS; slot++) if (counts[slot]) add(slot);
-    for (const slot of this.groupOf.keys()) if (slot < COUNT_SLOTS && !counts[slot]) add(slot);
-    return ran;
-  }
+  /** the slots whose code a unit installed */
+  unitSlots(): IterableIterator<number> { return this.groupOf.keys(); }
 }

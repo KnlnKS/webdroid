@@ -98,7 +98,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
     world = made;
     if (!lifetime.signal.aborted && store) { usage = () => made.usage(); store.worlds.add(usage); }
     useWorld(made); mark("worldMade");
-    if (globalThis.__wdWasm) Object.assign(globalThis.__wdWasm, { aotKey: store?.key, ran: () => made.tiers.ranBuildSlots().platform });
+    if (globalThis.__wdWasm) Object.assign(globalThis.__wdWasm, { aotKey: store?.key, ran: () => made.aot?.ranSlots().platform ?? [] });
     return made;
   };
   if (typeof location === "undefined") {

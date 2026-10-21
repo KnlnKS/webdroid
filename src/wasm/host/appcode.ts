@@ -206,7 +206,7 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
   }
   async function rebuild(world: World): Promise<Built> {
     // the attached build's methods this launch ran lead, as on-demand ones do, so the classes a launch runs fill the first modules again
-    const ran = !saved ? [] : world.tiers.ranBuildSlots().app.flatMap((s) => { const e = world.slots.at(s); return e?.k === "method" ? [mid(e.m)] : []; });
+    const ran = !saved || !world.aot ? [] : world.aot.ranSlots().app.flatMap((s) => { const e = world.slots.at(s); return e?.k === "method" ? [mid(e.m)] : []; });
     const at = size(), made = await builder.build({ methods: [...new Set([...ran, ...merged.methods])], classes: [...merged.classes], synths: [...merged.synths] }, hostClasses, rootLibraries(world));
     const built: Built = { kept: await made.kept, methods: made.methods, modules: made.files.size - 1, ms: made.ms };
     builds.unshift(built);
@@ -224,8 +224,10 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
   }
   /** keeps the platform modules this launch loaded and the build code it ran for the next one */
   function recordLaunch(world: World): void {
-    const ran = world.tiers.ranBuildSlots();
-    if (world.aot) record.add([...world.aot.loaded, ...world.aot.missed], saved?.index.id ?? 0, [...ran.platform, ...ran.app]);
+    const aot = world.aot;
+    if (!aot) return;
+    const ran = aot.ranSlots();
+    record.add([...aot.loaded, ...aot.missed], saved?.index.id ?? 0, [...ran.platform, ...ran.app]);
   }
   function watch(world: World): void {
     let last = -1, refines = 0, building = false;
