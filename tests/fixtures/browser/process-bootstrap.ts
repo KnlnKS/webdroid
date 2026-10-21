@@ -307,7 +307,6 @@ export async function clockBootstrapOwnership() {
 /** a Worker's and its peers' calls on the stores the broker keeps for every process */
 export async function storeOwnership() {
   const broker = processBroker(), pkg = "test.stores.shared", foreign = "test.stores.other";
-  const fileHooks = {prepare:vfs.prepare,flush:vfs.flush,onWrite:vfs.onWrite};
   broker.files.attach(8302,vfs);
   for (const [i, name] of [pkg, foreign].entries()) {
     const root = {name:"manifest",attrs:[{ns:"",name:"package",resId:0,type:TV.STRING,data:0,str:name}],children:[]};
@@ -358,13 +357,13 @@ export async function storeOwnership() {
     const changedMode = await ask("files.fileSetAttributes",directory,{mode:0o700}) === 0 && ((await peers[0].endpoint.files.fileStat(directory)).value!.mode & 0o7777) === 0o700;
     await broker.files.flush();
     const {PrivateFiles} = await import("../../../src/shell/privatefiles.ts");
-    const restarted = new PrivateFiles(), hooks = {prepare:vfs.prepare,flush:vfs.flush,onWrite:vfs.onWrite};
+    const restarted = new PrivateFiles();
     let restoredMetadata = false;
     try {
-      vfs.metadata.delete(directory);restarted.attach(8399,vfs);await restarted.prepare(pkg);
+      vfs.rmdir(directory,false);restarted.attach(8399,vfs);await restarted.prepare(pkg);
       const restored = vfs.attributes(directory,true);
       restoredMetadata = restored.uid === packages.get(pkg)!.uid && restored.gid === packages.get(pkg)!.uid && restored.mode === 0o700;
-    } finally {restarted.detach(8399);Object.assign(vfs,hooks);}
+    } finally {restarted.detach(8399);}
     const listed=await ask("files.fileList",`/data/data/${pkg}`) as {value:string[]};
     listed.value.length=0;
     const freshList=await peers[0].endpoint.files.fileList(`/data/data/${pkg}`);
@@ -378,11 +377,11 @@ export async function storeOwnership() {
   }finally{
     for(const client of peers)client.close();worker.terminate();
     for(const pid of [8301,8302,8303])broker.fail(pid,"store fixture cleanup",NOT_CRASHED);
-    for(const path of [...vfs.dirs])if(path.startsWith(`/data/data/${pkg}`)||path.startsWith(`/data/user_de/0/${pkg}`))vfs.rmdir(path);
+    for(const root of [`/data/data/${pkg}`,`/data/user_de/0/${pkg}`])for(const [path] of [...vfs.entries(root)])vfs.rmdir(path);
     broker.preferences.remove(pkg); broker.preferences.delete("android:notification-policy:"+foreign);
     broker.permissions.clear(pkg);broker.permissions.clear(foreign);
     packages.delete(pkg);packages.delete(foreign);
-    await broker.files.flush();Object.assign(vfs,fileHooks);
+    await broker.files.flush();
   }
 }
 

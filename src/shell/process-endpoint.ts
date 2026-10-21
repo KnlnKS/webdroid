@@ -78,16 +78,18 @@ function connectRemoteStores(broker: BrokerCalls): void {
   notificationTransport.foreground = broker.notificationForeground;
   useSettingsAccess(broker.settings);
   usePathOwner(broker);
-  vfs.prepare = broker.files.filePrepare;
+  releaseFiles = vfs.useOwner({ prepare: broker.files.filePrepare });
   useHostUi(() => broker.ui);
   usePreferenceAccess(broker.prefs);
   usePermissionAccess(broker.permissions);
   exitRecordTransport.records = broker.exitRecords;
   exitRecordTransport.publish = broker.processExited;
 }
+let releaseFiles = () => {};
 export function closeProcessBrokerPort(): void {
   calls?.close();
   life.close();
+  releaseFiles();
   activityResults.clear();
   // its presence routes system providers to system_server, which a closed port no longer reaches
   systemProviderTransport.lookup = undefined;

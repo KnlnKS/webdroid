@@ -188,12 +188,8 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   rt.classpath = zip;
   // sourceDir is the base apk, not the container it arrived in: a library that re-extracts its
   // own .so with ZipFile(ApplicationInfo.sourceDir) has to find lib/, not a list of apks.
-  if (install.base instanceof Uint8Array) vfs.write(apkPath(), install.base);
-  else vfs.mount(apkPath(), install.base);
-  for (const sp of install.splits) {
-    if (sp.bytes) vfs.write(apkPath(sp.name), sp.bytes);
-    else vfs.mount(apkPath(sp.name), sp.source);
-  }
+  vfs.place(apkPath(), install.base);
+  for (const sp of install.splits) vfs.place(apkPath(sp.name), sp.bytes ?? sp.source);
   mark("startZygote"); onStatus("Loading app code…");
   // the archives LoadedApk's class loader reads
   appArchives.add(apkPath()); appArchives.add(packages.get(pkg)?.path ?? apkPath());
