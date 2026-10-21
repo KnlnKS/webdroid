@@ -78,12 +78,23 @@ export interface UnitHeader {
 }
 export interface CHeader extends UnitHeader {
   classes: number[];
-  /** the D modules of the platform build it imports class globals from, "g<D module>"; a module of an app build imports them from the classes' own modules, by class id */
-  mods: string[];
+  /** the D modules of the platform build it imports class globals from, whole (import module "g<D module>"); a module of an app build imports them from the
+   *  classes' own modules, by class id */
+  mods: number[];
   /** the slots of methods of its classes the module lacks: abstract ones, natives without an implementation, and those the compiler produced invalid code for */
   absent: number[];
 }
 export const VERSION = 22;
+
+/** the module files of a build: the platform build's code (c), data (d) and runtime-function (y) modules, and an app build's code (a), data (e) and runtime-function (s) ones */
+export type AotKind = "c" | "d" | "y" | "a" | "e" | "s";
+/** the file of module `n` of kind `kind` */
+export const aotFile = (kind: AotKind, n: number): string => kind + n + ".wasm";
+/** the kind and number of the module in file `name`; undefined for another file of the build */
+export function parseAotFile(name: string): { kind: AotKind; n: number } | undefined {
+  const m = /^([cdyaes])(\d+)\.wasm$/.exec(name);
+  return m ? { kind: m[1] as AotKind, n: +m[2] } : undefined;
+}
 
 /** where numbering `a` first departs from `b`: the part, its sizes and the first entries that differ */
 function numberingDiff(a: Numbering, b: Numbering): string {
@@ -212,7 +223,7 @@ export class AotRuntime {
     // a class the build reserved slots for has as many methods here
     if (index.numbering.tail.some((t) => typeof t !== "string" && (w.prog.get(t[0])?.methods.length ?? 0) + 1 !== t[1]) || !w.adopt(index.numbering)) return undefined;
     const a = new AotRuntime(w, { dOf: unrle(index.dOf), cOf: unrle(index.cOf), extraGroup: index.extraGroup }, store, index.programClasses);
-    index.synths.forEach((names, module) => names.forEach((n) => a.synthIn.set(n, `y${module}.wasm`)));
+    index.synths.forEach((names, module) => names.forEach((n) => a.synthIn.set(n, aotFile("y", module))));
     w.hosts.adoptTakeover(index.hostKeys, index.overridden);
     // a method this World replaces by an intrinsic that the build did not, or the reverse, is not the build's
     const built = new Set(index.intrinsics), now = new Set(w.opts.intrinsics.keys());
@@ -275,7 +286,7 @@ export class AotRuntime {
     this.cOf = cOf;
     this.cState.length = this.appFrom + app.modules;
     for (const [module, over] of app.patches) (this.patchesOver.get(over) ?? this.patchesOver.set(over, []).get(over)!).push(this.appFrom + module);
-    app.synths.forEach((names, module) => names.forEach((n) => this.synthIn.set(n, `s${module}.wasm`)));
+    app.synths.forEach((names, module) => names.forEach((n) => this.synthIn.set(n, aotFile("s", module))));
     for (const [block, module] of app.dOf) this.appDOf.set(block, module);
     this.appD.length = app.dModules;
     // the app build's files are a<module>.wasm, e<module>.wasm and s<module>.wasm, which no platform file is named like
@@ -304,13 +315,13 @@ export class AotRuntime {
       const b = w.slots.blockOf(base);
       if (b >= this.platformBlocks && (app = this.appDOf.get(b)) === undefined) return undefined;
     }
-    const exports = !w.instantiates ? {} : app === undefined ? this.loadD(g) : this.data(`e${app}.wasm`, this.appD, app);
+    const exports = !w.instantiates ? {} : app === undefined ? this.loadD(g) : this.data(aotFile("e", app), this.appD, app);
     // Returning without data hands publication to World.link. Block the group before class building can re-enter it.
     if (!exports && app === undefined) this.fallbackD.add(g);
     const jc = w.prog.get(name);
     return exports && { name, id, ...app === undefined ? { mod: "g" + g, from: "platform" as const } : { mod: "e" + app, from: "app" as const }, slotBase: base, nMethods: jc ? jc.methodCount : 0, exports };
   }
-  private loadD(g: number): WebAssembly.Exports | undefined { return this.data(`d${g}.wasm`, this.dExports, g); }
+  private loadD(g: number): WebAssembly.Exports | undefined { return this.data(aotFile("d", g), this.dExports, g); }
   private data(file: string, memo: (WebAssembly.Exports | undefined)[], g: number): WebAssembly.Exports | undefined {
     let ex = memo[g];
     if (ex) return ex;
@@ -361,9 +372,9 @@ export class AotRuntime {
   /** Files absent on first use. A preflight data miss can retry until World.link begins publishing fallback globals for its group. */
   missed = new Set<string>();
   private ready(file: string): boolean {
-    const missed = this.missed.has(file), data = /^d(\d+)\.wasm$/.exec(file);
-    if (this.rejectedData.has(file) || data && this.fallbackD.has(+data[1])) return false;
-    if (missed && !/^c\d+\.wasm$/.test(file) && !data) return false;
+    const missed = this.missed.has(file), f = parseAotFile(file);
+    if (this.rejectedData.has(file) || f?.kind === "d" && this.fallbackD.has(f.n)) return false;
+    if (missed && f?.kind !== "c" && f?.kind !== "d") return false;
     if (this.store!.get(file)) return true;
     if (!missed) { this.missed.add(file); this.w.stats.aot.missed++; }
     return false;
@@ -406,15 +417,15 @@ export class AotRuntime {
     return !this.store?.prefetch || !this.w.instantiates || c < 0 || c >= this.appFrom || this.cState[c] ? -1 : c;
   }
   private preparationFiles(c: number): string[] {
-    const file = `c${c}.wasm`, mod = this.store!.get(file);
+    const file = aotFile("c", c), mod = this.store!.get(file);
     if (!mod) return [file];
     // Byte stores are already local. Only asynchronously compiled modules need a delivery wait.
     if (ArrayBuffer.isView(mod)) return [];
     const head = header<CHeader>(mod);
     if (!this.w.units.admits(head)) return [];
     const files: string[] = [];
-    for (const m of head.mods) if (!this.fallbackD.has(+m.slice(1))) {
-      const file = `d${m.slice(1)}.wasm`;
+    for (const g of head.mods) if (!this.fallbackD.has(g)) {
+      const file = aotFile("d", g);
       if (!this.store!.get(file)) files.push(file);
     }
     return files;
@@ -462,15 +473,15 @@ export class AotRuntime {
   }
   private loadC(c: number): boolean {
     if (this.cState[c]) return this.cState[c] === LIVE;
-    const w = this.w, app = c >= this.appFrom, file = app ? `a${c - this.appFrom}.wasm` : `c${c}.wasm`, mod = this.module(file);
+    const w = this.w, app = c >= this.appFrom, file = app ? aotFile("a", c - this.appFrom) : aotFile("c", c), mod = this.module(file);
     if (!mod) { if (app) this.cState[c] = DEAD; return false; }
     const head = header<CHeader>(mod);
     if (!w.units.admits(head)) { this.cState[c] = DEAD; w.stats.aot.dead++; return false; }
     // Request the whole dependency set now: stopping at the first miss delays delivery of the remaining original globals.
     let dataReady = true;
-    for (const m of head.mods) if (!this.fallbackD.has(+m.slice(1)) && !this.ready(`d${m.slice(1)}.wasm`)) dataReady = false;
+    for (const g of head.mods) if (!this.fallbackD.has(g) && !this.ready(aotFile("d", g))) dataReady = false;
     if (!dataReady) return false;
-    if (!head.mods.every(m => this.fallbackD.has(+m.slice(1)) || !!this.loadD(+m.slice(1)))) { this.cState[c] = DEAD; w.stats.aot.dead++; return false; }
+    if (!head.mods.every(g => this.fallbackD.has(g) || !!this.loadD(g))) { this.cState[c] = DEAD; w.stats.aot.dead++; return false; }
     const absent = new Set(head.absent), taken = w.hosts.taken();
     if (this.overriddenSeen !== taken.size) {
       this.overriddenBy.clear();
@@ -481,7 +492,7 @@ export class AotRuntime {
     if (app) this.cClasses[c] = head.classes;
     // Retired data groups bind each class's published globals instead of creating another owner.
     const modules: Record<string, WebAssembly.Exports> = {};
-    for (const m of head.mods) { const ex = this.dExports[+m.slice(1)]; if (ex) modules[m] = ex; }
+    for (const g of head.mods) { const ex = this.dExports[g]; if (ex) modules["g" + g] = ex; }
     let t2 = 0;
     const placed = w.units.link({ head, module: mod, modules }, () => {
       w.stats.aot.c++;

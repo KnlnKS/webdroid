@@ -14,6 +14,7 @@ import { Program } from "../../src/wasm/compiler/program.ts";
 import { externs } from "../../src/wasm/link/intrinsics.ts";
 import { natives } from "./harness.ts";
 import { rt } from "../../src/jvm/runtime.ts";
+import { aotFile } from "../../src/wasm/link/aot.ts";
 import { AotBuilder, codeBytes, codeFile, dataBytes, dataModule, invalidFunction, packModule, synthModules, validation } from "../../src/wasm/link/aotbuild.ts";
 import type { MethodInfo } from "../../src/wasm/compiler/program.ts";
 import { AOT_ROOT, buildKey, sourceKey } from "../aot-key.ts";
@@ -113,7 +114,7 @@ cGroups.forEach((blocks, k) => {
   try { made = codeFile(w, blocks, methods, { strict: true, validate, platformData: true }); } catch (e) { throw new Error(`C ${k}: ${(e as Error).message}`); }
   const { file, header, bytes } = made, plain = packModule(header, bytes);
   nMethods += methods.length;
-  writeFileSync(join(out, `c${k}.wasm`), file); sized(`c${k}.wasm`, file.length);
+  writeFileSync(join(out, aotFile("c", k)), file); sized(aotFile("c", k), file.length);
   cBytes += file.length; mapBytes += file.length - plain.length;
 });
 aot.cGroupOf = aot.cGroupOf.map((g) => (empty.has(g) ? -1 : g));
@@ -125,7 +126,7 @@ dGroups.forEach((blocks, k) => {
   const { bytes, header } = dataModule(w, blocks.map((b) => w.slots.blockClass[b])), bad = rejects(bytes);
   if (bad) throw new Error(`D ${k}: ${bad.message}`);
   const file = packModule(header, bytes);
-  writeFileSync(join(out, `d${k}.wasm`), file); sized(`d${k}.wasm`, file.length);
+  writeFileSync(join(out, aotFile("d", k)), file); sized(aotFile("d", k), file.length);
   dBytes += file.length;
 });
 // the classes the code reserved slots for beyond the platform's (arrays, ...) share one module, and the runtime functions the modules name, which a World would
@@ -134,7 +135,7 @@ const extraNames = () => w.numbers.tail.flatMap((t) => (typeof t === "string" ? 
 let extras: number, extra: ReturnType<typeof dataModule>, synths: string[][], nSynths: number, yBytes: number;
 do {
   yBytes = 0;
-  synths = synthModules(w, (k, bytes) => { writeFileSync(join(out, `y${k}.wasm`), bytes); yBytes += bytes.length; });
+  synths = synthModules(w, (k, bytes) => { writeFileSync(join(out, aotFile("y", k)), bytes); yBytes += bytes.length; });
   nSynths = w.slots.synths().length;
   const names = extraNames();
   extras = names.length;
@@ -142,7 +143,7 @@ do {
 } while (extraNames().length !== extras || w.slots.synths().length !== nSynths);
 if (rejects(extra.bytes)) throw new Error("extra classes: module does not validate");
 const xfile = packModule({ ...extra.header, classes: [] }, extra.bytes);
-writeFileSync(join(out, `d${aot.dKeys.length}.wasm`), xfile); dBytes += xfile.length;
+writeFileSync(join(out, aotFile("d", aot.dKeys.length)), xfile); dBytes += xfile.length;
 const t2 = performance.now();
 
 const index = aot.finish(synths);

@@ -145,7 +145,8 @@ export function codeFile(w: World, classes: number[], methods: MethodInfo[], { p
   { file: Uint8Array; header: CHeader; bytes: Uint8Array } {
   const { cx, built, header: unit, skipped } = codeModule(w, methods, opts), held = new Set(methods);
   const absent = classes.flatMap((b) => w.prog.get(w.slots.blockClass[b])!.methods.filter((m) => !held.has(m) || skipped.has(mid(m))).map((m) => w.slots.blockBase[b] + m.index));
-  const header: CHeader = { ...unit, classes, mods: platformData ? [...cx.deps.keys()] : [], absent };
+  // a class of the platform build has its data in import module "g<D module>" (AotRuntime.linkClass)
+  const header: CHeader = { ...unit, classes, mods: platformData ? [...cx.deps.keys()].map((mod) => +mod.slice(1)) : [], absent };
   return { file: packModule(header, built.bytes, { w, traces: built.traces }), header, bytes: built.bytes };
 }
 /** the data module of the classes `names` (World.classModule), and its header */

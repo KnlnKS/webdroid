@@ -4,7 +4,7 @@
 // the next find it too. A compile worker for the launch's second-tier units is made either way; `start` gives it the World. The World attaches the saved build only
 // while it has numbered what it had when the app's dexes arrived, as when the build was made (the zygote's numbering).
 import type { World, WorldOptions } from "../link/world.ts";
-import type { Demand } from "../link/aot.ts";
+import { parseAotFile, type Demand } from "../link/aot.ts";
 import type { Numbering } from "../link/numbers.ts";
 import { mid } from "../compiler/ids.ts";
 import type { DexFile } from "../../jvm/dex.ts";
@@ -140,7 +140,7 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
   // the app is shown: a background process's whole build is CPU taken from the launch it serves
   const warmAll = !!saved && !record.ran(saved.index.id);
   if (found && req.warm && (req.shown || !warmAll)) void persisted.then(() => {
-    const modules = [...found.files].filter(([name]) => /^a\d+\.wasm$/.test(name)).map(([name, bytes]): [WebAssembly.Module, Uint8Array] => [found.saved.get(name)!, bytes]);
+    const modules = [...found.files].filter(([name]) => parseAotFile(name)?.kind === "a").map(([name, bytes]): [WebAssembly.Module, Uint8Array] => [found.saved.get(name)!, bytes]);
     // the transfer detaches the files' bytes
     found.files.clear();
     req.warm!({ modules, all: warmAll }, [...new Set(modules.map(([, bytes]) => bytes.buffer))]);
