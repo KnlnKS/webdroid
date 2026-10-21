@@ -8,7 +8,7 @@ import java.lang.reflect.Method;
 /** VectorDrawable and PathParser on the reference device, for `pnpm fwtest` and the browser
  *  test's pixels: framework vectors drawn into ARGB bitmaps (one "px" line of hex colours each),
  *  node properties by target name, and paths PathParser builds (approximated). Run by
- *  `pnpm ts scripts/vector-probe.ts`. */
+ *  `pnpm gen-framework --only vector`. */
 public class VectorDrawableProbe {
   static Object call(Object o, String name, Object... args) throws Exception {
     for (Class<?> c = o instanceof Class ? (Class<?>) o : o.getClass(); c != null; c = c.getSuperclass())

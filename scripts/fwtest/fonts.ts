@@ -223,7 +223,7 @@ await exercise("TextRunShaper, PositionedGlyphs, Font.getGlyphBounds (device val
 });
 
 // getTextWidths of printable ASCII in the default family across weights and sizes, hinting on and
-// off, as `pnpm textcmp --record` printed them on the reference AVD
+// off, as `pnpm gen-framework --only textLayout` printed them on the reference AVD
 await exercise("Paint.getTextWidths across weights and hinting (device values)", async () => {
   await loadSystemFonts();
   const ascii = Array.from({ length: 0x5e }, (_, i) => String.fromCharCode(0x21 + i)).join(""), T = "Landroid/graphics/Typeface;";

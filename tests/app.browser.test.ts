@@ -118,7 +118,7 @@ test.concurrent("framework drawables resolve dimensions, tint, enabled states an
   expect(result.after[3]).toBeGreaterThan(0);
   expect(result.after[3]).toBeLessThan(255);
   expect(result.center[3]).toBe(128);
-  // VectorDrawableProbe's pixels on the reference device (scripts/vector-probe.ts): within 3 per channel
+  // VectorDrawableProbe's pixels on the reference device (pnpm gen-framework --only vector): within 3 per channel
   const device = (await readFile(`${import.meta.dirname}/fixtures/vector-drawable.txt`, "utf8")).split("\n").filter((l) => l.startsWith("px "));
   for (const line of device) {
     const [, name, , , ...hex] = line.split(" "), got = result.vectors[name];

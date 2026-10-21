@@ -68,7 +68,7 @@ export const fontMetrics = (fm: object, cls = "FontMetrics") =>
   ["top", "ascent", "descent", "bottom", "leading"].map((k) => (fm as Record<string, number>)[declaredField(`android/graphics/Paint$${cls}`, k)]);
 
 const vectorProbe = readFileSync("tests/fixtures/vector-drawable.txt", "utf8").trim().split("\n");
-/** VectorDrawableProbe's lines with `tag` (scripts/vector-probe.ts), the tag removed */
+/** VectorDrawableProbe's lines with `tag` (pnpm gen-framework --only vector), the tag removed */
 export const vectorProbeLines = (tag: string) => vectorProbe.filter((l) => l.startsWith(tag + " ")).map((l) => l.slice(tag.length + 1));
 /** a Java Rect's (or RectF's) left, top, right and bottom: instance fields are mangled properties */
 export const ltrb = (r: object, cls: "Rect" | "RectF" = "Rect") =>
