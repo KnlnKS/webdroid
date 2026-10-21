@@ -7,7 +7,7 @@ import { logUncaught, detached } from "../jvm/natives/jthrowable.ts";
 import { systemResource } from "./configuration.ts";
 import { toJsArray } from "../jvm/natives/jcoll.ts";
 import { settingsAccess } from "./settings.ts";
-import { hostService } from "./binder.ts";
+import { enforceCallingOrSelfPermission, hostService } from "./binder.ts";
 
 const VIBRATOR_ID = 1;
 /** VibrationSettings' fallbacks for prebaked effects a motor without effects cannot play (CLICK,
@@ -23,9 +23,21 @@ function* fallbackTimings(effect: number): Gen<number[]> {
   return timings.length === 1 ? [0, timings[0]] : timings;
 }
 let vibration: ReturnType<typeof setTimeout> | undefined;
+/** the effect playing, as off/on durations from `start` */
+let playing: { start: number; timings: number[]; repeat: number } | null = null;
+/** VibratorController.isVibrating: the motor is in an on step of the playing effect */
+function motorOn(): boolean {
+  if (!playing) return false;
+  const { timings, repeat } = playing, period = repeat < 0 ? 0 : timings.slice(repeat).reduce((a, b) => a + b, 0);
+  let t = performance.now() - playing.start, i = 0;
+  for (; i < timings.length && t >= timings[i]; i++) t -= timings[i];
+  if (i === timings.length && period > 0) for (t %= period, i = repeat; t >= timings[i]; i++) t -= timings[i];
+  return i < timings.length && i % 2 === 1;
+}
 /** Android's alternating off/on durations, from the composed effect's segments, played from `repeat` */
 function play(timings: number[], repeat: number): void {
   clearTimeout(vibration);
+  playing = { start: performance.now(), timings, repeat };
   const run = (from: number) => {
     const part = timings.slice(from), total = part.reduce((a, b) => a + b, 0);
     globalThis.navigator?.vibrate?.(from % 2 ? part : [0, ...part]);
@@ -93,11 +105,14 @@ hostService("vibrator_manager", "webdroid/VibratorManagerService", "android/os/I
   }),
   "vibrate(IILjava/lang/String;Landroid/os/CombinedVibration;Landroid/os/VibrationAttributes;Ljava/lang/String;Landroid/os/IBinder;)V":
     (_uid: number, _device: number, _pkg: string, combined: JObj) => { detached(() => rt.drive(playCombined(combined)), logUncaught); },
-  "cancelVibrate(ILandroid/os/IBinder;)V": () => { clearTimeout(vibration); globalThis.navigator?.vibrate?.(0); },
+  "cancelVibrate(ILandroid/os/IBinder;)V": () => { clearTimeout(vibration); playing = null; globalThis.navigator?.vibrate?.(0); },
   "performHapticFeedback(IILjava/lang/String;IZLjava/lang/String;Z)V": (_uid: number, _device: number, _pkg: string, constant: number, always: number) => {
     detached(() => rt.drive(performHapticFeedback(constant, always)), logUncaught);
   },
-  "isVibrating(I)Z": () => 0,
+  "isVibrating(I)Z": driven(function* (id: number): Gen {
+    yield enforceCallingOrSelfPermission("android.permission.ACCESS_VIBRATOR_STATE", "isVibrating");
+    return +(id === VIBRATOR_ID && motorOn());
+  }),
   // no state changes are reported, as none can be observed
   "registerVibratorStateListener(ILandroid/os/IVibratorStateListener;)Z": () => 0,
   "unregisterVibratorStateListener(ILandroid/os/IVibratorStateListener;)Z": () => 0,

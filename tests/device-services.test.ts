@@ -146,6 +146,19 @@ describe("storage stats", () => {
     expect(await thrown(() => vcall(stats, "queryStatsForUser", "(Ljava/util/UUID;Landroid/os/UserHandle;)Landroid/app/usage/StorageStats;", uuid, user)))
       .toMatch(/^java\/lang\/SecurityException: Caller does not have android.permission.PACKAGE_USAGE_STATS/);
   });
+  test("StorageManager's cache size is the cache the app's storage stats count", async () => {
+    const storage = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "storage");
+    const stats = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "storagestats");
+    const uuid = await staticField("android/os/storage/StorageManager", "UUID_DEFAULT"), held = `/data/data/${pkg}/cache/held.bin`;
+    vfs.write(held, new Uint8Array(5));
+    try {
+      const size: bigint = await vcall(storage, "getCacheSizeBytes", "(Ljava/util/UUID;)J", uuid);
+      const own = await vcall(stats, "queryStatsForPackage", "(Ljava/util/UUID;Ljava/lang/String;Landroid/os/UserHandle;)Landroid/app/usage/StorageStats;",
+        uuid, pkg, await scall("android/os/Process", "myUserHandle", "()Landroid/os/UserHandle;"));
+      expect(size).toBeGreaterThanOrEqual(5n);
+      expect(size).toBe(await vcall(own, "getCacheBytes", "()J"));
+    } finally { vfs.delete(held); }
+  });
 });
 
 describe("media metrics", () => {
