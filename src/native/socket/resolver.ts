@@ -1,5 +1,5 @@
-// The ARM32 libc's resolver functions over guest memory: getaddrinfo, getnameinfo, getifaddrs,
-// gai_strerror and inet_pton/ntop, over net-address.ts's resolver and interfaces; and getaddrinfo's
+// The ARM32 libc's resolver functions over guest memory: getaddrinfo, getnameinfo, gethostby*,
+// getifaddrs, gai_strerror and inet_pton/ntop/aton, over net-address.ts's resolver and interfaces; and getaddrinfo's
 // hints, which netd's dnsproxyd (daemons.ts) checks alike for a 64-bit process's bionic.
 
 import { E } from "../abi.ts";
@@ -10,7 +10,7 @@ import { mem, anchor } from "../mem.ts";
 import { fail } from "../kernel.ts";
 import {
   AF_UNSPEC, AF_INET, AF_INET6, AI_NUMERICHOST, NI_NUMERICHOST, NI_NAMEREQD, EAI_NONAME, EAI_FAMILY, EAI_SERVICE, EAI_SOCKTYPE, V4_LOOPBACK,
-  familyOf, parseIpv4, parseIpv6, addressText, resolveHost, hostOf, gaiText, INTERFACES,
+  HOST_NOT_FOUND, familyOf, parseIpv4, parseIpv6, addressText, resolveHost, hostOf, gaiText, INTERFACES,
 } from "../net-address.ts";
 import { SOCK_STREAM, SOCK_DGRAM, SOCK_RAW, sockaddrOf, readEndpoint } from "./abi.ts";
 import { record } from "./core.ts";
@@ -123,6 +123,41 @@ function getnameinfo(sockaddr: number, length: number, host: number, hostLength:
   return copyText(resolved ?? addressText(ep.address), host, hostLength) && copyText(String(ep.port), service, serviceLength) ? 0 : EAI_OVERFLOW;
 }
 
+/** the ARM32 struct hostent: h_name, h_aliases, h_addrtype, h_length, then h_addr_list */
+const HOSTENT = { size: 20, aliases: 4, type: 8, length: 12, list: 16 };
+const NO_RECOVERY = 3;
+/** gethostbyname and gethostbyaddr, and the h_errno they set: one for the process, where bionic keeps one per thread */
+export function hostLookups(): Record<string, HostFn> {
+  const hostErrno = mem.hostAlloc(4);
+  let entry = 0;
+  const noHost = (code = HOST_NOT_FOUND): number => { mem.st32(hostErrno, code); return 0; };
+  /** the answer, in the storage the next lookup replaces */
+  const hostent = (name: string, addresses: number[][]): number => {
+    const text = utf8.enc.encode(name + "\0"), length = addresses[0].length;
+    const list = HOSTENT.size + 4, bytes = list + 4 * (addresses.length + 1), size = bytes + length * addresses.length + text.length;
+    if (entry) mem.free(entry);
+    const at = entry = mem.malloc(size);
+    if (!at) return noHost(NO_RECOVERY);
+    mem.memset(at, 0, size);
+    mem.write(at + size - text.length, text); stp(at, at + size - text.length);
+    stp(at + HOSTENT.aliases, at + HOSTENT.size);
+    mem.st32(at + HOSTENT.type, familyOf(addresses[0])); mem.st32(at + HOSTENT.length, length);
+    stp(at + HOSTENT.list, at + list);
+    addresses.forEach((address, i) => { stp(at + list + 4 * i, at + bytes + length * i); mem.write(at + bytes + length * i, address); });
+    return at;
+  };
+  return {
+    gethostbyname: (_cpu, args) => { const name = args.str(); return complete(resolveHost(name, AF_INET, 0), (found) => typeof found === "number" ? noHost() : hostent(name, found)); },
+    gethostbyaddr: (_cpu, args) => {
+      const at = args.p(), length = args.u(), type = args.i();
+      if (length !== (type === AF_INET ? 4 : type === AF_INET6 ? 16 : -1)) return noHost();
+      const address = Array.from(mem.bytes(at, length)), name = hostOf(address);
+      return name ? hostent(name, [address]) : noHost();
+    },
+    __get_h_errno: () => hostErrno,
+  };
+}
+
 export const RESOLVER: Record<string, HostFn> = {
   getaddrinfo: (cpu, args) => getaddrinfo(cpu, args.p(), args.p(), args.p(), args.p()),
   freeaddrinfo: (_cpu, args) => { const address = args.p(); if (address) mem.free(address); },
@@ -138,6 +173,9 @@ export const RESOLVER: Record<string, HostFn> = {
     mem.write(out, bytes);
     return 1;
   },
+  // dotted-decimal alone, as inet_pton reads it; inet_addr answers INADDR_NONE when it cannot
+  inet_aton: (_cpu, args) => { const bytes = parseIpv4(args.str()), out = args.p(); if (!bytes) return 0; if (out) mem.write(out, bytes); return 1; },
+  inet_addr: (_cpu, args) => { const bytes = parseIpv4(args.str()); return bytes ? bytes[0] | bytes[1] << 8 | bytes[2] << 16 | bytes[3] << 24 : -1; },
   inet_ntop: (cpu, args) => {
     const family = args.i(), source = args.p(), destination = args.p(), length = args.u();
     if (family !== AF_INET && family !== AF_INET6) { fail(cpu, E.AFNOSUPPORT); return 0; }

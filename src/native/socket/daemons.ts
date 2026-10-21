@@ -5,7 +5,7 @@ import { E } from "../abi.ts";
 import { utf8 } from "../../jvm/abi.ts";
 import { logLine } from "../kernel.ts";
 import { complete } from "../host.ts";
-import { AF_INET, AF_INET6, familyOf, resolveHost, hostOf, parseIpv4, parseIpv6 } from "../net-address.ts";
+import { AF_INET, AF_INET6, HOST_NOT_FOUND, familyOf, resolveHost, hostOf, parseIpv4, parseIpv6 } from "../net-address.ts";
 import { sockaddrOf } from "./abi.ts";
 import { AI_CANONNAME, addrinfoCandidates } from "./resolver.ts";
 
@@ -59,7 +59,6 @@ function hostent(name: string, addresses: number[][]): Uint8Array {
   for (const a of addresses) r.be32(length).bytes(a);
   return r.be32(0).done();
 }
-const HOST_NOT_FOUND = 1;
 function query(line: string): Uint8Array | Promise<Uint8Array> {
   const [command, ...args] = line.split(" ");
   if (command === "getaddrinfo") {
