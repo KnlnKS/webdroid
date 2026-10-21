@@ -18,7 +18,7 @@ export function attachIme(canvas: HTMLCanvasElement, kbd: HTMLTextAreaElement, s
   const input = new MessageChannel(), view = new MessageChannel(), calls = callProxy<InputCalls>(input.port2, inputMethods);
   const keyboard = receiveIme(view.port2, canvas, calls.endpoint, kbd);
   void serveInput(input.port1, view.port1).then(close => { if (closed) close(); else stop = close; });
-  const pointers = attachPointerInput(canvas, () => device, dispatchTouches, () => {
+  const pointers = attachPointerInput(canvas, device, dispatchTouches, () => {
     if (!imeActive()) return;
     clearTimeout(focusTimer);
     focusTimer = setTimeout(() => { if (!closed) keyboard.focus(); }, 0);

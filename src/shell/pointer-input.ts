@@ -12,13 +12,11 @@ const MIRROR = -1;
 const attached = new Set<() => void>();
 /** send every canvas's batched finger moves and step its wheel gesture: once per display frame */
 export function drainPointers(): void { for (const drain of attached) drain(); }
-export function attachPointerInput(canvas: HTMLCanvasElement, geometry: () => PointerGeometry,
+/** `device` is read as each event needs it, so it follows the display's geometry */
+export function attachPointerInput(canvas: HTMLCanvasElement, device: PointerGeometry,
   dispatch: PointerDispatch, onDown: () => void = () => {}, source: HTMLElement = canvas) {
   const listeners = new AbortController();
   let closed = false;
-  const device = { get width() { return geometry().width; }, get height() { return geometry().height; },
-    get scrollUnit() { return geometry().scrollUnit; }, get touchSlop() { return geometry().touchSlop; },
-    get edgeSlop() { return geometry().edgeSlop; }, get minScalingSpan() { return geometry().minScalingSpan; } };
   function listenOn<K extends keyof HTMLElementEventMap>(name: K, handler: (event: HTMLElementEventMap[K]) => void,
     options: AddEventListenerOptions = {}) {
     source.addEventListener(name, handler, { ...options, signal: listeners.signal });
@@ -109,7 +107,7 @@ export function attachPointerInput(canvas: HTMLCanvasElement, geometry: () => Po
   }
 
   function cancelWheel() {
-    if (armed) void dispatch(ACTION_CANCEL, last);
+    if (armed) send(ACTION_CANCEL, last);
     hand = null; armed = false;
   }
 

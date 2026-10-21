@@ -159,7 +159,7 @@ export class ProcessHost {
     const canvas = this.canvas, frames = this.display = receiveFrames(display.port1, canvas, () => this.presented.resolve());
     if (this.hosts.mirroring) frames.mirror(this.hosts.mirroring);
     const calls = callProxy<InputCalls>(input.port1, inputMethods), text = this.ime = receiveIme(ime.port1, canvas, calls.endpoint);
-    const pointers = attachPointerInput(canvas, () => device, calls.endpoint.pointer, () => {
+    const pointers = attachPointerInput(canvas, device, calls.endpoint.pointer, () => {
       clearTimeout(this.focusTimer);
       this.focusTimer = setTimeout(() => { this.focusTimer = undefined; if (!this.closed) text.focus(); }, 0);
     });
