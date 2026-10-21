@@ -27,7 +27,7 @@ export class HostFunctions {
     };
   }
   private helperUnit(cx: Compiler, imports: Record<string, any>, built: { bytes: Uint8Array; traces: FnTrace[] }, clock: Clock, rebuild: (slot: number) => Function, slot?: number): { get: () => Function; raw?: Function } {
-    const dependent = cx.assumptions.some(a => !a[4]) || cx.absent.some(a => !a[1]);
+    const dependent = cx.assumptions.some(([, , , , owner]) => !owner) || cx.absent.some(([, owner]) => !owner);
     const units = this.w.units;
     if (slot !== undefined || !dependent) return units.link(units.compiled(cx, imports, built, slot), (e) => { const raw = e.m as Function; return { get: () => raw, raw }; }, clock)!;
     const at = -this.helperSlots.push(undefined);
