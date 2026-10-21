@@ -1,6 +1,7 @@
-import { bridgeSocket, gzipHeaders, sharedRoute, type ServeHost } from "../src/shell/serve-routes.ts";
+import { bridgeSocket, gzipHeaders, ownPage, sharedRoute, type ServeHost } from "../src/shell/serve-routes.ts";
 import { WebBridgeSession } from "./bridge.ts";
 import { tcpRelay } from "./tcp.ts";
+import { isPublicHost } from "../src/native/net-address.ts";
 
 export { WebBridgeSession };
 
@@ -62,17 +63,17 @@ async function largeAsset(request: Request, env: Env): Promise<Response> {
 export default {
   async fetch(request: Request, env: Env, context: ExecutionContext): Promise<Response> {
     const url = new URL(request.url), path = url.pathname;
-    const host: ServeHost = { bridge: (call, id) => env.WEB_BRIDGES.getByName(id).fetch(call), dnsLookup };
-    const shared = sharedRoute(url, host);
+    const host: ServeHost = { bridge: (call, id) => env.WEB_BRIDGES.getByName(id).fetch(call), dnsLookup, proxy: { reachable: isPublicHost } };
+    const shared = sharedRoute(url, host), header = (name: string) => request.headers.get(name);
     if (shared) return shared(request);
-    if (path === "/tcp") return tcpRelay(request, context);
+    if (path === "/tcp") return ownPage(url, header) ? tcpRelay(request, context) : new Response("forbidden", { status: 403 });
     if (path === "/webview-origin") {
       if (!env.WEBVIEW_ORIGIN) return new Response("Configure WEBVIEW_ORIGIN on a separate hostname", { status: 503 });
       const origin = new URL(env.WEBVIEW_ORIGIN).origin;
       return origin === url.origin ? new Response("WebView origin must differ", { status: 503 }) : Response.json(origin);
     }
     if (path === "/webview-socket") {
-      const id = bridgeSocket(url, request.headers.get("origin"));
+      const id = bridgeSocket(url, header);
       return id === null ? new Response("bad bridge", { status: 403 }) : host.bridge(request, id);
     }
     if (path.startsWith("/vendor/aosp/")) return largeAsset(request, env);

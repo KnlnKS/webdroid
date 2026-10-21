@@ -19,7 +19,7 @@ import { bundle } from "./scripts/bundle.ts";
 import { runNode } from "./scripts/node.ts";
 import { fileResponse, respond, toWeb } from "./scripts/serve.ts";
 import { WORKER_SCRIPTS } from "./src/worker-scripts.ts";
-import { bridgeSocket, gzipHeaders, sharedRoute, tcpTarget, type ServeHost } from "./src/shell/serve-routes.ts";
+import { bridgeSocket, gzipHeaders, ownPage, sharedRoute, tcpTarget, type ServeHost } from "./src/shell/serve-routes.ts";
 import { relayTcp, relayUdp } from "./socket-relays.ts";
 
 const apkDirectory = process.env.WEBDROID_APK_DIR ?? "apks";
@@ -164,8 +164,9 @@ export function devServer(): Plugin {
         if (!url) return void socket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
         // a socket's error (a frame past the size limit) closes it, which its relay ends with
         const upgrade = (use: (ws: WebSocket) => void) => sockets.handleUpgrade(req, socket, head, (ws) => { ws.on("error", () => ws.terminate()); use(ws); });
+        const header = (name: string) => req.headers[name] as string | undefined;
         if (url.pathname === "/webview-socket") {
-          const id = bridgeSocket(url, req.headers.origin);
+          const id = bridgeSocket(url, header);
           if (id === null) return void socket.end("HTTP/1.1 403 Forbidden\r\n\r\nbad bridge");
           return upgrade((ws) => {
             webRelay.open(id, ws);
@@ -173,8 +174,10 @@ export function devServer(): Plugin {
             ws.once("close", () => webRelay.close(id, ws));
           });
         }
+        if (url.pathname !== "/udp" && url.pathname !== "/tcp") return void socket.end("HTTP/1.1 404 Not Found\r\n\r\n");
+        // a WebSocket skips CORS: a page of any site open in the browser could otherwise use this machine's network
+        if (!ownPage(url, header)) return void socket.end("HTTP/1.1 403 Forbidden\r\n\r\n");
         if (url.pathname === "/udp") return upgrade(relayUdp);
-        if (url.pathname !== "/tcp") return void socket.end("HTTP/1.1 404 Not Found\r\n\r\n");
         const target = tcpTarget(url);
         if (typeof target === "string") return void socket.end(`HTTP/1.1 400 Bad Request\r\n\r\n${target}`);
         upgrade((ws) => relayTcp(ws, target));

@@ -114,6 +114,24 @@ export const INTERFACES: Interface[] = [{
 export function isGuestHost(hostname: string): boolean {
   return /^(localhost|ip6-localhost|ip6-loopback|127\.\d+\.\d+\.\d+|0\.0\.0\.0|\[::1?\])$/i.test(hostname);
 }
+/** whether a host the deployed relay and proxy are asked to reach may be on the public internet: not localhost,
+ *  nor an address that is unspecified, loopback, private, shared (CGNAT), link-local (cloud metadata among
+ *  them), benchmarking (this resolver's synthetic block), multicast or reserved. `host` is a name or a literal,
+ *  as a URL or the relay names it; URL's parser reads an IPv4 literal's other forms (2130706433, 0x7f.1). */
+export function isPublicHost(host: string): boolean {
+  const name = host.toLowerCase().replace(/^\[(.*)\]$/, "$1");
+  if (name === "localhost" || name.endsWith(".localhost")) return false;
+  let v4: ArrayLike<number> | null = parseIpv4(URL.parse(`http://${name}/`)?.hostname ?? "");
+  const v6 = v4 ? null : parseIpv6(name);
+  if (v6 && isMapped(v6)) v4 = v6.slice(12);
+  // unspecified, loopback; unique local (fc00::/7), link- and site-local (fe80::/9), multicast
+  else if (v6) return !(isAny(v6) || isLoopback(v6) || (v6[0] & 0xfe) === 0xfc || v6[0] === 0xfe && v6[1] >= 0x80 || v6[0] === 0xff);
+  // a name has no colon: one that is no IPv6 literal (a zone, a port) is refused
+  if (!v4) return !name.includes(":");
+  const [a, b] = [v4[0], v4[1]];
+  return !(a === 0 || a === 10 || a === 127 || a >= 224 || a === 100 && b >= 64 && b < 128 || a === 169 && b === 254
+    || a === 172 && b >= 16 && b < 32 || a === 192 && (b === 168 || b === 0 && v4[2] === 0) || a === 198 && (b === 18 || b === 19));
+}
 /** where an http(s) URL the device serves itself connects: Linux takes an unspecified address as
  *  the loopback one */
 export function guestEndpoint(url: string): Endpoint | null {

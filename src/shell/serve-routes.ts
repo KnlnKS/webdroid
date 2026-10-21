@@ -16,6 +16,14 @@ export interface ServeHost {
 }
 type Route = (request: Request) => Response | Promise<Response>;
 
+/** whether a request comes from a page of `url`'s own origin, as the browser that sent it says: by the page's
+ *  Origin (a WebSocket's, a POST's), or by Sec-Fetch-Site for a same-origin GET, which names none. A client
+ *  outside a browser can claim either. */
+export function ownPage(url: URL, header: (name: string) => string | null | undefined): boolean {
+  const origin = header("origin");
+  return origin ? origin === url.origin : header("sec-fetch-site") === "same-origin";
+}
+const forbidden = () => new Response("forbidden", { status: 403 });
 const frame = () => new Response(WEB_FRAME, { headers: { "content-type": "text/html", "cache-control": "no-store" } });
 const bridgeCall = async (request: Request, host: ServeHost): Promise<Response> => {
   const id = new URL(request.url).searchParams.get("id") ?? "";
@@ -30,7 +38,9 @@ export function sharedRoute(url: URL, host: ServeHost): Route | undefined {
     case "/webview": return frame;
     case "/webview-worker.js": return () => new Response(WEB_PROXY_WORKER, { headers: { "content-type": "text/javascript", "cache-control": "no-cache" } });
     case "/webview-call": return request => bridgeCall(request, host);
-    case "/proxy": return request => proxyRequest(request, { ...host.proxy, bridgeCall: call => bridgeCall(call, host) });
+    // the app's own HTTP: a page of another origin would make this an open proxy
+    case "/proxy": return request => ownPage(new URL(request.url), name => request.headers.get(name))
+      ? proxyRequest(request, { ...host.proxy, bridgeCall: call => bridgeCall(call, host) }) : forbidden();
     case "/dns-query": return forwardDnsMessage;
     // Whether a name resolves: the guest's resolvers answer a synthetic address for every name (the relay
     // dials by name), so this is how a name that does not exist fails as it would on a device, instead of
@@ -43,9 +53,9 @@ export function sharedRoute(url: URL, host: ServeHost): Route | undefined {
 }
 
 /** the bridge a /webview-socket upgrade opens, or null when it names none or comes from another origin */
-export function bridgeSocket(url: URL, origin: string | null | undefined): string | null {
+export function bridgeSocket(url: URL, header: (name: string) => string | null | undefined): string | null {
   const id = url.searchParams.get("id") ?? "";
-  return BRIDGE_ID.test(id) && origin === url.origin ? id : null;
+  return BRIDGE_ID.test(id) && ownPage(url, header) ? id : null;
 }
 
 export type TcpTarget = { host: string; port: number; alpn: string[]; secure: boolean };

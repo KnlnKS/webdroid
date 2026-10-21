@@ -1,11 +1,14 @@
 import { connect } from "cloudflare:sockets";
 import { tcpReady, tcpTarget } from "../src/shell/serve-routes.ts";
+import { isPublicHost } from "../src/native/net-address.ts";
 
 export async function tcpRelay(request: Request, context: ExecutionContext): Promise<Response> {
   if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") return new Response("expected websocket", { status: 400 });
   const target = tcpTarget(new URL(request.url));
   if (typeof target === "string") return new Response(target, { status: 400 });
   const { host, port, secure } = target;
+  // nothing to reach on Cloudflare's own network; the guest's connect fails as unreachable
+  if (!isPublicHost(host)) return new Response("unreachable target", { status: 403 });
 
   const [client, server] = Object.values(new WebSocketPair());
   server.accept();

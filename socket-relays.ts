@@ -16,9 +16,9 @@ const MAX_PENDING_TCP_BYTES = 8 * 1024 * 1024;
 // A text control frame means connected and carries the relay's local endpoint; a close before
 // that means the connect failed. A plain "ok" (worker/tcp.ts, local address unparsed) also means connected.
 //
-// This is an outbound proxy for whatever the emulated app asks for — the same trust boundary
-// as the dev server's /proxy, and the same reason both are dev-server-only: bound to loopback,
-// never meant to face a network.
+// Like /proxy, this is an outbound proxy for whatever the emulated app asks for, so the server opens it
+// only to its own origin's pages (ownPage) and listens on loopback. It reaches this machine's network,
+// as the developer's device would; the deployed Worker's relay (worker/tcp.ts) refuses private addresses.
 /** a WebSocket close reason, which holds 123 bytes: the message's printable ASCII */
 const closeReason = (message: string) => message.replace(/[^ -~]/g, "?").slice(0, 123);
 

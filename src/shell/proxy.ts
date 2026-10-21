@@ -16,6 +16,8 @@ export function sandboxDocument(request: Request, response: Response): Response 
 
 interface ProxyOptions {
   target?: (requested: string) => string;
+  /** whether this server may connect to `hostname`: the deployed Worker keeps off private networks */
+  reachable?: (hostname: string) => boolean;
   bridgeCall: (request: Request) => Promise<Response>;
   fetchUpstream?: (url: string, init: RequestInit, encoded: boolean) => Promise<Response>;
 }
@@ -72,6 +74,7 @@ async function proxied(request: Request, options: ProxyOptions): Promise<Respons
         body: body && new Uint8Array(body).toBase64() }) : null;
       if (!intercepted) throw new Error(`ECONNREFUSED: nothing listens at ${new URL(url).host}`);
     }
+    if (!intercepted && options.reachable && !options.reachable(new URL(url).hostname)) throw new Error(`ECONNREFUSED: ${new URL(url).host} is not reachable from this server`);
     const init: RequestInit = {
       method: request.method, headers,
       // buffered: a redirect (307/308) must replay the body, which a stream cannot
@@ -89,7 +92,6 @@ async function proxied(request: Request, options: ProxyOptions): Promise<Respons
     });
     // A server may drop Content-Length from a streamed response; URLConnection restores this value.
     if (out.has("content-length")) out.set("x-wd-content-length", out.get("content-length")!);
-    out.set("access-control-allow-origin", "*");
     out.set("x-wd-final-url", upstream.url || url);
     // a browser hides Set-Cookie from fetch, so the values travel under our own name
     const cookies = upstream.headers.getSetCookie();
