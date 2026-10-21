@@ -4,6 +4,8 @@ import { chromium, type Browser, type Page } from "playwright";
 import { webDocument } from "../src/shell/webhtml.ts";
 import { webScript } from "../src/shell/webscript.ts";
 import { proxyRequest } from "../src/shell/proxy.ts";
+import { proxyPath, type ProxyQuery } from "../src/shell/webpage/proxywire.ts";
+import type { WebResponse } from "../src/shell/webpage/protocol.ts";
 import { WEB_FRAME, WEB_FRAME_SANDBOX, WEB_PROXY_WORKER } from "../src/shell/webinject.ts";
 import { holdFrames } from "../src/shell/webpage/holdframes.ts";
 import { webViewBrands } from "../src/shell/webpage/clienthints.ts";
@@ -109,6 +111,35 @@ describe("WebView generated documents", () => {
       expect(scripts).toEqual(["https://upstream.example/dir/before.js", "https://upstream.example/assets/after.js"]);
       expect(await page.evaluate(() => document.getElementsByTagName("base").length)).toBe(2);
     } finally { await page.close(); }
+  });
+
+  test.concurrent("the proxy readies the client's intercepted response and the app's loopback answer as it readies the site's", async () => {
+    const answers: Record<string, WebResponse | null> = {
+      "https://upstream.example/page": { body: btoa("<p>intercepted"), status: 201, reason: "Made", headers: { "content-type": "text/html" } },
+      "https://upstream.example/site.css": null,
+      "http://127.0.0.1:8080/api": { body: btoa("local"), status: 200, reason: "OK", headers: { "content-type": "text/plain" } },
+    };
+    const calls: unknown[] = [], fetched: string[] = [];
+    const proxy = async (query: ProxyQuery) => {
+      const response = await proxyRequest(new Request("http://renderer.localhost" + proxyPath(query)), {
+        bridgeCall: async (call) => {
+          const { kind, url, main } = await call.json();
+          calls.push([new URL(call.url).searchParams.get("id"), kind, url, main]);
+          return Response.json({ value: answers[url] });
+        },
+        fetch: async (url) => { fetched.push(url); return new Response("upstream-style", { headers: { "content-type": "text/css" } }); },
+      });
+      return [response.status, await response.text(), response.headers.get("x-wd-error")];
+    };
+    const [status, html] = await proxy({ url: "https://upstream.example/page", frame: "main", bridge: "b", intercept: true });
+    expect([status, html]).toEqual([201, expect.stringMatching(/wd-proxy-url" content="https:\/\/upstream.example\/page".*<p>intercepted/s)]);
+    // a client that answers none leaves the request to the site; the device's own address is the app's alone
+    const rest = [];
+    for (const query of [{ url: "https://upstream.example/site.css", bridge: "b", intercept: true }, { url: "http://127.0.0.1:8080/api", bridge: "b" },
+      { url: "http://127.0.0.1:8080/api" }]) rest.push(await proxy(query));
+    expect(rest).toEqual([[200, "upstream-style", null], [200, "local", null], [502, expect.stringContaining("nothing listens"), "refused"]]);
+    expect([calls, fetched]).toEqual([[["b", "request", "https://upstream.example/page", true], ["b", "request", "https://upstream.example/site.css", false],
+      ["b", "loopback", "http://127.0.0.1:8080/api", undefined]], ["https://upstream.example/site.css"]]);
   });
 });
 
