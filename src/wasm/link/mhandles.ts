@@ -214,10 +214,9 @@ function fieldAccess(w: World, id: number, put: boolean, stat: boolean, parent: 
       if (BOX[f.desc]) box(cx, c, f.desc);
       return;
     }
-    if (!stat) target();
-    arg(value);
-    if (BOX[f.desc]) unbox(cx, c, f.desc);
-    if (stat) c.gset(cx.staticGlobal(jc.name, f.name, f.desc)); else c.structSet(st, at);
+    const unboxed = () => { arg(value); if (BOX[f.desc]) unbox(cx, c, f.desc); };
+    if (!stat) cx.emitFieldStore(c, jc.name, f, target, unboxed);
+    else { unboxed(); c.gset(cx.staticGlobal(jc.name, f.name, f.desc)); }
   }, parent) as never;
 }
 

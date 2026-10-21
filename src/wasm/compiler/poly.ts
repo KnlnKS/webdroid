@@ -2,7 +2,7 @@
 // Guarded accessor types and null reference operands use storage operations; other conversions and views use the Java bridge.
 import { OP } from "./code.ts";
 import { T, ref, refNull, type VT } from "./wasmbin.ts";
-import { ACC, kindOf, type Kind, typeName } from "./program.ts";
+import { ACC, kindOf, type FieldInfo, type Kind, typeName } from "./program.ts";
 import { elemKindOf } from "./consts.ts";
 import { descToName, varHandleValues } from "../../jvm/abi.ts";
 import { argRegisters, type PreparedInstruction as Ins } from "../../jvm/prepared.ts";
@@ -160,11 +160,11 @@ export function emitVarHandleAccess(cx: Compiler, c: Code, mode: string, params:
       c.lget(vh).refTest(fvh).raw(OP.i32_eqz).if_(); classCast(); c.end();
       c.lget(vh).refCast(fvh).structGet(fvh, cx.fieldIndex(FVH, { owner: FVH, name: "artField", desc: "J" })).raw(OP.i32_wrap_i64).lset(fid);
     };
-    const cands: { cn: string; fid: number; fi: number; letter: string }[] = [];
+    const cands: { cn: string; fid: number; f: FieldInfo; fi: number }[] = [];
     for (const cn of stat ? [] : cx.prog.chain(R)) {
       const jc = cx.prog.get(cn);
       if (!jc?.def || jc.isInterface) continue;
-      jc.fields.forEach((f, i) => { if (!f.isStatic && valueKind(f.desc) === vf && i < 1 << 12) cands.push({ cn, fid: cx.idOf(cn) << 12 | i, fi: cx.fieldIndex(cn, f), letter: f.desc[0] }); });
+      jc.fields.forEach((f, i) => { if (!f.isStatic && valueKind(f.desc) === vf && i < 1 << 12) cands.push({ cn, fid: cx.idOf(cn) << 12 | i, f, fi: cx.fieldIndex(cn, f) }); });
     }
     if (R === "java/lang/Void") { cx.callThrower(c, "npe"); c.unreachable(); }        // the receiver is the literal null
     else if (cands.length && cands.length <= MAX_CANDIDATES) {
@@ -176,7 +176,8 @@ export function emitVarHandleAccess(cx: Compiler, c: Code, mode: string, params:
       for (const cand of cands) {
         const st = cx.structFor(cand.cn), r = c.newLocal(refNull(st));
         c.lget(fid).i32(cand.fid).raw(OP.i32_eq).if_().lget(recv).refCast(st).lset(r);
-        access({ load: () => c.lget(r).structGet(st, cand.fi), store: (v) => c.lget(r).lget(v).structSet(st, cand.fi), narrow: () => narrowTo(c, cand.letter) }, vals);
+        access({ load: () => c.lget(r).structGet(st, cand.fi), store: (v) => cx.emitFieldStore(c, cand.cn, cand.f, () => c.lget(r), () => c.lget(v)),
+          narrow: () => narrowTo(c, cand.f.desc[0]) }, vals);
         c.br(1).end();
       }
       classCast(); c.unreachable().end();

@@ -2,7 +2,7 @@
 import { parseMethodDesc } from "../../jvm/abi.ts";
 import { HT, ModuleBuilder, T, ref, refNull, type VT, type FunctionType } from "./wasmbin.ts";
 import { Code, OP, type InlineFrame } from "./code.ts";
-import { ACC, type Program, kindOf, type Kind, type MethodInfo } from "./program.ts";
+import { ACC, type FieldInfo, type Program, kindOf, type Kind, type MethodInfo } from "./program.ts";
 import { mid } from "./ids.ts";
 import { H, ELEM, MATH_ARITY, elemKindOf, type ElemKind } from "./consts.ts";
 import { declareSymbolicSites, type SymbolicSite } from "./sites.ts";
@@ -503,6 +503,12 @@ export class Compiler implements Base {
     // vt[IMT+2s] == sel ? vt[IMT+2s+1] : imtslow(vt, sel)
     c.lset(l).lget(l).i32(H.IMT + 2 * s).arrayGet(this.tVT).i32(sel).raw(OP.i32_eq).if_(T.i32)
       .lget(l).i32(H.IMT + 2 * s + 1).arrayGet(this.tVT).else_().lget(l).i32(sel).call(this.helper("imtslow")).end();
+  }
+  /** stores what `value` pushes into instance field `f` of the object `obj` pushes as `decl`'s struct; the object takes over a native handle stored into a
+   *  field that holds one (World.claims) */
+  emitFieldStore(c: Code, decl: string, f: FieldInfo, obj: () => void, value: () => void): void {
+    obj(); value(); c.structSet(this.structFor(decl), this.fieldIndex(decl, f));
+    if (this.w.claims(f)) { obj(); c.externConvertAny(); value(); c.call(this.imp.claim); }
   }
 
   // ---------- allocation

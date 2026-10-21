@@ -68,11 +68,12 @@ synthFamily("uf", (w, arg) => {
   return { params: op === "get" ? ["L"] : op === "put" ? ["L", k] : ["L", k, k], ret: op === "get" ? k : op === "put" ? "V" : "I", body: (cx, c) => {
     const st = cx.structFor(name), at = cx.fieldIndex(name, f), o = c.newLocal(refNull(st));
     c.lget(0).refCast(st).lset(o);
+    const put = (v: number) => cx.emitFieldStore(c, name, f, () => c.lget(o), () => c.lget(v));
     if (op === "get") c.lget(o).structGet(st, at);
-    else if (op === "put") c.lget(o).lget(1).structSet(st, at);
+    else if (op === "put") put(1);
     else {
       c.lget(o).structGet(st, at).lget(1); if (k === "L") c.call(cx.helper("acmp")); else c.raw(k === "I" ? OP.i32_eq : OP.i64_eq);
-      c.if_(T.i32).lget(o).lget(2).structSet(st, at).i32(1).else_().i32(0).end();
+      c.if_(T.i32); put(2); c.i32(1).else_().i32(0).end();
     }
   } };
 }, true);

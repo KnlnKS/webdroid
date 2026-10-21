@@ -604,9 +604,8 @@ export class MC {
   }
   /** stores what `value` pushes (in the field's kind) into `obj`'s field */
   private fieldPut({ decl, f }: { decl: string; f: FieldInfo }, obj: number, value: () => void) {
-    const cx = this.cx, c = this.code, st = cx.structFor(decl);
-    this.refTo(obj, st); value(); c.structSet(st, cx.fieldIndex(decl, f));
-    if (cx.w.claims(f)) { this.refTo(obj, st); c.externConvertAny(); value(); c.call(cx.imp.claim); }
+    const st = this.cx.structFor(decl);
+    this.cx.emitFieldStore(this.code, decl, f, () => this.refTo(obj, st), value);
   }
   emitStatic(ins: Ins) {
     const cx = this.cx, c = this.code, put = ins.op >= 0x67, r = this.fieldOf(ins.b, true);
