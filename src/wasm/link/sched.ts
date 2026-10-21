@@ -502,10 +502,11 @@ export class Sched {
     for (const id of this.initWaiters.keys()) if (this.strands[this.w.initWord(id) >>> 2]?.thread === thread) return true;
     return false;
   }
-  /** whether `holder` waits, through the strands it waits for, on `waiter` */
+  /** whether `holder` waits, through the strands it waits for, on `waiter`; a cycle that does not reach `waiter` is others' deadlock, which `waiter` waits behind */
   private waitsFor(holder: Strand, waiter: Strand): boolean {
     if (waiter.root) return false;
-    for (let c: Strand | null = holder, n = 0; c && !c.root; c = c.waitsOn) if (c === waiter || ++n > 64) return true;
+    const seen = new Set<Strand>();
+    for (let c: Strand | null = holder; c && !c.root && !seen.has(c); c = c.waitsOn) { if (c === waiter) return true; seen.add(c); }
     return false;
   }
   private initDone(id: number): number {
