@@ -93,7 +93,7 @@ export const offArg = (a: { i(): number; l(): bigint }) => (PTR === 8 ? Number(a
 /** getRandomValues fills at most 64 KiB a call, and no shared view (guest memory): such a
  *  target is filled through a copy */
 export function randomBytes(target: Uint8Array): void {
-  const out = target.buffer instanceof ArrayBuffer ? target : new Uint8Array(target.length);
+  const out = target.buffer instanceof ArrayBuffer ? target as Uint8Array<ArrayBuffer> : new Uint8Array(target.length);
   for (let off = 0; off < out.length; off += 65536) crypto.getRandomValues(out.subarray(off, off + 65536));
   if (out !== target) target.set(out);
 }
