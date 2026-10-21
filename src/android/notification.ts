@@ -440,14 +440,12 @@ function* addAutoGroupSummary(trigger: PostedNotification, flags: number, member
     ...trigger, key: `${keyOf(trigger.userId, trigger.pkg, 0x7fffffff, RANKER_GROUP, trigger.uid)}|${RANKER_GROUP}`, id: 0x7fffffff, tag: RANKER_GROUP,
     postTime: BigInt(Date.now()), flags: getDeclared<number>(summary, N, "flags"), group: RANKER_GROUP, sortKey: null, override: RANKER_GROUP, data: yield* awaited(notificationStore.capture(summary)),
   };
-  try {
-    if (epoch !== notificationStore.epoch(trigger.pkg) || !notificationStore.posted.includes(trigger)) return;
+  const current = () => epoch === notificationStore.epoch(trigger.pkg) && notificationStore.posted.includes(trigger);
+  yield* post(record, function* () {
+    if (!current()) return false;
     notificationStore.autobundled.set(pk, record.key);
-    if (!(yield* awaited(hasPermission(record.uid))) || (yield* channelImportance(record)) === IMPORTANCE_NONE) return;
-    if (epoch !== notificationStore.epoch(trigger.pkg) || !notificationStore.posted.includes(trigger)) return;
-    const old = insert(record);
-    if (old) yield* awaited(old.data.close());
-  } finally { if (!notificationStore.posted.includes(record)) yield* awaited(record.data.close()); }
+    return (yield* awaited(hasPermission(record.uid))) && (yield* channelImportance(record)) !== IMPORTANCE_NONE && current();
+  }());
 }
 /** updateAutobundledSummaryLocked: the summary follows its members' flags and look */
 function* updateAutobundledSummary(trigger: PostedNotification, flags: number, members: Ungrouped[]): Gen<void> {
@@ -462,22 +460,34 @@ function* updateAutobundledSummary(trigger: PostedNotification, flags: number, m
   setDeclared(summary, N, { flags });
   yield vcall(summary, "setSmallIcon", "(Landroid/graphics/drawable/Icon;)V", look.icon);
   setDeclared(summary, N, { color: look.color, visibility: look.visibility });
-  const data = yield* awaited(notificationStore.capture(summary));
-  if (!notificationStore.posted.includes(record) || record.data !== previous) { yield* awaited(data.close()); return; }
-  const old = record.data; record.flags = flags; record.data = data;
-  yield* awaited(old.close());
+  yield* replaceData(record, previous, summary, flags);
 }
 function* channelImportance(r: PostedNotification): Gen<number> {
   const channel = yield* channelFor(new Preferences(r.pkg), r.channel, true);
   return channel ? yield vcall(channel, "getImportance", "()I") : IMPORTANCE_NONE;
 }
-/** PostNotificationRunnable's list update: a new key is added, an existing one replaced in place */
-function insert(r: PostedNotification): PostedNotification | null {
-  const list = notificationStore.posted, i = list.findIndex((o) => o.key === r.key);
-  if (i < 0) { list.push(r); return null; }
-  const old = list[i];
-  list[i] = r;
-  return old;
+/** PostNotificationRunnable's list update, once `admitted` agrees: a new key is added, an existing one
+ *  replaced in place and its parcel closed; a record left out closes its own. Whether it posted. */
+function* post(r: PostedNotification, admitted: Gen<boolean>): Gen<boolean> {
+  try {
+    if (!(yield* admitted)) return false;
+    const list = notificationStore.posted, i = list.findIndex((o) => o.key === r.key);
+    if (i < 0) list.push(r);
+    else {
+      const old = list[i];
+      list[i] = r;
+      yield* awaited(old.data.close());
+    }
+    return true;
+  } finally { if (!notificationStore.posted.includes(r)) yield* awaited(r.data.close()); }
+}
+/** a posted record's notification rewritten with `flags`: its parcel replaces the one read as
+ *  `previous`, unless the record went or changed meanwhile */
+function* replaceData(r: PostedNotification, previous: StoredParcel, n: JObj, flags: number): Gen<void> {
+  const data = yield* awaited(notificationStore.capture(n));
+  if (!notificationStore.posted.includes(r) || r.data !== previous) return yield* awaited(data.close());
+  r.flags = flags; r.data = data;
+  yield* awaited(previous.close());
 }
 
 // ── posting
@@ -580,13 +590,12 @@ function* enqueueNotification(pkg: string | null, opPkg: string | null, tag: str
     key, pkg: pkg!, opPkg: opPkg ?? pkg!, id, tag, uid: notifyUid, pid, userId, postTime: BigInt(Date.now()),
     channel: yield vcall(channel, "getId", "()Ljava/lang/String;"), flags, group, sortKey, override: old?.override ?? null, data: yield* awaited(notificationStore.capture(n)),
   };
-  try {
+  const posted = yield* post(record, function* () {
     if (old && isGroupSummary(old) && (!isGroupSummary(record) || groupKey(old) !== groupKey(record)))
       yield* removeRecords(groupChildren(old, (f) => (f & (FLAG_FOREGROUND_SERVICE | FLAG_USER_INITIATED_JOB)) !== 0));
-    if (epoch !== notificationStore.epoch(pkg!)) return;
-    const replaced = insert(record);
-    if (replaced) yield* awaited(replaced.data.close());
-  } finally { if (!notificationStore.posted.includes(record)) yield* awaited(record.data.close()); }
+    return epoch === notificationStore.epoch(pkg!);
+  }());
+  if (!posted) return;
   // GroupHelper sees a post that is new or changed its group or flags
   if ((yield vcall(n, "getSmallIcon", "()Landroid/graphics/drawable/Icon;")) && (!old || old.group !== record.group || old.flags !== record.flags))
     yield* groupHelperPosted(record, n);
@@ -648,10 +657,7 @@ function* stopForeground(pkg: string | undefined, id: number, remove: boolean): 
   const n = yield* awaited(notificationStore.readStored(r.data));
   const flags = r.flags & ~FLAG_FOREGROUND_SERVICE;
   setDeclared(n, N, { flags });
-  const data = yield* awaited(notificationStore.capture(n));
-  if (!notificationStore.posted.includes(r) || r.data !== previous) { yield* awaited(data.close()); return; }
-  const old = r.data; r.flags = flags; r.data = data;
-  yield* awaited(old.close());
+  yield* replaceData(r, previous, n, flags);
 }
 
 const POLICY = "android/app/NotificationManager$Policy";
