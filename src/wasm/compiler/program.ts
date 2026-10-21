@@ -337,14 +337,18 @@ export class Program extends LoaderGraph {
   /** resolve a method declared in `cls` or inherited (superclasses, then interfaces) */
   resolve(cls: string, name: string, desc: string): MethodInfo | undefined {
     const key = mkey(name, desc);
+    return this.resolveBy(cls, (c) => c.method(key));
+  }
+  /** the method `lookup` finds in `cls` or a superclass, else the first instance method it finds in their interfaces, depth first */
+  resolveBy(cls: string, lookup: (c: JClass) => MethodInfo | undefined): MethodInfo | undefined {
     for (let c: JClass | undefined = this.get(cls); c; c = c.sup ? this.get(c.sup) : undefined) {
-      const m = c.method(key); if (m) return m;
+      const m = lookup(c); if (m) return m;
     }
     const seen = new Set<string>();
     const visit = (n: string): MethodInfo | undefined => {
       if (seen.has(n)) return undefined; seen.add(n);
       const c = this.get(n); if (!c) return undefined;
-      const m = c.method(key); if (m && !(m.flags & ACC.STATIC)) return m;
+      const m = lookup(c); if (m && !(m.flags & ACC.STATIC)) return m;
       for (const i of c.ifaces) { const r = visit(i); if (r) return r; }
       return undefined;
     };
@@ -400,13 +404,17 @@ export class Program extends LoaderGraph {
     for (let c = this.get(cls); c; c = c.sup ? this.get(c.sup) : undefined) c.ifaces.forEach(visit);
     return [...out];
   }
-  /** the field `name` that `cls` declares or inherits (the class, its superinterfaces, then its superclass): of type `desc` and kind `isStatic` when given */
+  /** the field `name` that `cls` declares or inherits: of type `desc` and kind `isStatic` when given */
   resolveField(cls: string, name: string, desc?: string, isStatic?: boolean): FieldInfo | undefined {
+    return this.resolveFieldBy(cls, (x) => x.name === name && (desc === undefined || x.desc === desc) && (isStatic === undefined || x.isStatic === isStatic));
+  }
+  /** the first field `match` takes that `cls` declares or inherits: the class, its superinterfaces, then its superclass */
+  resolveFieldBy(cls: string, match: (f: FieldInfo) => boolean): FieldInfo | undefined {
     const seen = new Set<string>();
     const visit = (n: string): FieldInfo | undefined => {
       if (seen.has(n)) return undefined; seen.add(n);
       const c = this.get(n); if (!c) return undefined;
-      const f = c.fields.find((x) => x.name === name && (desc === undefined || x.desc === desc) && (isStatic === undefined || x.isStatic === isStatic)); if (f) return f;
+      const f = c.fields.find(match); if (f) return f;
       for (const i of c.ifaces) { const r = visit(i); if (r) return r; }
       return c.sup ? visit(c.sup) : undefined;
     };

@@ -45,26 +45,8 @@ export function symbolicMethod(c: JClass, name: string, desc: string): MethodInf
 }
 
 /** DEX member resolution compares descriptors, not the referring loader's already-resolved types. */
-export function resolveSymbolicMethod(prog: Program, cls: string, name: string, desc: string): MethodInfo | undefined {
-  if (prog.loaderOf(cls) === prog.boot) return prog.resolve(cls, name, desc);
-  for (const key of prog.chain(cls)) {
-    const m = symbolicMethod(prog.require(key), name, desc);
-    if (m) return m;
-  }
-  const seen = new Set<string>();
-  const visit = (key: string): MethodInfo | undefined => {
-    if (seen.has(key)) return;
-    seen.add(key);
-    const c = prog.get(key);
-    if (!c) return;
-    const m = symbolicMethod(c, name, desc);
-    if (m && !m.isStatic) return m;
-    for (const iface of c.ifaces) { const found = visit(iface); if (found) return found; }
-  };
-  for (const key of prog.chain(cls)) for (const iface of prog.require(key).ifaces) {
-    const found = visit(iface); if (found) return found;
-  }
-}
+export const resolveSymbolicMethod = (prog: Program, cls: string, name: string, desc: string): MethodInfo | undefined =>
+  prog.resolveBy(cls, (c) => symbolicMethod(c, name, desc));
 
 /** Package-private slots retain their declaring runtime package even when binary prototypes match. */
 export const dispatchMethodKey = (key: string): string => key.slice(key.indexOf("\0") + 1);
@@ -112,21 +94,6 @@ export function symbolicDispatchFor(prog: Program, cls: string, slot: string, in
   }
   const maximal = prog.maximalInterfaceMethods(prog.chain(cls).flatMap(owner => prog.require(owner).ifaces), c => symbolicMethod(c, name, desc));
   return selectDefault(maximal, includeAbstract);
-}
-
-function resolveSymbolicField(prog: Program, cls: string, name: string, desc: string): FieldInfo | undefined {
-  const seen = new Set<string>(), raw = javaName(desc);
-  const visit = (key: string): FieldInfo | undefined => {
-    if (seen.has(key)) return;
-    seen.add(key);
-    const c = prog.get(key);
-    if (!c) return;
-    const field = c.fields.find(f => f.name === name && javaName(f.desc) === raw);
-    if (field) return field;
-    for (const iface of c.ifaces) { const found = visit(iface); if (found) return found; }
-    return c.sup ? visit(c.sup) : undefined;
-  };
-  return visit(cls);
 }
 
 /** ART Class::FindVirtualMethodForInterfaceSuper visits subinterfaces before their ancestors. */
@@ -181,7 +148,7 @@ export function resolveFieldRef(prog: Program, dex: DexFile, idx: number, isStat
 function fieldRef(prog: Program, dex: DexFile, idx: number, isStatic: boolean, referrer: string): { decl: string; f: FieldInfo } | LinkFailure {
   const fr = dex.field(idx), types = prog.typesOf(dex), decl = types.typeName(fr.cls), type = dex.rawType(fr.type);
   if (!prog.get(decl)) return fail("ncdfr", UNRESOLVED + types.type(fr.cls), decl);
-  const f = resolveSymbolicField(prog, decl, fr.name, type);
+  const raw = javaName(type), f = prog.resolveFieldBy(decl, (x) => x.name === fr.name && javaName(x.desc) === raw);
   if (!f) return fail("nsfer", `No ${isStatic ? "static " : "instance "}field ${fr.name} of type ${type} in class ${descriptor(decl)} or its superclasses${declared(prog, decl)}`);
   if (f.isStatic !== isStatic) {
     return fail("icce", `Expected '${prettyType(f.desc)} ${dotted(f.owner)}.${f.name}' to be a ${isStatic ? "static" : "instance"} field rather than a ${isStatic ? "instance" : "static"} field${declared(prog, referrer)}`);
