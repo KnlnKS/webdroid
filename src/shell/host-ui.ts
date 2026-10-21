@@ -68,7 +68,7 @@ function choose<T>(title: string, choices: { label: string; run: () => T | Promi
   dialog.style.cssText = "border:0;border-radius:12px;padding:20px;min-width:260px;max-width:90vw;color:#222;background:#fff;box-shadow:0 12px 40px #0005;font:16px sans-serif";
   const heading = document.createElement("div");
   heading.textContent = title;
-  heading.style.cssText = "font-weight:600;margin-bottom:16px";
+  heading.style.cssText = "font-weight:600;margin-bottom:16px;white-space:pre-line";
   dialog.append(heading);
   const actions = document.createElement("div");
   actions.style.cssText = "display:flex;gap:12px;flex-wrap:wrap";

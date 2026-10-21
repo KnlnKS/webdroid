@@ -5,7 +5,6 @@ import { bootstrapTransfers, closeProcessBootstrap, type ProcessBootstrap } from
 import { callProxy, methodsOf, type CallFailure } from "./rpc.ts";
 import type { WorkerControl } from "./worker-control.ts";
 import type { ProcessRecord } from "./processes.ts";
-import { attachPointerInput } from "./pointer-input.ts";
 import { createGuestClockPort } from "../guest-clock.ts";
 import { serveTierPorts, type TierPorts } from "../jvm/tier.ts";
 import { sendPlatformJars } from "../android/framework.ts";
@@ -16,7 +15,7 @@ import { displayRate } from "./display-rate.ts";
 import { device, formatScreen } from "./config.ts";
 import type { ClockBootstrap } from "./clock-port.ts";
 import { receiveFrames, type FrameReceiver, type Mirror } from "./frame-port.ts";
-import { inputMethods, receiveIme, type InputCalls } from "./input-port.ts";
+import { attachRealmInput } from "./input-port.ts";
 import { receiveMedia } from "./media-port.ts";
 import { receiveWebSurfaces } from "./web-surface-port.ts";
 import { WORKER_SCRIPTS } from "../worker-scripts.ts";
@@ -99,7 +98,7 @@ export class ProcessHost {
   readonly presented = Promise.withResolvers<void>();
   readonly control: WorkerControl;
   display: FrameReceiver | undefined;
-  ime: ReturnType<typeof receiveIme> | undefined;
+  ime: ReturnType<typeof attachRealmInput> | undefined;
   private web: HTMLElement | undefined;
   /** the process it runs, once started */
   private record: ProcessRecord | undefined;
@@ -108,7 +107,6 @@ export class ProcessHost {
   private readonly endpoint = new MessageChannel();
   private readonly controlPorts = new MessageChannel();
   private readonly ends: (() => void)[] = [];
-  private focusTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly pagehide = () => this.fail("Process page closed");
 
   constructor(spare: SpareWorker, pkg: string, hosts: ProcessHosts) {
@@ -157,14 +155,10 @@ export class ProcessHost {
     const display = new MessageChannel(), input = new MessageChannel(), ime = new MessageChannel(), web = new MessageChannel(), media = new MessageChannel();
     const canvas = this.canvas, frames = this.display = receiveFrames(display.port1, canvas, () => this.presented.resolve());
     if (this.hosts.mirroring) frames.mirror(this.hosts.mirroring);
-    const calls = callProxy<InputCalls>(input.port1, inputMethods), text = this.ime = receiveIme(ime.port1, canvas, calls.endpoint);
-    const pointers = attachPointerInput(canvas, () => device, calls.endpoint.pointer, () => {
-      clearTimeout(this.focusTimer);
-      this.focusTimer = setTimeout(() => { this.focusTimer = undefined; text.focus(); }, 0);
-    });
+    const text = this.ime = attachRealmInput(canvas, () => device, input.port1, ime.port1);
     const surfaces = receiveWebSurfaces(web.port1, canvas, () => device);
     this.web = surfaces.layer;
-    this.ends.push(pointers.close, calls.close, text.close, frames.close, receiveMedia(media.port1), surfaces.close);
+    this.ends.push(text.close, frames.close, receiveMedia(media.port1), surfaces.close);
     return { display: display.port2, screen: canvas.transferControlToOffscreen(), input: input.port2, ime: ime.port2, web: web.port2, media: media.port2 };
   }
   /** its place among the processes shown: `z` from the bottom, or hidden; `interactive` takes the pointer */
@@ -177,7 +171,7 @@ export class ProcessHost {
   /** its process's death ends the Worker and what the page holds of it: a port posted to the Worker is detached
    *  here, and the broker closes the endpoint it took first, so closing either again does nothing */
   close(): void {
-    clearTimeout(this.focusTimer); window.removeEventListener("pagehide", this.pagehide);
+    window.removeEventListener("pagehide", this.pagehide);
     for (const close of this.ends) close();
     this.spare.worker.terminate(); this.spare.release();
     this.endpoint.port1.close(); this.endpoint.port2.close(); this.controlPorts.port2.close();

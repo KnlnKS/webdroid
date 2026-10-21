@@ -3,6 +3,7 @@
 import type { ImeState } from "../android/ime.ts";
 import type { TouchPointer } from "./pointer-queue.ts";
 import { callProxy, methodsOf, serveCalls } from "./rpc.ts";
+import { attachPointerInput, type PointerDispatch, type PointerGeometry } from "./pointer-input.ts";
 
 type ImeCalls = {
   input(generation: number, text: string, start: number, end: number, composing: boolean): Promise<void>;
@@ -99,4 +100,17 @@ export function receiveIme(view: MessagePort, canvas: HTMLCanvasElement, calls: 
   return { close, focus() { mirror(); if (!input.disabled) input.focus(); }, input,
     /** whether its canvas shows */
     show(visible: boolean) { if (shown === visible) return; shown = visible; mirror(); if (state.active && shown) input.focus(); } };
+}
+
+/** `canvas`'s input to one realm, served on `input` and `view`: its pointers go to `dispatch`, the realm's
+ *  by default, and a press focuses the text control once the press's own focus change is done */
+export function attachRealmInput(canvas: HTMLCanvasElement, geometry: () => PointerGeometry, input: MessagePort, view: MessagePort,
+  { dispatch, kbd, source }: { dispatch?: PointerDispatch; kbd?: HTMLTextAreaElement; source?: HTMLElement } = {}) {
+  const calls = callProxy<InputCalls>(input, inputMethods), text = receiveIme(view, canvas, calls.endpoint, kbd);
+  let focusTimer: ReturnType<typeof setTimeout> | undefined;
+  const pointers = attachPointerInput(canvas, geometry, dispatch ?? calls.endpoint.pointer, () => {
+    clearTimeout(focusTimer);
+    focusTimer = setTimeout(text.focus, 0);
+  }, source);
+  return { ...text, close() { clearTimeout(focusTimer); pointers.close(); text.close(); calls.close(); } };
 }

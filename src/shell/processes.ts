@@ -23,7 +23,7 @@ import { device, naturalLandscape } from "./config.ts";
 import { exported, componentPermission, componentProcess, resolveProvider } from "../android/pm.ts";
 import { PermissionStore } from "../android/permissions.ts";
 import { attrStr } from "../android/axml.ts";
-import { sqliteStore, type createSQLiteSession } from "../android/sqlite.ts";
+import type { createSQLiteSession } from "../android/sqlite.ts";
 import { preferenceStore } from "../android/sharedprefs.ts";
 import { notificationStore } from "../android/notification.ts";
 import { PROCESS_PID } from "../android/os.ts";
@@ -40,6 +40,7 @@ import { storageEntries } from "./device-storage.ts";
 import { bootstrapTransfers, type ProcessBootstrap } from "./process-bootstrap-data.ts";
 import { serveCalls, closePort } from "./rpc.ts";
 import { serveBrokerPort } from "./broker-port.ts";
+import { hostUi } from "./host-ui.ts";
 import { asBroker, forgetRemoved, permissionDenied, processProxy, receivers, unawaited, type BroadcastData, type ProcessEndpoint, type Receiver } from "./broker-contract.ts";
 
 export type { ProcessBootstrap } from "./process-bootstrap-data.ts";
@@ -128,7 +129,6 @@ export class ProcessBroker {
     if (!store) { store = import("./webcookies.ts").then(({ WebCookies }) => new WebCookies(pkg)); this.cookieStores.set(pkg, store); }
     return store;
   }
-  readonly databases = sqliteStore;
   readonly preferences = preferenceStore;
   readonly notifications = notificationStore;
   private entries = new Map<number, ProcessRecord>();
@@ -322,7 +322,7 @@ export class ProcessBroker {
   /** system_server's part in a package's data change, run in this realm: it outlives its caller,
    *  which may be the package */
   async changePackageData(pkg: string, change: PackageDataChange, broadcasts: { data: ParcelData; targets: Receiver[] }[], prompt?: string): Promise<boolean> {
-    if (prompt && !confirm(prompt)) return false;
+    if (prompt && await hostUi().chooseOne(prompt, ["OK"]) !== 0) return false;
     await (await import("./packagedata.ts")).changePackageData(this, pkg, change, broadcasts);
     return true;
   }
