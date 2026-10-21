@@ -35,8 +35,8 @@ rt.register({
       return Object.assign(s, { host: host ?? "", port, plain, autoClose: !!autoClose });
     }),
     "createSocket()Ljava/net/Socket;": () => newObj(SSL_SOCKET),
-    "createSocket(Ljava/lang/String;I)Ljava/net/Socket;": (host: string | null, port: number) =>
-      after(newObj(SSL_SOCKET, "(Ljava/lang/String;I)V", host, port), (s: JSSLSocket) => Object.assign(s, { host: host ?? "" })),
+    "createSocket(Ljava/lang/String;I)Ljava/net/Socket;": waits((host: string | null, port: number) =>
+      after(newObj(SSL_SOCKET, "(Ljava/lang/String;I)V", host, port), (s: JSSLSocket) => Object.assign(s, { host: host ?? "" }))),
     "createSocket(Ljava/net/InetAddress;I)Ljava/net/Socket;": (address: JObj | null, port: number) => newObj(SSL_SOCKET, "(Ljava/net/InetAddress;I)V", address, port),
     "getDefaultCipherSuites()[Ljava/lang/String;": () => strArray(CIPHERS),
     "getSupportedCipherSuites()[Ljava/lang/String;": () => strArray(CIPHERS),
@@ -195,9 +195,9 @@ rt.register({
     "getProtocol()Ljava/lang/String;": () => PROTOCOLS[1],
     "getPeerHost()Ljava/lang/String;": function (this: JSSLSession) { return this.host; },
     "getPeerPort()I": function (this: JSSLSession) { return this.port; },
-    "getPeerCertificates()[Ljava/security/cert/Certificate;": function (this: JSSLSession) { return relayChain(this.host); },
+    "getPeerCertificates()[Ljava/security/cert/Certificate;": waits(function (this: JSSLSession) { return relayChain(this.host); }),
     "getLocalCertificates()[Ljava/security/cert/Certificate;": () => null,
-    "getPeerPrincipal()Ljava/security/Principal;": function (this: JSSLSession) { return after(relayChain(this.host), subjectOf); },
+    "getPeerPrincipal()Ljava/security/Principal;": waits(function (this: JSSLSession) { return after(relayChain(this.host), subjectOf); }),
     "getLocalPrincipal()Ljava/security/Principal;": () => null,
     "getId()[B": () => new Int8Array(0),
     "isValid()Z": () => 1,
@@ -526,13 +526,13 @@ rt.register({
     "setChunkedStreamingMode(I)V": function (this: JHttpURLConnection, n: number) { this.chunkLength = n <= 0 ? 4096 : n; },
     "setFixedLengthStreamingMode(I)V": function (this: JHttpURLConnection, n: number) { this.fixedContentLength = n; this.fixedContentLengthLong = BigInt(n); },
     "setFixedLengthStreamingMode(J)V": function (this: JHttpURLConnection, n: bigint) { this.fixedContentLengthLong = n; this.fixedContentLength = Number(BigInt.asIntN(32, n)); },
-    "getResponseCode()I": function (this: JHttpURLConnection) {
+    "getResponseCode()I": waits(function (this: JHttpURLConnection) {
       if (!rt.natives.has(classNameOf(this)!)) return statusFromHeader.call(this);
       return after(this.connect(), (r) => { this.responseMessage = r.msg || null; return this.responseCode = r.status; });
-    },
-    "getResponseMessage()Ljava/lang/String;": function (this: JHttpURLConnection) {
+    }),
+    "getResponseMessage()Ljava/lang/String;": waits(function (this: JHttpURLConnection) {
       return after(vcall(this, "getResponseCode", "()I"), () => this.responseMessage);
-    },
+    }),
     "getErrorStream()Ljava/io/InputStream;": driven(function* (this: JHttpURLConnection): Gen {
       // AOSP connects here too, and answers null for any failure rather than throwing
       try { return (yield* awaited(this.connect())).status >= 400 ? this.stream() : null; } catch { return null; }
@@ -589,14 +589,14 @@ rt.register({
     "getCipherSuite()Ljava/lang/String;": () => CIPHERS[0],
     "getLocalCertificates()[Ljava/security/cert/Certificate;": () => null,
     // both principals are the first certificate's subject, from the overridable certificate accessors
-    "getLocalPrincipal()Ljava/security/Principal;": function (this: JHttpsURLConnection) {
+    "getLocalPrincipal()Ljava/security/Principal;": waits(function (this: JHttpsURLConnection) {
       return after(vcall(this, "getLocalCertificates", "()[Ljava/security/cert/Certificate;") as unknown[] | null, (certs) => certs === null ? null : subjectOf(certs));
-    },
-    "getServerCertificates()[Ljava/security/cert/Certificate;": function (this: JHttpsURLConnection) {
+    }),
+    "getServerCertificates()[Ljava/security/cert/Certificate;": waits(function (this: JHttpsURLConnection) {
       return after(vcall(this.url, "getHost", "()Ljava/lang/String;") as string | Promise<string>, relayChain);
-    },
-    "getPeerPrincipal()Ljava/security/Principal;": function (this: JHttpsURLConnection) {
+    }),
+    "getPeerPrincipal()Ljava/security/Principal;": waits(function (this: JHttpsURLConnection) {
       return after(vcall(this, "getServerCertificates", "()[Ljava/security/cert/Certificate;") as unknown[], subjectOf);
-    },
+    }),
   },
 });

@@ -56,7 +56,7 @@ nc("get_cipher_names(Ljava/lang/String;)[Ljava/lang/String;", (selector: string)
   if (selector !== "ALL:3DES") throw runtimeError("Unable to set SSL cipher list");
   return Object.assign(CIPHER_NAMES.slice(), { $t: "Ljava/lang/String;" });
 });
-nc("getDirectBufferAddress(Ljava/nio/Buffer;)J", (b: JBuffer) => after(directAddress(b ?? rt.npe()), BigInt));
+nc("getDirectBufferAddress(Ljava/nio/Buffer;)J", waits((b: JBuffer) => after(directAddress(b ?? rt.npe()), BigInt)));
 nc("RAND_bytes([B)V", (b: Int8Array | null) => {
   if (!b) throw rt.mkThrowable("java/lang/NullPointerException", null);
   randomBytes(u8(b));
@@ -465,9 +465,9 @@ function digestSignInit(signing: boolean) {
 }
 nc("EVP_DigestSignInit(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;JLcom/android/org/conscrypt/NativeRef$EVP_PKEY;)J", digestSignInit(true));
 nc("EVP_DigestVerifyInit(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;JLcom/android/org/conscrypt/NativeRef$EVP_PKEY;)J", digestSignInit(false));
-const directUpdate = (ref: JObj, address: bigint, len: number) => after(memoryAt(address, len), (b) => { liveHash(ref).update(b); });
+const directUpdate = waits((ref: JObj, address: bigint, len: number) => after(memoryAt(address, len), (b) => { liveHash(ref).update(b); }));
 for (const n of ["EVP_DigestUpdateDirect", "EVP_DigestSignUpdateDirect", "EVP_DigestVerifyUpdateDirect"]) nc(`${n}(Lcom/android/org/conscrypt/NativeRef\$EVP_MD_CTX;JI)V`, directUpdate);
-nc("HMAC_UpdateDirect(Lcom/android/org/conscrypt/NativeRef$HMAC_CTX;JI)V", (ref: JObj, address: bigint, len: number) => after(memoryAt(address, len), (b) => { liveMac(ref).update(b); }));
+nc("HMAC_UpdateDirect(Lcom/android/org/conscrypt/NativeRef$HMAC_CTX;JI)V", waits((ref: JObj, address: bigint, len: number) => after(memoryAt(address, len), (b) => { liveMac(ref).update(b); })));
 nc("EVP_DigestSignFinal(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;)[B", waits((ref: JObj) => {
   const c = ptr<SignCtx>(ref), s = c.sign;
   if (!s?.signing) throw runtimeError("EVP_DigestSignFinal: not initialized for signing");

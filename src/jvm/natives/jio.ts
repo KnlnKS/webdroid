@@ -106,7 +106,7 @@ const fisNatives: Record<string, (this: JObj, ...args: never[]) => unknown> = {
     if (!st) lastError(-E.BADF, "GetLength failed");
     return BigInt(st!.size);
   }),
-  "position0()J": function () { return after(javaLseekFd(streamFd(this),0,1),result => BigInt(lastError(result,"Seek failed"))); },
+  "position0()J": waits(function (this: JObj) { return after(javaLseekFd(streamFd(this), 0, 1), (result) => BigInt(lastError(result, "Seek failed"))); }),
   "skip0(J)J": driven(function* (this: JObj, n: bigint): Gen {
     const fd = streamFd(this), cur = yield* awaited(javaLseekFd(fd, 0, 1));
     if (cur === -E.SPIPE) throw rt.mkThrowable("java/io/FileInputStream$UseManualSkipException", null);

@@ -53,7 +53,7 @@ rt.registerJnis("java/util/zip/Inflater", {
     return handle(s);
   },
   "setDictionary(J[BII)V": (h: bigint, b: Int8Array, off: number, len: number) => setDictionary(h, region(b, off, len), zInflate.inflateSetDictionary),
-  "setDictionaryBuffer(JJI)V": (h: bigint, address: bigint, len: number) => after(memoryAt(address, len), (d) => setDictionary(h, d, zInflate.inflateSetDictionary)),
+  "setDictionaryBuffer(JJI)V": waits((h: bigint, address: bigint, len: number) => after(memoryAt(address, len), (d) => setDictionary(h, d, zInflate.inflateSetDictionary))),
   "inflateBytesBytes(J[BII[BII)J": function (this: JObj, h: bigint, i: Int8Array, io: number, il: number, o: Int8Array, oo: number, ol: number) {
     return inflateBytes.call(this, h, region(i, io, il), region(o, oo, ol));
   },
@@ -63,9 +63,9 @@ rt.registerJnis("java/util/zip/Inflater", {
   "inflateBufferBytes(JJI[BII)J": waits(function (this: JObj, h: bigint, input: bigint, il: number, o: Int8Array, oo: number, ol: number) {
     return after(memoryAt(input, il), (i) => inflateBytes.call(this, h, i, region(o, oo, ol)));
   }),
-  "inflateBufferBuffer(JJIJI)J": function (this: JObj, h: bigint, input: bigint, il: number, out: bigint, ol: number) {
+  "inflateBufferBuffer(JJIJI)J": waits(function (this: JObj, h: bigint, input: bigint, il: number, out: bigint, ol: number) {
     return after(memoryAt(input, il), (i) => after(memoryAt(out, ol), (o) => inflateBytes.call(this, h, i, o)));
-  },
+  }),
   "getAdler(J)I": (h: bigint) => stream(h).adler | 0,
   // pako's updatewindow, unlike zlib's, does not size a kept window again after a reset zeroed
   // wsize, so the next stream would lose every back-reference: size it here
@@ -124,15 +124,15 @@ rt.registerJnis("java/util/zip/Deflater", {
     return handle(s);
   },
   "setDictionary(J[BII)V": (h: bigint, b: Int8Array, off: number, len: number) => setDictionary(h, region(b, off, len), zDeflate.deflateSetDictionary),
-  "setDictionaryBuffer(JJI)V": (h: bigint, address: bigint, len: number) => after(memoryAt(address, len), (d) => setDictionary(h, d, zDeflate.deflateSetDictionary)),
+  "setDictionaryBuffer(JJI)V": waits((h: bigint, address: bigint, len: number) => after(memoryAt(address, len), (d) => setDictionary(h, d, zDeflate.deflateSetDictionary))),
   "deflateBytesBytes(J[BII[BIIII)J": (h: bigint, i: Int8Array, io: number, il: number, o: Int8Array, oo: number, ol: number, flush: number, params: number) =>
     deflateBytes(h, region(i, io, il), region(o, oo, ol), flush, params),
   "deflateBytesBuffer(J[BIIJIII)J": waits((h: bigint, i: Int8Array, io: number, il: number, out: bigint, ol: number, flush: number, params: number) =>
     after(memoryAt(out, ol), (o) => deflateBytes(h, region(i, io, il), o, flush, params))),
   "deflateBufferBytes(JJI[BIIII)J": waits((h: bigint, input: bigint, il: number, o: Int8Array, oo: number, ol: number, flush: number, params: number) =>
     after(memoryAt(input, il), (i) => deflateBytes(h, i, region(o, oo, ol), flush, params))),
-  "deflateBufferBuffer(JJIJIII)J": (h: bigint, input: bigint, il: number, out: bigint, ol: number, flush: number, params: number) =>
-    after(memoryAt(input, il), (i) => after(memoryAt(out, ol), (o) => deflateBytes(h, i, o, flush, params))),
+  "deflateBufferBuffer(JJIJIII)J": waits((h: bigint, input: bigint, il: number, out: bigint, ol: number, flush: number, params: number) =>
+    after(memoryAt(input, il), (i) => after(memoryAt(out, ol), (o) => deflateBytes(h, i, o, flush, params)))),
   "getAdler(J)I": (h: bigint) => stream(h).adler | 0,
   "reset(J)V": (h: bigint) => { zDeflate.deflateReset(stream(h)); },
   "end(J)V": (h: bigint) => { zDeflate.deflateEnd(stream(h)); release(h); },
@@ -142,7 +142,7 @@ rt.registerJnis("java/util/zip/Deflater", {
 const checksum = (step: (sum: number, b: Uint8Array) => number) => ({
   "update(II)I": (sum: number, b: number) => step(sum, Uint8Array.of(b)),
   "updateBytes(I[BII)I": (sum: number, b: Int8Array, off: number, len: number) => step(sum, u8(b, off, len)),
-  "updateByteBuffer(IJII)I": (sum: number, address: bigint, off: number, len: number) => after(memoryAt(address + BigInt(off), len), (b) => step(sum, b)),
+  "updateByteBuffer(IJII)I": waits((sum: number, address: bigint, off: number, len: number) => after(memoryAt(address + BigInt(off), len), (b) => step(sum, b))),
 });
 const crc = checksum(crc32);
 rt.registerJnis("java/util/zip/CRC32", { "update(II)I": crc["update(II)I"], "updateBytes0(I[BII)I": crc["updateBytes(I[BII)I"], "updateByteBuffer0(IJII)I": crc["updateByteBuffer(IJII)I"] });
