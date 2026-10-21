@@ -8,15 +8,12 @@ import { vfs, apkPath } from "./vfs.ts";
 import { inflateTree } from "../zip.ts";
 import type { Install } from "./install.ts";
 import { fixProcessBitness, processBitness, setTargetSdkVersion } from "../jvm/natives/jvmruntime.ts";
-import { Arsc } from "../android/arsc.ts";
 import { loadFramework, mountPlatformJars } from "../android/framework.ts";
 import { deviceNightMode } from "../android/settings.ts";
 import { qualify as componentClass } from "../jvm/roots.ts";
 import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml.ts";
-import { nativeRes } from "../android/res.ts";
-import { setDeviceNight, syncDeviceOrientation, applyApplicationLocales, localesFromTags, initDeviceLocales, loadResources, applyDeviceConfiguration, type Locales } from "../android/configuration.ts";
+import { setDeviceNight, syncDeviceOrientation, applyApplicationLocales, localesFromTags, initDeviceLocales, applyDeviceConfiguration, type Locales } from "../android/configuration.ts";
 import { appHost, setAppHost } from "../android/apphost.ts";
-import { registerApk, registerSplit } from "../android/assetmanager.ts";
 import { setManifest } from "../android/pm.ts";
 import { getPrefs } from "../android/sharedprefs.ts";
 import { PROCESS_PID, asZygote, setProcessIdentity, setProcessName } from "../android/os.ts";
@@ -201,19 +198,13 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   await vfs.prepare(pkg);
 
   mark("dataReady"); onStatus("Loading resources…");
-  const arsc = new Arsc(zip["resources.arsc"], (p) => zip[p] ?? null);
-  for (const sp of install.splits) if (sp.resources) arsc.add(sp.resources);
-  registerApk(apkPath(), { table: arsc, zip, lazyEntries: install.lazyEntries });
-  for (const sp of install.splits) registerSplit(apkPath(sp.name));
   const { target } = usesSdk(manifest);
-  const jres = await onMain(() => loadResources(apkPath()));
   // ActivityThread.handleBindApplication: the system Resources take the device configuration and
   // display metrics too (Resources.getSystem() starts from setToDefaults: a 0x0 display)
   await onMain(applyDeviceConfiguration);
-  const res = nativeRes(jres);
 
   setAppHost({
-    res, pkg, assetKey, zip,
+    pkg, assetKey, zip,
     splits: install.splits.map((sp) => sp.name),
     setApplicationNightMode: (mode) => setApplicationNightMode(pkg, mode),
     setApplicationLocales: (locales) => setApplicationLocales(pkg, locales),

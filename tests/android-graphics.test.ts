@@ -373,7 +373,7 @@ describe("typed-array-font", () => {
     const archive = await parsePackageArchive(bytes);
     const id = archive.apk.table!.findId("font", "fontawesome");
     expect(id).not.toBe(0);
-    const jres = await appResources(archive.apk, "typed-array-font");
+    const jres = await appResources(archive, "typed-array-font");
     expect(iof(await vcall(jres, "getFont", "(I)Landroid/graphics/Typeface;", id), "android/graphics/Typeface")).toBe(true);
   });
 });

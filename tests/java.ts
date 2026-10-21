@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 import { rt, type JObj } from "../src/jvm/runtime.ts";
 import { classNameOf, newObj, scall } from "../src/jvm/natives/jentry.ts";
 import type { AppHost } from "../src/android/apphost.ts";
-import type { Resources } from "../src/android/res.ts";
 
 export { scall } from "../src/jvm/natives/jentry.ts";
 
@@ -27,9 +26,9 @@ export function fixtureDeadline(ms = 90_000): void {
   }, ms).unref();
 }
 
-/** the AppHost a booted page sets for `pkg`, over its resources */
-export const testAppHost = ({ pkg, res }: { pkg: string; res: Resources }): AppHost =>
-  ({ pkg, res, assetKey: "", zip: {}, splits: [], setApplicationNightMode: () => {}, setApplicationLocales: () => {} });
+/** the AppHost a booted page sets for `pkg` */
+export const testAppHost = ({ pkg }: { pkg: string }): AppHost =>
+  ({ pkg, assetKey: "", zip: {}, splits: [], setApplicationNightMode: () => {}, setApplicationLocales: () => {} });
 
 let apex: Promise<void> | null = null;
 /** the /apex ICU and tz data every realm mounts */
@@ -83,13 +82,19 @@ export async function loadPlatform(): Promise<void> {
   if (!deviceConfiguration().locales.values.length) await initDeviceLocales();
 }
 
-/** AOSP's Resources over `apk`, installed as an app at /data/app/`name`.apk beside framework-res */
-export async function appResources(apk: import("../src/android/res.ts").Apk, name: string) {
-  const { loadResources } = await import("../src/android/configuration.ts");
-  const { registerApk } = await import("../src/android/assetmanager.ts");
+/** AOSP's Resources over `archive`, installed at /data/app/`name`.apk beside framework-res, as
+ *  ResourcesManager builds them under the device configuration */
+export async function appResources(archive: import("../src/android/packagearchive.ts").PackageArchive, name: string): Promise<JObj> {
+  const { javaConfiguration } = await import("../src/android/configuration.ts");
+  const { registerPackage } = await import("../src/android/pm.ts");
+  const { vcall } = await import("../src/jvm/natives/jentry.ts");
   await loadPlatform();
-  registerApk(`/data/app/${name}.apk`, apk);
-  return loadResources(`/data/app/${name}.apk`);
+  const path = registerPackage(archive, `/data/app/${name}.apk`).path;
+  const apk = await scall("android/content/res/ApkAssets", "loadFromPath", "(Ljava/lang/String;)Landroid/content/res/ApkAssets;", path);
+  const builder = await newObj("android/content/res/AssetManager$Builder", "()V");
+  await vcall(builder, "addApkAssets", "(Landroid/content/res/ApkAssets;)Landroid/content/res/AssetManager$Builder;", apk);
+  return newObj("android/content/res/Resources", "(Landroid/content/res/AssetManager;Landroid/util/DisplayMetrics;Landroid/content/res/Configuration;)V",
+    await vcall(builder, "build", "()Landroid/content/res/AssetManager;"), await newObj("android/util/DisplayMetrics", "()V"), await javaConfiguration());
 }
 
 type BootedApp = { app: JObj; info: JObj; loaded: JObj };
@@ -102,7 +107,6 @@ let started: Promise<unknown> | null = null;
  *  is asked for. */
 export async function bootApp(record: import("../src/android/packages.ts").PackageRecord, pid = 4321): Promise<JObj> {
   const { packages } = await import("../src/android/packages.ts");
-  const { registerApk } = await import("../src/android/assetmanager.ts");
   const { setProcessIdentity, setProcessName } = await import("../src/android/os.ts");
   const { setAppHost } = await import("../src/android/apphost.ts");
   const { onMain } = await import("../src/android/mainloop.ts");
@@ -113,7 +117,6 @@ export async function bootApp(record: import("../src/android/packages.ts").Packa
   let entry = booted.get(record.pkg);
   if (!entry) {
     packages.set(record.pkg, record);
-    registerApk(record.path, record.apk);
     // installd's createAppData, as a page's boot does it
     for (const dir of ["", "/cache", "/code_cache"]) vfs.mkdir(`/data/data/${record.pkg}${dir}`);
   }

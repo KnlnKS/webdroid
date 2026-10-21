@@ -17,8 +17,10 @@ import { TV, XE, parseAXMLDoc, StringPool, type XmlDoc, type XmlEvent, type XmlN
 import { qualifiers } from "./arsc.ts";
 import { deviceQualifiers } from "./configuration.ts";
 import { packages } from "./packages.ts";
+import { appHost } from "./apphost.ts";
 import { mkPfd } from "./os.ts";
 import { BytesFile, readFully, type FileSource } from "../shell/lazyfile.ts";
+import { apkPath } from "../shell/vfs.ts";
 
 const delegate = rt.registerJnis.bind(rt);
 
@@ -28,22 +30,21 @@ const delegate = rt.registerJnis.bind(rt);
 
 /** ApkAssets.PROPERTY_SYSTEM */
 const PROPERTY_SYSTEM = 1;
-interface ApkN extends Apk { path: string; system: boolean; strings: bigint }
-const loaded = new Map<string, Apk>();
-/** the apk installed at `path`, as ApkAssets loads it */
-const apkAt = (path: string): Apk | null => loaded.get(path) ?? [...packages.values()].find((record) => record.path === path)?.apk ?? null;
-/** an apk the shell installed, before the package registry records it */
-export function registerApk(path: string, apk: Apk): void {
-  if (!loaded.has(path)) loaded.set(path, apk);
-}
-/** a split installed with its base: its table and entries are merged into the base's (shell/install.ts),
+/** an ApkAssets: the apk as loaded from the registry's `origin` (null for one never installed) */
+interface ApkN extends Apk { path: string; origin: Apk | null; system: boolean; strings: bigint }
+/** a split of the running app's: its table and entries are merged into the base's (shell/install.ts),
  *  so the ApkAssets ResourcesManager loads for its path adds nothing of its own */
-export const registerSplit = (path: string): void => registerApk(path, emptyApk());
+const SPLIT = emptyApk();
+/** the apk installed at `path`, as ApkAssets loads it */
+function apkAt(path: string): Apk | null {
+  for (const record of packages.values()) if (record.path === path) return record.apk;
+  return appHost?.splits.some((name) => apkPath(name) === path) ? SPLIT : null;
+}
 const apkN = (h: bigint) => deref<ApkN>(h);
 function loadApk(path: string, flags: number): bigint {
   const apk = apkAt(path);
   if (!apk) throw rt.mkThrowable("java/io/IOException", "Failed to load asset path " + path);
-  return handle({ ...apk, path, system: (flags & PROPERTY_SYSTEM) !== 0, strings: 0n } satisfies ApkN);
+  return handle({ ...apk, path, origin: apk, system: (flags & PROPERTY_SYSTEM) !== 0, strings: 0n } satisfies ApkN);
 }
 /** the apks behind an AssetManager */
 const apksOf = (res: Resources) => res.apks as ApkN[];
@@ -65,7 +66,7 @@ function findEntry(res: Resources, path: string, cookie = 0): { apk: Apk; source
 delegate("android/content/res/ApkAssets", {
   "nativeLoad(ILjava/lang/String;ILandroid/content/res/loader/AssetsProvider;)J": (_format: number, path: string, flags: number) => loadApk(path, flags),
   "nativeLoadEmpty(ILandroid/content/res/loader/AssetsProvider;)J": (flags: number) =>
-    handle({ ...emptyApk(), path: "empty", system: (flags & PROPERTY_SYSTEM) !== 0, strings: 0n } satisfies ApkN),
+    handle({ ...emptyApk(), path: "empty", origin: null, system: (flags & PROPERTY_SYSTEM) !== 0, strings: 0n } satisfies ApkN),
   // a descriptor is served by the path it was opened from; one with no installed apk behind it
   // fails as a device fails an unreadable one
   "nativeLoadFd(ILjava/io/FileDescriptor;Ljava/lang/String;ILandroid/content/res/loader/AssetsProvider;)J":
@@ -79,8 +80,8 @@ delegate("android/content/res/ApkAssets", {
     const apk = apkN(h);
     return apk.strings || (apk.strings = apk.table?.values ? handle(apk.table.values) : 0n);
   },
-  // installed archives never change underneath a process
-  "nativeIsUpToDate(J)Z": () => 1,
+  // stale once the registry holds another apk at its path, as a reinstall replaces it
+  "nativeIsUpToDate(J)Z": (h: bigint) => { const apk = apkN(h); return +(apk.origin === null || apkAt(apk.path) === apk.origin); },
   "nativeOpenXml(JLjava/lang/String;)J": driven(function* (h: bigint, path: string): Gen {
     const source = entrySource(apkN(h), path);
     if (!source) throw rt.mkThrowable("java/io/FileNotFoundException", path);

@@ -1,7 +1,6 @@
 // The device's configuration and its languages: the record AOSP's Configuration and LocaleList are
-// built from, the resource qualifiers it selects under, and the Resources the shell builds under it,
-// as LoadedApk has ResourcesManager build an app's. It hosts no service, so the package registry
-// can select under it without joining binder's import cycle.
+// built from, and the resource qualifiers it selects under. It hosts no service, so the package
+// registry can select under it without joining binder's import cycle.
 
 import { awaited, driven, getDeclared, setDeclared, type JObj, type Gen } from "../jvm/runtime.ts";
 import { device } from "../shell/config.ts";
@@ -137,23 +136,8 @@ const deviceMetrics = driven(function* deviceMetrics(): Gen<JObj> {
   const { width, height } = device;
   return setDeclared(dm, "android/util/DisplayMetrics", { widthPixels: width, heightPixels: height, noncompatWidthPixels: width, noncompatHeightPixels: height });
 });
-/** every Resources built here */
-const built: WeakRef<JObj>[] = [];
-/** An installed apk's Resources, as ResourcesManager builds them: its ApkAssets over the system
- *  ones in an AssetManager, under the device's configuration. */
-export const loadResources = driven(function* loadResources(path: string): Gen<JObj> {
-  const apk = yield scall("android/content/res/ApkAssets", "loadFromPath", "(Ljava/lang/String;)Landroid/content/res/ApkAssets;", path);
-  const builder = yield newObj("android/content/res/AssetManager$Builder", "()V");
-  yield vcall(builder, "addApkAssets", "(Landroid/content/res/ApkAssets;)Landroid/content/res/AssetManager$Builder;", apk);
-  const assets = yield vcall(builder, "build", "()Landroid/content/res/AssetManager;");
-  const jres: JObj = yield newObj("android/content/res/Resources", "(Landroid/content/res/AssetManager;Landroid/util/DisplayMetrics;Landroid/content/res/Configuration;)V",
-    assets, yield* awaited(deviceMetrics()), yield* awaited(javaConfiguration()));
-  built.push(new WeakRef(jres));
-  return jres;
-});
-/** The configuration Java sees after a device change: AOSP's resources take it as
- *  ResourcesManager.applyConfigurationToResources hands it out, the system's first, then every
- *  Resources built here. */
+/** The configuration Java sees after a device change, which the system Resources take first, as
+ *  ResourcesManager.applyConfigurationToResources hands it out. */
 export const applyDeviceConfiguration = driven(function* applyDeviceConfiguration(): Gen<unknown> {
   const C = "android/content/res/Configuration";
   const config = yield* awaited(javaConfiguration());
@@ -161,11 +145,5 @@ export const applyDeviceConfiguration = driven(function* applyDeviceConfiguratio
   yield scall("android/content/res/Resources", "getSystem", "()Landroid/content/res/Resources;");
   yield scall("android/content/res/Resources", "updateSystemConfiguration",
     `(L${C};Landroid/util/DisplayMetrics;Landroid/content/res/CompatibilityInfo;)V`, config, yield* awaited(deviceMetrics()), null);
-  for (const entry of built.slice()) {
-    const jres = entry.deref();
-    if (!jres) { built.splice(built.indexOf(entry), 1); continue; }
-    const own = yield newObj(C, `(L${C};)V`, config);
-    yield vcall(jres, "updateConfiguration", `(L${C};Landroid/util/DisplayMetrics;)V`, own, null);
-  }
   return config;
 });

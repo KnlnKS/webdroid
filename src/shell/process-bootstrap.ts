@@ -50,7 +50,7 @@ export async function loadProcessPackages(data: ProcessBootstrap): Promise<Insta
     }
     if (own) {
       boot = await openInstallApks(snapshot.splits.map((split) => new RemoteFile(split)), base);
-      // AssetManager may cache this package before bootApk constructs its resources.
+      // the record's apk is the one ApkAssets loads at sourceDir: the splits join it
       for (const split of boot.splits) if (split.resources) archive.apk.table?.add(split.resources);
       for (const [name, source] of boot.lazyEntries) archive.apk.lazyEntries.set(name, source);
     }
