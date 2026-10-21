@@ -6,7 +6,7 @@ import { argRegisters, decodeInstructions, ifTarget, type PreparedInstruction } 
 import { ACC } from "../../jvm/dex.ts";
 import { isWide } from "../../jvm/abi.ts";
 import { failed, resolveFieldRef, resolveInvoke } from "./linkage.ts";
-import { Invoke, invokeKind, isInvoke, narrowBits, wideBits } from "../../jvm/opcodes.ts";
+import { Invoke, invokeKind, isInvoke, isMoveResult, narrowBits, wideBits } from "../../jvm/opcodes.ts";
 import { STRING } from "./strings.ts";
 import type { FieldInfo, MethodInfo, Program } from "./program.ts";
 
@@ -67,7 +67,7 @@ function straight(prog: Program, m: MethodInfo, p0: number, insns: PreparedInstr
     const op = x.op, afterCall = justCalled, kind = isInvoke(op) ? invokeKind(op) : -1;
     justCalled = false;
     if (done) return;
-    if (op >= 0x0a && op <= 0x0c) { if (!afterCall) return; define(x.a, op === 0x0b, { t: steps.length - 1 }); } // move-result
+    if (isMoveResult(op)) { if (!afterCall) return; define(x.a, op === 0x0b, { t: steps.length - 1 }); } // move-result
     else if (op >= 0x12 && op <= 0x19) define(x.a, op >= 0x16, { bits: op <= 0x15 ? narrowBits(op, x.b) : wideBits(op, x.b, x.wideLit) });
     else if (op >= SGET && op < SGET + FIELD_OPS) {
       const f = resolveFieldRef(prog, m.dex, x.b, true, m.cls);

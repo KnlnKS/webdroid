@@ -74,7 +74,7 @@ export class MethodFacts {
   }
 
   private analyze(): Facts[] {
-    const mc = this.mc, { instructions, blockAt, first, last, succ } = mc.prepared, n = first.length, entry: (Facts | undefined)[] = new Array(n);
+    const mc = this.mc, { instructions, blockAt, first, last, succ, fall: falls } = mc.prepared, n = first.length, entry: (Facts | undefined)[] = new Array(n);
     const start = newFacts();
     if (!mc.m.isStatic) { const w = mc.typing.param(mc.item.regs - mc.item.ins); if (w >= 0) start.nonNull.add(w); }
     entry[0] = start;
@@ -100,7 +100,7 @@ export class MethodFacts {
         for (let i = first[b]; i <= last[b]; i++) this.step(instructions[i], out);
         // a null test (if-eqz, if-nez) refines the facts along its two edges, unless both reach one block
         const test = instructions[last[b]], op = test.op, w = op === 0x38 || op === 0x39 ? mc.typing.use(test.pc, test.a) : -1;
-        const taken = w >= 0 && mc.typing.kind[w] === KR && !out.nonNull.has(w) ? blockAt[ifTarget(test)] : -1, fall = blockAt[test.pc + test.len];
+        const taken = w >= 0 && mc.typing.kind[w] === KR && !out.nonNull.has(w) ? blockAt[ifTarget(test)] : -1, fall = falls[b];
         if (taken < 0 || taken === fall) { for (const s of succ[b]) push(s, out); continue; }
         const refined = cloneFacts(out);
         refined.nonNull.add(w);

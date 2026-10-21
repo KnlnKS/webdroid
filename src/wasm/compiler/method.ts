@@ -7,7 +7,7 @@ import { staticallyBound, type Compiler } from "./j2w.ts";
 import { ELEM_KINDS, elemKindOf, type ElemKind } from "./consts.ts";
 import { isWide } from "../../jvm/abi.ts";
 import type { DexTypes } from "../../jvm/dex.ts";
-import { argRegisters, endsBlock, ifTarget, switchCases, type PreparedInstruction as Ins, type PreparedMethod } from "../../jvm/prepared.ts";
+import { argRegisters, ifTarget, switchCases, type PreparedInstruction as Ins, type PreparedMethod } from "../../jvm/prepared.ts";
 import { type Flow, Go, structureAny } from "./structure.ts";
 import { mid } from "./ids.ts";
 import { emitPolymorphic } from "./poly.ts";
@@ -16,7 +16,7 @@ import { failed, invokeSite, resolveFieldRef, typeFailure, type InvokeSite, type
 import { MethodFacts, cloneFacts, newFacts, type Facts } from "./facts.ts";
 import { isStackOverflow } from "./exc.ts";
 import { WHOLE_FRAME, planDepth, type DepthPlan } from "./depth.ts";
-import { invokeKind, isInvoke, narrowBits, wideBits } from "../../jvm/opcodes.ts";
+import { endsBlock, invokeKind, isIf, isInvoke, isMoveResult, narrowBits, wideBits } from "../../jvm/opcodes.ts";
 import { emitRestored } from "./hostcalls.ts";
 import { OutlinedCode, Outliner } from "./outline.ts";
 import { isEmpty, trivialOf, type Seq, type Trivial, type Val } from "./inline.ts";
@@ -356,7 +356,7 @@ export class MC {
     }
     const last = instructions[end];
     if (!endsBlock(last.op)) {
-      const target = this.flow.fallTarget(b, last.op >= 0x32 && last.op <= 0x3d ? blockAt[ifTarget(last)] : -1);
+      const target = this.flow.fallTarget(b, isIf(last.op) ? blockAt[ifTarget(last)] : -1);
       if (target >= 0) this.jump(b, start[target], true);
     }
   }
@@ -446,7 +446,7 @@ export class MC {
     }
     if (isInvoke(op)) return this.emitInvoke(ins);
     if (op >= 0x7b && op <= 0xe2) return this.emitArith(ins);
-    if (op >= 0x32 && op <= 0x3d) return this.emitIf(ins);
+    if (isIf(op)) return this.emitIf(ins);
     const c = this.code, cx = this.cx, dex = this.dex, types = this.types, a = ins.a, b = ins.b;
     switch (op) {
       case 0x00: return; // nop
@@ -676,7 +676,7 @@ export class MC {
   /** the move-result that follows `ins`, if one does */
   private moveResult(ins: Ins): Ins | undefined {
     const i = this.prepared.indexAt[ins.pc + ins.len], nx = i >= 0 ? this.prepared.instructions[i] : undefined;
-    return nx && nx.op >= 0x0a && nx.op <= 0x0c ? nx : undefined;
+    return nx && isMoveResult(nx.op) ? nx : undefined;
   }
   emitInvoke(ins: Ins) {
     const cx = this.cx, c = this.code;

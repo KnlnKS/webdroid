@@ -115,6 +115,12 @@ export function insnLen(insns: Uint16Array, pc: number): number {
   if (!entry) throw new Error(`bad opcode 0x${op.toString(16)} at pc ${pc}`);
   return FMT_LEN[entry[1]];
 }
+export const isMoveResult = (op: number) => op >= 0x0a && op <= 0x0c;
+export const isReturn = (op: number) => op >= 0x0e && op <= 0x11;
+export const isGoto = (op: number) => op >= 0x28 && op <= 0x2a;
+export const isIf = (op: number) => op >= 0x32 && op <= 0x3d;
+/** return, throw and goto: nothing falls through them */
+export const endsBlock = (op: number) => isReturn(op) || op === 0x27 || isGoto(op);
 export const isInvoke = (op: number) => (op >= 0x6e && op <= 0x78 && op !== 0x73) || (op >= 0xfa && op <= 0xfd);
 /** iget and iput: quickened forms never compile */
 export const isFieldAccess = (op: number) => op >= 0x52 && op <= 0x5f;

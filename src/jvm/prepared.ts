@@ -1,5 +1,5 @@
 import type { CodeItem } from "./dex.ts";
-import { FMT_LEN, OPS, insnLen, type Fmt } from "./opcodes.ts";
+import { FMT_LEN, OPS, endsBlock, insnLen, isGoto, isIf, type Fmt } from "./opcodes.ts";
 import { isWide } from "./abi.ts";
 
 export interface PreparedInstruction {
@@ -28,6 +28,8 @@ export interface PreparedMethod {
   readonly last: Int32Array;
   /** by block: the blocks its branch and fall-through reach, each once */
   readonly succ: readonly (readonly number[])[];
+  /** by block: the block it falls through to, -1 when its last instruction ends it (endsBlock) */
+  readonly fall: Int32Array;
   /** by block: the handler blocks its throwing instructions reach */
   readonly hsucc: readonly (readonly number[])[];
   /** every pc a try hands exceptions to, once each, in the order the tries name them */
@@ -121,10 +123,6 @@ const NO_THROW = new Uint8Array(256);
 for (const [lo, hi] of [[0x00, 0x19], [0x28, 0x2a], [0x2d, 0x3d], [0x7b, 0xe2]] as const) for (let o = lo; o <= hi; o++) NO_THROW[o] = 1;
 for (const o of [0x93, 0x94, 0x9e, 0x9f, 0xb3, 0xb4, 0xbe, 0xbf, 0xd3, 0xd4, 0xdb, 0xdc]) NO_THROW[o] = 0; // int/long div, rem
 
-export function endsBlock(op: number): boolean {
-  return (op >= 0x0e && op <= 0x11) || op === 0x27 || (op >= 0x28 && op <= 0x2a);
-}
-
 export function ifTarget(instruction: PreparedInstruction): number {
   return instruction.pc + (instruction.fmt === "22t" ? instruction.c : instruction.b);
 }
@@ -147,9 +145,9 @@ export function switchCases(code: CodeItem, instruction: PreparedInstruction): [
 
 export function branchTargets(code: CodeItem, instruction: PreparedInstruction): readonly number[] {
   const op = instruction.op;
-  if (op >= 0x28 && op <= 0x2a) return [instruction.pc + instruction.a];
+  if (isGoto(op)) return [instruction.pc + instruction.a];
   if (op === 0x2b || op === 0x2c) return switchCases(code, instruction).map(([, target]) => target);
-  if (op >= 0x32 && op <= 0x3d) return [ifTarget(instruction)];
+  if (isIf(op)) return [ifTarget(instruction)];
   return NO_TARGETS;
 }
 
@@ -196,14 +194,14 @@ export function prepareMethod(code: CodeItem): PreparedMethod {
   });
   const blockAt = new Int32Array(size).fill(-1), firsts: number[] = [];
   for (let i = 0; i < n; i++) if (leaders[instructions[i].pc]) { blockAt[instructions[i].pc] = firsts.length; firsts.push(i); }
-  const nb = firsts.length, start = new Int32Array(nb), first = Int32Array.from(firsts), last = new Int32Array(nb);
+  const nb = firsts.length, start = new Int32Array(nb), first = Int32Array.from(firsts), last = new Int32Array(nb), fall = new Int32Array(nb);
   const succ: number[][] = new Array(nb), hsucc: (readonly number[])[] = new Array(nb).fill(NO_TARGETS), seen = new Int32Array(nb).fill(-1);
   for (let b = 0; b < nb; b++) {
     last[b] = b + 1 < nb ? first[b + 1] - 1 : n - 1;
     start[b] = instructions[first[b]].pc;
-    const instruction = instructions[last[b]], out: number[] = succ[b] = [], fall = endsBlock(instruction.op) ? -1 : blockAt[instruction.pc + instruction.len];
+    const instruction = instructions[last[b]], out: number[] = succ[b] = [], f = fall[b] = endsBlock(instruction.op) ? -1 : blockAt[instruction.pc + instruction.len];
     for (const target of branchTargets(code, instruction)) { const s = blockAt[target]; if (s >= 0 && seen[s] !== b) { seen[s] = b; out.push(s); } }
-    if (fall >= 0 && seen[fall] !== b) out.push(fall);
+    if (f >= 0 && seen[f] !== b) out.push(f);
   }
   const all = new Set<number>(), handlers: (readonly number[] | undefined)[] = tries.length ? new Array(n) : [];
   code.tries.forEach((region, t) => {
@@ -220,7 +218,7 @@ export function prepareMethod(code: CodeItem): PreparedMethod {
       for (const h of blocks) if (!at.includes(h)) at.push(h);
     }
   });
-  return { instructions, indexAt, blockAt, start, first, last, succ, hsucc, handlerPcs: [...all], handlers };
+  return { instructions, indexAt, blockAt, start, first, last, succ, fall, hsucc, handlerPcs: [...all], handlers };
 }
 /** whether a method's branches close a cycle */
 export function cyclic({ succ }: PreparedMethod): boolean {
