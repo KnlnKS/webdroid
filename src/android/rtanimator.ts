@@ -9,7 +9,7 @@ import { rt } from "../jvm/runtime.ts";
 import { scall } from "../jvm/natives/jentry.ts";
 import { deref, handle, ownedHandle, release, take } from "./handles.ts";
 import type { NativePaint } from "./paint.ts";
-import { type NativeRenderNode, prop as canvasProperty } from "./rendernode.ts";
+import type { NativeRenderNode, Property } from "./rendernode.ts";
 import { interpolatePaths, PathData } from "./pathparser.ts";
 import { type Tree, type Group, type FullPath, type VPath, node } from "./vectordrawable.ts";
 import { detached } from "../jvm/natives/jthrowable.ts";
@@ -304,12 +304,12 @@ rt.registerJnis("android/graphics/animation/RenderNodeAnimator", {
     return ownedHandle(a);
   },
   "nCreateCanvasPropertyFloatAnimator(JF)J": (p: bigint, final: number) => {
-    const prop = canvasProperty<number>(p);
+    const prop = deref<Property<number>>(p);
     return ownedHandle(new NodeAnimator(final, () => prop.value, (_n, v) => { prop.value = v; }));
   },
   // CanvasPropertyPaintAnimator::PaintField: STROKE_WIDTH, ALPHA (set as a uint8)
   "nCreateCanvasPropertyPaintAnimator(JIF)J": (p: bigint, field: number, final: number) => {
-    const paint = canvasProperty<NativePaint>(p).value;
+    const paint = deref<Property<NativePaint>>(p).value;
     return ownedHandle(field === 0
       ? new NodeAnimator(final, () => paint.strokeWidth, (_n, v) => { paint.strokeWidth = v; })
       : new NodeAnimator(final, () => paint.color >>> 24, (_n, v) => paint.setAlpha(Math.trunc(v) & 255)));
