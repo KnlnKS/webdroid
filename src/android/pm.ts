@@ -60,6 +60,8 @@ export function setManifest(root: XmlNode): void {
   packages.set(pkg, currentPackage);
   extractNativeLibraries(currentPackage);
 }
+/** the splits installed beside the booted package's base; this process holds no other package's */
+const ownSplits = (record: PackageRecord): readonly string[] => record === currentPackage && appHost ? appHost.splits : [];
 
 // ── native libraries, laid out as PackageAbiHelper derives them for a cluster install
 const INSTRUCTION_SETS: Record<string, string> = { "arm64-v8a": "arm64", "armeabi-v7a": "arm", armeabi: "arm", x86_64: "x86_64", x86: "x86" };
@@ -163,8 +165,7 @@ const privateFlagsExt = (record: PackageRecord) => {
 /** the ApplicationInfo PackageInfoUtils.generateApplicationInfo makes for `flags` */
 function* buildApplicationInfo$(record: PackageRecord, flags: number): Gen<JObj> {
   const ai: JObj = yield newObj(APP), app = record.application, pkg = record.pkg, { min, target } = record.sdk;
-  const own = record === currentPackage && appHost?.pkg === pkg ? appHost : null;
-  const splits = own?.splits.length ? own.splits : null;
+  const own = ownSplits(record), splits = own.length ? own : null;
   const abi = primaryAbi(record);
   const qualified = (name: string) => { const value = app && attrStr(app, name); return value ? qualifyComponent(value, pkg) : null; };
   const className = qualified("name");
@@ -469,10 +470,10 @@ function* instrumentationInfo$(record: PackageRecord, node: XmlNode, flags: numb
 function* packageInfo$(record: PackageRecord, flags: number): Gen<JObj> {
   const pi: JObj = yield newObj(PACKAGE), root = record.root, app: JObj = yield* applicationInfo$(record, flags);
   const version = attr(root, "versionName");
-  const own = record === currentPackage && appHost?.pkg === record.pkg ? appHost : null;
+  const splits = ownSplits(record);
   const time = installTime(record.pkg);
   setDeclared(pi, PACKAGE, {
-    packageName: record.pkg, splitNames: strArray(own?.splits ?? []), splitRevisionCodes: new Int32Array(own?.splits.length ?? 0),
+    packageName: record.pkg, splitNames: strArray(splits), splitRevisionCodes: new Int32Array(splits.length),
     versionCode: intAttr(root, "versionCode", 0), versionCodeMajor: intAttr(root, "versionCodeMajor", 0),
     versionName: version?.type === TV.REFERENCE ? resString(record.res, version.data) : version?.str ?? null,
     sharedUserId: attrStr(root, "sharedUserId"), sharedUserLabel: intAttr(root, "sharedUserLabel", 0), applicationInfo: app,
@@ -581,7 +582,7 @@ export async function installPackageArchive(bytes: Uint8Array, expectedPackage: 
 const wholeChecksumAlgorithms: readonly [number, string][] = [[2, "MD5"], [4, "SHA-1"], [8, "SHA-256"], [16, "SHA-512"]];
 async function apkDigests(record: PackageRecord, includeSplits: boolean, required: number): Promise<[string | null, number, Uint8Array][]> {
   const files: [string | null, string][] = [[null, record.path]];
-  if (includeSplits && record === currentPackage && appHost) files.push(...appHost.splits.map((name): [string, string] => [name, apkPath(name)]));
+  if (includeSplits) files.push(...ownSplits(record).map((name): [string, string] => [name, apkPath(name)]));
   const result: [string | null, number, Uint8Array][] = [];
   for (const [splitName, path] of files) {
     const bytes = await vfs.readFile(path);
