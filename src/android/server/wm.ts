@@ -4,6 +4,7 @@
 import { awaited, rt, JObj, noops, stubs, getDeclared, driven, declaredField, waits, type Gen } from "../../jvm/runtime.ts";
 import { jarray } from "../../jvm/abi.ts";
 import { after, callOn, newObj, vcall, scall, staticField, JThread } from "../../jvm/natives/jentry.ts";
+import { csText } from "../../jvm/natives/jchars.ts";
 import { hostService } from "../binder.ts";
 import { device } from "../../shell/config.ts";
 import { uptimeMillis } from "../../guest-clock.ts";
@@ -151,7 +152,7 @@ function* addWindow(window: JObj, attrs: JObj, visibility: number, outChannel: J
   yield vcall(copy, "copyFrom", `(L${LP};)I`, attrs);
   const type = lp<number>(attrs, "type"), token = lp<JObj | null>(attrs, "token");
   const parent = isSubWindow(type) && token ? windows.get(token) ?? null : null;
-  const title = String((yield vcall(attrs, "getTitle", "()Ljava/lang/CharSequence;")) ?? "");
+  const title = yield* awaited(csText(yield vcall(attrs, "getTitle", "()Ljava/lang/CharSequence;")));
   const ws = new WindowState(window, copy, parent, title, type, windowZ(type, token, ++seq));
   ws.visibility = visibility;
   ws.requestedVisibleTypes = yield* awaited(insetsType("defaultVisible"));
