@@ -45,7 +45,7 @@ export class DrawPlan {
   /** a normal blur, which the context's filter draws */
   blur: BlurMask | null = null;
   /** the draw blends through its coverage (drawMask): a mask filter other than a normal blur, an
-   *  unbounded mode, or an ALPHA_8 image's shader */
+   *  unbounded mode, a shader under a colour filter, or an ALPHA_8 image's shader */
   viaMask = false;
   /** into a bitmap, the op Skia's own raster rules composite a solid colour with (bitmap-raster.ts) */
   raster: GlobalCompositeOperation | null = null;
@@ -95,7 +95,7 @@ export class NativeCanvas {
     const op = mode === null ? null : COMPOSITE[mode] ?? null, unbounded = op !== null && UNBOUNDED.has(op);
     const mf = kind === IMAGE ? null : p.maskFilter, blur = kind === SHAPE && mf instanceof BlurMask && mf.style === 0 ? mf : null;
     plan.mode = mode; plan.op = op; plan.unbounded = unbounded; plan.blur = blur;
-    plan.viaMask = kind !== IMAGE && (mf !== null && blur === null || unbounded || kind === MASK && p.shader !== null);
+    plan.viaMask = kind !== IMAGE && (mf !== null && blur === null || unbounded || p.shader !== null && (kind === MASK || p.colorFilter !== null));
     plan.raster = kind === SHAPE && this.bmp && mode !== "DST" && !unbounded && !p.shader && !mf && (!p.pathEffect || p.dash) && !p.shadowRadius
       ? op ?? "source-over" : null;
     return plan;
@@ -125,7 +125,7 @@ export class NativeCanvas {
     }
     return shader !== null && (!!replayed || typeof CanvasPattern !== "undefined" && ctx[stroke ? "strokeStyle" : "fillStyle"] instanceof CanvasPattern);
   }
-  private maskLayer: { shape: NativeCanvas; target: OffscreenCanvasRenderingContext2D; paint: NativePaint; cpu: boolean } | null = null;
+  private maskLayer: { shape: NativeCanvas; target: OffscreenCanvasRenderingContext2D; shaded: OffscreenCanvasRenderingContext2D | null; paint: NativePaint; cpu: boolean } | null = null;
   /** a draw blended through its coverage, as SkDraw blends a mask: `coverage` draws the shape in the
    *  white paint it is given (`aliased`: sampled at pixel centres), the paint's mask filter makes that
    *  M, and the source S blends by the mode's `op` where M covers, D·(1−M) + blend(S, D)·M. A
@@ -144,11 +144,12 @@ export class NativeCanvas {
     const w = ctx.canvas.width, h = ctx.canvas.height, m = ctx.getTransform(), scale = deviceScale(m);
     if (!w || !h || !scale) return;
     let layer = this.maskLayer;
+    const raster = () => new OffscreenCanvas(w, h).getContext("2d", { willReadFrequently: cpu })!;
     if (!layer || layer.shape.w !== w || layer.shape.h !== h || layer.cpu !== cpu) {
-      const raster = () => new OffscreenCanvas(w, h).getContext("2d", { willReadFrequently: cpu })!;
-      layer = this.maskLayer = { shape: NativeCanvas.over(raster(), w, h), target: raster(), paint: new NativePaint(), cpu };
+      layer = this.maskLayer = { shape: NativeCanvas.over(raster(), w, h), target: raster(), shaded: null, paint: new NativePaint(), cpu };
     }
     const source = layer.shape.ctx as OffscreenCanvasRenderingContext2D, target = layer.target;
+    const shaded = p.shader && p.colorFilter ? filteredShader(layer.shaded ??= raster(), p, m) : null;
     source.resetTransform(); source.clearRect(0, 0, w, h); source.setTransform(m);
     coverage(layer.shape, whitePaint(p, layer.paint));
     if (aliased) {
@@ -163,7 +164,7 @@ export class NativeCanvas {
     if (op && UNBOUNDED.has(op) && !mf?.colored) {
       // blend(S, D) over all of `source`, kept where M covers and added to D·(1−M)
       source.resetTransform(); source.clearRect(0, 0, w, h); source.drawImage(ctx.canvas, 0, 0);
-      fillSource(source, p, op, m);
+      fillSource(source, p, op, m, shaded);
       source.globalCompositeOperation = "destination-in"; source.drawImage(target.canvas, 0, 0);
       source.globalCompositeOperation = "source-over";
       ctx.save();
@@ -175,7 +176,7 @@ export class NativeCanvas {
       return;
     }
     // a mask filter that colours (emboss) has drawn the shape's colours itself
-    if (!mf?.colored) fillSource(target, p, "source-in", m);
+    if (!mf?.colored) fillSource(target, p, "source-in", m, shaded);
     const undo = beginPaint(ctx, p, op, false, null);
     ctx.save();
     try { ctx.resetTransform(); ctx.drawImage(target.canvas, 0, 0); }
@@ -674,11 +675,14 @@ function whitePaint(p: NativePaint, into: NativePaint): NativePaint {
   into.color = -1; into.shader = null; into.colorFilter = null;
   return into;
 }
-/** the paint's source over all of `c` by `op`, under the draw's transform `m`: its colour, or its
- *  shader at the paint's alpha; `c` is left untransformed */
-function fillSource(c: OffscreenCanvasRenderingContext2D, p: NativePaint, op: GlobalCompositeOperation, m: DOMMatrix) {
+/** the paint's source over all of `c` by `op`, under the draw's transform `m`: its colour, its
+ *  shader at the paint's alpha, or `shaded`, that through the colour filter; `c` is left untransformed */
+function fillSource(c: OffscreenCanvasRenderingContext2D, p: NativePaint, op: GlobalCompositeOperation, m: DOMMatrix, shaded: OffscreenCanvas | null) {
   c.globalCompositeOperation = op;
-  if (p.shader) {
+  if (shaded) {
+    c.resetTransform();
+    c.drawImage(shaded, 0, 0);
+  } else if (p.shader) {
     c.setTransform(m);
     c.globalAlpha = (p.color >>> 24) / 255;
     fillWithShader(c, p.shader);
@@ -690,6 +694,18 @@ function fillSource(c: OffscreenCanvasRenderingContext2D, p: NativePaint, op: Gl
     c.fillRect(0, 0, c.canvas.width, c.canvas.height);
   }
   c.globalCompositeOperation = "source-over";
+}
+/** the paint's shader at its alpha, over all of `c` under `m`, then through its colour filter, as
+ *  Skia filters what a shader makes before coverage */
+function filteredShader(c: OffscreenCanvasRenderingContext2D, p: NativePaint, m: DOMMatrix): OffscreenCanvas {
+  const w = c.canvas.width, h = c.canvas.height, f = p.colorFilter!;
+  c.resetTransform(); c.clearRect(0, 0, w, h); c.setTransform(m);
+  c.globalAlpha = (p.color >>> 24) / 255;
+  fillWithShader(c, p.shader!);
+  c.globalAlpha = 1;
+  c.resetTransform();
+  recolor(c, w, h, f.color, f.matrix, f.mode);
+  return c.canvas;
 }
 
 export function unsupported(what: string) { return () => { throw rt.unimplemented(what); }; }

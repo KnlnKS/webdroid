@@ -81,7 +81,40 @@ async function probe() {
     clear: pixel("SRC_IN", 0), add: pixel("PLUS", 0x40102040), multiply: pixel("MODULATE", 0x8080ff00), before: pixel("SRC_IN", 0x80ff0000) };
   bitmap.ctx.fillStyle = "#fff"; bitmap.ctx.fillRect(0, 0, 1, 1);
   const changed = pixel("SRC_IN", 0x80ff0000);
-  return { results, extracted, shaded, position, copiedAlpha, originalAlpha, plane, tints, changed, effects: await effects() };
+  return { results, extracted, shaded, position, copiedAlpha, originalAlpha, plane, tints, changed, effects: await effects(), filters: await filters() };
+}
+/** colour filters on a solid colour, on a shader and on a nine-patch's paint */
+async function filters() {
+  const mode = async (name: string) => (await linkInit("android/graphics/PorterDuff$Mode")).static(name);
+  const filter = async (color: number, name: string) => newObj("android/graphics/PorterDuffColorFilter", "(ILandroid/graphics/PorterDuff$Mode;)V", color, await mode(name));
+  const filtered = async (color: number, name: string) => {
+    const paint = await newPaint();
+    await vcall(paint, "setColor", "(I)V", color);
+    await vcall(paint, "setColorFilter", "(Landroid/graphics/ColorFilter;)Landroid/graphics/ColorFilter;", await filter(0xff00ff00 | 0, name));
+    return paint;
+  };
+  const surface = async () => { const ctx = new OffscreenCanvas(40, 40).getContext("2d")!; return { ctx, canvas: await canvasOver(ctx, 40, 40), at: (x: number, y: number) => Array.from(ctx.getImageData(x, y, 1, 1).data) }; };
+  const rect = (canvas: unknown, paint: unknown) => vcall(canvas, "drawRect", "(FFFFLandroid/graphics/Paint;)V", 10, 10, 30, 30, paint);
+  const solid = await surface(), screen = await surface(), dst = await surface();
+  await rect(solid.canvas, await filtered(0x80ff0000 | 0, "MULTIPLY"));
+  await rect(screen.canvas, await filtered(0x80ff0000 | 0, "SCREEN"));
+  await rect(dst.canvas, await filtered(0x80ff0000 | 0, "DST"));
+  const shader = await surface(), gradient = await filtered(-1, "SRC_IN");
+  const clamp = (await linkInit("android/graphics/Shader$TileMode")).static("CLAMP");
+  await vcall(gradient, "setShader", "(Landroid/graphics/Shader;)Landroid/graphics/Shader;",
+    await newObj("android/graphics/LinearGradient", "(FFFFIILandroid/graphics/Shader$TileMode;)V", 0, 0, 40, 0, -1, 0x80ffffff | 0, clamp));
+  await rect(shader.canvas, gradient);
+  // a white nine-patch drawn through a tinting paint at half alpha
+  const argb = (await linkInit("android/graphics/Bitmap$Config")).static("ARGB_8888");
+  const white = await scall("android/graphics/Bitmap", "createBitmap", "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;", 9, 9, argb);
+  await vcall(white, "eraseColor", "(I)V", -1);
+  const chunk = new DataView(new ArrayBuffer(32 + 13 * 4));
+  chunk.setUint8(1, 2); chunk.setUint8(2, 2); chunk.setUint8(3, 9);
+  [3, 6, 3, 6, 1, 1, 1, 1, 1, 1, 1, 1, 1].forEach((v, i) => chunk.setInt32(32 + i * 4, v, true));
+  const patch = await newObj("android/graphics/NinePatch", "(Landroid/graphics/Bitmap;[B)V", white, new Int8Array(chunk.buffer));
+  const tint = await filtered(0x80000000 | 0, "SRC_IN"), patched = await surface();
+  await vcall(patch, "draw", "(Landroid/graphics/Canvas;Landroid/graphics/Rect;Landroid/graphics/Paint;)V", patched.canvas, await newObj("android/graphics/Rect", "(IIII)V", 5, 5, 35, 35), tint);
+  return { multiply: solid.at(20, 20), screen: screen.at(20, 20), dst: dst.at(20, 20), shader: [shader.at(10, 20), shader.at(29, 20), shader.at(5, 20)], patch: [patched.at(20, 20), patched.at(2, 2)] };
 }
 /** path effects, the other mask filters, a shadow layer, text scale and measurement under the text flags */
 async function effects() {

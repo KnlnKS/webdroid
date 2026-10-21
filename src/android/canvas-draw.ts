@@ -19,7 +19,7 @@ import { NativePaint, copyPaint, defaultPaint, underlinePosition, underlineThick
 import { cssColor, canvasLocalBounds, tintedBmp, BLEND_MODES, COMPOSITE } from "./graphics.ts";
 import { type NinePatchChunk, drawNinePatch } from "./ninepatch.ts";
 import { applyMatrix, matrixAt } from "./matrix.ts";
-import { type NativeCanvas, type DrawPlan, MASK, IMAGE, drawingCanvas, beginPaint, endPaint, unsupported } from "./canvas.ts";
+import { type NativeCanvas, type DrawPlan, MASK, IMAGE, drawingCanvas, beginPaint, endPaint, saveLayer, unsupported } from "./canvas.ts";
 
 function drawPath(nc: NativeCanvas, path: NativePath, p: NativePaint): void | Promise<void> {
   const plan = nc.planDraw(p);
@@ -228,20 +228,31 @@ function drawBitmapAt(nc: NativeCanvas, b: NativeBitmap, x: number, y: number, p
     drawBitmap(nc, b, paint, 0, 0, b.w, b.h);
   } finally { nc.ctx.restore(); }
 }
-/** Canvas.drawPatch as android_graphics_Canvas draws it: a patch of another density is drawn in its
- *  own pixels under a scale; the paint contributes its alpha */
+/** Canvas.drawPatch as android_graphics_Canvas draws it, the lattice through the paint as
+ *  drawBitmap's image is (NinePatchDrawable's tint is its paint's colour filter): a patch of another
+ *  density is drawn in its own pixels under a scale. Under an unbounded mode each piece would clear
+ *  the others, so the lattice is drawn into a layer that blends once. */
 function drawPatch(nc: NativeCanvas, bmp: NativeBitmap, chunk: NinePatchChunk, l: number, t: number, r: number, b: number, paint: NativePaint | null, dstDensity: number, srcDensity: number) {
-  const ctx = nc.ctx;
+  const p = paint ?? defaultPaint, plan = nc.planDraw(p, IMAGE);
+  if (plan.mode === "DST") return;
+  if (plan.unbounded) {
+    const count = saveLayer(nc, { left: l, top: t, right: r, bottom: b }, p);
+    try { ninePatch(nc.ctx, bmp.image, bmp, chunk, l, t, r, b, dstDensity, srcDensity); } finally { nc.restoreToCount(count); }
+    return;
+  }
+  const ctx = nc.ctx, f = p.colorFilter, undo = beginPaint(ctx, p, plan.op, true, null);
+  try { ninePatch(ctx, f ? tintedBmp(bmp, f.color, f.matrix, f.mode) : bmp.image, bmp, chunk, l, t, r, b, dstDensity, srcDensity); }
+  finally { endPaint(ctx, undo); }
+}
+function ninePatch(ctx: Ctx2D, image: CanvasImageSource, bmp: NativeBitmap, chunk: NinePatchChunk, l: number, t: number, r: number, b: number, dstDensity: number, srcDensity: number) {
+  if (dstDensity === srcDensity || !dstDensity || !srcDensity) return drawNinePatch(ctx, image, bmp.w, bmp.h, chunk, l, t, r - l, b - t);
+  const s = dstDensity / srcDensity;
   ctx.save();
-  if (paint) ctx.globalAlpha *= (paint.color >>> 24) / 255;
-  if (dstDensity === srcDensity || !dstDensity || !srcDensity) drawNinePatch(ctx, bmp.image, bmp.w, bmp.h, chunk, l, t, r - l, b - t);
-  else {
-    const s = dstDensity / srcDensity;
+  try {
     ctx.translate(l, t);
     ctx.scale(s, s);
-    drawNinePatch(ctx, bmp.image, bmp.w, bmp.h, chunk, 0, 0, (r - l) / s, (b - t) / s);
-  }
-  ctx.restore();
+    drawNinePatch(ctx, image, bmp.w, bmp.h, chunk, 0, 0, (r - l) / s, (b - t) / s);
+  } finally { ctx.restore(); }
 }
 /** a plain run into a bitmap in the faces CanvasKit has, drawn as Skia draws minikin's glyphs (with
  *  the paint's hyphen edits) */
