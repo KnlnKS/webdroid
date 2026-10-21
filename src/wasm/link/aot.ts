@@ -185,16 +185,14 @@ export class AotRuntime {
   private readonly programClasses: number;
   /** what the World had numbered once the platform build was attached */
   readonly platformMarks: Marks;
-  /** code modules from this one on belong to the app build; the classes it defines */
+  /** code modules from this one on belong to the app build, once one is attached */
   private appFrom = Infinity;
-  /** the app build's data modules, and the one that holds each class block */
-  private appD: (WebAssembly.Exports | undefined)[] = [];
-  /** the code modules (absolute) that patch each platform code module */
-  private patchesOver = new Map<number, number[]>();
+  /** what of the attached app build can still be loaded, until unbindApp drops it: its data modules and the one that holds each class block, and the code modules
+   *  (absolute) that patch each platform code module */
+  private app?: { d: (WebAssembly.Exports | undefined)[]; dOf: Map<number, number>; patchesOver: Map<number, number[]> };
   /** the file of each synthetic function a build holds (the app build's over the platform's), and whether each file is loaded (LIVE), being loaded or unusable (DEAD) */
   private synthIn = new Map<string, string>();
   private synthState = new Map<string, number>();
-  private appDOf = new Map<number, number>();
 
   /** the build laid out as `layout` over `w`, which has numbered its platform classes and what the build numbered after them */
   constructor(w: World, layout: AotLayout, store?: AotStore, programClasses = 0) {
@@ -260,7 +258,10 @@ export class AotRuntime {
     };
     return `${(prog.root.before ?? []).map(graph).join(" ")}|${(prog.root.after ?? []).map(graph).join(" ")}`;
   }
+  /** the root's libraries the attached app build was compiled under, which the classes its data modules laid out keep */
   private appLibraries?: string;
+  /** whether the World took an app build's numbering, which it keeps once unbindApp drops the build */
+  get appAttached(): boolean { return this.appLibraries !== undefined; }
   /** why `extend` refused the app build it was given, which a harness reports */
   appRejected?: string;
   /** whether the root's libraries are now those the attached app build was compiled under */
@@ -280,16 +281,15 @@ export class AotRuntime {
       if (fresh) w.rollback(since.from);
       this.appRejected = "numbering"; return false; }
     this.appLibraries = app.libraries;
-    const platform = this.store!, cOf = new Int32Array(w.slots.blockBase.length).fill(-1);
+    const platform = this.store!, cOf = new Int32Array(w.slots.blockBase.length).fill(-1), from = this.appFrom = this.cState.length;
     cOf.set(this.cOf);
-    this.appFrom = this.cState.length;
-    for (const [block, module] of app.cOf) cOf[block] = this.appFrom + module;
+    for (const [block, module] of app.cOf) cOf[block] = from + module;
     this.cOf = cOf;
-    this.cState.length = this.appFrom + app.modules;
-    for (const [module, over] of app.patches) (this.patchesOver.get(over) ?? this.patchesOver.set(over, []).get(over)!).push(this.appFrom + module);
+    this.cState.length = from + app.modules;
+    const patchesOver = new Map<number, number[]>();
+    for (const [module, over] of app.patches) (patchesOver.get(over) ?? patchesOver.set(over, []).get(over)!).push(from + module);
+    this.app = { d: new Array(app.dModules), dOf: new Map(app.dOf), patchesOver };
     app.synths.forEach((names, module) => names.forEach((n) => this.synthIn.set(n, aotFile("s", module))));
-    for (const [block, module] of app.dOf) this.appDOf.set(block, module);
-    this.appD.length = app.dModules;
     // the app build's files are a<module>.wasm, e<module>.wasm and s<module>.wasm, which no platform file is named like
     this.store = { get: (file) => ("aes".includes(file[0]) ? store : platform).get(file),
       ...(platform.prefetch && { prefetch: (files: string[]) => platform.prefetch!(files) }) };
@@ -314,9 +314,9 @@ export class AotRuntime {
       base = w.slots.preassigned.get(name);
       if (base === undefined) return undefined;
       const b = w.slots.blockOf(base);
-      if (b >= this.platformBlocks && (app = this.appDOf.get(b)) === undefined) return undefined;
+      if (b >= this.platformBlocks && (app = this.app?.dOf.get(b)) === undefined) return undefined;
     }
-    const exports = !w.instantiates ? {} : app === undefined ? this.loadD(g) : this.data(aotFile("e", app), this.appD, app);
+    const exports = !w.instantiates ? {} : app === undefined ? this.loadD(g) : this.data(aotFile("e", app), this.app!.d, app);
     // Returning without data hands publication to World.link. Block the group before class building can re-enter it.
     if (!exports && app === undefined) this.fallbackD.add(g);
     const jc = w.prog.get(name);
@@ -395,7 +395,7 @@ export class AotRuntime {
   installed(slot: number): boolean {
     const b = this.w.slots.blockOf(slot), c = b < 0 ? -1 : this.cOf[b];
     if (c >= 0 && this.cState[c] === LIVE && this.has(c, slot)) return true;
-    for (const p of this.patchesOver.get(c) ?? []) if (this.cState[p] === LIVE && this.cClasses[p].includes(b) && this.has(p, slot)) return true;
+    for (const p of this.app?.patchesOver.get(c) ?? []) if (this.cState[p] === LIVE && this.cClasses[p].includes(b) && this.has(p, slot)) return true;
     return false;
   }
   private has(c: number, slot: number): boolean { return !this.cAbsent[c]!.has(slot); }
@@ -478,7 +478,7 @@ export class AotRuntime {
     if (!(c >= 0)) return false;
     let loaded = this.loadC(c);
     // App patches can remain valid when their platform unit is rejected.
-    if (!loaded && this.cState[c] === DEAD) for (const p of this.patchesOver.get(c) ?? []) loaded = this.loadC(p) || loaded;
+    if (!loaded && this.cState[c] === DEAD) for (const p of this.app?.patchesOver.get(c) ?? []) loaded = this.loadC(p) || loaded;
     return loaded && this.installed(slot);
   }
   private loadC(c: number): boolean {
@@ -520,7 +520,7 @@ export class AotRuntime {
     for (const [callee, ...by] of head.held ?? []) if (taken.has(callee)) for (const x of by) w.assumptions.undoCode(x);
     w.stats.aot.ms += performance.now() - t2;
     // the app build's patches of this module's methods: after its own code, which they replace where they have some
-    for (const p of this.patchesOver.get(c) ?? []) this.loadC(p);
+    for (const p of this.app?.patchesOver.get(c) ?? []) this.loadC(p);
     return true;
   }
 
@@ -528,8 +528,7 @@ export class AotRuntime {
   /** App units were compiled before the runtime loader's library graph was known. Keep platform modules and stable numbering, but discard the app's old resolution. */
   unbindApp(): void {
     for (let c = this.appFrom; c < this.cState.length; c++) this.cState[c] = DEAD;
-    this.appDOf.clear();
-    this.patchesOver.clear();
+    this.app = undefined;
     this.synthIn.clear();
   }
   // ---- stack traces
@@ -542,7 +541,7 @@ export class AotRuntime {
     const c = this.cOf[w.slots.blockOf(base)];
     if (c < 0) return undefined;
     // a patch of the module has the code of the methods it replaced
-    for (const module of [...this.patchesOver.get(c) ?? [], c]) {
+    for (const module of [...this.app?.patchesOver.get(c) ?? [], c]) {
       const t = this.cState[module] === LIVE ? this.traceIn(module, base + m.index, m, name) : undefined;
       if (t) return t;
     }

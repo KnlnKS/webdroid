@@ -179,13 +179,13 @@ export class World {
     this.base = this.numbers.marks();
     if (opts.app) this.attachApp(opts.app);
   }
-  /** whether an app build is in use */
-  appAttached = false;
+  /** whether this World took an app build's numbering (AotRuntime.appAttached) */
+  get appAttached(): boolean { return !!this.aot?.appAttached; }
   /** uses `app`, an app build, if this World can (AotRuntime.extend): before the app's code first runs */
   attachApp(app: NonNullable<WorldOptions["app"]>): boolean {
     if (this.appAttached || !this.aot?.extend(app.index, app.store)) return false;
     this.base = this.numbers.marks();
-    return this.appAttached = true;
+    return true;
   }
 
   // ---------- numbering
