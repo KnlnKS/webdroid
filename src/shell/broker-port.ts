@@ -87,12 +87,10 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
       create: (pkg, kind, code, flags, intent, intents) => broker.createPending(pid, pkg, kind, code, flags, intent, intents, intentCodec),
       cancel: id => broker.cancelPending(pid, id),
       send: (id, fill) => broker.intents.send(id, fill),
-      operation: id => broker.takePending(pid, id),
-      kind: id => broker.intents.get(id)?.kind ?? null,
-      flags: id => broker.intents.get(id)?.flags ?? 0,
-      creator: id => {
+      take: id => broker.takePending(pid, id),
+      peek: id => {
         const operation = broker.intents.get(id);
-        return operation ? { pkg: operation.pkg, uid: operation.uid } : null;
+        return operation && { pkg: operation.pkg, uid: operation.uid, kind: operation.kind, flags: operation.flags };
       },
     },
     files: {

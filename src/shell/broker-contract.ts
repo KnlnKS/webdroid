@@ -83,7 +83,7 @@ export const brokerMethods = {
   process: methodsOf<ProcessLifeCalls>()(["processAlive", "processSignal", "processWatch", "processUnwatch"]),
   webStorage: methodsOf<WebStorageCalls>()(["webRenderer", "webStorage"]),
   starts: methodsOf<ServiceStarts>()(["created", "destroyed", "start", "deliver", "requested", "stop", "stopSelf", "done", "foreground"]),
-  pending: methodsOf<PendingAccess>()(["create", "cancel", "send", "operation", "kind", "flags", "creator"]),
+  pending: methodsOf<PendingAccess>()(["create", "cancel", "send", "take", "peek"]),
   prefs: methodsOf<PreferenceCalls>()(["preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles"]),
   files: methodsOf<FilePathCalls>()(["filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "fileRename", "fileRemove", "fileCreate", "fileFifo", "fileSetAttributes"]),
   descriptors: methodsOf<DescriptorCalls>()(["fileDescriptor"]),

@@ -363,9 +363,9 @@ describe("pending-intents", () => {
       const id = (await creator.pending.create(PKG,"activity",7,0,data))!;
       const denied = await other.pending.create(PKG,"activity",8,0,data).catch(error => error.javaClass);
       expect(denied).toBe("java/lang/SecurityException");
-      expect(await creator.pending.creator(id)).toEqual({pkg:PKG,uid:owner.uid});
+      expect(await creator.pending.peek(id)).toEqual({pkg:PKG,uid:owner.uid,kind:"activity",flags:0});
       expect(await sibling.pending.create(PKG,"activity",7,0x8000000,await encoded("updated"))).toBe(id);
-      const operation = (await sibling.pending.operation(id))!;
+      const operation = (await sibling.pending.take(id))!;
       expect(operation.process).toBe(PKG + ":owner");
       expect(await vcall(await decodeIntent(operation.intent),"getStringExtra","(Ljava/lang/String;)Ljava/lang/String;","extra")).toBe("updated");
       operation.intent.bytes.fill(0);
@@ -380,13 +380,14 @@ describe("pending-intents", () => {
       broker.ready(7704,{...createProcessEndpoint(),service:async request => {receiveAlarm(request);return null;}});
       const fired = await Promise.race([delivery,new Promise(resolve => setTimeout(()=>resolve(null),1000))]);
       expect(fired).toMatchObject({kind:"pending",alarmCount:1,operation:{uid:owner.uid,process:PKG+":owner"}});
-      expect(await sibling.pending.kind(id)).toBe("activity");
+      expect((await sibling.pending.peek(id))?.kind).toBe("activity");
       broker.alarms.cancel(id);
       await sibling.pending.cancel(id);
-      expect(await sibling.pending.creator(id)).toBeNull();
+      expect(await sibling.pending.peek(id)).toBeNull();
       const single = (await sibling.pending.create(PKG,"broadcast",9,0x40000000,await encoded("single")))!;
-      expect((await sibling.pending.operation(single))!.kind).toBe("broadcast");
-      expect(await sibling.pending.operation(single)).toBeNull();
+      expect((await sibling.pending.peek(single))!.kind).toBe("broadcast");
+      expect((await sibling.pending.take(single))!.kind).toBe("broadcast");
+      expect(await sibling.pending.take(single)).toBeNull();
     } finally {
       for (const client of clients) client.close();
       for (const pid of [7701,7702,7703,7704]) broker.fail(pid,"pending fixture cleanup",NOT_CRASHED);
@@ -428,6 +429,14 @@ describe("pending-intents", () => {
       expect(await vcall(broadcast, "isBroadcast", "()Z")).toBe(1);
       expect(await vcall(foreground, "isForegroundService", "()Z")).toBe(1);
       expect(await vcall(foreground, "isService", "()Z")).toBe(0);
+      // startIntentSender sends a one-shot broadcast sender once
+      const served: string[] = [];
+      broker.ready(pid, { ...createProcessEndpoint(), service: async request => { served.push(request.kind); return null; } });
+      const once = await scall("android/app/PendingIntent", "getBroadcast", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", context, 2, intent, 0x44000000);
+      const start = async () => vcall(await hostedService("activity_task"), "startActivityIntentSender",
+        "(Landroid/app/IApplicationThread;Landroid/content/IIntentSender;Landroid/os/IBinder;Landroid/content/Intent;Ljava/lang/String;Landroid/os/IBinder;Ljava/lang/String;IIILandroid/os/Bundle;)I",
+        null, await vcall(once, "getTarget", "()Landroid/content/IIntentSender;"), null, null, null, null, null, 0, 0, 0, null);
+      expect([await start(), await start(), served]).toEqual([0, -96, ["pending"]]);
       const alarm = await vcall(context, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "alarm");
       await vcall(alarm, "set", "(IJLandroid/app/PendingIntent;)V", 2, 1000000000000n, broadcast);
       await vcall(alarm, "cancel", "(Landroid/app/PendingIntent;)V", broadcast);
