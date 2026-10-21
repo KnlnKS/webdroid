@@ -21,7 +21,7 @@ import { type NinePatchChunk, drawNinePatch } from "./ninepatch.ts";
 import { applyMatrix, matrixAt } from "./matrix.ts";
 import { type NativeCanvas, type DrawPlan, MASK, IMAGE, drawingCanvas, beginPaint, endPaint, saveLayer, unsupported } from "./canvas.ts";
 
-function drawPath(nc: NativeCanvas, path: NativePath, p: NativePaint): void | Promise<void> {
+export function drawPath(nc: NativeCanvas, path: NativePath, p: NativePaint): void | Promise<void> {
   const plan = nc.planDraw(p);
   if (plan.raster && tryBitmapPath(nc, p, plan.raster, path)) return;
   if (!path.inverseFill) {
@@ -186,7 +186,7 @@ function punchHole(nc: NativeCanvas, l: number, t: number, r: number, b: number,
 /** an image drawn through the paint as SkCanvas::drawImageRect does, into the destination rect from
  *  the source rect (the whole bitmap when there is none): its alpha, colour filter, blend mode and
  *  shadow; an ALPHA_8 bitmap is coverage, drawn in the paint's colour */
-function drawBitmap(nc: NativeCanvas, b: NativeBitmap, paint: NativePaint | null, dx: number, dy: number, dw: number, dh: number,
+export function drawBitmap(nc: NativeCanvas, b: NativeBitmap, paint: NativePaint | null, dx: number, dy: number, dw: number, dh: number,
   sx?: number, sy?: number, sw?: number, sh?: number) {
   const p = paint ?? defaultPaint, alpha8 = b.config === ALPHA_8, plan = nc.planDraw(p, alpha8 ? MASK : IMAGE);
   if (plan.mode === "DST") return;
