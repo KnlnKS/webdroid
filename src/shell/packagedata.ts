@@ -29,7 +29,7 @@ export type PackageState = {
   remove?(pkg: string): unknown;
   packages?(): Iterable<string> | Promise<Iterable<string>>;
 };
-/** in the order they clear: what is keyed by uid first, files and web data last */
+/** started in this order and running together: what is keyed by uid first, files and web data last */
 const owners = (broker: Broker): PackageState[] => [
   alarmData, jobData, shortcutData, keystoreData, broker.notifications, uriGrantData, broker.permissions, legacyPreferenceData, legacySnapshotData,
   { clear: async (pkg) => (await broker.cookies(pkg)).remove(), remove: async (pkg) => (await broker.cookies(pkg)).forget(),
@@ -50,16 +50,17 @@ export async function removePackageData(broker: Broker, pkg: string): Promise<vo
 /** what happens to a package's data: clearApplicationUserData's clear, or its removal with the package */
 export type PackageDataChange = ({ kind: "clear" } & DataClear) | { kind: "remove" };
 /** the package stops (its processes die and its services go), then its data is cleared, or it is
- *  removed with its installed archive; then `broadcasts` go out */
+ *  removed: its installed archive first, so a removal that fails part way is not restored at the next
+ *  boot; then `broadcasts` go out */
 export async function changePackageData(broker: Broker, pkg: string, change: PackageDataChange, broadcasts: { data: ParcelData; targets: Receiver[] }[]): Promise<void> {
   if (change.kind === "clear") {
     await broker.forceStop(pkg, { reason: REASON_USER_REQUESTED, description: `stop ${pkg} due to clear data` });
     await clearAppData(broker, pkg, change);
   } else {
     await broker.forceStop(pkg);
+    await forgetPackage(installedPath(pkg));
     await broker.packageRemoved(pkg);
     await removePackageData(broker, pkg);
-    await forgetPackage(installedPath(pkg));
   }
   for (const { data, targets } of broadcasts) await broker.broadcast(null, data, targets, [], false);
 }
