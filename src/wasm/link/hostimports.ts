@@ -1,9 +1,8 @@
 // The functions compiled code imports as "host" (compiler/j2w.ts HOST_IMPORTS): what it asks of the runtime outside Wasm.
 import { MATH_IMPORTS, type HostImport } from "../compiler/j2w.ts";
-import { javaName } from "../compiler/program.ts";
+import { javaName, mid } from "../compiler/program.ts";
 import { SLOT, excMessage, type JavaFrame } from "../compiler/exc.ts";
 import { unresolvedClass } from "../compiler/linkage.ts";
-import { mid } from "../compiler/ids.ts";
 import type { InvokeMode } from "../compiler/handles.ts";
 import { HEAP_LIMIT } from "../../jvm/abi.ts";
 import { NO_INDEX } from "../../jvm/dex.ts";

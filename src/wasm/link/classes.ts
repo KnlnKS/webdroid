@@ -99,7 +99,7 @@ export function emitRefCopy(cx: Compiler, c: Code): void {
   c.if_().lget(0).lget(1).lget(2).lget(3).lget(4); cx.callRt(c, "acopy"); c.ret().end();
 }
 
-const isAssignableFrom = (cx: Compiler, c: Code) => cx.callMethod(c, cx.prog.resolve(CLASS, "isAssignableFrom", "(Ljava/lang/Class;)Z")!);
+const isAssignableFrom = (cx: Compiler, c: Code) => cx.callNamed(c, CLASS, "isAssignableFrom", "(Ljava/lang/Class;)Z");
 const field = (cx: Compiler, name: string, d: string) => cx.fieldIndex(CLASS, { owner: CLASS, name, desc: d });
 
 // classOf(id): the cached Class object; the table grows to hold the id
@@ -286,7 +286,7 @@ def("java/lang/Class.getNameNative()Ljava/lang/String;", (cx, c) => {
 // Class.classForName(name, initialize, loader): the class `loader` sees under that name (loaders.ts)
 def("java/lang/Class.classForName(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;", (cx, c) => {
   const id = c.newLocal(T.i32);
-  c.lget(0).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
+  c.lget(0); cx.nullCheck(c);
   const wait = cx.global("rt", "wait", T.i32, true);
   emitRestored(cx, c, [], [], () => {
     c.lget(0); cx.str.toHost(c); c.lget(2).externConvertAny(); c.i32(Lookup.ForName); c.call(cx.imp.classByName).lset(id);
@@ -303,7 +303,7 @@ def("java/lang/Class.classForName(Ljava/lang/String;ZLjava/lang/ClassLoader;)Lja
 // ART's findLoadedClass also searches recognized platform loader paths (loaders.ts).
 def("java/lang/VMClassLoader.findLoadedClass(Ljava/lang/ClassLoader;Ljava/lang/String;)Ljava/lang/Class;", (cx, c) => {
   const id = c.newLocal(T.i32);
-  c.lget(1).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
+  c.lget(1); cx.nullCheck(c);
   emitRestored(cx, c, [], [T.anyref], () => {
     c.lget(1); cx.str.toHost(c); c.lget(0).externConvertAny(); c.i32(Lookup.Defined); c.call(cx.imp.classByName).lset(id);
     emitClassAnswer(cx, c, id);
@@ -320,7 +320,7 @@ def("java/lang/Class.getInnerClassFlags(I)I", (cx, c) => {
 // Class.getPrimitiveClass(name): the class whose Java name is `name`, matched on length and first character (unique among the nine)
 def("java/lang/Class.getPrimitiveClass(Ljava/lang/String;)Ljava/lang/Class;", (cx, c) => {
   const len = c.newLocal(T.i32), ch = c.newLocal(T.i32);
-  c.lget(0).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
+  c.lget(0); cx.nullCheck(c);
   c.lget(0); cx.callNamed(c, "java/lang/String", "length", "()I"); c.lset(len);
   c.lget(0).i32(0); cx.callNamed(c, "java/lang/String", "charAt", "(I)C"); c.lset(ch);
   for (const [desc, [, , name]] of Object.entries(PRIM)) {
@@ -371,7 +371,7 @@ def("java/lang/Object.internalClone()Ljava/lang/Object;", (cx, c) => {
 
 def("java/lang/Class.getDeclaredField(Ljava/lang/String;)Ljava/lang/reflect/Field;", (cx, c) => {
   const id = c.newLocal(T.i32), n = c.newLocal(T.i32), len = c.newLocal(T.i32), k = c.newLocal(T.i32);
-  c.lget(1).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
+  c.lget(1); cx.nullCheck(c);
   c.lget(0); idOfClass(cx, c); c.lset(id);
   cx.info(c, Info.NFields, () => c.lget(id)); c.lset(n);
   c.lget(1); cx.callNamed(c, "java/lang/String", "length", "()I"); c.lset(len);

@@ -263,6 +263,8 @@ public class C {
     Object o = k.newInstance();
     int r = (Integer) m.invoke(o) + (Integer) f.invoke(new B()) * 10 + (m.getReturnType() == int.class ? 100 : 0) + m.getParameterTypes().length * 1000;
     try { A.class.getMethod("nope"); } catch (NoSuchMethodException e) { r += 10000; }
+    // an interface method Object declares dispatches through Object's slot
+    if ((Boolean) java.util.Comparator.class.getMethod("equals", Object.class).invoke(String.CASE_INSENSITIVE_ORDER, String.CASE_INSENSITIVE_ORDER)) r += 200000000;
     return r + (o instanceof A ? 100000 : 0) + (m.getDeclaringClass() == A.class ? 1000000 : 0) + I.class.getMethod("g").getName().length() * 10000000;
   }
   enum Color { RED, GREEN, BLUE }

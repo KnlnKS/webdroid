@@ -17,8 +17,8 @@ import type { SymbolicSite } from "../compiler/sites.ts";
 import type { DexFile } from "../../jvm/dex.ts";
 import type { Loader, MethodInfo } from "../compiler/program.ts";
 import type { FnTrace } from "../compiler/j2w.ts";
-import { methodOf } from "../compiler/ids.ts";
-import { COUNT_SLOTS } from "../compiler/exc.ts";
+import { methodOf } from "../compiler/program.ts";
+import { COUNT_SLOTS } from "../compiler/consts.ts";
 import { LebReader } from "./module.ts";
 
 /** the files of a build, read synchronously: a page fetches them (and may compile them) before the code that needs them runs */

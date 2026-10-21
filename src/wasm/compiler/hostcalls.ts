@@ -8,8 +8,6 @@ import { HT, T, type VT } from "./wasmbin.ts";
 /** what a blocking or synchronizing operation answers; the compiled code turns it into the exception (sched.ts blockStatus) */
 export const St = { Ok: 0, Interrupted: 1, Imse: 2, Nbs: 3, Neg: 4, Nanos: 5, Proceed: 6, Block: 7 } as const;
 export type St = (typeof St)[keyof typeof St];
-/** loop iterations of one activation between two chances for another strand to run (a power of two) */
-export const FUEL = 4096;
 /** the strand id of host code that enters Java outside any strand */
 export const ROOT = 1;
 

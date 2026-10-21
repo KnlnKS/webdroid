@@ -3,15 +3,16 @@
 import { HEAP_LIMIT } from "../../jvm/abi.ts";
 import { OP, type Code } from "./code.ts";
 import { HT, T, ref, refNull, type VT } from "./wasmbin.ts";
-import { H, type ElemKind } from "./consts.ts";
-import { ALLOC_WINDOW } from "./exc.ts";
+import { H, ALLOC_WINDOW, type ElemKind } from "./consts.ts";
 import { Block, Sync, emitBlock, emitSync } from "./hostcalls.ts";
 import type { Compiler } from "./j2w.ts";
 
 interface Helper { params: VT[]; results: VT[]; body: (c: Code) => void }
+export type HelperName = `${"i" | "l"}${"div" | "rem"}` | `cmp${"l" | "g"}${"f" | "d"}` | "cast" | "castImpl" | "castArr" | "iof" | "implements" | "imtslow"
+  | `aput:${ElemKind}` | "hash" | "menter" | "mexit" | "newLen" | "allocSlow" | "vtab" | "acmp" | "shash";
 /** by name, a helper's signature and body in a Compiler's module */
-export const helpers = new Map<string, (cx: Compiler) => Helper>();
-const def = (name: string, make: (cx: Compiler) => Helper) => { helpers.set(name, make); };
+export const helpers = new Map<HelperName, (cx: Compiler) => Helper>();
+const def = (name: HelperName, make: (cx: Compiler) => Helper) => { helpers.set(name, make); };
 const L = T.anyref;
 
 for (const [name, wide, rem] of [["idiv", false, false], ["irem", false, true], ["ldiv", true, false], ["lrem", true, true]] as const) def(name, (cx) => {
@@ -33,7 +34,7 @@ for (const [name, W, lt, gt, eq, nanGreater] of [["cmplf", T.f32, OP.f32_lt, OP.
   c.end();
 } }));
 /** obj when it is null or passes `test` (of obj, class id and any depth), else ClassCastException */
-const cast = (name: string, params: VT[], test: (cx: Compiler, c: Code) => void) => def(name, (cx) => ({ params: [L, T.i32, ...params], results: [L], body: (c) => {
+const cast = (name: HelperName, params: VT[], test: (cx: Compiler, c: Code) => void) => def(name, (cx) => ({ params: [L, T.i32, ...params], results: [L], body: (c) => {
   c.lget(0).refIsNull().raw(OP.i32_eqz).if_();
   test(cx, c);
   c.raw(OP.i32_eqz).if_().lget(0).call(cx.helper("vtab")).i32(H.ID).arrayGet(cx.tVT).lget(1); cx.callThrower(c, "cce"); c.end();
@@ -83,12 +84,11 @@ def("imtslow", (cx) => ({ params: [refNull(cx.tVT), T.i32], results: [T.i32], bo
   c.lget(slot);
 } }));
 // aput:<element kind>(array, index, value): the store of an array element out of line, for code that runs once (method.ts emitAput)
-for (const k of ["i8", "i16", "i32", "i64", "ref"] as ElemKind[]) def("aput:" + k, (cx) => ({ params: [L, T.i32, k === "ref" ? L : k === "i64" ? T.i64 : T.i32], results: [], body: (c) => {
-  const data = c.newLocal(ref(cx.tData[k]));
-  c.lget(0).refCast(cx.tArr[k]).structGet(cx.tArr[k], 2).lset(data);
-  c.lget(1).lget(data).arrayLen().raw(OP.i32_ge_u).if_().lget(1).lget(data).arrayLen(); cx.callThrower(c, "aioobe"); c.end();
-  if (k === "ref") cx.emitStoreCheck(c, 0, () => c.lget(2));
-  c.lget(data).lget(1).lget(2).arraySet(cx.tData[k]);
+for (const k of ["i8", "i16", "i32", "i64", "ref"] as ElemKind[]) def(`aput:${k}`, (cx) => ({ params: [L, T.i32, k === "ref" ? L : k === "i64" ? T.i64 : T.i32], results: [], body: (c) => {
+  const data = c.newLocal(ref(cx.tData[k])), index = () => c.lget(1);
+  c.lget(0); cx.arrayData(c, k).lset(data);
+  cx.boundsCheck(c, index, () => c.lget(data).arrayLen());
+  cx.emitElementStore(c, k, 0, () => c.lget(data), index, () => c.lget(2));
 } }));
 // the header word: the monitor (thin lock owner and count, or an inflated monitor's index) in its low half, the identity hash in its high half
 def("hash", (cx) => ({ params: [L], results: [T.i32], body: (c) => {
@@ -123,11 +123,11 @@ for (const enter of [true, false]) def(enter ? "menter" : "mexit", (cx) => ({ pa
 } }));
 // newLen(len, shift): the length itself once it is a legal array length and the allocation fits the budget
 def("newLen", (cx) => ({ params: [T.i32, T.i32], results: [T.i32], body: (c) => {
-  const bytes = c.newLocal(T.i64), g = cx.global("rt", "alloc", T.i32, true);
+  const bytes = c.newLocal(T.i64);
   c.lget(0).i32(0).raw(OP.i32_lt_s).if_().lget(0); cx.callThrower(c, "nase"); c.end();
   c.lget(0).raw(OP.i64_extend_i32_u).lget(1).raw(OP.i64_extend_i32_u, OP.i64_shl).lset(bytes);
   c.lget(bytes).i64(BigInt(HEAP_LIMIT)).raw(OP.i64_gt_u).if_().lget(bytes); cx.callThrower(c, "oom"); c.end();
-  c.gget(g).lget(bytes).raw(OP.i32_wrap_i64, OP.i32_add).gset(g).gget(g).i32(0).raw(OP.i32_ge_s).if_().call(cx.helper("allocSlow")).end();
+  cx.allocBytes(c, () => c.lget(bytes).raw(OP.i32_wrap_i64));
   c.lget(0);
 } }));
 // allocSlow(): the allocation window is used up; the host decides whether the heap really is full. Garbage that only a finalizer frees (a native handle

@@ -7,13 +7,12 @@
 import { PRIMS, mangleField } from "../../jvm/abi.ts";
 import { rt, JObj } from "../../jvm/runtime.ts";
 import { JThrowable } from "../../jvm/natives/jthrowable.ts";
-import { ELEM_KINDS } from "../compiler/consts.ts";
+import { ELEM_KINDS, TRANSFER_BASE, TRANSFER_BYTES } from "../compiler/consts.ts";
 import { javaName, kindOf, methodKinds, type FieldInfo, type Kind, type MethodInfo } from "../compiler/program.ts";
 import type { World } from "../link/world.ts";
-import { TRANSFER_BASE, TRANSFER_BYTES } from "../compiler/exc.ts";
 import type { Strand } from "../link/sched.ts";
 import type { BridgeScope, HostBridge, HostSpec, NativeSource } from "../link/hostapi.ts";
-import { copyFn } from "../compiler/copy.ts";
+import { copyFn } from "../link/copy.ts";
 import { handleViews } from "../../android/handles.ts";
 import { count } from "./stats.ts";
 import { readBufferBytes, type JBuffer } from "../../jvm/natives/jnio.ts";

@@ -1,26 +1,25 @@
 import { emitSymbolicSite, siteKey } from "./sites.ts";
-import { STRING } from "./strings.ts";
+import { STRING, stringSite } from "./strings.ts";
 import { Code, OP, inlineMark } from "./code.ts";
 import { T, ref, refNull, type VT } from "./wasmbin.ts";
-import { kindOf, type FieldInfo, type Kind, type MethodInfo } from "./program.ts";
+import { kindOf, mid, type FieldInfo, type Kind, type MethodInfo } from "./program.ts";
 import { staticallyBound, type Compiler } from "./j2w.ts";
-import { H, ELEM_KINDS, elemKindOf, type ElemKind } from "./consts.ts";
+import { ELEM_KINDS, elemKindOf, type ElemKind } from "./consts.ts";
 import { isWide } from "../../jvm/abi.ts";
 import type { DexTypes } from "../../jvm/dex.ts";
-import { argRegisters, endsBlock, ifTarget, switchCases, type PreparedInstruction as Ins, type PreparedMethod } from "../../jvm/prepared.ts";
+import { argRegisters, ifTarget, switchCases, type PreparedInstruction as Ins, type PreparedMethod } from "../../jvm/prepared.ts";
 import { type Flow, Go, structureAny } from "./structure.ts";
-import { mid } from "./ids.ts";
 import { emitPolymorphic } from "./poly.ts";
 import { emitCustom, emitHandleConstant, emitTypeConstant } from "./handles.ts";
 import { failed, invokeSite, resolveFieldRef, typeFailure, type InvokeSite, type LinkFailure } from "./linkage.ts";
 import { MethodFacts, cloneFacts, newFacts, type Facts } from "./facts.ts";
 import { isStackOverflow } from "./exc.ts";
 import { WHOLE_FRAME, planDepth, type DepthPlan } from "./depth.ts";
-import { Invoke, invokeKind, isInvoke, narrowBits, wideBits } from "../../jvm/opcodes.ts";
+import { endsBlock, invokeKind, isIf, isInvoke, isMoveResult, narrowBits, wideBits } from "../../jvm/opcodes.ts";
 import { emitRestored } from "./hostcalls.ts";
 import { OutlinedCode, Outliner } from "./outline.ts";
 import { isEmpty, trivialOf, type Seq, type Trivial, type Val } from "./inline.ts";
-import { KINDS, BINOPS, UNARY, binopKind, binopName, I as KI, F as KF, R as KR, J as KJ, D as KD, type Binop, type Typing } from "./infer.ts";
+import { KINDS, BINOPS, UNARY, binopKind, binopName, uninitAliases, I as KI, F as KF, R as KR, J as KJ, D as KD, type Binop, type Typing } from "./infer.ts";
 
 /** how an invoke reaches the Java method it calls: a fixed one, whose body may run in place; a dispatch, through the only implementation the class hierarchy has if
  *  it has one (Compiler.devirt); String's constructor, which makes the string */
@@ -46,18 +45,16 @@ const UNARY_CODE: Around[] = [
   trunc(2), trunc(6), after(OP.f32_demote_f64),
   after(OP.i32_extend8_s), (c, x) => { x(); c.i32(0xffff).raw(OP.i32_and); }, after(OP.i32_extend16_s),
 ];
-/** the element storage, sign and value kind of each array access, aget (0x44) to aget-short (0x4a), and of the aput (0x4b-0x51) of the same type */
-const ELEMS: { k: ElemKind; sign: "s" | "u" | ""; kind: Kind }[] = [
-  { k: "i32", sign: "", kind: "I" }, { k: "i64", sign: "", kind: "J" }, { k: "ref", sign: "", kind: "L" }, { k: "i8", sign: "u", kind: "I" },
-  { k: "i8", sign: "s", kind: "I" }, { k: "i16", sign: "u", kind: "I" }, { k: "i16", sign: "s", kind: "I" },
-];
+/** the element type of each array access, aget (0x44) to aget-short (0x4a), and of the aput (0x4b-0x51) of the same type: its storage, the letter of its
+ *  descriptor (an int's stands for a float's, a long's for a double's) and its value kind */
+const ELEMS = [..."IJLZBCS"].map((letter) => ({ k: elemKindOf("[" + letter), letter, kind: kindOf(letter) }));
 /** the comparison of if-lt, if-ge, if-gt and if-le, and of their -z forms */
 const COMPARE = [OP.i32_lt_s, OP.i32_ge_s, OP.i32_gt_s, OP.i32_le_s];
 
 export function compileMethod(cx: Compiler, m: MethodInfo): Code {
   const nparams = (m.isStatic ? 0 : 1) + m.params.length;
   const leaf = (c: Code) => { if (!cx.runsJava(c)) cx.bound.set(mid(m), 4 + nparams + c.localTypes.length); return c; };
-  const intr = cx.intrinsic(m);
+  const intr = cx.w.intrinsic(m);
   if (intr) { const c = new Code(nparams); intr(cx, m, c); return leaf(c); }
   if (!m.codeOff) { const c = new Code(nparams); cx.gap(c, `${mid(m)}: ${cx.natives.reason(m)}`); return leaf(c); }
   try {
@@ -108,8 +105,10 @@ export class MC {
     if (l === undefined) this.webLocal[web] = l = this.code.newLocal(KINDS[this.typing.kind[web]].vt);
     return l;
   }
+  /** by web, the first and last instruction it is live at: webs whose intervals are disjoint share storage */
+  private spans!: { start: number[]; end: number[] };
   private allocateWebs() {
-    const { start, end } = this.typing.ranges(), reserved = new Set<number>();
+    const { start, end } = this.spans = this.typing.ranges(), reserved = new Set<number>();
     for (let r = this.item.regs - this.item.ins; r < this.item.regs; r++) { const w = this.typing.param(r); if (w >= 0) reserved.add(w); }
     const pools = new Map<VT, { local: number; end: number }[]>();
     const webs = start.map((_, w) => w).filter(w => start[w] !== undefined && !reserved.has(w)).sort((a, b) => start[a] - start[b] || a - b);
@@ -277,7 +276,7 @@ export class MC {
   private bind(ins: Ins): Binding | null {
     const { decl, name, target } = this.invoke(ins), kind = invokeKind(ins.op);
     if (target === "clone" || failed(target)) return null;
-    if (kind === Invoke.Direct && decl === STRING && name === "<init>") return { k: "string" };
+    if (stringSite(this.dex, ins) === "init") return { k: "string" };
     if (staticallyBound(this.cx.w, kind, decl, target)) return { k: "fixed", m: target, body: this.bodyOf(target) };
     const only = this.cx.devirt(decl, name, target.desc);
     return { k: "virtual", only: only === "many" ? undefined : only };
@@ -356,7 +355,7 @@ export class MC {
     }
     const last = instructions[end];
     if (!endsBlock(last.op)) {
-      const target = this.flow.fallTarget(b, last.op >= 0x32 && last.op <= 0x3d ? blockAt[ifTarget(last)] : -1);
+      const target = this.flow.fallTarget(b, isIf(last.op) ? blockAt[ifTarget(last)] : -1);
       if (target >= 0) this.jump(b, start[target], true);
     }
   }
@@ -407,9 +406,8 @@ export class MC {
   linkFail(f: LinkFailure) { this.cx.linkError(this.code, f); }
   /** push a non-null (ref null $Obj) of register `reg`, throwing NPE when null */
   nonNull(reg: number) {
-    const c = this.code, cx = this.cx;
-    if (this.facts.nonNull.has(this.useWeb(reg))) { this.get("L", reg); return; }
-    this.get("L", reg); c.refIsNull().if_(); cx.callThrower(c, "npe"); c.end(); this.get("L", reg);
+    if (!this.facts.nonNull.has(this.useWeb(reg))) { this.get("L", reg); this.cx.nullCheck(this.code); }
+    this.get("L", reg);
   }
   /** emit "ensure class initialized", unless an earlier instruction on every path to here has */
   ensure(cls: string) { this.cx.emitEnsure(this.code, cls, this.facts.inited); }
@@ -447,7 +445,7 @@ export class MC {
     }
     if (isInvoke(op)) return this.emitInvoke(ins);
     if (op >= 0x7b && op <= 0xe2) return this.emitArith(ins);
-    if (op >= 0x32 && op <= 0x3d) return this.emitIf(ins);
+    if (isIf(op)) return this.emitIf(ins);
     const c = this.code, cx = this.cx, dex = this.dex, types = this.types, a = ins.a, b = ins.b;
     switch (op) {
       case 0x00: return; // nop
@@ -477,9 +475,8 @@ export class MC {
       case 0x21: this.arrayLength(b); this.set("I"); return;
       case 0x22: { // new-instance
         if (this.unresolved(types.type(b))) return;
-        const name = types.typeName(b);
-        // a String is made by the constructor call, which assigns its register
-        if (name === STRING) c.anyNull(); else { this.ensure(name); cx.emitNew(c, name); }
+        // a String is made by the constructor call, which assigns its registers
+        if (stringSite(dex, ins) === "alloc") c.anyNull(); else { const name = types.typeName(b); this.ensure(name); cx.emitNew(c, name); }
         this.set("L"); return;
       }
       case 0x23: if (this.unresolved(types.type(ins.c))) return; cx.emitNewArray(c, types.type(ins.c), () => this.get("I", ins.b)); this.set("L"); return;
@@ -552,17 +549,11 @@ export class MC {
   }
   /** the local of each element kind that holds the data array of the array being accessed */
   private dloc(k: ElemKind): number { return this.scratchLocal(k, ref(this.cx.tData[k])); }
-  idxCheck(k: ElemKind, idxReg: number) {
-    const c = this.code, d = this.dloc(k);
-    this.get("I", idxReg); c.lget(d).arrayLen().raw(OP.i32_ge_u).if_();
-    this.get("I", idxReg); c.lget(d).arrayLen(); this.cx.callThrower(c, "aioobe"); c.end();
-  }
   emitAget(ins: Ins) {
-    const c = this.code, cx = this.cx, { k, sign, kind } = ELEMS[ins.op - 0x44], d = this.dloc(k);
+    const c = this.code, cx = this.cx, { k, letter, kind } = ELEMS[ins.op - 0x44], d = this.dloc(k), index = () => this.get("I", ins.c);
     this.nonNull(ins.b); cx.arrayData(c, k).lset(d);
-    this.idxCheck(k, ins.c);
-    c.lget(d); this.get("I", ins.c);
-    sign === "s" ? c.arrayGetS(cx.tData[k]) : sign === "u" ? c.arrayGetU(cx.tData[k]) : c.arrayGet(cx.tData[k]);
+    cx.boundsCheck(c, index, () => c.lget(d).arrayLen());
+    c.lget(d); index(); cx.emitElementLoad(c, letter);
     this.set(kind);
   }
   emitAput(ins: Ins) {
@@ -570,16 +561,14 @@ export class MC {
     // a static initializer runs once, and its long array literals take the engine longer to compile than to run: their stores are a call
     if (this.m.name === "<clinit>") {
       this.nonNull(ins.b); this.get("I", ins.c); this.get(kind, ins.a);
-      c.call(cx.helper("aput:" + k));
+      c.call(cx.helper(`aput:${k}`));
       return;
     }
-    const d = this.dloc(k);
+    const d = this.dloc(k), index = () => this.get("I", ins.c);
     this.nonNull(ins.b); c.lset(this.tmpL);
     c.lget(this.tmpL); cx.arrayData(c, k).lset(d);
-    this.idxCheck(k, ins.c);
-    if (k === "ref") cx.emitStoreCheck(c, this.tmpL, () => this.get("L", ins.a));
-    c.lget(d); this.get("I", ins.c); this.get(kind, ins.a);
-    c.arraySet(cx.tData[k]);
+    cx.boundsCheck(c, index, () => c.lget(d).arrayLen());
+    cx.emitElementStore(c, k, this.tmpL, () => c.lget(d), index, () => this.get(kind, ins.a));
   }
   fieldOf(idx: number, isStatic: boolean) { return resolveFieldRef(this.cx.prog, this.dex, idx, isStatic, this.m.cls); }
   /** the field an iget or iput names; String's representation has no fields to translate an access of */
@@ -604,9 +593,8 @@ export class MC {
   }
   /** stores what `value` pushes (in the field's kind) into `obj`'s field */
   private fieldPut({ decl, f }: { decl: string; f: FieldInfo }, obj: number, value: () => void) {
-    const cx = this.cx, c = this.code, st = cx.structFor(decl);
-    this.refTo(obj, st); value(); c.structSet(st, cx.fieldIndex(decl, f));
-    if (cx.w.claims(f)) { this.refTo(obj, st); c.externConvertAny(); value(); c.call(cx.imp.claim); }
+    const st = this.cx.structFor(decl);
+    this.cx.emitFieldStore(this.code, decl, f, () => this.refTo(obj, st), value);
   }
   emitStatic(ins: Ins) {
     const cx = this.cx, c = this.code, put = ins.op >= 0x67, r = this.fieldOf(ins.b, true);
@@ -687,10 +675,10 @@ export class MC {
   /** the move-result that follows `ins`, if one does */
   private moveResult(ins: Ins): Ins | undefined {
     const i = this.prepared.indexAt[ins.pc + ins.len], nx = i >= 0 ? this.prepared.instructions[i] : undefined;
-    return nx && nx.op >= 0x0a && nx.op <= 0x0c ? nx : undefined;
+    return nx && isMoveResult(nx.op) ? nx : undefined;
   }
   emitInvoke(ins: Ins) {
-    const cx = this.cx, c = this.code, prog = cx.prog;
+    const cx = this.cx, c = this.code;
     if (ins.op >= 0xfc) return emitCustom(this, ins);
     if (ins.op >= 0xfa) return emitPolymorphic(this, ins);
     const { desc, decl, target } = this.invoke(ins);
@@ -704,31 +692,22 @@ export class MC {
     if (b.k === "string") {
       const make = cx.str.factory(desc);
       if (make === undefined) { this.invokeGap(ins, `String.<init>${desc}`); return; }
-      pushArgs(this, ins, p.params); c.call(make); if (site) this.leaveSite(); c.lset(this.local(this.useWeb(ins.regs[0]))); return;
+      pushArgs(this, ins, p.params); c.call(make); if (site) this.leaveSite();
+      const own = this.local(this.useWeb(ins.regs[0]));
+      c.lset(own);
+      for (const w of this.stringCopies(ins)) c.lget(own).lset(this.local(w));
+      return;
     } else if (b.k === "fixed") {
       if (target.isStatic) { this.ensure(target.cls); pushArgs(this, ins, p.params, 0); } else { this.nonNull(ins.regs[0]); pushArgs(this, ins, p.params); }
       cx.callMethod(c, target);
     } else {
       // A native callback can load an override while this activation is still running.
-      const declC = prog.get(decl);
       // the slot the receiver's class gives the method; a call that expects one of the likely implementations tests for it first, so the engine can inline it
       const guards = this.guards(ins, b);
       this.nonNull(ins.regs[0]); c.lset(this.tmpL);
       c.lget(this.tmpL); pushArgs(this, ins, p.params);
       c.lget(this.tmpL).refCast(cx.tObj).structGet(cx.tObj, 0);
-      if (declC && !declC.isInterface) {
-        c.i32(cx.w.dispatch.vslot(decl, target.key)).arrayGet(cx.tVT);
-      } else if (prog.get("java/lang/Object")!.byKey.has(target.key)) {
-        c.i32(cx.w.dispatch.vslot("java/lang/Object", target.key)).arrayGet(cx.tVT);
-      } else {
-        const sel = cx.w.selectorId(target.key), s = sel % H.IMT_N;
-        // fn = vt[IMT+2s] == sel ? vt[IMT+2s+1] : imtslow(vt, sel)
-        const vtl = this.scratchLocal("vt", ref(cx.tVT));
-        c.lset(vtl);
-        c.lget(vtl).i32(H.IMT + 2 * s).arrayGet(cx.tVT).i32(sel).raw(OP.i32_eq).if_(T.i32)
-          .lget(vtl).i32(H.IMT + 2 * s + 1).arrayGet(cx.tVT).else_()
-          .lget(vtl).i32(sel).call(cx.helper("imtslow")).end();
-      }
+      cx.emitDispatchSlot(c, decl, target.key, () => this.scratchLocal("vt", ref(cx.tVT)));
       // the receiver and arguments stay on the stack under the tests: a guard takes them as block parameters instead of repeating them
       const type = cx.descSig(desc, false);
       if (guards.length) {
@@ -741,6 +720,15 @@ export class MC {
     }
     if (site) this.leaveSite();
     this.finishResult(ins, retK);
+  }
+  private aliases?: Map<number, number[]>;
+  /** the webs besides the receiver's that the String.<init> call `ins` assigns the String it makes, as ART assigns every copy of the allocation
+   *  (SetStringInitValueToAllAliases): those that own their storage there */
+  private stringCopies(ins: Ins): number[] {
+    const regs = (this.aliases ??= uninitAliases(this.dex, this.item, this.prepared, (x) => stringSite(this.dex, x))).get(ins.pc);
+    if (!regs) return [];
+    const i = this.prepared.indexAt[ins.pc], own = this.useWeb(ins.regs[0]), { start, end } = this.spans;
+    return regs.map((r) => this.typing.holds(ins.pc, r)).filter((w) => w >= 0 && w !== own && start[w] <= i && i <= end[w]);
   }
   /** the body of `m` (inline.ts) in place of the call `ins`: the checks the invoke makes in its own frame, then the body's steps */
   private emitBody(ins: Ins, m: MethodInfo, t: Trivial, retK: Kind | "V", site: boolean) {
@@ -820,7 +808,7 @@ export class MC {
     if (lit) c.i32(ins.c); else this.num(wideShift ? KI : k, y);
     if (fmod) { if (k === KF) c.raw(OP.f64_promote_f32); c.call(this.cx.imp.fmod); if (k === KF) c.raw(OP.f32_demote_f64); }
     // Wasm traps on a zero divisor and on MIN / -1, where Java throws or wraps: the helpers do as Java does, unless a literal rules both out
-    else if ((name === "div" || name === "rem") && (k === KI || k === KJ) && !(lit && ins.c !== 0 && ins.c !== -1)) c.call(this.cx.helper((k === KI ? "i" : "l") + name));
+    else if ((name === "div" || name === "rem") && (k === KI || k === KJ) && !(lit && ins.c !== 0 && ins.c !== -1)) c.call(this.cx.helper(`${k === KI ? "i" : "l"}${name}`));
     else { if (wideShift) c.raw(OP.i64_extend_i32_u); c.raw(WASM_BINOP[k][name]!); }
     this.setNum(k);
   }

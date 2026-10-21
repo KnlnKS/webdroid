@@ -1,15 +1,14 @@
 // What a unit is made of: the methods a first call compiles beside the one asked for (`batch`), and the callees and guarded implementations a hot
 // method's second-tier unit takes in (`group`), chosen by how often the first tier saw them run.
-import { ACC, type MethodInfo } from "../compiler/program.ts";
+import { ACC, mid, type MethodInfo } from "../compiler/program.ts";
 import { staticallyBound, type CallPlan } from "../compiler/j2w.ts";
-import { mid } from "../compiler/ids.ts";
 import { failed, invokeSite, symbolicOverride } from "../compiler/linkage.ts";
-import { HOT_BUDGET } from "../compiler/exc.ts";
 import { cyclic, decodeInstruction, decodeInstructions, prepareMethod, type PreparedInstruction } from "../../jvm/prepared.ts";
 import { insnLen, invokeKind, isInvoke } from "../../jvm/opcodes.ts";
 import { instructionClass } from "./resolution.ts";
 import type { Tiering } from "./tiering.ts";
 import type { World } from "./world.ts";
+import { HOT_BUDGET } from "../compiler/consts.ts";
 
 /** the most methods a first-tier unit holds (Planner.batch) */
 const BATCH = 32;

@@ -8,10 +8,21 @@ import { kindOf } from "./program.ts";
 import { parseMethodDesc } from "../../jvm/abi.ts";
 import type { Compiler } from "./j2w.ts";
 import { bytesFactory } from "./strfactory.ts";
+import type { DexFile } from "../../jvm/dex.ts";
+import type { PreparedInstruction } from "../../jvm/prepared.ts";
 
 export const STRING = "java/lang/String";
 /** field indices of the struct after the Object header (0, 1) */
 const CHARS = 2, HASH = 3, JS = 4;
+
+/** how `ins` makes a String, which has no constructor: its allocation (new-instance), which holds null until the constructor call (invoke-direct
+ *  String.<init>), which the String's factory takes the place of. No loader defines a String of its own, so the dex's name is the class */
+export function stringSite(dex: DexFile, ins: PreparedInstruction): "alloc" | "init" | undefined {
+  if (ins.op === 0x22) return dex.type(ins.b) === "Ljava/lang/String;" ? "alloc" : undefined;
+  if (ins.op !== 0x70 && ins.op !== 0x76) return undefined;
+  const m = dex.method(ins.b);
+  return m.name === "<init>" && dex.type(m.cls) === "Ljava/lang/String;" ? "init" : undefined;
+}
 
 export class StructStrings {
   private cx: Compiler;
@@ -57,7 +68,7 @@ export class StructStrings {
   /** pushes the char array of the String in local `l` */
   charsOf(c: Code, l: number): Code { return c.lget(l).refCast(this.st).structGet(this.st, CHARS); }
   lenOf(c: Code, l: number): Code { return this.charsOf(c, l).arrayLen(); }
-  npe(c: Code, l: number): void { c.lget(l).refIsNull().if_(); this.cx.callThrower(c, "npe"); c.end(); }
+  npe(c: Code, l: number): void { c.lget(l); this.cx.nullCheck(c); }
 
   /** newChars(n) -> (ref $chars): a zeroed array of n chars, through the allocation budget */
   newChars(): number {
@@ -66,8 +77,7 @@ export class StructStrings {
   /** newCharsKnown(n) -> (ref $chars): as newChars for a length that is no larger than an array that exists, so it only counts the allocation */
   newCharsKnown(): number {
     return this.fn("newCharsKnown", [T.i32], [ref(this.chars)], (c) => {
-      const g = this.cx.global("rt", "alloc", T.i32, true);
-      c.gget(g).lget(0).i32(1).raw(OP.i32_shl).raw(OP.i32_add).gset(g).gget(g).i32(0).raw(OP.i32_ge_s).if_().call(this.cx.helper("allocSlow")).end();
+      this.cx.allocBytes(c, () => c.lget(0).i32(1).raw(OP.i32_shl));
       c.lget(0).arrayNewDefault(this.chars);
     });
   }

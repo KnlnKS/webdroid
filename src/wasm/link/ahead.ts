@@ -1,8 +1,7 @@
 // Compiling ahead of the first call, in idle time: the methods the methods that ran call, so that an interaction's first calls find their code rather than
 // compile it. The demand marks measure how much of what a launch compiled on demand this would have found.
-import { ACC, type MethodInfo } from "../compiler/program.ts";
-import { COUNT_SLOTS } from "../compiler/exc.ts";
-import { mid } from "../compiler/ids.ts";
+import { ACC, mid, type MethodInfo } from "../compiler/program.ts";
+import { COUNT_SLOTS } from "../compiler/consts.ts";
 import type { Tiering } from "./tiering.ts";
 import type { World } from "./world.ts";
 

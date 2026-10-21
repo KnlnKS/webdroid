@@ -1,7 +1,7 @@
 // Making the modules of a build (scripts/wasm/aot-build.ts makes the platform's, apps.ts an app's) and the headers that say what their code needs, which aot.ts reads:
 // the size a module is estimated at, V8's verdict on one, and the code, data and synthetic-function modules.
 import { Compiler, NeedsNumber, type FnTrace } from "../compiler/j2w.ts";
-import { mid } from "../compiler/ids.ts";
+import { mid } from "../compiler/program.ts";
 import { uleb } from "../compiler/wasmbin.ts";
 import type { JClass, MethodInfo } from "../compiler/program.ts";
 import { compileModule } from "./module.ts";

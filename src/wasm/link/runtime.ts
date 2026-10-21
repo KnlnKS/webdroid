@@ -2,9 +2,9 @@
 // linker a lazy-link stub calls, which compiles the slot's code on its first call (Tiering.linkSlot). Its table entries are the throwers' stubs.
 import { HT, ModuleBuilder, T, refNull, sleb, uleb } from "../compiler/wasmbin.ts";
 import { Code } from "../compiler/code.ts";
-import { H } from "../compiler/consts.ts";
+import { H, ALLOC_WINDOW } from "../compiler/consts.ts";
 import { declareBase, kindVT } from "../compiler/j2w.ts";
-import { SLOT, THROWERS, ALLOC_WINDOW, type Thrower } from "../compiler/exc.ts";
+import { SLOT, THROWERS, type Thrower } from "../compiler/exc.ts";
 import { Sync, ROOT } from "../compiler/hostcalls.ts";
 import { suspending } from "./module.ts";
 import type { World } from "./world.ts";

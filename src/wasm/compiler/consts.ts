@@ -15,3 +15,27 @@ export function f64bits(x: number): bigint { const b = new DataView(new ArrayBuf
 /** java.lang.Math's transcendental natives, by arity: the host's Math, imported as they are rather than wrapped as natives */
 export const MATH_ARITY = { acos: 1, asin: 1, atan: 1, cbrt: 1, cos: 1, cosh: 1, exp: 1, expm1: 1, log: 1, log10: 1, log1p: 1, sin: 1, sinh: 1, tan: 1, tanh: 1,
   atan2: 2, hypot: 2, pow: 2 } as const;
+
+// the runtime's budgets and the layout of the scratch memory, shared by compiled code and the host
+/** calls and loop iterations a method runs as first-tier code before it is recompiled (Tiering.upgrade) */
+export const HOT_BUDGET = 5000;
+/** The counters of first-tier methods are words of the scratch memory, one per table slot from COUNT_BASE; slots beyond COUNT_SLOTS are not counted. */
+export const COUNT_BASE = 8, COUNT_SLOTS = 1 << 20;
+/** After the counters, a fixed window the host bridge copies arrays through: growing memory during a native would detach the views it holds of its
+ *  arguments. Scratch for natives starts after it. */
+export const TRANSFER_BASE = COUNT_BASE + 4 * COUNT_SLOTS, TRANSFER_BYTES = 1 << 18, SCRATCH_BASE = TRANSFER_BASE + TRANSFER_BYTES;
+/** A word of the scratch memory that, while set, makes a first-tier method trap as it is entered: the warm Worker calls methods to have the engine compile them (warmshim.ts). */
+export const WARM_AT = 0;
+/** The weight of the frames a stack may hold, counted by the methods that call something (compiler/method.ts): a frame weighs 4 plus its Wasm locals, which is
+ *  its size in the engine's baseline code to within 10% (8,700 frames of 1 parameter (weight 11) or 2,030 of 10 parameters and 20 locals (weight 53) fill node's 984 KB stack: about 100,000).
+ *  V8 does not let Wasm catch its own stack overflow, so a Java handler for StackOverflowError sees only the one this limit throws; the limit is half of what
+ *  the stack holds, and an overflow it still hits is turned into the error at the edge of the Java world (World.boundary) */
+export const MAX_DEPTH = 56000, SOE_HEADROOM = 2000;
+/** the weight of the frames a method may leave out of the depth when it calls only methods that leave theirs out (method.ts) */
+export const MAX_UNCOUNTED = 512;
+/** bytes allocated between two heap checks; allocation counts up to zero from -ALLOC_WINDOW */
+export const ALLOC_WINDOW = 8 << 20;
+/** a class's init word: 0 not started, (strand << 2 | 1) running on that strand, then done or failed (JLS 12.4.2) */
+export const INIT_DONE = 2, INIT_FAILED = 3;
+/** loop iterations of one activation between two chances for another strand to run (a power of two) */
+export const FUEL = 4096;

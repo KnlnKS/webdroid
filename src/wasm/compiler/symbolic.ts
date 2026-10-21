@@ -3,10 +3,11 @@ import type { Code } from "./code.ts";
 import { Compiler, type LinkEnv } from "./j2w.ts";
 import { MC } from "./method.ts";
 import type { Kind, MethodInfo } from "./program.ts";
-import type { SymbolicSite } from "./sites.ts";
+import { symbolicInstruction, type SymbolicSite } from "./sites.ts";
 import { T } from "./wasmbin.ts";
 
-// A resolved symbolic site's operation: no method IR or copied callees, and its inputs are the caller's bits.
+// A resolved symbolic site's operation: no method IR or copied callees, and its inputs are the caller's bits. It lowers only the instructions
+// symbolicInstruction selects, whose lowering reaches registers through get and set alone, never the typing, prepared code or flow this MC lacks.
 class SymbolicMC extends MC {
   private inputs: SymbolicSite[4];
   outputLocal = -1;
@@ -21,7 +22,10 @@ class SymbolicMC extends MC {
     if (i < 0) throw new Error(`invalid symbolic operand v${reg}:${kind} at ${this.cur.pc}`);
     this.code.lget(i);
   }
-  override emit(ins: PreparedInstruction): void { this.cur = ins; this.code.pc = ins.pc; this.emitOperation(ins); }
+  override emit(ins: PreparedInstruction): void {
+    if (!symbolicInstruction(this.m, ins)) throw new Error(`${ins.name} at ${ins.pc} is not a symbolic site`);
+    this.cur = ins; this.code.pc = ins.pc; this.emitOperation(ins);
+  }
 }
 
 /** the unit of one symbolic site's operation, once its references resolve; it restores the frame depth on normal and exceptional exits */

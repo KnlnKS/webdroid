@@ -18,7 +18,7 @@ import { emitRestored } from "../../src/wasm/compiler/hostcalls.ts";
 import { hostLoop } from "../../src/wasm/host/boot.ts";
 import { onNestedStrand, wasmEntry } from "../../src/wasm/host/entry.ts";
 import { resumeAs } from "../../src/jvm/natives/jentry.ts";
-import { ALLOC_WINDOW, javaFrames } from "../../src/wasm/compiler/exc.ts";
+import { javaFrames } from "../../src/wasm/compiler/exc.ts";
 import { HEAP_LIMIT } from "../../src/jvm/abi.ts";
 import { T } from "../../src/wasm/compiler/wasmbin.ts";
 import { classIntrinsics } from "../../src/wasm/link/classes.ts";
@@ -26,6 +26,7 @@ import { classIntrinsics } from "../../src/wasm/link/classes.ts";
 import { CORE_PATHS, JAVA, ROOT } from "./paths.ts";
 import { checker } from "./tools.ts";
 import { fixture, jdkTool } from "../java.ts";
+import { ALLOC_WINDOW } from "../../src/wasm/compiler/consts.ts";
 
 const out = fixture({ sources: [join(JAVA, "Th.java"), join(JAVA, "Ref.java")], release: 11, minApi: 34, classes: /^Th.*\.class$/ });
 

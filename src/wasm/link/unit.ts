@@ -3,7 +3,7 @@
 // numbered the same things in the same order: the worker follows the numbering of the World it compiles for (`sync`), numbers what its unit needs beyond that as that World
 // would (`numbering`), and the World takes the unit only if it has not numbered anything meanwhile (Tiering.adoptUnit); otherwise the worker forgets what it numbered.
 import { Compiler } from "../compiler/j2w.ts";
-import { methodOf, mid } from "../compiler/ids.ts";
+import { methodOf, mid } from "../compiler/program.ts";
 import type { InlineFrame } from "../compiler/code.ts";
 import type { JClass } from "../compiler/program.ts";
 import type { UnitHeader } from "./aot.ts";

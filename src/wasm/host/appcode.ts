@@ -6,7 +6,7 @@
 import type { World, WorldOptions } from "../link/world.ts";
 import { libraryLoaders, parseAotFile, type Demand } from "../link/aot.ts";
 import type { Numbering } from "../link/numbers.ts";
-import { mid } from "../compiler/ids.ts";
+import { mid } from "../compiler/program.ts";
 import type { DexFile } from "../../jvm/dex.ts";
 import type { FetchStore } from "./aotstore.ts";
 import { buildFiles, appKey, LaunchRecord, SavedBuild, type Persist } from "./persist.ts";

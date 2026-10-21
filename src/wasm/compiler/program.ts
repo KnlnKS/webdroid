@@ -82,6 +82,15 @@ export class PlainClass implements JClass {
   declaresStaticOf(): boolean { return true; }
 }
 export const mkey = (name: string, desc: string) => name + desc;
+/** a method no dex defines (an extern, a host class's native, a proxy class's): it has no code, so nothing reads its dex */
+export function codelessMethod(cls: string, name: string, desc: string, flags: number, index: number): MethodInfo {
+  const { params, ret } = parseMethodDesc(desc);
+  return { cls, name, desc, flags, dex: null!, methodIdx: -1, codeOff: 0, key: mkey(name, desc), isStatic: !!(flags & ACC.STATIC), isCtor: name === "<init>", params, ret, index };
+}
+/** a method's identity across the program, the key of intrinsics and native bindings: "cls.name+descriptor" */
+export const mid = (m: MethodInfo) => m.cls + "." + m.key;
+/** the method `id` names (class names have no dots) */
+export const methodOf = (prog: Program, id: string): MethodInfo | undefined => { const dot = id.indexOf("."); return prog.get(id.slice(0, dot))?.method(id.slice(dot + 1)); };
 
 /** the name Java code sees for a class key (and for the key of an array class) */
 export const javaName = (key: string): string => (key.includes("@") ? key.replace(/@\d+(?=;|$)/g, "") : key);
@@ -282,9 +291,7 @@ export class Program extends LoaderGraph {
     for (const key of keys) {
       const [, cls, name, desc] = /^(.*)\.(\w+)(\(.*)$/.exec(key)!;
       if (this.get(cls)?.dex) continue;
-      const p = parseMethodDesc(desc);
-      const c = this.get(cls) ?? this.stub(cls, "java/lang/Object");
-      const m: MethodInfo = { cls, name, desc, flags: ACC.PUBLIC | ACC.STATIC, dex: null!, methodIdx: -1, codeOff: 0, key: mkey(name, desc), isStatic: true, isCtor: false, params: p.params, ret: p.ret, index: c.methods.length };
+      const c = this.get(cls) ?? this.stub(cls, "java/lang/Object"), m = codelessMethod(cls, name, desc, ACC.PUBLIC | ACC.STATIC, c.methods.length);
       c.methods.push(m); c.byKey.set(m.key, m);
     }
     this.forget();
@@ -337,14 +344,18 @@ export class Program extends LoaderGraph {
   /** resolve a method declared in `cls` or inherited (superclasses, then interfaces) */
   resolve(cls: string, name: string, desc: string): MethodInfo | undefined {
     const key = mkey(name, desc);
+    return this.resolveBy(cls, (c) => c.method(key));
+  }
+  /** the method `lookup` finds in `cls` or a superclass, else the first instance method it finds in their interfaces, depth first */
+  resolveBy(cls: string, lookup: (c: JClass) => MethodInfo | undefined): MethodInfo | undefined {
     for (let c: JClass | undefined = this.get(cls); c; c = c.sup ? this.get(c.sup) : undefined) {
-      const m = c.method(key); if (m) return m;
+      const m = lookup(c); if (m) return m;
     }
     const seen = new Set<string>();
     const visit = (n: string): MethodInfo | undefined => {
       if (seen.has(n)) return undefined; seen.add(n);
       const c = this.get(n); if (!c) return undefined;
-      const m = c.method(key); if (m && !(m.flags & ACC.STATIC)) return m;
+      const m = lookup(c); if (m && !(m.flags & ACC.STATIC)) return m;
       for (const i of c.ifaces) { const r = visit(i); if (r) return r; }
       return undefined;
     };
@@ -400,13 +411,17 @@ export class Program extends LoaderGraph {
     for (let c = this.get(cls); c; c = c.sup ? this.get(c.sup) : undefined) c.ifaces.forEach(visit);
     return [...out];
   }
-  /** the field `name` that `cls` declares or inherits (the class, its superinterfaces, then its superclass): of type `desc` and kind `isStatic` when given */
+  /** the field `name` that `cls` declares or inherits: of type `desc` and kind `isStatic` when given */
   resolveField(cls: string, name: string, desc?: string, isStatic?: boolean): FieldInfo | undefined {
+    return this.resolveFieldBy(cls, (x) => x.name === name && (desc === undefined || x.desc === desc) && (isStatic === undefined || x.isStatic === isStatic));
+  }
+  /** the first field `match` takes that `cls` declares or inherits: the class, its superinterfaces, then its superclass */
+  resolveFieldBy(cls: string, match: (f: FieldInfo) => boolean): FieldInfo | undefined {
     const seen = new Set<string>();
     const visit = (n: string): FieldInfo | undefined => {
       if (seen.has(n)) return undefined; seen.add(n);
       const c = this.get(n); if (!c) return undefined;
-      const f = c.fields.find((x) => x.name === name && (desc === undefined || x.desc === desc) && (isStatic === undefined || x.isStatic === isStatic)); if (f) return f;
+      const f = c.fields.find(match); if (f) return f;
       for (const i of c.ifaces) { const r = visit(i); if (r) return r; }
       return c.sup ? visit(c.sup) : undefined;
     };

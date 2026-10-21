@@ -4,8 +4,9 @@
 import { Compiler, type CallPlan } from "../compiler/j2w.ts";
 import type { InlineFrame } from "../compiler/code.ts";
 import type { MethodInfo } from "../compiler/program.ts";
-import { COUNT_BASE, COUNT_SLOTS, THROWERS, throwerBody, wasmFrameNames, deepStack } from "../compiler/exc.ts";
-import { mid, methodOf } from "../compiler/ids.ts";
+import { THROWERS, throwerBody, wasmFrameNames, deepStack } from "../compiler/exc.ts";
+import { COUNT_BASE, COUNT_SLOTS } from "../compiler/consts.ts";
+import { mid, methodOf } from "../compiler/program.ts";
 import { definitionReady, initiatedType } from "./resolution.ts";
 import { defaultLoop } from "./sched.ts";
 import type { Slot } from "./slots.ts";

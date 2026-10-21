@@ -4,7 +4,7 @@
 import { OP, type Code } from "../compiler/code.ts";
 import { T } from "../compiler/wasmbin.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
-import { mid } from "../compiler/ids.ts";
+import { mid } from "../compiler/program.ts";
 import { f64bits } from "../compiler/consts.ts";
 
 export const charIntrinsics = new Map<string, Intrinsic>();

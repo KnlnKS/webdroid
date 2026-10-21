@@ -4,7 +4,6 @@ import type { Program } from "../compiler/program.ts";
 import { OP } from "../compiler/code.ts";
 import { f32bits, f64bits } from "../compiler/consts.ts";
 import { T } from "../compiler/wasmbin.ts";
-import { methodOf } from "../compiler/ids.ts";
 import { typeFailure } from "../compiler/linkage.ts";
 import { handleThunk, methodTypeSignatureTypes, mhInvoke } from "./mhandles.ts";
 import { caught, chain, each } from "./maybe.ts";
@@ -16,7 +15,7 @@ import type { World } from "./world.ts";
 import { PerWorld } from "./perworld.ts";
 import type { Strand } from "./sched.ts";
 import { resolveHandleReference, resolveSignatureTypes } from "./resolution.ts";
-import { typeName } from "../compiler/program.ts";
+import { typeName, methodOf } from "../compiler/program.ts";
 import { InvokeMode, emitHandleValue, emitTypeValue, emitInvokeImport, resolveHandleMember } from "../compiler/handles.ts";
 
 const MH = "java/lang/invoke/MethodHandle", MT = "java/lang/invoke/MethodType", CS = "java/lang/invoke/CallSite", LOOKUP = "java/lang/invoke/MethodHandles$Lookup";
@@ -96,11 +95,11 @@ function bootstrap(w: World, referrer: MethodInfo, index: number, parent: Strand
       if (h.type !== MethodHandleType.InvokeStatic) { cx.throwNew(c, "java/lang/BootstrapMethodError", "Unsupported bootstrap method invocation kind"); return; }
       if (invalid) { cx.throwNew(c, invalid.cls, invalid.message); return; }
       if (target && target.flags & 0x80) {
-        c.lget(handle); cx.constClass(c, target.params.at(-1)!); cx.callMethod(c, cx.prog.resolve(MH, "asVarargsCollector", `(Ljava/lang/Class;)L${MH};`)!); c.lset(handle);
+        c.lget(handle); cx.constClass(c, target.params.at(-1)!); cx.callNamed(c, MH, "asVarargsCollector", `(Ljava/lang/Class;)L${MH};`); c.lset(handle);
       }
       cx.emitNewArray(c, "[Ljava/lang/Object;", () => c.i32(values.length)); c.lset(args);
       cx.emitEnsure(c, LOOKUP); cx.emitNew(c, LOOKUP); c.ltee(lookup); cx.constClass(c, referrer.cls); c.i32(15);
-      cx.callMethod(c, cx.prog.resolve(LOOKUP, "<init>", "(Ljava/lang/Class;I)V")!);
+      cx.callNamed(c, LOOKUP, "<init>", "(Ljava/lang/Class;I)V");
       c.lget(args).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).i32(0).lget(lookup).arraySet(cx.tData.ref);
       const params = [`L${LOOKUP};`];
       for (let i = 1; i < values.length; i++) {
@@ -137,9 +136,9 @@ export function invokeCustom(w: World, site: string, args: object, parent: Stran
       const field = cx.prog.resolveField(CS, "target", `L${MH};`)!, st = cx.structFor(CS);
       c.lget(local).refCast(st).structGet(st, cx.fieldIndex(CS, field));
       const target = c.newLocal(T.anyref); c.lset(target).lget(target).refIsNull().if_(); cx.throwNew(c, "java/lang/ClassCastException", "Bootstrap method returned a CallSite with a null target"); c.end();
-      c.lget(target); cx.callMethod(c, cx.prog.resolve(MH, "type", `()L${MT};`)!);
+      c.lget(target); cx.callNamed(c, MH, "type", `()L${MT};`);
       if (!emitTypeValue(cx, c, referrer.dex, referrer.dex.callSiteProto(index))) return;
-      cx.callMethod(c, cx.prog.resolve(MT, "equals", "(Ljava/lang/Object;)Z")!);
+      cx.callNamed(c, MT, "equals", "(Ljava/lang/Object;)Z");
       c.raw(OP.i32_eqz).if_(); cx.throwNew(c, "java/lang/invoke/WrongMethodTypeException", "Bootstrap target is not of the requested type"); c.end().lget(local);
     }, parent)(candidate) as object | Promise<object>;
   };

@@ -2,7 +2,7 @@
 // elsewhere (a build's module, a worker's) carries it, and one compiled here has it made from its Compiler, whose imports are made from what its compile linked.
 import type { FunctionType } from "../compiler/wasmbin.ts";
 import type { Compiler, FnTrace } from "../compiler/j2w.ts";
-import { methodOf } from "../compiler/ids.ts";
+import { methodOf } from "../compiler/program.ts";
 import type { HostContext } from "./hostapi.ts";
 import { VERSION, type UnitHeader } from "./aot.ts";
 import { compiledHeader } from "./aotbuild.ts";

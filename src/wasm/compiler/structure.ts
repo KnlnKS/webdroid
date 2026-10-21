@@ -4,7 +4,8 @@
 // a `continue` of the loop it closes or a `break` out of a labelled block ending at its target.
 // Only edges between regions, which exceptions and handler exits take, go through the `pc` switch.
 import type { CodeItem } from "../../jvm/dex.ts";
-import { branchTargets, endsBlock, ifTarget, type PreparedMethod } from "../../jvm/prepared.ts";
+import { branchTargets, ifTarget, type PreparedMethod } from "../../jvm/prepared.ts";
+import { endsBlock, isGoto, isIf } from "../../jvm/opcodes.ts";
 
 /** How a branch reaches its target block. */
 export const Go = { Next: 0, Break: 1, Continue: 2, Dispatch: 3 } as const;
@@ -35,13 +36,9 @@ export class Flow {
   constructor(prepared: PreparedMethod, code: CodeItem, extraEntries: readonly number[] = []) {
     const { instructions, blockAt, start, last: lastIdx } = prepared, n = start.length, root = n;
     const succs: (readonly number[])[] = prepared.succ.slice(), preds: number[][] = new Array(n + 1), last = (b: number) => instructions[lastIdx[b]];
-    this.fall = new Int32Array(n);
+    this.fall = prepared.fall;
     for (let b = 0; b <= n; b++) preds[b] = [];
-    for (let b = 0; b < n; b++) {
-      const ins = last(b);
-      this.fall[b] = endsBlock(ins.op) ? -1 : blockAt[ins.pc + ins.len];
-      for (const s of succs[b]) preds[s].push(b);
-    }
+    for (let b = 0; b < n; b++) for (const s of succs[b]) preds[s].push(b);
     const entries = [0];
     for (const pc of extraEntries) entries.push(blockAt[pc]);
     for (const pc of prepared.handlerPcs) entries.push(blockAt[pc]);
@@ -167,9 +164,9 @@ export class Flow {
     };
     for (const r of this.regions) for (const u of r.order) {
       const ins = last(u), op = ins.op;
-      if (op >= 0x28 && op <= 0x2a) { note(u, blockAt[ins.pc + ins.a], true); continue; }
+      if (isGoto(op)) { note(u, blockAt[ins.pc + ins.a], true); continue; }
       if (endsBlock(op)) continue;
-      if (op >= 0x32 && op <= 0x3d) {
+      if (isIf(op)) {
         const t = blockAt[ifTarget(ins)], f = this.fall[u];
         if (t === f) { note(u, f, true); continue; }
         if (this.go(u, t, true) === Go.Next) { this.inverted.add(u); note(u, f, false); continue; }

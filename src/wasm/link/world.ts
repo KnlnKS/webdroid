@@ -6,7 +6,7 @@
 //    calls the runtime's linker (runtime.ts), which compiles that method into a unit module (Compiler.buildUnit) and replaces the slot's entry, then calls through the slot.
 //  - Vtables hold table slots. CHA decisions are recorded per slot and undone (the stub is put back) when a dex added later falsifies them.
 import { symbolicInstruction } from "../compiler/sites.ts";
-import { type Program, methodKinds, type Loader, type JClass, type MethodInfo, type FieldInfo } from "../compiler/program.ts";
+import { methodKinds, mid, type Program, type Loader, type JClass, type MethodInfo, type FieldInfo } from "../compiler/program.ts";
 import { Cha } from "../compiler/cha.ts";
 import { intrinsicFor, type FnTrace, type Intrinsic } from "../compiler/j2w.ts";
 import type { CompileService, GuestMemory, HostBridge, HostNet, HostSpec, NativeBinder } from "./hostapi.ts";
@@ -17,9 +17,8 @@ import { HostClasses } from "./hostclass.ts";
 import type { ProxyDefinition } from "./proxy.ts";
 import { initiatedInstruction, resolveClass } from "./resolution.ts";
 import { hasSignatureConstraints } from "./signatures.ts";
-import { SLOT, FIRST_FREE_SLOT, SCRATCH_BASE, INIT_DONE, isStackOverflow } from "../compiler/exc.ts";
+import { SLOT, FIRST_FREE_SLOT, isStackOverflow } from "../compiler/exc.ts";
 import type { PreparedInstruction } from "../../jvm/prepared.ts";
-import { mid } from "../compiler/ids.ts";
 import type { DexFile } from "../../jvm/dex.ts";
 import { compileModule } from "./module.ts";
 import { AotRuntime, type AotStore, type AppIndex } from "./aot.ts";
@@ -40,6 +39,7 @@ import { hostImports, type HostImports } from "./hostimports.ts";
 import { Assumptions } from "./assumptions.ts";
 import { Namespaces } from "./namespaces.ts";
 import { PerWorld } from "./perworld.ts";
+import { SCRATCH_BASE, INIT_DONE } from "../compiler/consts.ts";
 
 export interface WorldOptions {
   intrinsics: Map<string, Intrinsic>;

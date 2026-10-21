@@ -1,6 +1,6 @@
 // The loaders' namespaces of a Program (program.ts): which class each loader sees under a name, and how the dexes they define see the classes they name.
 import { descToName } from "../../jvm/abi.ts";
-import type { ClassAnnotations, ClassDef, DexFile, DexTypes } from "../../jvm/dex.ts";
+import { ProtoTypes, type ClassAnnotations, type ClassDef, type DexFile, type DexTypes } from "../../jvm/dex.ts";
 import type { JClass } from "./program.ts";
 
 export type LoaderId = number | "boot";
@@ -34,24 +34,16 @@ export const changedTypes = (changed: ReadonlySet<string>): Set<string> | undefi
   [...changed].some(name => name.startsWith("[") || name.includes("@")) ? undefined : new Set([...changed].map(name => `L${name};`));
 
 /** a dex's descriptors as the loader that defines its classes sees them: each class they name by the key of the class the loader finds under that name */
-export class LoaderTypes implements DexTypes {
+export class LoaderTypes extends ProtoTypes {
   readonly dex: DexFile;
   readonly resolve: (desc: string) => string;
   private types: (string | undefined)[] = [];
   private names: (string | undefined)[] = [];
-  private params: (string[] | undefined)[] = [];
-  private protos: ({ params: string[]; ret: string } | undefined)[] = [];
-  private descs: (string | undefined)[] = [];
   private annotations = new Map<number, ClassAnnotations>();
-  constructor(dex: DexFile, resolve: (desc: string) => string) { this.dex = dex; this.resolve = resolve; }
+  constructor(dex: DexFile, resolve: (desc: string) => string) { super(); this.dex = dex; this.resolve = resolve; }
+  protected get file(): DexFile { return this.dex; }
   type(i: number): string { return this.types[i] ??= this.resolve(this.dex.rawType(i)); }
   typeName(i: number): string { return this.names[i] ??= descToName(this.type(i)); }
-  protoParamTypes(pi: number): string[] { return this.params[pi] ??= this.dex.proto(pi).params.map((t) => this.type(t)); }
-  protoTypes(pi: number): { params: string[]; ret: string } { return this.protos[pi] ??= { params: this.protoParamTypes(pi), ret: this.type(this.dex.proto(pi).ret) }; }
-  protoDesc(pi: number): string { return this.descs[pi] ??= "(" + this.protoParamTypes(pi).join("") + ")" + this.type(this.dex.proto(pi).ret); }
-  methodDesc(i: number): string { return this.protoDesc(this.dex.method(i).proto); }
-  methodTypes(i: number): { params: string[]; ret: string } { return this.protoTypes(this.dex.method(i).proto); }
-  methodKey(i: number): string { return this.dex.method(i).name + this.methodDesc(i); }
   classAnnotations(def: ClassDef): ClassAnnotations { return this.dex.classAnnotations(def, this, this.annotations); }
 }
 
