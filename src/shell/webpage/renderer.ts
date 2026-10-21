@@ -1,9 +1,9 @@
 // The renderer bootstrap: the document every WebView frame first loads on its renderer origin. It
 // announces itself to the app's window, which hands it its task and a port: load the page (fetched
 // through this origin's proxy worker, or written by the app), or work on the origin's storage.
-import { holdFrames } from "./frames.ts";
+import { holdFrames } from "./holdframes.ts";
 import { readAnswer } from "./proxywire.ts";
-import { respond, withPageScript, type AppMessage, type LoadMessage, type PageConfig, type PageMessage, type RendererContext, type RendererReady, type RendererTask,
+import { FRAME_BOOTSTRAP, respond, withPageScript, type AppMessage, type LoadMessage, type PageConfig, type PageMessage, type RendererContext, type RendererReady, type RendererTask,
   type StorageOp } from "./protocol.ts";
 
 /** the page script, as the renderer bootstrap writes it into an apk asset's document */
@@ -54,7 +54,7 @@ function start() {
   try { if (top!.location.href) return; } catch {}
   const params = new URL(location.href).searchParams, id = params.get("__wd_bridge"), sub = params.get("__wd_sub");
   // a subframe's page replaces this document, and its frame shows one load event, that page's
-  if (sub !== null) parent.postMessage({ wdFrame: "bootstrap" }, "*");
+  if (sub !== null) parent.postMessage(FRAME_BOOTSTRAP, "*");
   // Only the app's realm drives this frame: the nearest ancestor of the top's origin. A page that
   // frames another renderer origin cannot load a document into it or clear its storage.
   const ancestors = location.ancestorOrigins, app = ancestors?.[ancestors.length - 1];

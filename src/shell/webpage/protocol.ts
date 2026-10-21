@@ -16,6 +16,8 @@ export type FrameDocument = { src: string; init?: FrameInit } | { html: string; 
 
 /** a renderer document's announcement: its bridge and, for a subframe, its token */
 export type RendererReady = { kind: "ready"; bridge: string | null; sub: string | null };
+/** a subframe's renderer document to the page that frames it, ahead of its load (frames.ts) */
+export const FRAME_BOOTSTRAP = { wdFrame: "bootstrap" } as const;
 /** the page a renderer document loads, and the context its page script and worker read */
 export interface LoadMessage {
   kind: "load"; page: string; userAgent: string; intercept: boolean; interfaces: Record<string, Record<string, boolean>>;

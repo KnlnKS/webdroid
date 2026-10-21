@@ -5,7 +5,7 @@ import { webDocument } from "../src/shell/webhtml.ts";
 import { webScript } from "../src/shell/webscript.ts";
 import { proxyRequest } from "../src/shell/proxy.ts";
 import { WEB_FRAME, WEB_FRAME_SANDBOX, WEB_PROXY_WORKER } from "../src/shell/webinject.ts";
-import { holdFrames } from "../src/shell/webpage/frames.ts";
+import { holdFrames } from "../src/shell/webpage/holdframes.ts";
 import { webViewBrands } from "../src/shell/webpage/clienthints.ts";
 import { bundle } from "../scripts/bundle.ts";
 import { serveModules } from "./browser.ts";
