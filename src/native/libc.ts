@@ -218,7 +218,6 @@ export function libcInit(): void {
     __cxa_pure_virtual: (cpu) => cpu.fault("pure virtual call"),
     __stack_chk_fail: (cpu) => cpu.fault("stack smashing detected"),
     getpgrp: (cpu) => cpu.pid,
-    bsd_signal: () => 0,
     // its arguments are not the kernel's clone, and no thread starts this way
     clone: (cpu) => fail(cpu, E.NOSYS),
     getpriority: (cpu, a) => { const which = a.i(), who = a.i(); return which < 0 || which > 2 ? fail(cpu, E.INVAL) : which ? 0 : niceOf(cpu, who); },

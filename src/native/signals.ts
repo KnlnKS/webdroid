@@ -135,6 +135,15 @@ function signalTid(cpu: Cpu, pid: number, tid: number, sig: number): number {
 
 /** wd.native.killLog: the last pthread_kill calls, who signalled whom and what the target was doing */
 export const killLog: string[] = [];
+/** pthread_kill, answering the error itself: a thread that has run to its end is gone, ESRCH,
+ *  which a stop-the-world collector discounts */
+function killThread(c: Cpu, handle: number, sig: number): number {
+  const tid = tidOf(handle), t = cpuByTid(tid), r = !t || t.finished ? E.SRCH : sig < 0 || sig > 64 ? E.INVAL : 0;
+  killLog.push(`${c.name}->${t?.name ?? "tid" + tid}:${sig}=${r}${t ? `/${t.state},${t.loops},${t.parked ? "p" : ""}` : ""}`);
+  if (killLog.length > 300) killLog.splice(0, 100);
+  if (r === 0 && sig) t!.kill(sig);
+  return r;
+}
 
 /** the signal calls the kernel and libc's wrappers share: a handler runs on the target thread, at
  *  once when it is parked in a host call (as a kernel interrupts a syscall) and at its next slice
@@ -166,20 +175,17 @@ export const SIGNAL_LIBC: Record<string, HostFn> = {
     dispose(sig, fn, SA_RESTART, 0n);
     return prev;
   },
-  // a thread that has run to its end is gone: ESRCH, which a stop-the-world collector discounts
-  pthread_kill: (c, a) => {
-    const tid = tidOf(a.p()), t = cpuByTid(tid), sig = a.i(), r = !t || t.finished ? E.SRCH : sig < 0 || sig > 64 ? E.INVAL : 0;
-    killLog.push(`${c.name}->${t?.name ?? "tid" + tid}:${sig}=${r}${t ? `/${t.state},${t.loops},${t.parked ? "p" : ""}` : ""}`);
-    if (killLog.length > 300) killLog.splice(0, 100);
-    if (r === 0 && sig) t!.kill(sig);
-    return r;
-  },
+  pthread_kill: (c, a) => killThread(c, a.p(), a.i()),
+  // the value is not carried
+  pthread_sigqueue: (c, a) => killThread(c, a.p(), a.i()),
   raise: wrapped((cpu, a) => signalThread(cpu, a.i())),
+  // the process leads its own group
+  killpg: wrapped((cpu, a) => { const group = a.i(), sig = a.i(); return group < 0 ? -E.INVAL : group === 0 || group === cpu.pid ? signalThread(cpu, sig) : -E.SRCH; }),
   sigprocmask: (cpu, a) => { const e = cpu.sigmask(a.i(), a.p(), a.p(), 4); return e ? fail(cpu, e) : 0; },
   sigprocmask64: (cpu, a) => { const e = cpu.sigmask(a.i(), a.p(), a.p(), 8); return e ? fail(cpu, e) : 0; },
   sigpending: (cpu, a) => { mem.st32(a.p(), Number(sigset(...cpu.signals.keys()) & 0xffffffffn)); return 0; },
-  pthread_sigqueue: () => 0, killpg: () => 0,
 };
+SIGNAL_LIBC.bsd_signal = SIGNAL_LIBC.signal;
 for (const suffix of ["", "64"]) {
   // a sigset_t is a word, a sigset64_t the kernel's 8 bytes
   const setAt = (p: number): bigint => suffix ? mem.ld64(p) : BigInt(mem.ld32(p) >>> 0);
