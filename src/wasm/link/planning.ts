@@ -8,6 +8,7 @@ import { HOT_BUDGET } from "../compiler/exc.ts";
 import { cyclic, decodeInstruction, decodeInstructions, prepareMethod, type PreparedInstruction } from "../../jvm/prepared.ts";
 import { insnLen, invokeKind, isInvoke } from "../../jvm/opcodes.ts";
 import { instructionClass } from "./resolution.ts";
+import type { Tiering } from "./tiering.ts";
 import type { World } from "./world.ts";
 
 /** the most methods a first-tier unit holds (Planner.batch) */
@@ -20,7 +21,9 @@ const MEGAMORPHIC = 32;
 
 export class Planner {
   private readonly w: World;
-  constructor(w: World) { this.w = w; }
+  /** what the methods' first tier has done, which planning reads */
+  private readonly tiers: Pick<Tiering, "pending" | "asked" | "count">;
+  constructor(w: World, tiers: Pick<Tiering, "pending" | "asked" | "count">) { this.w = w; this.tiers = tiers; }
   /** the implementations of virtual calls are found again: classes were added or the namespace changed */
   forgetImplementations(): void { this.implemented.clear(); this.allocatedIndex = undefined; }
   /** `m` and the methods without code that its first run will call: its static and direct calls before its first branch, and theirs. They are compiled beside
@@ -36,7 +39,7 @@ export class Planner {
         const t = invokeSite(this.w.prog, c, ins.b, invokeKind(ins.op)).target;
         if (t === "clone" || failed(t) || out.includes(t) || !t.codeOff || t.flags & ACC.NATIVE || this.w.intrinsic(t)) continue;
         const at = this.w.slotOf(t), ts = this.w.slots.at(at);
-        if (ts?.k !== "method" || ts.done || this.w.tiers.pending(at) || this.w.aot?.provide(at)) continue;
+        if (ts?.k !== "method" || ts.done || this.tiers.pending(at) || this.w.aot?.provide(at)) continue;
         out.push(t);
       }
     }
@@ -82,8 +85,8 @@ export class Planner {
   private ran(t: MethodInfo): number {
     const slot = this.w.slotOf(t), sl = this.w.slots.method(slot)!;
     // a method that has asked for the second tier has used up a budget, whatever its count since
-    if (this.w.tiers.asked(slot) || this.w.opts.intrinsics.has(mid(t))) return HOT_BUDGET;
-    return sl.done ? this.w.tiers.count(slot) : 0;
+    if (this.tiers.asked(slot) || this.w.opts.intrinsics.has(mid(t))) return HOT_BUDGET;
+    return sl.done ? this.tiers.count(slot) : 0;
   }
   /** a method's call sites, and the classes it allocates and refers to */
   private planningSites = new Map<MethodInfo, { calls: PreparedInstruction[]; allocations: string[]; references: string[] }>();

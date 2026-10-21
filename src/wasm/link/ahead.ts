@@ -3,6 +3,7 @@
 import { ACC, type MethodInfo } from "../compiler/program.ts";
 import { COUNT_SLOTS } from "../compiler/exc.ts";
 import { mid } from "../compiler/ids.ts";
+import type { Tiering } from "./tiering.ts";
 import type { World } from "./world.ts";
 
 /** the methods a unit compiled ahead of their first call holds (AheadCompiler.compile), how many methods its calls are taken from, and the most it compiles in a World */
@@ -10,7 +11,9 @@ const AHEAD_UNIT = 16, AHEAD_ROOTS = 4096, AHEAD_MAX = 8192;
 
 export class AheadCompiler {
   private readonly w: World;
-  constructor(w: World) { this.w = w; }
+  /** what the methods' first tier has done, and the compile of the units made ahead */
+  private readonly tiers: Pick<Tiering, "pending" | "asked" | "counts" | "compileUnit">;
+  constructor(w: World, tiers: Pick<Tiering, "pending" | "asked" | "counts" | "compileUnit">) { this.w = w; this.tiers = tiers; }
   /** methods that ran, the latest last, then methods compiled ahead: what is compiled ahead are the methods they call */
   private roots: MethodInfo[] = [];
   /** methods to compile ahead, the next last */
@@ -27,7 +30,7 @@ export class AheadCompiler {
     for (const at of this.unran) {
       const s = this.w.slots.peek(at);
       if (s?.k !== "method" || !s.done) { this.unran.delete(at); continue; }
-      if (!this.w.tiers.asked(at) && !(at < COUNT_SLOTS && this.w.tiers.counts()[at])) continue;
+      if (!this.tiers.asked(at) && !(at < COUNT_SLOTS && this.tiers.counts()[at])) continue;
       this.unran.delete(at);
       this.w.demand.methods.add(s.m);
       this.noteRun([s.m]);
@@ -38,7 +41,7 @@ export class AheadCompiler {
     const rt = this.w.classes.get(t.cls);
     if (!rt || !t.codeOff || t.flags & ACC.NATIVE || this.w.intrinsic(t)) return -1;
     const slot = rt.slotBase + t.index, s = this.w.slots.at(slot);
-    return s?.k !== "method" || s.done || this.w.tiers.pending(slot) || this.w.aot?.holds(slot) ? -1 : slot;
+    return s?.k !== "method" || s.done || this.tiers.pending(slot) || this.w.aot?.holds(slot) ? -1 : slot;
   }
   /** Idle time: compiles the first-tier code of the methods that the methods that ran call when the call has one target, then what those call, in units of AHEAD_UNIT,
    *  until `until`, so that an interaction's first calls find their code rather than compile it. Whether any is left. */
@@ -54,7 +57,7 @@ export class AheadCompiler {
         if (root.codeOff) for (const { t } of this.w.planner.calls(root)) if (t && this.candidate(t) >= 0) this.queue.push(t);
       }
       if (!unit.length) return false;
-      const group = this.w.tiers.compileUnit(this.w.slotOf(unit[0]), false, (cx) => ({ methods: unit, built: cx.buildUnit(unit) }))!;
+      const group = this.tiers.compileUnit(this.w.slotOf(unit[0]), false, (cx) => ({ methods: unit, built: cx.buildUnit(unit) }))!;
       this.w.stats.ahead += unit.length;
       for (const at of group) this.unran.add(at);
       // what these call is likely next in turn, after what the methods that ran call
