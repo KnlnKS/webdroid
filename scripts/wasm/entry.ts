@@ -1,6 +1,5 @@
 // The entry seam (B1): host code calls Java through jentry's names over a World, and the answers, the exceptions that leave the calls and the identity
-// of the objects must be the ones java/E.expected.txt records. (entrytier.ts then runs them through the tier's own loading.) Run: pnpm wasm entry
-import { join } from "node:path";
+// of the objects must be the ones entrycases.ts states. (entrytier.ts then runs them through the tier's own loading.) Run: pnpm wasm entry
 import { rt } from "../../src/jvm/runtime.ts";
 import { mangleField } from "../../src/jvm/abi.ts";
 import { JThread, newObj, resumeAs } from "../../src/jvm/natives/jentry.ts";
@@ -9,25 +8,24 @@ import { runningThread, wasmEntry } from "../../src/wasm/host/entry.ts";
 import { UInfo } from "../../src/wasm/compiler/info.ts";
 import { world } from "./lib.ts";
 import { mountPlatform } from "./harness.ts";
-import { JAVA, ROOT, platformJars } from "./paths.ts";
+import { ROOT, platformJars } from "./paths.ts";
 import { entryCases, entryDex } from "./entrycases.ts";
-import { checker, recorded, unlike } from "./tools.ts";
+import { checker } from "./tools.ts";
 
 const dex = entryDex(), jars = platformJars("core-oj", "core-libart", "framework", "core-icu4j");
 await mountPlatform(ROOT);
-const expected = recorded(join(JAVA, "E.expected.txt"));
 
 const w = world([dex, ...jars]), gaps: string[] = [];
 w.onGap = (gap) => gaps.push(gap);
 const entry = wasmEntry(w);
 const missesBefore = perf.wasmFacadeMisses;
-const wasm = await entryCases();
+const failures = await entryCases();
 const facade = (await newObj("E")) as Record<string, unknown>;
 void facade.noSuchField;
 const counted = perf.wasmFacadeMisses - missesBefore === 1 && rt.missing.has("facade E.noSuchField") && perf.wasmEntries > 0;
 
 const suite = checker("entry"), { fail } = suite;
-for (const failure of unlike(expected, wasm)) fail(failure);
+for (const failure of failures) fail(failure);
 if (!counted) fail("a read no field backs is not counted in perf and the missing entries");
 // a facade read outside any native's scope (a looper callback reading vsync data) copies the array in a scope of its own and leaves no scope open
 const scope = w.bridge as unknown as { scopes: unknown[]; live: Map<object, unknown> };
@@ -95,4 +93,4 @@ try {
 }
 if (suite.failed === parentFailures) console.log("2/2 constructor parent/monitor contexts pass");
 if (gaps.length) fail(`gaps hit: ${[...new Set(gaps)].join("; ")}`);
-suite.done(`${expected.length} entry calls answer as recorded on a World`);
+suite.done("the entry calls answer as stated on a World");

@@ -1,6 +1,6 @@
 // The classes the host implements (B2), as the cases of the hostclass suite use them: TS classes registered as specs for classes no dex defines (wdtest/*) beside the
 // registered specs of the platform's own boundary (java/net/HttpURLConnection), the Java fixture Hc that uses them, and the calls host code makes on both. The suite runs
-// the cases on a World, where the host object and the Java object are an object each; the lines must be java/hc/expected.txt.
+// the cases on a World, where the host object and the Java object are an object each, and each must answer as it states.
 import { join } from "node:path";
 import { driven, getDeclared, JObj, rt, type Gen } from "../../src/jvm/runtime.ts";
 import { classNameOf, iof, newObj, scall, vcall } from "../../src/jvm/natives/jentry.ts";
@@ -68,49 +68,68 @@ function show(v: unknown): string {
   if (v === null || v === undefined || typeof v !== "object") return typeof v === "bigint" ? v + "n" : String(v);
   return Array.isArray(v) ? `[${v.map(show)}]` : `<${classNameOf(v)}>`;
 }
+/** what `f` answers: its value, or the exception that leaves it */
 async function run(f: () => unknown): Promise<string> {
-  try { return "ok " + show(await f()); } catch (e) {
+  try { return show(await f()); } catch (e) {
     const t = e as { msg?: unknown };
     return `threw ${classNameOf(e)} ${JSON.stringify(t.msg)}`;
   }
 }
 
-/** `blocking` runs the Java that waits: the World's entryAsync */
-export async function hostCases(blocking: (cls: string, name: string, desc: string) => Promise<unknown>): Promise<string[]> {
-  const out: string[] = [], line = async (name: string, f: () => unknown) => { out.push(`${name}: ${await run(f)}`); };
-  for (const m of ["runnable", "identity", "tags", "sub", "fail", "list", "http", "opened", "shapes", "faces", "booted"]) await line("Hc." + m, () => scall("Hc", m, `()${m === "sub" || m === "shapes" || m === "faces" || m === "booted" ? "I" : STR}`));
+/** what each of Hc's own methods answers */
+export const HC_ANSWERS: Record<string, string> = {
+  runnable: "200:true:true:201:201",
+  identity: "true:true:false:true:true:false:2:1:true:5:true:false",
+  tags: "null:t1",
+  sub: "20041002",
+  fail: "from the host",
+  list: "[<a>, <b>, <1>]:3:true:2:true:60333161:[<a>, <b>, <1>]:[<b>, <1>]",
+  http: "example.com,GET,GET,true,PUT,PUT,DELETE,7/7/-1,7/7/4096,b,d,null,Invalid HTTP method: BOGUS,Can't reset method: already connected,Already connected,false,true,0,201 Made",
+  opened: "false,false;true,false;",
+  shapes: "407",
+  faces: "307",
+  booted: "42",
+};
 
-  await line("a host method that waits, from a subclass", () => blocking("Hc", "blockSub", "()I"));
-  await line("a host method that enters Java that blocks", () => blocking("Hc", "reentered", "()I"));
+/** the calls, each with the answer it must give: the ones that answer otherwise. `blocking` runs the Java that waits: the World's entryAsync */
+export async function hostCases(blocking: (cls: string, name: string, desc: string) => Promise<unknown>): Promise<string[]> {
+  const out: string[] = [], line = async (name: string, want: string, f: () => unknown) => {
+    const got = await run(f);
+    if (got !== want) out.push(`${name}\n  want  ${want}\n  wasm  ${got}`);
+  };
+  for (const [m, want] of Object.entries(HC_ANSWERS)) await line("Hc." + m, want, () => scall("Hc", m, `()${m === "sub" || m === "shapes" || m === "faces" || m === "booted" ? "I" : STR}`));
+
+  await line("a host method that waits, from a subclass", "1505", () => blocking("Hc", "blockSub", "()I"));
+  await line("a host method that enters Java that blocks", "8", () => blocking("Hc", "reentered", "()I"));
 
   const c = await newObj("wdtest/Counter");
-  await line("new", () => c);
-  await line("class", () => classNameOf(c));
-  await line("instance of", () => [iof(c, "wdtest/Counter"), iof(c, "java/lang/Runnable"), iof(c, "java/util/function/IntSupplier"), iof(c, "java/lang/Object"), iof(c, STR)]);
-  await line("a host method nested in another", () => vcall(c, "nested", `(${OBJ})I`, null));
-  await line("inc inc", async () => [await vcall(c, "inc", "()I"), await vcall(c, "inc", "()I")]);
-  await line("a host field", () => (c as JCounter).n);
-  await line("through the alias", () => vcall(c, "getAsInt", "()I"));
-  await line("self is the receiver", async () => await vcall(c, "self", "()Lwdtest/Counter;") === c);
-  await line("kept is the object", async () => await scall("Hc", "keep", `(${OBJ})${OBJ}`, c) === c && await scall("Hc", "kept", `(I)${OBJ}`, 0) === c);
-  await line("static make", async () => { const m = await scall("wdtest/Counter", "make", "(I)Lwdtest/Counter;", 9) as JCounter; return [m instanceof JCounter, m.n, await vcall(m, "get", "()I"), m === c]; });
+  await line("new", "<wdtest/Counter>", () => c);
+  await line("class", "wdtest/Counter", () => classNameOf(c));
+  await line("instance of", "[true,true,true,true,false]", () => [iof(c, "wdtest/Counter"), iof(c, "java/lang/Runnable"), iof(c, "java/util/function/IntSupplier"), iof(c, "java/lang/Object"), iof(c, STR)]);
+  await line("a host method nested in another", "2", () => vcall(c, "nested", `(${OBJ})I`, null));
+  await line("inc inc", "[1,2]", async () => [await vcall(c, "inc", "()I"), await vcall(c, "inc", "()I")]);
+  await line("a host field", "2", () => (c as JCounter).n);
+  await line("through the alias", "2", () => vcall(c, "getAsInt", "()I"));
+  await line("self is the receiver", "true", async () => await vcall(c, "self", "()Lwdtest/Counter;") === c);
+  await line("kept is the object", "true", async () => await scall("Hc", "keep", `(${OBJ})${OBJ}`, c) === c && await scall("Hc", "kept", `(I)${OBJ}`, 0) === c);
+  await line("static make", "[true,9,9,false]", async () => { const m = await scall("wdtest/Counter", "make", "(I)Lwdtest/Counter;", 9) as JCounter; return [m instanceof JCounter, m.n, await vcall(m, "get", "()I"), m === c]; });
 
   const made = new JCounter();
   made.n = 4;
-  await line("a host-made object in Java", async () => [await scall("Hc", "keep", `(${OBJ})${OBJ}`, made) === made, await vcall(made, "inc", "()I"), made.n, classNameOf(made), iof(made, "java/lang/Runnable")]);
-  await line("both ways", async () => await scall("Hc", "kept", `(I)${OBJ}`, 1) === made);
-  await line("equal", async () => [await vcall(c, "equals", `(${OBJ})Z`, c), await vcall(c, "equals", `(${OBJ})Z`, made), await vcall(made, "hashCode", "()I") === await vcall(made, "hashCode", "()I")]);
+  await line("a host-made object in Java", "[true,5,5,wdtest/Counter,true]", async () => [await scall("Hc", "keep", `(${OBJ})${OBJ}`, made) === made, await vcall(made, "inc", "()I"), made.n, classNameOf(made), iof(made, "java/lang/Runnable")]);
+  await line("both ways", "true", async () => await scall("Hc", "kept", `(I)${OBJ}`, 1) === made);
+  await line("equal", "[1,0,true]", async () => [await vcall(c, "equals", `(${OBJ})Z`, c), await vcall(c, "equals", `(${OBJ})Z`, made), await vcall(made, "hashCode", "()I") === await vcall(made, "hashCode", "()I")]);
 
   const sub = await scall("Hc", "newSub", `()${OBJ}`) as JCounter;
-  await line("Java-made subclass", async () => [classNameOf(sub), sub instanceof JCounter, iof(sub, "wdtest/Counter"), await vcall(sub, "inc", "()I"), await vcall(sub, "twice", "()I"), sub.n]);
-  await line("its host object", async () => await scall("Hc", "keep", `(${OBJ})${OBJ}`, sub) === sub && await scall("Hc", "kept", `(I)${OBJ}`, 2) === sub);
+  await line("Java-made subclass", "[Hc$Sub,true,true,1,2002,1]", async () => [classNameOf(sub), sub instanceof JCounter, iof(sub, "wdtest/Counter"), await vcall(sub, "inc", "()I"), await vcall(sub, "twice", "()I"), sub.n]);
+  await line("its host object", "true", async () => await scall("Hc", "keep", `(${OBJ})${OBJ}`, sub) === sub && await scall("Hc", "kept", `(I)${OBJ}`, 2) === sub);
   await scall("Hc", "forget", "()V");
 
   const url = await newObj("java/net/URL", `(${STR})V`, "http://example.org/x");
   const conn = await newObj("Hc$Conn", "(Ljava/net/URL;)V", url) as Record<string, unknown>;
-  await line("connection fields", () => [conn.method, conn.responseCode, conn.follow, conn.chunkLength, conn.fixedContentLengthLong, getDeclared(conn, "java/net/URLConnection", "connected"),
+  await line("connection fields", "[GET,-1,1,-1,-1n,0,GET]", () => [conn.method, conn.responseCode, conn.follow, conn.chunkLength, conn.fixedContentLengthLong, getDeclared(conn, "java/net/URLConnection", "connected"),
     getDeclared(conn, "java/net/HttpURLConnection", "method")]);
-  await line("a field Java writes", async () => { await vcall(conn, "method", `(${STR})V`, "POST"); return [conn.method, await vcall(conn, "getRequestMethod", `()${STR}`)]; });
-  await line("a field the host writes", () => { conn.method = "HEAD"; return vcall(conn, "method", `()${STR}`); });
+  await line("a field Java writes", "[POST,POST]", async () => { await vcall(conn, "method", `(${STR})V`, "POST"); return [conn.method, await vcall(conn, "getRequestMethod", `()${STR}`)]; });
+  await line("a field the host writes", "HEAD", () => { conn.method = "HEAD"; return vcall(conn, "method", `()${STR}`); });
   return out;
 }

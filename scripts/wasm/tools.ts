@@ -1,5 +1,4 @@
 // What the suites share besides their Java fixtures (../java.ts): checking answers, cutting workloads out of Bench, and bundling the harnesses pages run.
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { bundle } from "../bundle.ts";
 
@@ -30,12 +29,3 @@ export function checker(name: string) {
 }
 export type Suite = ReturnType<typeof checker>;
 
-/** the lines a fixture's expected file records */
-export const recorded = (path: string): string[] => readFileSync(path, "utf8").trimEnd().split("\n");
-
-/** a failure for each answer that is not the recorded line, and for a different number of answers */
-export function unlike(want: string[], got: string[]): string[] {
-  const out = want.flatMap((line, i) => got[i] === line ? [] : [`${line.split(":")[0]}\n  want  ${line}\n  wasm  ${got[i]}`]);
-  if (got.length !== want.length) out.push(`${got.length} answers for ${want.length}`);
-  return out;
-}

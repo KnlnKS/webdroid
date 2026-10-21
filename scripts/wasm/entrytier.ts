@@ -1,31 +1,28 @@
-// The entry cases through the page's seam: the platform and the fixture loaded through tier.loadDex; its answers are java/E.expected.txt.
+// The entry cases through the page's seam: the platform and the fixture loaded through tier.loadDex; they must answer as entrycases.ts states.
 // It is the second half of `pnpm wasm entry`, in a process of its own because entry.ts installs a World of its own as the current one.
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import "../../src/natives.ts";
 import { dexesIn } from "../../src/jvm/dex.ts";
 import { loadDex } from "../../src/jvm/tier.ts";
 import { getDeclared } from "../../src/jvm/runtime.ts";
 import { bootTier } from "../tier.ts";
-import { JAVA } from "./paths.ts";
 import { entryCases, entryDex } from "./entrycases.ts";
-import { checker, recorded, unlike } from "./tools.ts";
+import { checker } from "./tools.ts";
 import { classNameOf, newObj, scall, staticField, vcall } from "../../src/jvm/natives/jentry.ts";
 import { FileDescriptors, type DescriptorCalls } from "../../src/shell/file-descriptors.ts";
 import { canonicalFilePaths, usePathOwner } from "../../src/shell/file-path.ts";
 import { callProxy, serveCalls } from "../../src/shell/process-port.ts";
 import { writeBufferBytes } from "../../src/jvm/natives/jnio.ts";
 
-const expected = recorded(join(JAVA, "E.expected.txt"));
 // every jar of the boot class path is on the device; the classes of the four the fixture needs are loaded
 await bootTier({ jars: ["boot/core-oj.jar", "boot/core-libart.jar", "framework.jar", "boot/core-icu4j.jar"] });
 const dexBytes = new Uint8Array(readFileSync(entryDex()));
 for (const d of dexesIn(dexBytes, "E")) loadDex(d);
-const got = await entryCases();
+const failures = await entryCases();
 const suite = checker("entrytier");
-for (const failure of unlike(expected, got)) suite.fail(failure);
+for (const failure of failures) suite.fail(failure);
 await inMemoryControl();
-suite.done(`${got.length} entry calls answer as recorded through the page's seam`);
+suite.done("the entry calls answer as stated through the page's seam");
 
 async function inMemoryControl(): Promise<void> {
   const bytes = dexBytes, padded = new Int8Array(bytes.length + 16);
