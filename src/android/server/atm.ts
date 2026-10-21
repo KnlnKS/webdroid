@@ -11,7 +11,7 @@ import { newArrayList } from "../../jvm/natives/jcoll.ts";
 import { configurations, resizeWindows, setClientVisible } from "./wm.ts";
 import { notifyDisplayChanged } from "../display.ts";
 import { asSystem, hostService, systemToken } from "../binder.ts";
-import { appHost, runningApp } from "../apphost.ts";
+import { runningApp } from "../apphost.ts";
 import { componentParts$, intentQuery$, mkComponentName, systemActivity, withComponent$, SYSTEM_ACTIVITY, type ComponentRef, type JIntent, type SystemHandler, type SystemResult } from "../intent.ts";
 import { grantIntentUris$ } from "../urigrants.ts";
 import { pms, processRecord, runsHere, scheduleOnApp, thisApp } from "./process.ts";
@@ -237,7 +237,7 @@ function* clearAbove(target: ActivityRecord | null): Gen<void> {
 }
 /** ActivityRecord.deliverNewIntentLocked: onNewIntent, around a temporary pause when resumed */
 function* newIntent(r: ActivityRecord, intent: JObj): Gen<void> {
-  const referrer = yield newObj("com/android/internal/content/ReferrerIntent", "(Landroid/content/Intent;Ljava/lang/String;)V", intent, appHost!.pkg);
+  const referrer = yield newObj("com/android/internal/content/ReferrerIntent", "(Landroid/content/Intent;Ljava/lang/String;)V", intent, runningApp().pkg);
   yield* schedule(r.app, yield item("NewIntentItem", "Landroid/os/IBinder;Ljava/util/List;Z", r.token, yield newArrayList([referrer]), +(r.state === "resumed")), null);
 }
 
@@ -279,7 +279,7 @@ const STYLEABLE = "com/android/internal/R$styleable";
  *  context: an activity may start before the Application exists */
 const packageResources = once(driven(function* (): Gen<JObj> {
   const system = yield vcall(yield scall("android/app/ActivityThread", "currentActivityThread", "()Landroid/app/ActivityThread;"), "getSystemContext", "()Landroid/app/ContextImpl;");
-  return yield vcall(yield vcall(system, "createPackageContext", "(Ljava/lang/String;I)Landroid/content/Context;", appHost!.pkg, 0), "getResources", "()Landroid/content/res/Resources;");
+  return yield vcall(yield vcall(system, "createPackageContext", "(Ljava/lang/String;I)Landroid/content/Context;", runningApp().pkg, 0), "getResources", "()Landroid/content/res/Resources;");
 }));
 /** ActivityRecord's occludesParent from the activity's theme: one translucent or floating, or showing
  *  the wallpaper, lets what is under it show */
@@ -327,7 +327,7 @@ function* resolveStart(app: JObj, intent: JObj, resolvedType: string | null, res
   if (runsHere(pkg, process)) return { run: () => startActivity(app, copy, info, resultRecord, resultWho, requestCode), remote: false };
   return { remote: true, run: function* () {
     yield activityTransport.launch(pkg, process, getDeclared<string>(info, AI, "name").replaceAll(".", "/"), copy, resultRecord ? {
-      caller: { pkg: appHost!.pkg, cls: getDeclared<string>(resultRecord.info, AI, "name") },
+      caller: { pkg: runningApp().pkg, cls: getDeclared<string>(resultRecord.info, AI, "name") },
       deliver: (resultCode, data) => detached(() => asSystem(() => rt.drive(deliverResult(resultRecord, resultWho, requestCode, resultCode, data))), logUncaught),
     } : undefined);
   } };
@@ -389,7 +389,7 @@ export const coverTop = driven(function* (): Gen<void> {
 });
 /** the broker's launch of one of this process's activities for another process */
 export const startActivityInProcess = driven(function* (component: string, intent: JObj, remoteId: number, caller: ComponentRef | null): Gen<void> {
-  const name = yield* awaited(mkComponentName(appHost!.pkg, component.replaceAll("/", ".")));
+  const name = yield* awaited(mkComponentName(runningApp().pkg, component.replaceAll("/", ".")));
   const info = yield vcall(yield* awaited(pms()), "getActivityInfo", "(Landroid/content/ComponentName;JI)Landroid/content/pm/ActivityInfo;", name, BigInt(GET_META_DATA), 0);
   if (!info) throw new Error("Activity not installed: " + component);
   yield vcall(intent, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", name);
@@ -400,7 +400,7 @@ export const startActivityInProcess = driven(function* (component: string, inten
  *  would). Shown behind a translucent process, a stopped top starts again without resuming, as
  *  ActivityRecord.makeActiveIfNeeded does. */
 export const taskVisibility = driven(function* (phase: "pause" | "stop" | "resume" | "visible"): Gen<void> {
-  const top = stack.at(-1), pkg = appHost!.pkg;
+  const top = stack.at(-1), pkg = runningApp().pkg;
   if (!top) { if (phase === "resume" && processRecord.userLaunched) yield startMainActivity(thisApp(), pkg); return; }
   if (phase === "pause") yield pause(top);
   else if (phase === "stop") for (const r of [...stack]) yield* stop(r);

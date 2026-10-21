@@ -8,7 +8,7 @@ import { newObj, vcall, scall, linkInit, after } from "../../jvm/natives/jentry.
 import { newArrayList } from "../../jvm/natives/jcoll.ts";
 import { PROCESS_PID, PROCESS_UID, processName, totalMemory, freeMemory } from "../os.ts";
 import { jarray } from "../../jvm/abi.ts";
-import { appHost } from "../apphost.ts";
+import { appHost, runningApp } from "../apphost.ts";
 import { configurations } from "./wm.ts";
 import { startMainActivity, startOperation$ } from "./atm.ts";
 import { uptimeMillis } from "../../guest-clock.ts";
@@ -40,7 +40,7 @@ const disabledChanges = (target: number) =>
   BigInt64Array.from(Object.entries(COMPAT_CHANGES).flatMap(([id, since]) => target < since ? [BigInt(id)] : [])).sort();
 
 const bind = driven(function* (app: JObj): Gen<void> {
-  const pkg = appHost!.pkg, process = processName();
+  const pkg = runningApp().pkg, process = processName();
   processRecord.thread = app;
   const pm = yield* awaited(pms());
   const info = yield vcall(pm, "getApplicationInfo", "(Ljava/lang/String;JI)Landroid/content/pm/ApplicationInfo;", pkg, STOCK_PM_FLAGS, 0);
@@ -120,7 +120,7 @@ const contentProvider = driven(function* (name: string, userId: number): Gen<JOb
 
 const PROCESS_INFO = "android/app/ActivityManager$RunningAppProcessInfo";
 function fillProc(info: JObj): JObj {
-  const pkg = appHost?.pkg ?? "";
+  const pkg = appHost?.pkg ?? "android";
   return setDeclared(info, PROCESS_INFO, { processName: processName(), pid: PROCESS_PID, uid: PROCESS_UID, pkgList: jarray([pkg], "Ljava/lang/String;"),
     importance: processImportance() });
 }

@@ -11,7 +11,7 @@ import { logUncaught, detached, notConnected } from "../../jvm/natives/jthrowabl
 import { parceledList, type ParcelData, binderEscape } from "../binder.ts";
 import { encodeIntent, decodeIntent } from "../intentipc.ts";
 import { PROCESS_PID, PROCESS_UID } from "../os.ts";
-import { appHost } from "../apphost.ts";
+import { runningApp } from "../apphost.ts";
 import { packages, qualifyComponent, type PackageRecord } from "../packages.ts";
 import { checkPermission } from "../permissions.ts";
 import { grantIntentUris$ } from "../urigrants.ts";
@@ -277,7 +277,7 @@ export const activeServiceMethods = {
   "stopService(Landroid/app/IApplicationThread;Landroid/content/Intent;Ljava/lang/String;I)I": driven(function* (_caller: JObj, intent: JObj, resolvedType: string | null) {
     const t = yield* resolve(intent, resolvedType);
     if (!t) return 0;
-    if (yield* denial(t, appHost!.pkg)) return -1;
+    if (yield* denial(t, runningApp().pkg)) return -1;
     if (isLocal(t)) yield* stopLocal(t);
     else { const bound = yield* withComponent$(intent, t.name); detached(() => serviceTransport.stop(remoteOwner(t), t.process, serviceClass(t), bound), logUncaught); }
     return 1;
