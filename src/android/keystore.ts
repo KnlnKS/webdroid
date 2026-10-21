@@ -16,9 +16,10 @@ import { DIGESTS, Hmac, hashOf } from "../crypto/digest.ts";
 import { aes, ctr, cbc, ecb, pkcs7Pad, pkcs7Unpad, AesGcm } from "../crypto/ciphers.ts";
 import {
   CURVES, mul, generateEc, generateRsa, ecdsaSign, ecdsaVerify, rsaBytes, rsaApply, rsaVerify, emsaEncode, emeEncode, emeDecode,
-  parsePrivateKey, parsePublicKey, marshalPrivateKey, marshalPublicKey, bitLength, EVP_PKEY_RSA, EVP_PKEY_EC, type PKey, type RsaPad,
+  parsePrivateKey, parsePublicKey, marshalPrivateKey, bitLength, EVP_PKEY_RSA, EVP_PKEY_EC, type PKey, type RsaPad,
 } from "../crypto/pkey.ts";
-import { seq, oid, tlv, integer, bits, bigToBytes, bytesToBig, derNull, octets } from "../crypto/der.ts";
+import { bigToBytes, bytesToBig } from "../crypto/der.ts";
+import { buildCertificate, x500Name, keyUsage } from "../crypto/x509.ts";
 import type { PackageState } from "../shell/packagedata.ts";
 import { persisted } from "../shell/device-storage.ts";
 
@@ -128,30 +129,15 @@ function characteristics(req: Param[], origin: number, extra: Param[] = []): Par
 }
 
 // ── certificates KeyMint issues for asymmetric keys (self-signed by the key when it may sign)
-const utcOrGeneralized = (ms: number) => {
-  const d = new Date(ms), p = (n: number) => String(n).padStart(2, "0");
-  const body = `${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}Z`, y = d.getUTCFullYear();
-  return y >= 1950 && y < 2050 ? tlv(0x17, new TextEncoder().encode(p(y % 100) + body)) : tlv(0x18, new TextEncoder().encode(y + body));
-};
-const OID_ECDSA_SHA256 = "1.2.840.10045.4.3.2", OID_RSA_SHA256 = "1.2.840.113549.1.1.11";
+const KEY_USAGE_BITS: [number, number][] = [[PURPOSE.SIGN, 0], [PURPOSE.ENCRYPT, 2], [PURPOSE.DECRYPT, 2], [PURPOSE.AGREE_KEY, 4]];
 function certificate(key: PKey, req: Param[], purposes: number[]): Uint8Array {
   const serial = one(req, TAG.CERTIFICATE_SERIAL) as Uint8Array | undefined, subject = one(req, TAG.CERTIFICATE_SUBJECT) as Uint8Array | undefined;
-  const name = subject?.length ? subject : seq(tlv(0x31, seq(oid("2.5.4.3"), tlv(0x0c, new TextEncoder().encode("Android Keystore Key")))));
-  const notBefore = Number(one(req, TAG.CERTIFICATE_NOT_BEFORE) ?? 0n), notAfter = Number(one(req, TAG.CERTIFICATE_NOT_AFTER) ?? 2461449600000n);
-  const canSign = purposes.includes(PURPOSE.SIGN);
-  const ku = [purposes.includes(PURPOSE.SIGN), false, purposes.includes(PURPOSE.ENCRYPT) || purposes.includes(PURPOSE.DECRYPT), false, purposes.includes(PURPOSE.AGREE_KEY)];
-  const last = ku.lastIndexOf(true), kuBits = ku.reduce((a, on, i) => a | (on ? 0x80 >> i : 0), 0);
-  const keyUsage = seq(oid("2.5.29.15"), tlv(1, [0xff]), octets(tlv(3, last < 0 ? [0] : [7 - last, kuBits])));
-  const sigAlg = key.type === EVP_PKEY_EC ? seq(oid(OID_ECDSA_SHA256)) : seq(oid(OID_RSA_SHA256), derNull());
-  const tbs = seq(tlv(0xa0, integer(2n)), serial?.length ? tlv(2, serial) : integer(1n), sigAlg, name,
-    seq(utcOrGeneralized(notBefore), utcOrGeneralized(notAfter)), name, marshalPublicKey(key), tlv(0xa3, seq(keyUsage)));
-  let signature: Uint8Array = new Uint8Array(0);
-  if (canSign) {
-    const digest = hashOf(DIGESTS.sha256.make, tbs);
-    if (key.type === EVP_PKEY_EC) signature = ecdsaSign(key.ec.curve, key.ec.priv!, digest);
-    else if (key.type === EVP_PKEY_RSA) signature = rsaApply(key.rsa, emsaEncode(key.rsa, { kind: "pkcs1", md: "sha256" }, digest)!, true)!;
-  }
-  return seq(tbs, sigAlg, bits(signature));
+  const name = subject?.length ? subject : x500Name([["2.5.4.3", "Android Keystore Key"]]);
+  return buildCertificate({
+    serial: serial?.length ? serial : 1n, issuer: name, subject: name, key, signer: purposes.includes(PURPOSE.SIGN) ? key : null,
+    notBefore: Number(one(req, TAG.CERTIFICATE_NOT_BEFORE) ?? 0n), notAfter: Number(one(req, TAG.CERTIFICATE_NOT_AFTER) ?? 2461449600000n),
+    exts: [keyUsage(KEY_USAGE_BITS.flatMap(([p, bit]) => purposes.includes(p) ? [bit] : []))],
+  });
 }
 
 // ── KeyMetadata / KeyEntryResponse
