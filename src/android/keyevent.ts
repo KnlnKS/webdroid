@@ -30,7 +30,6 @@ interface Behavior { meta: number; ch: number; fallback: number; replacement: nu
 interface Key { label: number; number: number; behaviors: Behavior[] }
 interface KeyMap { file: string; type: number; overlay: boolean; keys: Map<number, Key>; scanCodes: Map<number, number>; usageCodes: Map<number, number> }
 
-const keyCodeByLabel = (label: string): number | undefined => keyCodes.get(label);
 /** KeyCharacterMap::Parser over a .kcm file, as the device's format accepts it; null where it errs */
 export function parseKeyMap(file: string, text: string): KeyMap | null {
   const map: KeyMap = { file, type: 0, overlay: false, keys: new Map(), scanCodes: new Map(), usageCodes: new Map() };
@@ -44,11 +43,11 @@ export function parseKeyMap(file: string, text: string): KeyMap | null {
         if (!(rest[0] in TYPES)) return null;
         map.type = TYPES[rest[0]];
       } else if (word === "map") {
-        const code = keyCodeByLabel(rest[2]), from = Number(rest[1]);
+        const code = keyCodes.get(rest[2]), from = Number(rest[1]);
         if ((rest[0] !== "key" && rest[0] !== "usage") || code === undefined || !Number.isFinite(from)) return null;
         (rest[0] === "key" ? map.scanCodes : map.usageCodes).set(from, code);
       } else if (word === "key") {
-        const code = keyCodeByLabel(rest[0]);
+        const code = keyCodes.get(rest[0]);
         if (code === undefined || map.keys.has(code) || rest[1] !== "{") return null;
         map.keys.set(code, key = { label: 0, number: 0, behaviors: [] });
       } else return null;
@@ -103,7 +102,7 @@ function parseProperty(key: Key, line: string): boolean {
       haveChar = true;
       rest = rest.slice(word.length).trim();
     } else if (word === "fallback" || word === "replace") {
-      const code = keyCodeByLabel(arg ?? "");
+      const code = keyCodes.get(arg ?? "");
       if (code === undefined || haveFallback || haveReplacement || (word === "replace" && haveChar)) return false;
       if (word === "fallback") { b.fallback = code; haveFallback = true; } else { b.replacement = code; haveReplacement = true; }
       rest = rest.slice(rest.indexOf(arg) + arg.length).trim();
@@ -157,13 +156,17 @@ function findKey(map: KeyMap, ch: number): [number, number] | null {
 // Keyboard.cpp's updateMetaState
 const normalize = (m: number) => m | (m & (Meta.ALT_LEFT | Meta.ALT_RIGHT) ? Meta.ALT : 0) | (m & (Meta.SHIFT_LEFT | Meta.SHIFT_RIGHT) ? Meta.SHIFT : 0)
   | (m & (Meta.CTRL_LEFT | Meta.CTRL_RIGHT) ? Meta.CTRL : 0) | (m & (Meta.META_LEFT | Meta.META_RIGHT) ? Meta.META : 0);
-const EPHEMERAL: Record<number, number> = { 57: Meta.ALT_LEFT, 58: Meta.ALT_RIGHT, 59: Meta.SHIFT_LEFT, 60: Meta.SHIFT_RIGHT, 63: Meta.SYM,
-  119: Meta.FUNCTION, 113: Meta.CTRL_LEFT, 114: Meta.CTRL_RIGHT, 117: Meta.META_LEFT, 118: Meta.META_RIGHT };
-const LOCKED: Record<number, number> = { 115: Meta.CAPS_LOCK, 143: Meta.NUM_LOCK, 116: Meta.SCROLL_LOCK };
+/** the modifier keys, each named as its key code and meta state are, in the order addMetaKeys presses them: the
+ *  locking keys, the left/right pairs (SHIFT_LEFT and SHIFT_RIGHT) and the single ephemeral keys */
+const LOCKING = ["CAPS_LOCK", "NUM_LOCK", "SCROLL_LOCK"] as const, PAIRED = ["SHIFT", "ALT", "CTRL", "META"] as const, SINGLE = ["SYM", "FUNCTION"] as const;
+type Modifier = keyof typeof Meta;
+const keyOf = (m: Modifier) => keyCodes.get(m)!;
+const EPHEMERAL = new Map([...PAIRED.flatMap((m) => [`${m}_LEFT`, `${m}_RIGHT`] as const), ...SINGLE].map((m) => [keyOf(m), Meta[m]]));
+const LOCKED = new Map(LOCKING.map((m) => [keyOf(m), Meta[m]]));
 function updateMetaState(code: number, down: boolean, old: number): number {
-  const ephemeral = EPHEMERAL[code];
+  const ephemeral = EPHEMERAL.get(code);
   if (ephemeral) return normalize(down ? old | ephemeral : old & ~(ephemeral | Meta.ALT | Meta.SHIFT | Meta.CTRL | Meta.META));
-  const locked = LOCKED[code];
+  const locked = LOCKED.get(code);
   return locked && !down ? old ^ locked : old;
 }
 interface KeyStroke { code: number; meta: number; down: boolean }
@@ -176,21 +179,13 @@ function strokes(map: KeyMap, chars: ArrayLike<number>): KeyStroke[] | null {
     const [code, meta] = found;
     let current = 0;
     const add = (key: number, down: boolean) => { current = updateMetaState(key, down, current); out.push({ code: key, meta: current, down }); };
-    const single = (down: boolean, key: number, bits: number) => { if ((meta & bits) !== bits) return false; add(key, down); return true; };
-    const double = (down: boolean, left: number, leftBits: number, right: number, rightBits: number, either: number) => {
-      const specific = +single(down, left, leftBits) | +single(down, right, rightBits);
-      if (!specific) single(down, left, either);
-    };
-    const lockedKey = (key: number, bits: number) => { if ((meta & bits) === bits) { add(key, true); add(key, false); } };
-    const doubles: [number, number, number, number, number][] = [[59, Meta.SHIFT_LEFT, 60, Meta.SHIFT_RIGHT, Meta.SHIFT],
-      [57, Meta.ALT_LEFT, 58, Meta.ALT_RIGHT, Meta.ALT], [113, Meta.CTRL_LEFT, 114, Meta.CTRL_RIGHT, Meta.CTRL], [117, Meta.META_LEFT, 118, Meta.META_RIGHT, Meta.META]];
-    lockedKey(115, Meta.CAPS_LOCK); lockedKey(143, Meta.NUM_LOCK); lockedKey(116, Meta.SCROLL_LOCK);
-    for (const d of doubles) double(true, ...d);
-    single(true, 63, Meta.SYM); single(true, 119, Meta.FUNCTION);
+    const single = (down: boolean, m: Modifier, bits: number = Meta[m]) => { if ((meta & bits) !== bits) return false; add(keyOf(m), down); return true; };
+    // either key's state alone presses the left one
+    const pair = (down: boolean, m: (typeof PAIRED)[number]) => { if (!(+single(down, `${m}_LEFT`) | +single(down, `${m}_RIGHT`))) single(down, `${m}_LEFT`, Meta[m]); };
+    const locking = (m: Modifier) => { if ((meta & Meta[m]) === Meta[m]) { add(keyOf(m), true); add(keyOf(m), false); } };
+    LOCKING.forEach(locking); PAIRED.forEach((m) => pair(true, m)); SINGLE.forEach((m) => single(true, m));
     out.push({ code, meta: current, down: true }, { code, meta: current, down: false });
-    single(false, 119, Meta.FUNCTION); single(false, 63, Meta.SYM);
-    for (const d of [...doubles].reverse()) double(false, ...d);
-    lockedKey(116, Meta.SCROLL_LOCK); lockedKey(143, Meta.NUM_LOCK); lockedKey(115, Meta.CAPS_LOCK);
+    [...SINGLE].reverse().forEach((m) => single(false, m)); [...PAIRED].reverse().forEach((m) => pair(false, m)); [...LOCKING].reverse().forEach(locking);
   }
   return out;
 }
