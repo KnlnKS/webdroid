@@ -4,7 +4,7 @@
 import { join } from "node:path";
 import { program, world } from "./lib.ts";
 import { intrinsics } from "../../src/wasm/link/intrinsics.ts";
-import { mountPlatform, natives } from "./harness.ts";
+import { mountPlatform } from "./harness.ts";
 import { JAVA, ROOT, platformJars } from "./paths.ts";
 import { checker } from "./tools.ts";
 import { fixture, java, javac, onJdk, tempDir } from "../java.ts";
@@ -38,8 +38,9 @@ if (cha.targets("java/lang/Object", registered.name, registered.desc).length) th
 prog.addClass(synthetic); cha.index([synthetic.name]);
 if (synthetic.method(registered.key) !== registered || synthetic.byKey.get(resolved.key) !== resolved) throw new Error("runtime class lost declared methods or inherited aliases");
 if (cha.targets("java/lang/Object", registered.name, registered.desc)[0] !== registered) throw new Error("large hierarchy lost runtime declaration");
+// the Worlds over `prog` share it, which the host's classes would change for the first
 {
-  const w = world(prog, { natives }), cls = "C$K", fields = prog.require(cls).fields, id = w.idOf(cls);
+  const w = world(prog, { hostClasses: false }), cls = "C$K", fields = prog.require(cls).fields, id = w.idOf(cls);
   fieldCookie(w, id << 12 | fields.findIndex(f => f.name === "b"));
   const offset = fieldCookie(w, id << 12 | fields.findIndex(f => f.name === "a"));
   if (offset % 8 || hostUnsafe(w, UInfo.ObjGet, offset + 1, 0)) throw new Error("Unsafe field cookies overlap aligned words");
@@ -58,7 +59,7 @@ const cases = methods.map((m) => ({ m, args: [0n] }));
 const jdk = onJdk(out, cases.map((c) => `C.${c.m.name} 0`));
 const suite = checker("classdiff"), hit: string[] = [];
 for (const [i, c] of cases.entries()) {
-  const w = world(prog, { natives }); w.onGap = (gap) => hit.push(gap);
+  const w = world(prog, { hostClasses: false }); w.onGap = (gap) => hit.push(gap);
   const exp = jdk[i], name = `C.${c.m.name}`;
   let wasm: string;
   try { wasm = String(await w.entry(c.m.cls, c.m.name, c.m.desc)(0)); } catch { wasm = "throw"; }
@@ -66,7 +67,7 @@ for (const [i, c] of cases.entries()) {
   if (hit.length) { console.log(`${name}: gaps hit: ${[...new Set(hit)].join("; ")}`); hit.length = 0; }
 }
 {
-  const w = world([join(am, "classes.dex"), ...jars]);
+  const w = world([join(am, "classes.dex"), ...jars], { bare: true });
   let r: string;
   try { r = String(w.entry("Am", "run", "(I)I")(0)); } catch (e) { const t = w.throwable(e); r = t ? "java " + w.classNameOf(t) : String(e); }
   suite.check("Am.run", r, amExpected);

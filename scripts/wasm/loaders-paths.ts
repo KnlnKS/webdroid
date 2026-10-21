@@ -9,7 +9,6 @@ import { wasmJni } from "../../src/wasm/host/jni.ts";
 import { definingLoader, nativeClassLookup } from "../../src/wasm/link/loaders.ts";
 import { program, world } from "./lib.ts";
 import { loadDexes } from "../dexes.ts";
-import { natives } from "./harness.ts";
 import { PLATFORM_PATHS } from "../aosp.ts";
 import type { Suite } from "./tools.ts";
 
@@ -19,7 +18,7 @@ export async function nativePaths({ fail }: Suite, app: string, common: string, 
   vfs.mount(appPath, new BytesFile(new Uint8Array(readFileSync(app))));
   {
     const base = program([...PLATFORM_PATHS, common]);
-    const appDexes = loadDexes(app), p = new Program(appDexes, base), target = world(p, { natives, loop: { due: () => false, yield: () => Promise.resolve(), after: (ms, fn) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); } }, dexes: path => path === appPath ? appDexes : files.has(path) ? loadDexes(files.get(path)!) : undefined });
+    const appDexes = loadDexes(app), p = new Program(appDexes, base), target = world(p, { loop: { due: () => false, yield: () => Promise.resolve(), after: (ms, fn) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); } }, dexes: path => path === appPath ? appDexes : files.has(path) ? loadDexes(files.get(path)!) : undefined });
     let managed = 0;
     const callFn = target.helpers.callFn;
     target.helpers.callFn = function (name, ...args) { if (name.startsWith("resolve:load:")) managed++; return callFn.call(this, name, ...args); };

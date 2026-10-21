@@ -1,14 +1,14 @@
 // The page of boot-probe.ts, also loaded in an iframe of itself (`?frame`) as a second load of the same build.
 import { fetchPlatformJars, jarDexes } from "../../src/android/framework.ts";
 import { PLATFORM_JARS } from "../../src/jvm/provenance.ts";
-import { openAot, platformProgram, worldOptions } from "../../src/wasm/host/boot.ts";
+import { openAot, platformProgram } from "../../src/wasm/host/boot.ts";
 import { prepareApp } from "../../src/wasm/host/appcode.ts";
 import { prefetchInWorker } from "../../src/wasm/host/aotload.ts";
 import { spawnCompileWorker } from "../../src/wasm/host/compiler.ts";
 import { openPersist } from "../../src/wasm/host/persist.ts";
 import { dexesIn } from "../../src/jvm/dex.ts";
 import { Program } from "../../src/wasm/compiler/program.ts";
-import { World } from "../../src/wasm/link/world.ts";
+import { world } from "./lib.ts";
 import { mountPlatform, startProcess } from "./harness.ts";
 import { WORKER_SCRIPTS } from "../../src/worker-scripts.ts";
 
@@ -59,7 +59,7 @@ async function probe(): Promise<ProbeResult> {
   const dexes = dexesIn(new Uint8Array(await (await fetch("/app.dex")).arrayBuffer()), "app.dex"), persist = await openPersist();
    const p0 = performance.now();
   const code = await prepareApp({ dexes, aot: store!, prefetch: (files) => prefetchInWorker(store!, files), persist, spawn: () => spawnCompileWorker(undefined, WORKER_SCRIPTS.compile.url), roots: { launch: ["Pst", "Pst$Add", "Pst$Mul", "Pst$Base"] } });
-  const prepareMs = performance.now() - p0, b0 = performance.now(), w = new World(new Program(dexes, platform), { ...worldOptions(), aot: store, app: code.saved, compiler: code.compiler });
+  const prepareMs = performance.now() - p0, b0 = performance.now(), w = world(new Program(dexes, platform), { aot: store, app: code.saved, compiler: code.compiler });
   code.start(w);  await startProcess(w);  const bootMs = performance.now() - b0, s = w.stats;
   // the app: a loop hot enough to ask for the second tier, and the entry points whose answers every load must agree on
   const hot = w.entry("Pst", "hot", "(I)I");

@@ -12,7 +12,6 @@ import { program, world } from "./lib.ts";
 import { loadDexes } from "../dexes.ts";
 import { Program } from "../../src/wasm/compiler/program.ts";
 import { buildApp } from "../../src/wasm/link/apps.ts";
-import { natives } from "./harness.ts";
 import { nativeSource } from "../../src/wasm/host/nativesource.ts";
 import { Natives } from "../../src/wasm/host/natives.ts";
 import { JAVA } from "./paths.ts";
@@ -34,7 +33,7 @@ const slotOf = (w: ReturnType<typeof world>, cls: string, name: string, desc: st
 const installed = (w: ReturnType<typeof world>, slot: number) => { const s = w.slots.at(slot); return s?.k === "method" && s.done; };
 const containsInstalled = (w: ReturnType<typeof world>) => installed(w, slotOf(w, "java/util/ArrayList", "contains", "(Ljava/lang/Object;)Z"));
 {
-  const w = world([join(out, "classes.dex"), ...jars], { natives });
+  const w = world([join(out, "classes.dex"), ...jars]);
   check("the build is attached", !!w.aot, true);
   check("ArrayList.contains before", w.entry("Aot", "plain", "()I")(), 0);
   check("it ran precompiled", w.stats.aot.c > 0, true);
@@ -59,7 +58,7 @@ const containsInstalled = (w: ReturnType<typeof world>) => installed(w, slotOf(w
   check("the precompiled contains stays installed", containsInstalled(w), true);
 }
 {
-  const w = world([join(out, "classes.dex"), join(out, "out2/classes.dex"), ...jars], { natives });
+  const w = world([join(out, "classes.dex"), join(out, "out2/classes.dex"), ...jars]);
   check("the build is attached with the app's classes in the Program", !!w.aot, true);
   check("the subclass takes effect", w.entry("Aot2", "sub", "()I")(), 1);
   check("the plain list is as before", w.entry("Aot", "plain", "()I")(), 0);
@@ -80,7 +79,7 @@ const modules = /^[cd]\d+\.wasm$/;
 {
   let withheld = "", available = false;
   const requested = new Set<string>();
-  const w = world([join(out, "classes.dex"), ...jars], { natives, aot: { get: f => { requested.add(f); return f === withheld && !available ? undefined : fileOf(f); } } });
+  const w = world([join(out, "classes.dex"), ...jars], { aot: { get: f => { requested.add(f); return f === withheld && !available ? undefined : fileOf(f); } } });
   const block = w.numbers.ids.get("java/util/ArrayList")! - 1, slot = w.slots.blockBase[block];
   const c = w.aot!.platformModule(block), head = header<CHeader>(compileModule(fileOf(`c${c}.wasm`)));
   withheld = `d${head.mods[0].slice(1)}.wasm`;
@@ -92,7 +91,7 @@ const modules = /^[cd]\d+\.wasm$/;
   check("preflight D arrival permits C", w.aot!.install(slot), true);
   check("preflight D recovery Java result", w.entry("Aot", "plain", "()I")(), 0);
   available = false;
-  const published = world([join(out, "classes.dex"), ...jars], { natives, aot: { get: f => { requested.add(f); return f === withheld && !available ? undefined : fileOf(f); } } });
+  const published = world([join(out, "classes.dex"), ...jars], { aot: { get: f => { requested.add(f); return f === withheld && !available ? undefined : fileOf(f); } } });
   check("preflight before publication", published.aot!.install(slot), false);
   const data = header<DHeader>(compileModule(fileOf(withheld)));
   const cls = published.link(published.slots.blockClass[data.classes[0]]), globals = cls.exports;
@@ -106,13 +105,13 @@ const modules = /^[cd]\d+\.wasm$/;
 // Cached patches bind fallback globals and retain their invalidation owners even when the platform unit cannot load.
 {
   const app = loadDexes(join(out, "classes.dex")), platform = program(jars);
-  const producer = world(new Program(app, platform), { natives, compileOnly: true });
+  const producer = world(new Program(app, platform), { compileOnly: true });
   const method = producer.prog.resolve("java/util/ArrayList", "contains", "(Ljava/lang/Object;)Z")!;
   const built = buildApp(producer, [method], { methods: [], classes: [], synths: [] }), files = new Map(built.files);
   const c = producer.aot!.platformModule(producer.slots.blockOf(producer.slotOf(method)));
   const incompatible = packModule({ version: VERSION + 1 }, Uint8Array.of(0, 97, 115, 109, 1, 0, 0, 0));
   let available = false;
-  const page = world(new Program(app, platform), { natives, app: { index: built.index, store: { get: f => files.get(f) } },
+  const page = world(new Program(app, platform), { app: { index: built.index, store: { get: f => files.get(f) } },
     aot: { get: f => f === `c${c}.wasm` ? incompatible : /^d\d+\.wasm$/.test(f) && !available ? undefined : fileOf(f) } });
   const cls = page.link("java/util/ArrayList"), globals = cls.exports, slot = page.slotOf(page.prog.resolve(method.cls, method.name, method.desc)!);
   available = true;
@@ -142,7 +141,7 @@ const modules = /^[cd]\d+\.wasm$/;
       return Promise.resolve().then(() => { for (const f of files) delivered.set(f, compileModule(fileOf(f))); });
     },
   };
-  const make = () => world([join(out, "classes.dex"), ...jars], { natives, aot: store });
+  const make = () => world([join(out, "classes.dex"), ...jars], { aot: store });
   const w = make(), block = w.numbers.ids.get("java/util/ArrayList")! - 1, slot = w.slots.blockBase[block];
   const cfile = `c${w.aot!.platformModule(block)}.wasm`;
   const head = header<CHeader>(compileModule(fileOf(cfile)));
@@ -178,7 +177,7 @@ const modules = /^[cd]\d+\.wasm$/;
   check("an older module format prepares no files", requests.length, 0);
   delivered.clear(); requests.length = 0;
   held.delete(dataFile);
-  const automatic = world([join(out, "classes.dex"), ...jars], { natives, aot: store, loop: { ...hostLoop, due: () => false } });
+  const automatic = world([join(out, "classes.dex"), ...jars], { aot: store, loop: { ...hostLoop, due: () => false } });
   automatic.link("java/util/ArrayList");
   const ctor = automatic.prog.get("java/util/ArrayList")!.byKey.get("<init>()V")!, ctorSlot = automatic.slotOf(ctor);
   automatic.stubs.restoreStub(ctorSlot);
@@ -211,7 +210,7 @@ const modules = /^[cd]\d+\.wasm$/;
 // Late code binds existing globals; late data must never replace them.
 {
   let available = false;
-  const w = world([join(out, "classes.dex"), ...jars], { natives, aot: { get: f => /^c\d+\.wasm$/.test(f) && !available ? undefined : fileOf(f) } });
+  const w = world([join(out, "classes.dex"), ...jars], { aot: { get: f => /^c\d+\.wasm$/.test(f) && !available ? undefined : fileOf(f) } });
   const m = w.prog.get("java/util/ArrayList")!.byKey.get("contains(Ljava/lang/Object;)Z")!, slot = w.slotOf(m);
   check("late C first miss", w.aot!.install(slot), false);
   check("late C fallback runs first", w.entry("Aot", "plain", "()I")(), 0);
@@ -228,7 +227,7 @@ const modules = /^[cd]\d+\.wasm$/;
 }
 {
   let available = false;
-  const w = world([join(out, "classes.dex"), ...jars], { natives, aot: { get: f => /^d\d+\.wasm$/.test(f) && !available ? undefined : fileOf(f) } });
+  const w = world([join(out, "classes.dex"), ...jars], { aot: { get: f => /^d\d+\.wasm$/.test(f) && !available ? undefined : fileOf(f) } });
   const cls = w.link("java/util/ArrayList"), globals = cls.exports;
   const m = w.prog.get("java/util/ArrayList")!.byKey.get("contains(Ljava/lang/Object;)Z")!, slot = w.slotOf(m);
   available = true;
@@ -243,7 +242,7 @@ const modules = /^[cd]\d+\.wasm$/;
   let available = false, rejected = false;
   const index = JSON.parse(new TextDecoder().decode(fileOf("index.json")));
   const wrong = packModule({ version: VERSION - 1 }, Uint8Array.of(0, 97, 115, 109, 1, 0, 0, 0));
-  const w = world([join(out, "classes.dex"), ...jars], { natives, aot: { get: f => /^c\d+\.wasm$/.test(f) ? !available ? undefined : !rejected ? wrong : fileOf(f) : fileOf(f) } });
+  const w = world([join(out, "classes.dex"), ...jars], { aot: { get: f => /^c\d+\.wasm$/.test(f) ? !available ? undefined : !rejected ? wrong : fileOf(f) : fileOf(f) } });
   const slot = w.slotOf(w.prog.get("java/util/ArrayList")!.byKey.get("contains(Ljava/lang/Object;)Z")!);
   check("late format first miss", w.aot!.install(slot), false);
   available = true;
@@ -252,12 +251,12 @@ const modules = /^[cd]\d+\.wasm$/;
   rejected = true;
   check("late format rejection stays terminal", w.aot!.install(slot), false);
   const stale = new TextEncoder().encode(JSON.stringify({ ...index, version: VERSION + 1 }));
-  check("unsupported AOT index version rejected", !!world([join(out, "classes.dex"), ...jars], { natives, aot: { get: f => f === "index.json" ? stale : fileOf(f) } }).aot, false);
+  check("unsupported AOT index version rejected", !!world([join(out, "classes.dex"), ...jars], { aot: { get: f => f === "index.json" ? stale : fileOf(f) } }).aot, false);
   const previous = new TextEncoder().encode(JSON.stringify({ ...index, version: VERSION - 1 }));
-  check("previous zero-argument stub index rejected", !!world([join(out, "classes.dex"), ...jars], { natives, aot: { get: f => f === "index.json" ? previous : fileOf(f) } }).aot, false);
+  check("previous zero-argument stub index rejected", !!world([join(out, "classes.dex"), ...jars], { aot: { get: f => f === "index.json" ? previous : fileOf(f) } }).aot, false);
   const legacyD = packModule({ version: VERSION - 1 }, Uint8Array.of(0, 97, 115, 109, 1, 0, 0, 0));
   let replaceLegacy = false;
-  const oldData = world([join(out, "classes.dex"), ...jars], { natives, aot: { get: f => /^d\d+\.wasm$/.test(f) && !replaceLegacy ? legacyD : fileOf(f) } });
+  const oldData = world([join(out, "classes.dex"), ...jars], { aot: { get: f => /^d\d+\.wasm$/.test(f) && !replaceLegacy ? legacyD : fileOf(f) } });
   const oldSlot = oldData.slotOf(oldData.prog.get("java/util/ArrayList")!.byKey.get("contains(Ljava/lang/Object;)Z")!);
   check("previous D stub format cannot authorize C", oldData.aot!.install(oldSlot), false);
   check("previous D stub format instantiates no original globals", oldData.stats.aot.d, 0);
@@ -269,7 +268,7 @@ const modules = /^[cd]\d+\.wasm$/;
   oldData.link(name);
   check("late format replacement cannot install rejected original globals", oldData.aot!.hasLoaded(name), false);
   const foreign = new TextEncoder().encode(JSON.stringify({ ...index, dexes: index.dexes.map(() => "foreign-platform") }));
-  check("foreign platform index rejected", !!world([join(out, "classes.dex"), ...jars], { natives, aot: { get: f => f === "index.json" ? foreign : fileOf(f) } }).aot, false);
+  check("foreign platform index rejected", !!world([join(out, "classes.dex"), ...jars], { aot: { get: f => f === "index.json" ? foreign : fileOf(f) } }).aot, false);
 }
 // An app build made under the root's shared libraries keeps the classes its data modules laid out when Java binds those libraries after they were linked: the app's own
 // copy of a class the library defines first is the superclass before the binding, the library's after it, as the build has it.
@@ -285,11 +284,11 @@ const modules = /^[cd]\d+\.wasm$/;
     w.addDexes(loadDexes(join(lib3, "classes.dex")), library);
     w.namespaces.bindLibraries(w.prog.root, [library], []);
   };
-  const producer = world(new Program(app(), platform), { natives, compileOnly: true });
+  const producer = world(new Program(app(), platform), { compileOnly: true });
   bind(producer);
   const methods = ["run()I", "<init>()V"].map((k) => producer.prog.get("Aot3")!.byKey.get(k)!);
   const built = buildApp(producer, methods, { methods: [], classes: ["Aot3"], synths: [] }), files = new Map(built.files);
-  const page = world(new Program(app(), program(jars)), { natives, app: { index: built.index, store: { get: (f) => files.get(f) } } });
+  const page = world(new Program(app(), program(jars)), { app: { index: built.index, store: { get: (f) => files.get(f) } } });
   check("the library build is attached", page.appAttached, true);
   check("the build lays out the subclass", page.link("Aot3").mod[0], "e");
   let error = "";
@@ -303,7 +302,7 @@ const stores: [string, (seen: Set<string>) => AotStore, (w: ReturnType<typeof wo
   ["modules that arrive after they were first wanted", (seen) => ({ get: (f) => (modules.test(f) && /[2468]\.wasm$/.test(f) && !seen.has(f) ? (seen.add(f), undefined) : fileOf(f)) }), (w) => w.stats.aot.missed > 0],
 ];
 for (const [what, make, expected] of stores) {
-  const w = world([join(out, "classes.dex"), ...jars], { natives, aot: make(new Set()) });
+  const w = world([join(out, "classes.dex"), ...jars], { aot: make(new Set()) });
   check(`${what}: attached`, !!w.aot, true);
   check(`${what}: ArrayList.contains`, w.entry("Aot", "plain", "()I")(), 0);
   check(`${what}: as expected`, expected(w), true);

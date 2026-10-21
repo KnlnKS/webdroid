@@ -2,39 +2,26 @@
 // launch that ran the workloads, written to a directory `g1 --installed DIR` attaches as a launch finds a saved build. Beside it, startup.json lists the platform modules a start
 // and the workloads' first calls load, as a launch profile would for this app (aot-profile.ts), so a page compiles them ahead.
 //   WEBDROID_AOT=<platform build> pnpm wasm g1app --out DIR [workload ...]
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { Program } from "../../src/wasm/compiler/program.ts";
-import { externs, intrinsics } from "../../src/wasm/link/intrinsics.ts";
 import type { World } from "../../src/wasm/link/world.ts";
 import { prepareApp, type AppCode } from "../../src/wasm/host/appcode.ts";
-import { serveCompile, type CompileEnv } from "../../src/wasm/host/compile-serve.ts";
-import type { WorkerPort } from "../../src/wasm/host/compiler.ts";
 import { Persist, appKey, memoryBackend } from "../../src/wasm/host/persist.ts";
-import { heapUsed } from "../../src/wasm/host/stats.ts";
-import { fakeAot, world } from "./lib.ts";
+import { compileEnv, fakeAot, inThreadCompiler, platform, world } from "./lib.ts";
 import { loadDexes } from "../dexes.ts";
-import { attachHostClasses, mountPlatform, natives, startProcess } from "./harness.ts";
+import { mountPlatform, startProcess } from "./harness.ts";
 import { G1_DIR, ROOT } from "./paths.ts";
-import { PLATFORM_PATHS } from "../aosp.ts";
+import { cli } from "../args.ts";
 
-const AOT = process.env.WEBDROID_AOT, at = process.argv.indexOf("--out"), out = at < 0 ? "" : process.argv[at + 1];
-if (!AOT || !out) throw new Error("usage: WEBDROID_AOT=<platform build> g1app --out DIR [workload ...]");
-const workloads = process.argv.slice(2).filter((a, i, v) => !a.startsWith("--") && v[i - 1] !== "--out");
-const app = loadDexes(join(G1_DIR, "classes.dex")), platformDexes = PLATFORM_PATHS.flatMap(loadDexes);
-const platform = new Program(platformDexes); platform.addExterns(externs);
-const BASE = "aot://platform/", key = basename(AOT);
-const env: CompileEnv = { platform: async () => platformDexes, natives, intrinsics, externs, heapUsed, fetchBytes: async (url) => new Uint8Array(readFileSync(join(AOT, url.slice(BASE.length)))) };
-/** a compile worker over a MessageChannel in this thread */
-const spawn = (): WorkerPort => {
-  const { port1, port2 } = new MessageChannel();
-  serveCompile(port2 as never, env);
-  return { postMessage: (m, t) => port1.postMessage(m, t as never), set onmessage(f) { port1.onmessage = f as never; }, get onmessage() { return port1.onmessage as never; },
-    onerror: null, terminate: () => { port1.close(); port2.close(); } };
-};
+const usage = "WEBDROID_AOT=<platform build> pnpm wasm g1app --out DIR [workload ...]";
+const { values: { out }, positionals: workloads } = cli(usage, { out: { type: "string" } }), AOT = process.env.WEBDROID_AOT;
+if (!AOT || !out) throw new Error(`usage: ${usage}`);
+const app = loadDexes(join(G1_DIR, "classes.dex"));
+const BASE = "aot://platform/", key = basename(AOT), env = compileEnv(AOT, BASE), spawn = () => inThreadCompiler(env);
 const persist = new Persist(memoryBackend()), request = { dexes: app, aot: fakeAot(BASE, key), persist, spawn, roots: { launch: [] } };
 /** a launch as the page makes one: the app over the platform's Program, the saved build attached, the host's classes */
-const launch = (code: AppCode): World => attachHostClasses(world(new Program(app, platform), { natives, app: code.saved }));
+const launch = (code: AppCode): World => world(new Program(app, platform()), { app: code.saved });
 const run = async (w: World, reps: number) => {
   for (const workload of workloads) {
     const cls = ["Bench", "G1"].find((c) => w.prog.get(c)?.byKey.has(`w_${workload}()I`));

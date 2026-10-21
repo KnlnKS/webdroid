@@ -27,7 +27,7 @@ import type { Code } from "../../src/wasm/compiler/code.ts";
 import { St } from "../../src/wasm/compiler/hostcalls.ts";
 import { HOSTED } from "../../src/wasm/link/hostapi.ts";
 import { wasmEntry } from "../../src/wasm/host/entry.ts";
-import { mountPlatform, natives } from "./harness.ts";
+import { mountPlatform } from "./harness.ts";
 import { JAVA, ROOT } from "./paths.ts";
 import { PLATFORM_PATHS } from "../aosp.ts";
 import { checker } from "./tools.ts";
@@ -57,7 +57,7 @@ await archives(suite, out, app, a, b);
 const files = new Map([["/data/local/tmp/a.dex", a], ["/data/local/tmp/b.dex", b]]);
 for (const [path, file] of files) vfs.mount(path, new BytesFile(new Uint8Array(readFileSync(file))));
 await mountPlatform(ROOT);
-const w = world([app, ...PLATFORM_PATHS], { natives, dexes: (path) => (files.has(path) ? loadDexes(files.get(path)!) : undefined) });
+const w = world([app, ...PLATFORM_PATHS], { dexes: (path) => (files.has(path) ? loadDexes(files.get(path)!) : undefined) });
 
 const CHECKS = ["the loaders define distinct Shared classes", "getClassLoader", "loadClass finds the class again", "statics are separate", "isInstance does not cross", "both implement the app's Tag",
   "cast across loaders fails", "Class.forName with a loader", "a class only the other loader defines, and its superclass", "the parent's classes are found through the loader", "signatures name the loader's class",
@@ -162,7 +162,7 @@ for (const method of ["memberHostRetry", "memberHostWaitRetry"]) {
   check("executed catch loader", caught, 31);
   console.log("executed catch loader: wasm=31; untaken handler types stay lazy, suspended denial retries, successful identity stays cached, missing types preserve the original exception");
   {
-    const boot = world(new Program([], program([...PLATFORM_PATHS, common, b])), { natives });
+    const boot = world(new Program([], program([...PLATFORM_PATHS, common, b])));
     if (boot.prog.loaderOf("Shared") !== boot.prog.boot) fail("catch fixture is not boot-defined");
     const select = boot.entry("Shared", "catchOnly", "(Z)I");
     if (select(0) !== 7 || boot.prog.initiatedBy(boot.prog.boot, "CatchOnly")) fail("untaken boot catch resolved its type");
@@ -235,7 +235,7 @@ for (const method of ["memberHostRetry", "memberHostWaitRetry"]) {
       if (helper() !== 42 || await waitingHelper(resumed) !== 42 || w.stats.units !== units) fail("warm helper recompiled");
     } finally { resumed.end(); }
     console.log("helper accounting: two owned absence slots recover cached sync/strand functions after class arrival; warm calls unchanged");
-    const accountingWorld = world(w.prog, { natives }), initial = { ...accountingWorld.stats };
+    const accountingWorld = world(w.prog, { hostClasses: false }), initial = { ...accountingWorld.stats };
     const throwable = accountingWorld.helpers.makeThrowable("java/lang/IllegalStateException", "accounted helper");
     if (accountingWorld.stats.units <= initial.units || accountingWorld.stats.bytes <= initial.bytes || accountingWorld.stats.compileMs <= initial.compileMs) fail("throwable helper compilation unaccounted");
     const beforeReader = { ...accountingWorld.stats }, reader = accountingWorld.helpers.fieldReader<object | null>("java/lang/Throwable", "detailMessage", "Ljava/lang/String;");
@@ -317,7 +317,7 @@ check("actual delegate-last initiation and ordinary parent-first control", wasmD
 
 {
   const p = new Program(loadDexes(a), program([...PLATFORM_PATHS, app]));
-  const cache = world(p, { natives }), child = p.newLoader(p.root, null);
+  const cache = world(p), child = p.newLoader(p.root, null);
   cache.addDexes(loadDexes(b), child);
   const key = p.definedBy(child, "Shared")!, cls = p.get(key)!;
   const self = cls.byKey.get("self()LShared;")!, peer = cls.fields.find(f => f.name === "peer")!;
@@ -341,7 +341,7 @@ check("actual delegate-last initiation and ordinary parent-first control", wasmD
 }
 for (const asynchronous of [false, true]) {
   const appDexes = loadDexes(a), base = program([...PLATFORM_PATHS, common]);
-  const p = new Program([...loadDexes(layeredApp), ...appDexes], base), layered = world(p, { natives, dexes: path => {
+  const p = new Program([...loadDexes(layeredApp), ...appDexes], base), layered = world(p, { dexes: path => {
     const dexes = path === paths[0] ? appDexes : files.has(path) ? loadDexes(files.get(path)!) : undefined;
     return asynchronous ? Promise.resolve().then(() => dexes) : dexes;
   } });
@@ -412,7 +412,7 @@ for (const asynchronous of [false, true]) {
   if (!platform.dex || derived.loaderOf("Shared") !== derived.boot || derived.loaderOf("[[LShared;") !== derived.boot || ["[I", "#I", "#V"].some(name => derived.loaderOf(name) !== derived.boot) || derived.loaderOf("Ldr") !== derived.root || derived.loaderOf(base.definedBy(custom, "Sub")!) !== custom || derived.loaderOfDex(platform.dex) !== base.root || derived.lookup(derived.boot, "Shared") !== "Shared") fail("inherited DEX defining loader identity changed class path or confused app and bootstrap");
 }
 {
-  const resolver = world([app, ...PLATFORM_PATHS], { natives, dexes: path => files.has(path) ? loadDexes(files.get(path)!) : undefined });
+  const resolver = world([app, ...PLATFORM_PATHS], { dexes: path => files.has(path) ? loadDexes(files.get(path)!) : undefined });
   let forName: unknown;
   try { forName = await resolver.entryAsync("Ldr", "resolverForName", "(Ljava/lang/String;)I")(paths[0]); }
   catch (error) {

@@ -8,7 +8,7 @@ import { perf } from "../../src/perf.ts";
 import { runningThread, wasmEntry } from "../../src/wasm/host/entry.ts";
 import { UInfo } from "../../src/wasm/compiler/info.ts";
 import { world } from "./lib.ts";
-import { mountPlatform, natives } from "./harness.ts";
+import { mountPlatform } from "./harness.ts";
 import { JAVA, ROOT, platformJars } from "./paths.ts";
 import { entryCases, entryDex } from "./entrycases.ts";
 import { checker, recorded, unlike } from "./tools.ts";
@@ -17,7 +17,7 @@ const dex = entryDex(), jars = platformJars("core-oj", "core-libart", "framework
 await mountPlatform(ROOT);
 const expected = recorded(join(JAVA, "E.expected.txt"));
 
-const w = world([dex, ...jars], { natives }), gaps: string[] = [];
+const w = world([dex, ...jars]), gaps: string[] = [];
 w.onGap = (gap) => gaps.push(gap);
 const entry = wasmEntry(w);
 const missesBefore = perf.wasmFacadeMisses;

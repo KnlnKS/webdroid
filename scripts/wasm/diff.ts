@@ -6,7 +6,7 @@ import { world } from "./lib.ts";
 import { dexesIn } from "../../src/jvm/dex.ts";
 import { descToName } from "../../src/jvm/abi.ts";
 import { insnLen } from "../../src/jvm/opcodes.ts";
-import { mountPlatform, natives, startProcess } from "./harness.ts";
+import { mountPlatform, startProcess } from "./harness.ts";
 import { ACC } from "../../src/wasm/compiler/program.ts";
 import { caseLine, compare, genCases } from "./cases.ts";
 import { CORE_PATHS, JAVA, ROOT } from "./paths.ts";
@@ -33,7 +33,7 @@ const dex = join(out, "classes.dex");
   writeFileSync(dex, bytes);
 }
 await mountPlatform(ROOT);
-const w = world([dex, ...CORE_PATHS], { natives }), hit: string[] = [];
+const w = world([dex, ...CORE_PATHS]), hit: string[] = [];
 w.onGap = (gap) => hit.push(gap);
 await startProcess(w);
 const methods = ["W", "S", "N"].flatMap((c) => w.prog.require(c).methods.filter((m) => m.isStatic && m.codeOff && m.flags & ACC.PUBLIC));
@@ -50,7 +50,7 @@ const jdk = onJdk(out, cases.map(caseLine));
 const suite = checker("diff"), { blocked } = await compare(suite, cases, (m) => entries.get(m)!, jdk, hit);
 const wideCases = ["members", "annots"].map((name) => cases.findIndex((c) => c.m.cls === "N" && c.m.name === name)).filter((i) => i >= 0);
 if (wideCases.length) {
-  const wide = world([dex, ...CORE_PATHS], { natives });
+  const wide = world([dex, ...CORE_PATHS]);
   const wideEntry = wide.entryAsync.bind(wide);
   const a = wide.idOf("java/util/ArrayList"), b = wide.idOf("java/util/HashMap"), low = wide.selectorId("hashCode()I");
   if (b !== a + 1) throw new Error("full-width dispatch fixture requires adjacent class IDs");

@@ -145,7 +145,7 @@ for (const [i, [name, arg]] of CASES.entries()) {
 if (substrate) {
   for (const mode of ["bridge", "full", "recovered"] as const) {
     let full = false, turns = 0, bridge = 0;
-    const heap = world(w.prog, { heapUsed: () => full ? HEAP_LIMIT + 1 : 0, collect: () => {}, loop: {
+    const heap = world(w.prog, { bare: true, heapUsed: () => full ? HEAP_LIMIT + 1 : 0, collect: () => {}, loop: {
       ...hostLoop, after: (ms, run) => hostLoop.after(ms, () => { turns++; if (mode === "recovered") full = false; run(); }),
     } });
     heap.bridge.toJava(new Int8Array(1), "[B");

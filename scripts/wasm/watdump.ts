@@ -3,7 +3,7 @@
 import { join } from "node:path";
 import { writeFileSync } from "node:fs";
 import { program, world } from "./lib.ts";
-import { mountPlatform, natives, startProcess } from "./harness.ts";
+import { mountPlatform, startProcess } from "./harness.ts";
 import { G1_DIR, ROOT } from "./paths.ts";
 import { PLATFORM_PATHS } from "../aosp.ts";
 import { shellIn } from "../java.ts";
@@ -11,7 +11,7 @@ import { shellIn } from "../java.ts";
 const [workload, filter] = process.argv.slice(2);
 const dex = join(G1_DIR, "classes.dex");
 await mountPlatform(ROOT);
-const w = world(program([dex, ...PLATFORM_PATHS]), { natives });
+const w = world(program([dex, ...PLATFORM_PATHS]));
 await startProcess(w);
 const units: Uint8Array[] = [], instantiate = w.instantiate.bind(w);
 w.instantiate = (mod, imports) => { if (mod instanceof Uint8Array) units.push(mod); return instantiate(mod, imports); };

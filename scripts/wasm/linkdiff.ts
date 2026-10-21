@@ -5,7 +5,7 @@ import { copyFileSync } from "node:fs";
 import { join } from "node:path";
 import { world } from "./lib.ts";
 import { loadDexes } from "../dexes.ts";
-import { mountPlatform, natives, startProcess } from "./harness.ts";
+import { mountPlatform, startProcess } from "./harness.ts";
 import { CORE_PATHS, JAVA, ROOT } from "./paths.ts";
 import { checker } from "./tools.ts";
 import { filesIn, fixture, javac, onJdk, tempDir } from "../java.ts";
@@ -35,7 +35,7 @@ const expected: Record<string, string> = {
   classNowInterface: icce("Found interface LkC, but class was expected"),
 };
 await mountPlatform(ROOT);   // makes the ICU data resident, which natives cannot wait for
-const w = world([join(out, "classes.dex"), ...CORE_PATHS], { natives });
+const w = world([join(out, "classes.dex"), ...CORE_PATHS]);
 await startProcess(w);
 const hit: string[] = [];
 w.onGap = (gap) => hit.push(gap);

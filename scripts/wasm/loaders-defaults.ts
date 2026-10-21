@@ -21,7 +21,7 @@ export async function defaults(suite: Suite, build: (dir: string, sources: strin
 
 async function interfaceSuper({ check, fail }: Suite, dex: string): Promise<void> {
   {
-    const p = new Program(loadDexes(dex), core()), target = world(p), loader = p.newLoader(p.root, null);
+    const p = new Program(loadDexes(dex), core()), target = world(p, { bare: true }), loader = p.newLoader(p.root, null);
     target.addDexes(loadDexes(dex), loader);
     const face = p.definedBy(loader, "InterfaceSuper$C")!, replacement = p.definedBy(loader, "InterfaceSuper$B")!;
     p.addClass(new PlainClass("Outside", "java/lang/Object", [face], ACC.PUBLIC), p.root);
@@ -42,7 +42,7 @@ async function interfaceSuper({ check, fail }: Suite, dex: string): Promise<void
     const call = prepareMethod(m.dex.code(m.codeOff)).instructions.find(i => i.name === kind && m.dex.method(i.b).name === "f");
     if (!call || m.dex.rawType(m.dex.method(call.b).cls) !== `LInterfaceSuper$${owner};`) fail("D8 changed ordinary default dispatch");
   }
-  const current = world(p), mirrors = new Set<object>();
+  const current = world(p, { bare: true }), mirrors = new Set<object>();
   for (const [index, namespace] of ["root", "first", "second"].entries()) {
     let cls = "InterfaceSuper";
     if (namespace !== "root") {
@@ -67,7 +67,7 @@ async function abstractDefault({ check, fail }: Suite, dex: string): Promise<voi
   for (const file of filesIn(old, /^AbstractDefaultUse.*\.class$/)) copyFileSync(file, join(dir, file.split("/").pop()!));
   androidFixture({ out: dir });
   if (!check("binary-evolution JDK control", java(dir, "AbstractDefaultUse").trim(), "42\n1\n42\n1")) return;
-  const p = new Program(loadDexes(dex), core()), w = world(p);
+  const p = new Program(loadDexes(dex), core()), w = world(p, { bare: true });
   for (let index = 0; index < 3; index++) {
     let cls = "AbstractDefaultUse";
     if (index) { const loader = p.newLoader(p.boot, null); w.addDexes(loadDexes(dex), loader); cls += "@" + loader.id; }

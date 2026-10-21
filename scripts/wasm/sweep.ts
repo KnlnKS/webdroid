@@ -3,32 +3,30 @@
 // Compiler.gap), a compiler exception, or a module the selected engine rejects. The exit status is non-zero when a cause outside KNOWN occurs.
 // Run from the repository root: pnpm wasm sweep [path ...] [-v]
 import { join, resolve } from "node:path";
-import { world } from "./lib.ts";
+import { platform, platformDexes, world } from "./lib.ts";
 import { loadDexes } from "../dexes.ts";
-import { externs } from "../../src/wasm/link/intrinsics.ts";
 import { Program } from "../../src/wasm/compiler/program.ts";
 import { Compiler } from "../../src/wasm/compiler/j2w.ts";
-import { natives } from "./harness.ts";
 import { mid } from "../../src/wasm/compiler/ids.ts";
 import { compileModule, COMPILE_OPTIONS } from "../../src/wasm/link/module.ts";
 import { ROOT, platformJars } from "./paths.ts";
-import { PLATFORM_PATHS } from "../aosp.ts";
+import { AOSP } from "../aosp.ts";
+import { PLATFORM_JARS } from "../../src/jvm/provenance.ts";
+import { cli } from "../args.ts";
 
 const KNOWN = [/^native: /];
 // Validate discarded units without allocating executable code; compilation supplies rejection diagnostics.
 const validate = WebAssembly.validate as unknown as (bytes: BufferSource, options: typeof COMPILE_OPTIONS) => boolean;
 
-const verbose = process.argv.includes("-v"), args = process.argv.slice(2).filter((a) => !a.startsWith("-"));
+const { values: { verbose }, positionals: args } = cli("pnpm smoke [path ...] [-v]", { verbose: { type: "boolean", short: "v" } });
 // Check methods separately as well as in their AOT groups, since grouping changes inlining and imports.
 const targets = args.length ? args.map((a) => resolve(a)) : [...platformJars("core-oj", "core-libart", "okhttp", "bouncycastle", "apache-xml", "framework"), join(ROOT, "apks/FitNotes.apk")];
-const jars = PLATFORM_PATHS;
 let unexplained = 0;
 for (const target of targets) {
   // the boot class path comes first, as in ART: an app's stubs of platform classes (R8 API outlines) never shadow the platform's, and an app sees only the platform
-  const dexes = jars.includes(target) ? jars.map(loadDexes) : [...jars.map(loadDexes), loadDexes(target)];
-  const mine = new Set(dexes.at(jars.includes(target) ? jars.indexOf(target) : -1)), prog = new Program(dexes.flat());
-  prog.addExterns(externs);
-  const w = world(prog, { natives, compileOnly: true });
+  const jar = PLATFORM_JARS.find((j) => `${AOSP}/${j}` === target), own = jar ? [] : loadDexes(target);
+  const mine = new Set(jar ? platformDexes([jar]) : own), prog = new Program(own, platform());
+  const w = world(prog, { compileOnly: true, hostClasses: false });
   const names = new Set([...prog.all()].filter((c) => c.dex && mine.has(c.dex)).map((c) => c.name));
   const causes = new Map<string, string[]>();
   let total = 0, clean = 0, bodyless = 0;

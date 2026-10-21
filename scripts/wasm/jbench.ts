@@ -4,7 +4,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { program, world } from "./lib.ts";
-import { mountPlatform, natives, startProcess } from "./harness.ts";
+import { mountPlatform, startProcess } from "./harness.ts";
 import { ROOT } from "./paths.ts";
 import { PLATFORM_PATHS } from "../aosp.ts";
 import { cutWorkloads } from "./tools.ts";
@@ -28,7 +28,8 @@ console.log(`${"workload".padEnd(15)} ${"wasm".padStart(10)} ${"expected".padSta
 for (const name of todo) {
   let got: string, hit: string[] = [];
   const want = String(expected[name]);
-  const w = world(prog, { natives });
+  // the workloads' Worlds share one Program, which the host's classes would change for the first
+  const w = world(prog, { hostClasses: false });
   w.onGap = (gap) => hit.push(gap);
   await startProcess(w);
   const t0 = performance.now();

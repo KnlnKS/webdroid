@@ -1,15 +1,12 @@
-// What the harnesses run Java with: the registered natives, over the World lib.world makes, and the platform's jars and data mounted as a page mounts them.
+// What the harnesses run Java in besides the World lib.world makes: the platform's jars and data mounted as a page mounts them, and the state a process starts in.
 // It is bundled for pages too (g1run.ts, boot-probe-page.ts), where node:fs is the files the page preloaded.
-import "../../src/natives.ts";
 import { mountPlatformJar } from "../../src/android/framework.ts";
 import { mountPlatformData } from "../../src/shell/apex.ts";
 import { PLATFORM_DATA } from "../../src/jvm/bootclasspath.ts";
 import { isResident, mapExternal, pagesIn, unmapExternal } from "../../src/jvm/natives/jmemory.ts";
-import { attachHostClasses, natives, nativeSource } from "../../src/wasm/host/nativesource.ts";
 import type { World } from "../../src/wasm/link/world.ts";
 import { vfs } from "../../src/shell/vfs.ts";
 import { localPlatformData, platformJarBytes } from "../aosp.ts";
-export { attachHostClasses, natives, nativeSource };
 
 const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer), f64 = new Float64Array(1), u64 = new BigUint64Array(f64.buffer);
 /** float/double results and arguments cross harnesses as raw bits */

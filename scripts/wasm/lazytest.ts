@@ -15,10 +15,12 @@ const out = fixture({ sources: ["W", "Ex", "Lz", "Lz2"].map((n) => join(JAVA, `$
 fixture({ out: join(out, "out2"), classpath: [out], classes: filesIn(out, /^Lz2(\$\w+)?\.class$/) });
 
 const suite = checker("lazytest"), { check } = suite;
+/** a World over the fixture and the core jars without natives or host classes; `opts` are its own */
+const lz = (opts: Parameters<typeof world>[1] = {}) => world([join(out, "classes.dex"), ...jars], { bare: true, ...opts });
 
 // ---- CHA under open-world loading: the app's dexes join the hierarchy as they are added, another loader's classes once they are linked
 for (const own of [false, true]) {
-  const w = world([join(out, "classes.dex"), ...jars]), loader = own ? w.prog.newLoader(w.prog.root, null) : w.prog.root;
+  const w = lz(), loader = own ? w.prog.newLoader(w.prog.root, null) : w.prog.root;
   check("Lz.test before", w.entry("Lz", "test", "()I")(), 11);
   const t = w.stats.units;
   check("Lz.test again compiles nothing", (w.entry("Lz", "test", "()I")(), w.stats.units - t), 0);
@@ -35,7 +37,7 @@ for (const [hot, own] of [[false, false], [true, false], [true, true]]) {
     w.addDexes(loadDexes(join(out, "out2/classes.dex")), loader);
     return w.entry(own ? `Lz2@${loader.id}` : "Lz2", "make", "()LLz$A;")();
   }, { javaValues: true });
-  const w = world([join(out, "classes.dex"), ...jars], { natives: new Natives({
+  const w = lz({ natives: new Natives({
     find: (cls, key) => cls === "Lz" && key === "late()LLz$A;" ? late : undefined,
     thrown: () => undefined,
   }) });
@@ -52,7 +54,7 @@ for (const [hot, own] of [[false, false], [true, false], [true, true]]) {
 
 // ---- tiers: a method that uses up its budget is recompiled (here inside a loop, so the next call is the second tier) and answers the same
 {
-  const w = world([join(out, "classes.dex"), ...jars]), call = w.entry("Lz", "sum", "(I)I");
+  const w = lz(), call = w.entry("Lz", "sum", "(I)I");
   let first = call(40000);
   const slot = w.slotOf(w.prog.resolve("Lz", "sum", "(I)I")!), initial = w.table.get(slot);
   // the second tier waits until the program has been hot for a few ms
@@ -68,7 +70,7 @@ for (const [hot, own] of [[false, false], [true, false], [true, true]]) {
 
 // ---- implicit exceptions: class (caught by Java code) and message (computed by the host)
 {
-  const w = world([join(out, "classes.dex"), ...jars], { heapUsed: () => 0 });
+  const w = lz({ heapUsed: () => 0 });
   const call = (name: string, desc: string, ...a: unknown[]) => w.entry("Ex", name, desc)(...a);
   check("div by zero", call("div", "(II)I", 5, 0), -1001); check("message", w.lastMessage, "divide by zero");
   check("div ok", call("div", "(II)I", 7, 2), 3);
@@ -90,13 +92,13 @@ for (const [hot, own] of [[false, false], [true, false], [true, true]]) {
 // ---- the heap check at the end of each allocation window decides an OutOfMemoryError
 {
   let checks = 0;
-  const w = world([join(out, "classes.dex"), ...jars], { heapUsed: () => (++checks > 3 ? HEAP_LIMIT + 1 : 0) });
+  const w = lz({ heapUsed: () => (++checks > 3 ? HEAP_LIMIT + 1 : 0) });
   const n = w.entry("Ex", "churn", "(I)I")(1000) as number;
   check("churn runs out after a few windows", n < 0 && n > -20 ? "" : n, "");
 }
 // ---- stack traces: the Java frames of a throwable thrown three calls deep come back as method, DEX pc and source line
 {
-  const w = world([join(out, "classes.dex"), ...jars]), callA = w.entry("Ex", "a", "(I)Ljava/lang/Throwable;");
+  const w = lz(), callA = w.entry("Ex", "a", "(I)Ljava/lang/Throwable;");
   const backtrace = w.helpers.fieldReader("java/lang/Throwable", "backtrace", "Ljava/lang/Object;"), state = backtrace(callA(1) as object) as object;
   const frames = w.stacks.stackTrace(state), where = (fs: typeof frames) => fs.slice(0, 3).map((f) => `${f.cls}.${f.method}:${f.pc}:${f.line}`).join(" ");
   check("frames", frames.slice(0, 3).map((f) => `${f.cls}.${f.method}`).join(" "), "Ex.c Ex.b Ex.a");
@@ -119,7 +121,7 @@ for (const [hot, own] of [[false, false], [true, false], [true, true]]) {
 }
 // ---- stack overflow: V8 will not let Wasm catch it, so it surfaces as a StackOverflowError at the edge of the Java world
 {
-  const w = world([join(out, "classes.dex"), ...jars]);
+  const w = lz();
   let thrown: unknown;
   try { w.entry("Ex", "deep", "(I)I")(0); } catch (e) { thrown = e; }
   const t = w.throwable(thrown);
