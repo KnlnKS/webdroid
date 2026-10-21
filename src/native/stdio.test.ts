@@ -6,7 +6,7 @@ import { lookupHost, stp } from "./host.ts";
 import { libcInit } from "./libc.ts";
 import { mem } from "./mem.ts";
 import { fdFile, javaOpenFd } from "./fs.ts";
-import { javaCloseFd, javaFdBytes, javaLseekFd, javaDupFd, javaReadFd } from "./fd.ts";
+import { javaCloseFd, javaFdBytes, javaLseekFd, javaDupFd, javaReadFd, openFd } from "./fd.ts";
 import { renamePath } from "../shell/file-path.ts";
 import { kernelInit } from "./syscall.ts";
 import { kernel, kernelCalls, libCalls } from "./calls.testkit.ts";
@@ -309,4 +309,24 @@ test("a fifo goes with its file and ends when its last writer closes", async () 
     vfs.delete("/fifo-test");
     expect(await call("mkfifo", path, 0o600)).toBe(0);
   } finally { vfs.delete("/fifo-test"); mem.free(path); mem.free(buf); cpu.dispose(); setA64(false); }
+});
+
+test("the ARM32 libc's readdir answers each entry's type over the descriptor dirfd names", async () => {
+  setA64(false); kernelInit(); libcInit();
+  vfs.mkdir("/readdir-test"); vfs.mkdir("/readdir-test/sub"); vfs.write("/readdir-test/file", new Uint8Array(1));
+  const cpu = new Cpu(mainThread, "readdir-test"), call = libCalls(cpu, "libc.so"), path = mem.strdup("/readdir-test");
+  const list = async (dir: number) => {
+    const seen: string[] = [];
+    for (let de; (de = await call("readdir", dir));) seen.push(`${mem.cstr(de + 19)}:${mem.ld8u(de + 18)}`);
+    return seen.sort();
+  };
+  try {
+    const dir = await call("opendir", path), fd = await call("dirfd", dir);
+    expect(openFd(fd)?.dir).toBe(true);
+    expect(await list(dir)).toEqual(["..:4", ".:4", "file:8", "sub:4"]);
+    await call("rewinddir", dir);
+    expect(await list(dir)).toHaveLength(4);
+    expect(await call("closedir", dir)).toBe(0);
+    expect(openFd(fd)).toBeUndefined();
+  } finally { mem.free(path); cpu.dispose(); }
 });

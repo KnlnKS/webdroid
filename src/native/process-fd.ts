@@ -63,7 +63,8 @@ const REMOTE: FileOps = {
   positional: true,
   read: (f, _target, _at, n, off) => remoteRead(f.remote!, n, off),
   write: (f, bytes, off) => f.remote!.request("write", {bytes:bytes.slice(),offset:offsetOf(off)}),
-  seek: (f, offset, whence) => f.remote!.request("seek", {offset,whence}),
+  // a directory's position indexes the entries listed here
+  seek: (f, offset, whence) => !f.dir ? f.remote!.request("seek", {offset,whence}) : whence === 0 && offset >= 0 ? f.pos = offset : -E.INVAL,
   stat: (f) => f.remote!.stat(),
   sync: (f) => f.remote!.request("sync", {}),
   available: (f) => Promise.all([f.remote!.stat(), f.remote!.request("seek", {offset:0,whence:1})])
