@@ -11,7 +11,6 @@ import type { Ctx2D } from "./recording.ts";
 import type { NativePaint } from "./paint.ts";
 import type { NativeCanvas } from "./canvas.ts";
 import type { Box } from "./graphics.ts";
-import { deviceBounds } from "./matrix.ts";
 
 /** `draw` in device pixels by `op` (after the paint's stroke setup when `stroke`), the context
  *  restored afterwards; the plan has ruled out a shader, so fill styles need no transform */
@@ -173,11 +172,8 @@ export function tryBitmapPath(canvas: NativeCanvas, paint: NativePaint, op: Glob
     deviceHairline(canvas, paint, op, path.path());
     return true;
   }
+  // SkStroke keeps the path's inverseness: everything outside the stroke, wherever the stroke is
   if (!path.inverseFill || paint.style !== 1 || paint.dash || !paint.antiAlias && canvas.w * canvas.h > MAX_SAMPLED_PIXELS) return false;
-  // a stroke wholly off the canvas draws nothing
-  const m = canvas.ctx.getTransform(), b = path.bounds(), [x0, y0, x1, y1] = deviceBounds(m, b.left, b.top, b.right, b.bottom);
-  const pad = paint.strokeWidth * Math.max(Math.hypot(m.a, m.b), Math.hypot(m.c, m.d)) + 2;
-  if (x1 + pad < 0 || x0 - pad > canvas.w || y1 + pad < 0 || y0 - pad > canvas.h) return true;
   canvas.drawMask(paint, op, (nc, white) => inverseCoverage(nc, path, white), !paint.antiAlias);
   return true;
 }
