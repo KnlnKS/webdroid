@@ -6,7 +6,7 @@ import "../src/natives.ts";
 import { rt, JObj, getDeclared } from "../src/jvm/runtime.ts";
 import { jarray } from "../src/jvm/abi.ts";
 import { newObj, vcall, vcallAsync, iof } from "../src/jvm/natives/jentry.ts";
-import { checkUriPermission, grantUriPermission, revokeUriPermission } from "../src/android/urigrants.ts";
+import { checkUriPermission, grantUriPermission, revokeUriPermission } from "../src/android/server/urigrants.ts";
 import { mkUri } from "../src/android/net.ts";
 import { packages, PackageRecord, signaturePermissions } from "../src/android/packages.ts";
 import { vfs } from "../src/shell/vfs.ts";

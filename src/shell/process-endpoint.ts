@@ -6,6 +6,7 @@ import { usePathOwner } from "./file-path.ts";
 import { descriptorTransport } from "../native/process-fd.ts";
 import { useAccountStore } from "../android/accounts.ts";
 import { pendingTransport } from "../android/pendingintent.ts";
+import { uriGrantTransport } from "../android/urigrants.ts";
 import { useAlarmScheduler } from "../android/alarm.ts";
 import { encodeIntent, decodeIntent } from "../android/intentipc.ts";
 import { SYSTEM_SERVICES, useSystemServiceAccess, binderTransport, receiveTransaction, exportBinder, importBinder, parcelled, unparcelled, type BinderHandle } from "../android/binder.ts";
@@ -84,6 +85,7 @@ function connectRemoteStores(broker: BrokerCalls): void {
   usePermissionAccess(broker.permissions);
   exitRecordTransport.records = broker.exitRecords;
   exitRecordTransport.publish = broker.processExited;
+  Object.assign(uriGrantTransport, broker.uriGrants);
 }
 export function closeProcessBrokerPort(): void {
   calls?.close();

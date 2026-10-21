@@ -4,6 +4,7 @@
 // bundle the broker. Caller identity is bound to the port, never supplied in a request's arguments.
 import type { PendingAccess } from "../android/pendingintent.ts";
 import type { PermissionCalls } from "../android/permissions.ts";
+import type { UriGrantCalls } from "../android/urigrants.ts";
 import type { PreferenceCalls } from "../android/sharedprefs.ts";
 import type { WebStorageCalls } from "../android/webstorage.ts";
 import type { ForegroundNotificationRequest } from "../android/notification.ts";
@@ -56,6 +57,7 @@ export type BrokerCalls = CookieCalls & {
   permissions: PermissionCalls;
   settings: Calls<SettingsAccess>;
   activity: ActivityCalls;
+  uriGrants: Calls<UriGrantCalls>;
   ui: HostUi;
   serviceConnected: (key: string, binder: BinderHandle | null, dead: boolean) => Promise<void>;
   systemService: (name: string) => Promise<BinderHandle | null>;
@@ -91,6 +93,7 @@ export const brokerMethods = {
   settings: methodsOf<SettingsAccess>()(["get", "entries", "put", "ssaidKey"]),
   activity: methodsOf<ActivityCalls>()(["launch", "finish", "presentation"]),
   ui: hostUiMethods,
+  uriGrants: methodsOf<UriGrantCalls>()(["check", "grant", "revoke"]),
 } satisfies MethodTree & { [D in Domains<BrokerCalls>]: readonly (keyof BrokerCalls[D])[] };
 export const brokerCallNames = qualified(brokerMethods);
 

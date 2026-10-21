@@ -11,9 +11,9 @@ import { newArrayList } from "../../jvm/natives/jcoll.ts";
 import { configurations, resizeWindows, setClientVisible } from "./wm.ts";
 import { notifyDisplayChanged } from "../display.ts";
 import { asSystem, hostService, systemToken } from "../binder.ts";
-import { appHost } from "../apphost.ts";
+import { appHost, runningApp } from "../apphost.ts";
 import { componentParts$, intentQuery$, mkComponentName, systemActivity, withComponent$, SYSTEM_ACTIVITY, type ComponentRef, type JIntent, type SystemHandler, type SystemResult } from "../intent.ts";
-import { grantResultUris } from "../urigrants.ts";
+import { grantIntentUris$ } from "../urigrants.ts";
 import { pms, processRecord, runsHere, thisApp } from "./process.ts";
 import { decodeIntent } from "../intentipc.ts";
 import { fillIn$, pendingTransport, senderId$, sendPending$, START_CANCELED } from "../pendingintent.ts";
@@ -323,6 +323,7 @@ function* resolveStart(app: JObj, intent: JObj, resolvedType: string | null, res
   if (!info) return START_INTENT_NOT_RESOLVED;
   const copy = yield* withComponent$(intent, yield vcall(info, "getComponentName", "()Landroid/content/ComponentName;"));
   const pkg = getDeclared<string>(info, AI, "packageName"), process = getDeclared<string>(info, AI, "processName");
+  yield* grantIntentUris$(pkg, copy);
   if (runsHere(pkg, process)) return { run: () => startActivity(app, copy, info, resultRecord, resultWho, requestCode), remote: false };
   return { remote: true, run: function* () {
     yield activityTransport.launch(pkg, process, getDeclared<string>(info, AI, "name").replaceAll(".", "/"), copy, resultRecord ? {
@@ -370,13 +371,14 @@ function* runSystemActivity(run: SystemHandler, intent: JObj, resultTo: Activity
   let result: SystemResult = null;
   try { result = yield* awaited(run(intent)); } catch (error) { logUncaught(error); }
   const { resultCode, data } = result && "resultCode" in result ? result : { resultCode: result ? RESULT_OK : RESULT_CANCELED, data: result };
+  // the picker's grants of what the user chose: system providers' uris, which the app reaches itself
+  if (data) yield* grantIntentUris$(runningApp().pkg, data);
   yield* deliverResult(resultTo ?? stack.at(-1) ?? null, resultWho, requestCode, resultCode, data);
 }
 /** a result from an activity that covered `to` elsewhere (the browser, another process): the
  *  caller takes it as it resumes */
 function* deliverResult(to: ActivityRecord | null, resultWho: string | null, requestCode: number, resultCode: number, data: JObj | null): Gen<void> {
   if (!to || to.finishing) return;
-  if (resultCode === RESULT_OK && data) yield grantResultUris(appHost!.pkg, data);
   if (requestCode >= 0) to.results.push(yield newObj("android/app/ResultInfo", "(Ljava/lang/String;IILandroid/content/Intent;)V", resultWho, requestCode, resultCode, data));
   if (stack.at(-1) === to) yield coverTop();
 }
@@ -420,6 +422,9 @@ function* finish(r: ActivityRecord, resultCode: number, data: JObj | null): Gen<
   transitions++;
   try {
     if (r.finishing) return true;
+    // ActivityTaskManagerService.collectGrants: what the result's recipient may use, granted before it finishes
+    const recipient = r.resultTo ? runningApp().pkg : r.remote?.caller?.pkg;
+    if (data && recipient) yield* grantIntentUris$(recipient, data);
     r.finishing = true;
     yield* owedResult(r, resultCode, data);
     const covered = stack.slice(stack.indexOf(r) + 1).some((a) => !a.finishing);

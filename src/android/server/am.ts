@@ -13,7 +13,7 @@ import { configurations } from "./wm.ts";
 import { startMainActivity, startOperation$ } from "./atm.ts";
 import { uptimeMillis } from "../../guest-clock.ts";
 import { systemProviderHolder } from "../systemproviders.ts";
-import { checkUriPermission, grantUriPermission, revokeUriPermission } from "../urigrants.ts";
+import { uriGrantTransport } from "../urigrants.ts";
 import { uriText, type JUri } from "../net.ts";
 import { systemFontMap } from "../fonts.ts";
 import { appCrashed, processImportance, queryExitRecords, noteApplicationFlags, setProcessStateSummary, type ExitRecord } from "./appexitinfo.ts";
@@ -138,11 +138,11 @@ const activityManagerMethods = {
   "unstableProviderDied(Landroid/os/IBinder;)V": () => {},
   // ContextImpl's URI permissions, held by UriGrantsManagerService
   "checkUriPermission(Landroid/net/Uri;IIIILandroid/os/IBinder;)I": (uri: JUri | null, _pid: number, uid: number, modes: number) =>
-    after(uriText(uri), (u) => checkUriPermission(u, uid, modes)),
+    after(uriText(uri), (u) => uriGrantTransport.check(u, uid, modes)),
   "grantUriPermission(Landroid/app/IApplicationThread;Ljava/lang/String;Landroid/net/Uri;II)V": (_app: JObj, pkg: string, uri: JUri | null, modes: number) =>
-    after(pkg ? uriText(uri) : rt.npe(), (u) => grantUriPermission(pkg, u, modes)),
-  "revokeUriPermission(Landroid/app/IApplicationThread;Ljava/lang/String;Landroid/net/Uri;II)V": (_app: JObj, _pkg: string, uri: JUri | null, modes: number) =>
-    after(uriText(uri), (u) => revokeUriPermission(u, modes)),
+    after(pkg ? uriText(uri) : rt.npe(), (u) => uriGrantTransport.grant(pkg, [u], modes)),
+  "revokeUriPermission(Landroid/app/IApplicationThread;Ljava/lang/String;Landroid/net/Uri;II)V": (_app: JObj, pkg: string | null, uri: JUri | null, modes: number) =>
+    after(uriText(uri), (u) => uriGrantTransport.revoke(pkg, u, modes)),
   // Log.wtf's report, which RuntimeInit sends after logging it: with Settings.Global wtf_is_fatal
   // unset, ActivityManagerService records it and the process lives
   "handleApplicationWtf(Landroid/os/IBinder;Ljava/lang/String;ZLandroid/app/ApplicationErrorReport$ParcelableCrashInfo;I)Z": () => 0,

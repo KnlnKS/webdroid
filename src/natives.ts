@@ -64,7 +64,7 @@ import "./android/wifi.ts";
 import "./android/appwidget.ts";
 import "./android/localsocket.ts";
 import "./android/clipboard.ts";
-import "./android/urigrants.ts";
+import "./android/server/urigrants.ts";
 import "./android/game.ts";
 import "./android/vibrator.ts";
 import "./android/audio.ts";

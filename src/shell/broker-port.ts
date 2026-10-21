@@ -7,6 +7,7 @@ import { PROCESS_PID } from "../android/os.ts";
 import { ownedBy, packages } from "../android/packages.ts";
 import { canonicalPermissionCommands, checkUidPermission, holdsPlatformPermission } from "../android/permissions.ts";
 import { REASON_EXIT_SELF, deathOf, exitRecords, recordRemoteExit } from "../android/server/appexitinfo.ts";
+import { uriGrantCommands } from "../android/server/urigrants.ts";
 import { canonicalPreferenceCommands, createAppData } from "../android/sharedprefs.ts";
 import { createSQLiteSession } from "../android/sqlite.ts";
 import { systemProviders } from "../android/systemproviders.ts";
@@ -120,6 +121,7 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
       finish: (id, code, data) => { unawaited(broker.activities.finish(pid, id, code, data)); },
       presentation: translucent => broker.activities.presentation(pid, translucent),
     },
+    uriGrants: uriGrantCommands(() => caller.uid),
     ui: Object.fromEntries(hostUiMethods.map(name => [name, (...args: never[]) =>
       (hostUi()[name] as (...args: never[]) => unknown)(...args)])) as unknown as HostUi,
     serviceConnected: (key, binder, dead) => broker.serviceConnected(pid, key, binder, dead),

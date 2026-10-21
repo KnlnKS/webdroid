@@ -14,6 +14,7 @@ import { PROCESS_PID, PROCESS_UID } from "../os.ts";
 import { appHost } from "../apphost.ts";
 import { packages, qualifyComponent, type PackageRecord } from "../packages.ts";
 import { checkPermission } from "../permissions.ts";
+import { grantIntentUris$ } from "../urigrants.ts";
 import { type JComponentName, type JIntent, componentParts$, mkComponentName, newIntent, withComponent$ } from "../intent.ts";
 import { startForegroundNotification, stopForegroundNotification } from "../notification.ts";
 import { scheduleOnApp, compatInfo, pms, runsHere, STOCK_PM_FLAGS } from "./process.ts";
@@ -258,6 +259,7 @@ export const startService = driven(function* (intent: JObj, resolvedType: string
   if (!t) return null;
   const denied = yield* denial(t, callingPackage);
   if (denied) return yield* awaited(mkComponentName("!", denied));
+  yield* grantIntentUris$(t.pkg, intent);
   const bound = yield* withComponent$(intent, t.name);
   if (isLocal(t)) yield* startLocal(t, bound);
   else detached(() => serviceTransport.start(remoteOwner(t), t.process, bound, foreground), logUncaught);
