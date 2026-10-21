@@ -90,7 +90,8 @@ const publishProviders = driven(function* (holders: JObj): Gen<void> {
   }
 });
 /** the IContentProvider binder this process publishes for an authority, for a caller in another
- *  process; null when it is not published in time */
+ *  process; null when it is not published in time. The wait is host time, as ActivityStack's
+ *  visibility timeout is: a controlled guest clock would reach it before a starting process publishes */
 export async function publishedProvider(authority: string): Promise<JObj | null> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const holder = await Promise.race([publication(authority).promise, new Promise<null>((resolve) => { timer = setTimeout(resolve, PROVIDER_WAIT_MS, null); })]);

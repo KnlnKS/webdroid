@@ -142,7 +142,8 @@ export class ActivityStack {
    * launch goes ahead without it: a process whose main thread is blocked in a binder call —
    * one the new activity exists to answer, as when a service asks the user for a permission —
    * would otherwise hold the launch forever. Its late answer still lands, and a dead process
-   * answers nothing.
+   * answers nothing. The timeout is host time: the other process answers in host time, and a
+   * controlled guest clock reaches a pending deadline as soon as nothing earlier is due.
    */
   private visibility(entry: Entry, phase: "pause" | "stop" | "visible", timeoutMs: number): Promise<void> {
     return new Promise((resolve) => {
