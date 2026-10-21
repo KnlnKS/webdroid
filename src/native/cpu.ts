@@ -21,8 +21,8 @@ import { dieOfSignal } from "./crash.ts";
 import { setKernelLayout } from "./kernel.ts";
 import { backtrace } from "./dl.ts";
 
-const SliceExit = { Budget: 0, Suspend: 1, Exit: 2, Signal: 3 } as const;
-type SliceExit = (typeof SliceExit)[keyof typeof SliceExit];
+export const SliceExit = { Budget: 0, Suspend: 1, Exit: 2, Signal: 3 } as const;
+export type SliceExit = (typeof SliceExit)[keyof typeof SliceExit];
 const CoreExit = { Budget: 0, Host: 1, Ret: 2, Fault: 3, Syscall: 4 } as const;
 const ILL_ILLOPC = 1, TRAP_BRKPT = 1, BUS_ADRALN = 1, SEGV_MAPERR = 1, SEGV_ACCERR = 2;
 /** a nested call() on this register file: what it is for (wd.native.regs) and, for a signal handler,
