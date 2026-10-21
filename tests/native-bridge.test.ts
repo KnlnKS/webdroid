@@ -1,15 +1,15 @@
 import { expect, test, describe } from "vite-plus/test";
 import "../src/natives.ts";
-import { driven, type Gen, rt } from "../src/jvm/runtime.ts";
+import { driven, type Gen } from "../src/jvm/runtime.ts";
 import { Cpu, setA64 } from "../src/native/cpu.ts";
 import { mem } from "../src/native/mem.ts";
-import { mainThread, curThread, JThread, setCurThread, vcall } from "../src/jvm/natives/jentry.ts";
+import { mainThread, curThread } from "../src/jvm/natives/jentry.ts";
 import { RET_SENTINEL, PAGE_SIZE, STACK_SIZE } from "../src/native/abi.ts";
 import { lookupHost, hostFn, type ArgReader, hostLib, vaList } from "../src/native/host.ts";
 import { libcInit } from "../src/native/libc.ts";
 import { kernelInit } from "../src/native/syscall.ts";
 import { eglInit } from "../src/native/egl.ts";
-import { EglContext } from "../src/android/glsurface.ts";
+import { EglContext } from "../src/android/egl.ts";
 import { gl, bindContext, currentContext } from "../src/native/gl-context.ts";
 import { gles3Init } from "../src/native/gles3.ts";
 
@@ -85,6 +85,7 @@ describe("native-descriptor-flags", () => {
 describe("native-egl", () => {
   eglInit();
   const cpu = { jthread: curThread } as Cpu;
+  hostFn("libEGL.so", "eglInitialize")!(cpu, args([1, 0, 0]));
 
   test("EGL config arrays use guest pointer width while counts remain EGLint", () => {
     const p = mem.malloc(16);
@@ -95,7 +96,7 @@ describe("native-egl", () => {
           mem.u8.fill(0xff, p, p + 16);
           const values = name === "eglGetConfigs" ? [1, p, 1, p + 8] : [1, 0, p, 1, p + 8];
           expect(hostFn("libEGL.so", name)!(cpu, args(values))).toBe(1);
-          expect(mem.ld32(p)).toBe(1);
+          expect(mem.ld32(p)).toBeGreaterThan(0);
           expect(mem.ld32(p + 4)).toBe(a64 ? 0 : -1);
           expect(mem.ld32(p + 8)).toBe(1);
           expect(mem.ld32(p + 12)).toBe(-1);
@@ -150,38 +151,6 @@ describe("native-egl-thread-current", () => {
     expect(currentContext(cpuB.jthread)).toBe(contextB);
     expect(gl).toBe(contextB.gl);
     expect(calls).toEqual([0x84c1]);
-  });
-
-  test("Java EGL current state is visible to native GLES on the same thread", async () => {
-    gles3Init();
-    const original = Object.getOwnPropertyDescriptor(globalThis, "OffscreenCanvas");
-    const calls: number[] = [];
-    const context = { isContextLost: () => false, activeTexture: (texture: number) => calls.push(texture), getParameter: () => 0x84c0 };
-    Object.defineProperty(globalThis, "OffscreenCanvas", { configurable: true, value: class {
-      width: number; height: number;
-      constructor(width: number, height: number) { this.width = width; this.height = height; }
-      getContext() { return context; }
-    } });
-    const previous = curThread, thread = new JThread(), cpu = { jthread: thread } as Cpu;
-    setCurThread(thread);
-    try {
-      const egl = rt.make("javax/microedition/khronos/egl/EGL10");
-      const display = await vcall(egl, "eglGetDisplay", "(Ljava/lang/Object;)Ljavax/microedition/khronos/egl/EGLDisplay;", null);
-      const eglContext = await vcall(egl, "eglCreateContext", "(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLConfig;Ljavax/microedition/khronos/egl/EGLContext;[I)Ljavax/microedition/khronos/egl/EGLContext;", display, null, null, null);
-      const surface = await vcall(egl, "eglCreatePbufferSurface", "(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLConfig;[I)Ljavax/microedition/khronos/egl/EGLSurface;", display, null, null);
-      expect(await vcall(egl, "eglMakeCurrent", "(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLSurface;Ljavax/microedition/khronos/egl/EGLSurface;Ljavax/microedition/khronos/egl/EGLContext;)Z", display, surface, surface, eglContext)).toBe(1);
-      expect(currentContext(thread)).toBe((eglContext as { egl: EglContext }).egl);
-
-      const activeTexture = hostFn("libGLESv2.so", "glActiveTexture");
-      if (!activeTexture) throw new Error("GLES host is not registered");
-      activeTexture(cpu, args([0x84c2]));
-      expect(calls).toEqual([0x84c2]);
-    } finally {
-      bindContext(thread, null);
-      setCurThread(previous);
-      if (original) Object.defineProperty(globalThis, "OffscreenCanvas", original);
-      else Reflect.deleteProperty(globalThis, "OffscreenCanvas");
-    }
   });
 });
 

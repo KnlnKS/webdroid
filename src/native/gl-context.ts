@@ -1,7 +1,7 @@
 // The current GL context. A thread (a Java thread, or the JThread a native thread runs as) has at
 // most one EGL context current; every GL entry point first selects its caller's, whose WebGL
 // context, handle tables and error flags gles1, gles3 and the Java bindings then work on.
-import type { EglContext } from "../android/glsurface.ts";
+import type { EglContext } from "../android/egl.ts";
 import type { HostFn } from "./host.ts";
 import type { Cpu } from "./cpu.ts";
 
