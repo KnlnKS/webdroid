@@ -283,8 +283,7 @@ export class World {
     this.touching?.add(name);
     let rt = this.classes.get(name);
     if (rt) return rt;
-    const late = this.cha.admit(name);
-    if (late) this.assumptions.joined(late);
+    this.assumptions.admit(name);
     const aot = this.aot?.linkClass(name);
     if (aot) { this.classes.set(name, aot); this.classModules.repair(name); return aot; }
     const t0 = performance.now();
@@ -319,9 +318,8 @@ export class World {
   addDexes(dexes: DexFile[], loader: Loader = this.prog.root): string[] {
     const added = this.prog.add(dexes, loader);
     this.changed((s) => s.added(dexes, loader));
-    if (loader === this.prog.root || loader === this.prog.boot) this.assumptions.joined(this.cha.index(added));
-    else this.cha.defer(dexes);
-    this.loaded(added);
+    this.assumptions.added(added, loader === this.prog.root || loader === this.prog.boot ? undefined : dexes);
+    this.hosts.loaded();
     return added;
   }
   private claimers = new Map<string, boolean>();
@@ -360,11 +358,7 @@ export class World {
     for (const [m, body] of bodies) this.madeUp.set(mid(m), body);
     this.prog.addClass(jc, loader);
     this.changed(notice);
-    this.assumptions.joined(this.cha.index([jc.name]));
-    this.loaded([jc.name]);
-  }
-  private loaded(added: string[]): void {
-    this.assumptions.loaded(added);
+    this.assumptions.added([jc.name]);
     this.hosts.loaded();
   }
   /** the Program changed: results a compile worker made before are not adopted (epoch), the compile service hears of it (`notice`), and what was worked out from
@@ -373,7 +367,7 @@ export class World {
     this.epoch++;
     if (notice && this.compiler) notice(this.compiler);
     this.planner.forgetImplementations();
-    if (rebound) { this.cha.reindex(); this.helpers.forgetFieldReaders(); PerWorld.rebound(this); }
+    if (rebound) { this.helpers.forgetFieldReaders(); PerWorld.rebound(this); }
   }
 
   // ---------- calling in from JS, and exceptions
