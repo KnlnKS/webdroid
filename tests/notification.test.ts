@@ -5,7 +5,6 @@ import { classNameOf, newObj, vcall, vcallAsync } from "../src/jvm/natives/jentr
 import { stringHash } from "../src/jvm/abi.ts";
 import { packageUid } from "../src/android/packages.ts";
 import { grantPermissions } from "../src/android/permissions.ts";
-import { preferenceStore, canonicalPreferenceCommands, usePreferenceAccess, usePreferenceStore, type PreferenceCalls } from "../src/android/sharedprefs.ts";
 import { callProxy, serveCalls } from "../src/shell/process-port.ts";
 import { ownedSystemService, useSystemServiceAccess, parcelled, type BinderHandle } from "../src/android/binder.ts";
 import { NotificationStore, notificationStore, useNotificationStore, notificationTransport, receiveForegroundNotification, startForegroundNotification, stopForegroundNotification, type ForegroundNotificationRequest } from "../src/android/notification.ts";
@@ -24,29 +23,26 @@ import { procIdentity } from "../src/shell/procfs.ts";
 const pkg = "org.webdroid.test.notify";
 const N = "Landroid/app/Notification;", B = "Landroid/app/Notification$Builder;";
 let manager: JObj, app: JObj;
-let closePreferences: () => void;
+let closeService: () => void;
 
+// the app reaches the service and posts its foreground notification over a port, as a Worker does
 beforeAll(async () => {
   app = await bootApp(await packageRecord(pkg, { permissions: ["android.permission.POST_NOTIFICATIONS"] }));
-  const owner = preferenceStore, { port1, port2 } = new MessageChannel();
-  const foreground = notificationTransport.foreground;
-  type Calls = PreferenceCalls & {
+  const { port1, port2 } = new MessageChannel(), foreground = notificationTransport.foreground;
+  type Calls = {
     systemService(name: string): Promise<BinderHandle | null>;
     foreground(request: ForegroundNotificationRequest): Promise<void>;
   };
-  const stop = serveCalls(port1, { ...canonicalPreferenceCommands(owner, name => {
-    if (name !== "android:notification-policy:" + pkg) throw new Error("foreign preference file");
-  }), systemService: ownedSystemService,
+  const stop = serveCalls(port1, { systemService: ownedSystemService,
     foreground: (request: ForegroundNotificationRequest) => receiveForegroundNotification(pkg, {pid:procIdentity.pid,uid:packageUid(pkg)}, request),
   });
-  const client = callProxy<Calls>(port2, ["preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles", "systemService", "foreground"]);
-  usePreferenceAccess(client.endpoint);
+  const client = callProxy<Calls>(port2, ["systemService", "foreground"]);
   useSystemServiceAccess(["notification"], client.endpoint.systemService);
   notificationTransport.foreground = client.endpoint.foreground;
-  closePreferences = () => { client.close(); stop(); usePreferenceStore(owner); useSystemServiceAccess([]); notificationTransport.foreground = foreground; };
+  closeService = () => { client.close(); stop(); useSystemServiceAccess([]); notificationTransport.foreground = foreground; };
   manager = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "notification");
 });
-afterAll(() => closePreferences?.());
+afterAll(() => closeService?.());
 
 const channel = async (id: string, name: string, importance: number) =>
   newObj("android/app/NotificationChannel", "(Ljava/lang/String;Ljava/lang/CharSequence;I)V", id, name, importance);
