@@ -311,7 +311,10 @@ export class AotRuntime {
       : !(fresh || JSON.stringify(since) === JSON.stringify(app.prefix)) ? `prefix: ${numberingDiff(since, app.prefix)}` : undefined;
     if (rejected) { this.appRejected = rejected; return false; }
     if (fresh && !w.adopt(app.prefix)) { this.appRejected = "prefix not adopted"; return false; }
-    if (!sameMarks(w.numbers.marks(), app.base) || !w.adopt(app.numbering)) { this.appRejected = "numbering"; return false; }
+    if (!sameMarks(w.numbers.marks(), app.base) || !w.adopt(app.numbering)) {
+      // a fresh World took the prefix just now
+      if (fresh) w.rollback(since.from);
+      this.appRejected = "numbering"; return false; }
     this.appLibraries = app.libraries;
     const platform = this.store!, cOf = new Int32Array(w.slots.blockBase.length).fill(-1);
     cOf.set(this.cOf);

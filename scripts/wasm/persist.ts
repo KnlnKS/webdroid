@@ -364,6 +364,9 @@ if (saved) {
   // what does not match is not used
   check("other dex files find no build", world(late, { app: { index, store } }).appAttached, false);
   check("a changed base finds none", world(app, { app: { index: { ...index, base: { ...index.base, names: index.base.names + 1 } }, store } }).appAttached, false);
+  // a prefix that does not lead to the base is taken back
+  const unbased = world(app, { app: { index: { ...index, prefix: { ...index.prefix, names: [...index.prefix.names, "Unbased"] } }, store } });
+  check("a prefix that misses the base is not kept", [unbased.appAttached, sameMarks(unbased.numbers.marks(), unbased.aot!.platformMarks)].join(), "false,true");
   check("a changed format finds none", world(app, { app: { index: { ...index, version: index.version + 1 }, store } }).appAttached, false);
   const stale = world(app);
   stale.entry("Pst", "chain", "()I")();
