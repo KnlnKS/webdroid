@@ -17,7 +17,7 @@ import { type NativePathEffect, DashEffect, effectAt, strokeRec } from "./pathef
 import { shapeTextRun, layoutOutlines, layoutBounds, hasGlyph } from "./shaping.ts";
 import { strokeCommands } from "./skia.ts";
 import { deviceScale } from "./matrix.ts";
-import { isRecording, recordOrRun, transformOf, type Ctx2D } from "./recording.ts";
+import { recordOrRun, transformOf, type Ctx2D } from "./recording.ts";
 
 const PAINT = "android/graphics/Paint";
 /** Paint's flag bits hwui keeps (getJavaFlags): LCD_RENDER_TEXT and VERTICAL_TEXT are not */
@@ -206,8 +206,7 @@ const strokeWidthOn = (ctx: Ctx2D, width: number, antiAlias: boolean): number =>
 /** a stroke's width, cap, join and miter limit on `ctx`; a recording takes the device pixel of the transform it is drawn under */
 export function applyStroke(ctx: Ctx2D, width: number, antiAlias: boolean, cap: CanvasLineCap, join: CanvasLineJoin, miter: number): void {
   if (antiAlias && width > 0) ctx.lineWidth = width;
-  else if (isRecording(ctx)) recordOrRun(ctx, (c) => { c.lineWidth = strokeWidthOn(c, width, antiAlias); });
-  else ctx.lineWidth = strokeWidthOn(ctx, width, antiAlias);
+  else recordOrRun(ctx, (c) => { c.lineWidth = strokeWidthOn(c, width, antiAlias); });
   ctx.lineCap = cap; ctx.lineJoin = join;
   if (join === "miter") ctx.miterLimit = miter;
 }

@@ -3,7 +3,7 @@
 // paint is applied to a draw. The draws themselves are canvas-draw.ts. A Java canvas holds a
 // handle to a NativeCanvas in mNativeCanvasWrapper, and TS reaches it through canvasOf.
 
-import { isInvertible, isRecording, nestedRecording, recordOrRun, replay, replayFor, transformOf, type Ctx2D, type DisplayList, Recorder } from "./recording.ts";
+import { isInvertible, isRecording, nestedRecording, recordOrRun, replay, replayFor, replayingCanvas, transformOf, type Ctx2D, type DisplayList, Recorder } from "./recording.ts";
 import { aliasedStroke } from "./bitmap-raster.ts";
 import { rt, type JObj, peerField, setDeclared } from "../jvm/runtime.ts";
 import { after, newObj, scall } from "../jvm/natives/jentry.ts";
@@ -81,6 +81,13 @@ export class NativeCanvas {
     const nc = new NativeCanvas();
     nc.setTarget(ctx, w, h, bmp);
     return nc;
+  }
+  /** the canvas a draw this canvas defers reaches `ctx` through: this one when it draws there, the
+   *  canvas replaying it when that does (its clip and bitmap), else one over `ctx` */
+  at(ctx: Ctx2D): NativeCanvas {
+    if (ctx === this.ctx) return this;
+    const r = replayingCanvas();
+    return r?.ctx === ctx ? r : NativeCanvas.over(ctx);
   }
   /** SkiaCanvas::setBitmap: a fresh device, its matrix identity and its clip the whole target */
   setTarget(ctx: Ctx2D, w: number, h: number, bmp: NativeBitmap | null) {
@@ -622,13 +629,15 @@ function restoreBehind(nc: NativeCanvas, count: number, paint: NativePaint) {
   if (nc.saveCount !== count + 1) return;
   const behind = nc.layers?.at(-1)?.behind;
   if (behind) {
+    const q = new NativePaint();
+    copyPaint(paint, q);
     recordOrRun(nc.ctx, (ctx) => {
       const image = behind.image;
       if (!image) return;
       ctx.save();
       ctx.resetTransform();
       ctx.beginPath(); ctx.rect(behind.x, behind.y, image.width, image.height); ctx.clip();
-      NativeCanvas.over(ctx).drawPaint(paint);
+      nc.at(ctx).drawPaint(q);
       ctx.restore();
     });
   }

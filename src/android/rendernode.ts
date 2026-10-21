@@ -6,12 +6,12 @@
 // projection and stretch are properties kept, not drawn; animators run from the frame loop
 // (rtanimator.ts), and position listeners hear where a frame drew their node (positionUpdates).
 
-import { Recorder, displayListLength, isRecording, recordOrRun, replay, replayingCanvas, replayFor, transformOf, type Ctx2D, type DisplayList } from "./recording.ts";
+import { Recorder, displayListLength, recordOrRun, replay, replayingCanvas, replayFor, transformOf, type Ctx2D, type DisplayList } from "./recording.ts";
 import { rt } from "../jvm/runtime.ts";
 import { handle, deref, ownedHandle, refBaseHandle, incStrong, decStrong, REFBASE_FINALIZER } from "./handles.ts";
 import { NativePath } from "./path.ts";
 import { perf } from "../perf.ts";
-import type { NativeRenderEffect } from "./rendereffect.ts";
+import { type NativeRenderEffect, sized } from "./rendereffect.ts";
 import { NativePaint, copyPaint, paintAt } from "./paint.ts";
 import { type NativeColorFilter, COMPOSITE } from "./graphics.ts";
 import { Camera3D, type Mat, IDENTITY, identity, mul, translateM, scaleM, about, setPivotedTransform, invert, isIdentity, applyMatrix, matrixAt, deviceBounds } from "./matrix.ts";
@@ -193,9 +193,7 @@ export function drawNodeInto(ctx: Ctx2D, n: NativeRenderNode) {
     perf.rnReplay += displayListLength(ops);
     if (effect) {
       // an effect filters the node's own pixels, so it rasterises node-local
-      const surface = n.effectInput ??= new OffscreenCanvas(w, h);
-      if (surface.width !== w) surface.width = w;
-      if (surface.height !== h) surface.height = h;
+      const surface = n.effectInput = sized(n.effectInput, w, h);
       const input = surface.getContext("2d")!; input.reset();
       const canvas = n.effectCanvas ??= NativeCanvas.over(input, w, h);
       canvas.setTarget(input, w, h, null);
@@ -409,7 +407,7 @@ function beginRecording(nc: NativeCanvas, w: number, h: number) {
 /** AnimatedRippleDrawable: the ripple's circle through its RuntimeShader, with the uniforms the
  *  animated properties drive set as drawn (the turbulence as RippleShader.setNoisePhase sets it) */
 const RIPPLE_SCALE = 1.5, PI = Math.PI, PI_ROTATE_RIGHT = PI * 0.0078125, PI_ROTATE_LEFT = -PI_ROTATE_RIGHT;
-function drawRipple(ctx: Ctx2D, x: number, y: number, radius: number, paint: NativePaint, progress: number, phase: number, color: number, b: RuntimeShaderBuilder) {
+function drawRipple(nc: NativeCanvas, x: number, y: number, radius: number, paint: NativePaint, progress: number, phase: number, color: number, b: RuntimeShaderBuilder) {
   const circle = (name: string, offset: number, scale: number, angle: number) =>
     b.trySet(name, [offset + phase * scale * Math.cos(angle), offset + phase * scale * Math.sin(angle)]);
   const rotation = (name: string, angle: number) => b.trySet(name, [Math.cos(angle), Math.sin(angle)]);
@@ -426,7 +424,7 @@ function drawRipple(ctx: Ctx2D, x: number, y: number, radius: number, paint: Nat
   rotation("in_tRotation2", phase * PI_ROTATE_LEFT + 2 * PI);
   rotation("in_tRotation3", phase * PI_ROTATE_RIGHT + 2.75 * PI);
   // the shader is rasterized only under the circle (RippleDrawable fills it), not the whole window
-  const m = ctx.getTransform(), W = ctx.canvas.width, H = ctx.canvas.height;
+  const m = nc.ctx.getTransform(), W = nc.w, H = nc.h;
   const ex = Math.hypot(m.a, m.c) * radius + 1, ey = Math.hypot(m.b, m.d) * radius + 1;
   const cx = m.a * x + m.c * y + m.e, cy = m.b * x + m.d * y + m.f;
   const x0 = Math.max(0, Math.floor(cx - ex)), y0 = Math.max(0, Math.floor(cy - ey));
@@ -435,7 +433,7 @@ function drawRipple(ctx: Ctx2D, x: number, y: number, radius: number, paint: Nat
   const shaded = new NativePaint();
   copyPaint(paint, shaded);
   shaded.shader = b.shader(null, [x0, y0, x1 - x0, y1 - y0]);
-  drawCircle(NativeCanvas.over(ctx), x, y, radius, shaded);
+  drawCircle(nc, x, y, radius, shaded);
 }
 /** CanvasProperty's containers: a float, or a paint an animator changes, read when replayed */
 type Property<T> = { value: T };
@@ -467,31 +465,30 @@ rt.registerJnis("android/graphics/RecordingCanvas", {
   // animators move) when it replays
   "nDrawCircle(JJJJJ)V": (h: bigint, x: bigint, y: bigint, r: bigint, p: bigint) => {
     const [px, py, pr, pp] = [prop<number>(x), prop<number>(y), prop<number>(r), prop<NativePaint>(p)];
-    recordOrRun(canvasAt(h).ctx, (ctx) => drawCircle(NativeCanvas.over(ctx), px.value, py.value, pr.value, pp.value));
+    const nc = canvasAt(h);
+    recordOrRun(nc.ctx, (ctx) => drawCircle(nc.at(ctx), px.value, py.value, pr.value, pp.value));
   },
   "nDrawRoundRect(JJJJJJJJ)V": (h: bigint, l: bigint, t: bigint, r: bigint, b: bigint, rx: bigint, ry: bigint, p: bigint) => {
     const [pl, pt, pr, pb, prx, pry, pp] = [prop<number>(l), prop<number>(t), prop<number>(r), prop<number>(b), prop<number>(rx), prop<number>(ry), prop<NativePaint>(p)];
-    recordOrRun(canvasAt(h).ctx, (ctx) => drawRoundRect(NativeCanvas.over(ctx), pl.value, pt.value, pr.value, pb.value, prx.value, pry.value, pp.value));
+    const nc = canvasAt(h);
+    recordOrRun(nc.ctx, (ctx) => drawRoundRect(nc.at(ctx), pl.value, pt.value, pr.value, pb.value, prx.value, pry.value, pp.value));
   },
   // the ripple is a RuntimeShader animated on the RenderThread
   "nDrawRipple(JJJJJJJIJ)V": (h: bigint, x: bigint, y: bigint, r: bigint, p: bigint, progress: bigint, phase: bigint, color: number, builder: bigint) => {
     const [px, py, pr, pp, pg, ph] = [prop<number>(x), prop<number>(y), prop<number>(r), prop<NativePaint>(p), prop<number>(progress), prop<number>(phase)];
     const shader = deref<RuntimeShaderBuilder>(builder);
-    recordOrRun(canvasAt(h).ctx, (ctx) => drawRipple(ctx, px.value, py.value, pr.value, pp.value, pg.value, ph.value, color, shader));
+    const nc = canvasAt(h);
+    recordOrRun(nc.ctx, (ctx) => drawRipple(nc.at(ctx), px.value, py.value, pr.value, pp.value, pg.value, ph.value, color, shader));
   },
   "nDrawTextureLayer(JJ)V": (h: bigint, layer: bigint) => {
     const l = deref<TextureLayer>(layer);
     recordOrRun(canvasAt(h).ctx, (ctx) => l.draw(ctx));
   },
   // replayed, the functor is clipped by the nodes drawing it and the canvas replaying them
-  "nDrawWebViewFunctor(JI)V": (h: bigint, functor: number) => {
-    const nc = canvasAt(h);
-    if (isRecording(nc.ctx)) recordOrRun(nc.ctx, (ctx) => {
-      const r = replayingCanvas();
-      drawFunctor(ctx, functor, r ? [r.cl, r.ct, r.cr, r.cb] : null);
-    });
-    else drawFunctor(nc.ctx, functor, [nc.cl, nc.ct, nc.cr, nc.cb]);
-  },
+  "nDrawWebViewFunctor(JI)V": (h: bigint, functor: number) => recordOrRun(canvasAt(h).ctx, (ctx) => {
+    const r = replayingCanvas();
+    drawFunctor(ctx, functor, r ? [r.cl, r.ct, r.cr, r.cb] : null);
+  }),
 });
 rt.registerJnis("android/graphics/CanvasProperty", {
   "nCreateFloat(F)J": (value: number) => ownedHandle({ value }),

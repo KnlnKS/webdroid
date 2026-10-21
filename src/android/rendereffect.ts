@@ -9,7 +9,7 @@ import type { Ctx2D } from "./recording.ts";
 
 /** the rasters a blur reuses from one run to the next */
 export type BlurCache = { padded: OffscreenCanvas | null; blurred: OffscreenCanvas | null };
-function sized(c: OffscreenCanvas | null, w: number, h: number): OffscreenCanvas {
+export function sized(c: OffscreenCanvas | null, w: number, h: number): OffscreenCanvas {
   if (!c) return new OffscreenCanvas(w, h);
   if (c.width !== w) c.width = w;
   if (c.height !== h) c.height = h;
