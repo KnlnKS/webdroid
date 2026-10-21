@@ -54,12 +54,10 @@ worker.addEventListener("fetch", (event) => {
   if (original.origin === worker.location.origin && ["/webview", "/webview-worker.js"].includes(original.pathname) || localProxy && !query) return;
   event.respondWith((async () => {
     const client = await worker.clients.get(event.clientId);
-    if (!client) return fetch(request);
-    // JVM/compiler Workers have no document renderer context. Their local modules
-    // and archives keep the shell fetch path, as before resource URL translation.
-    if (original.origin === worker.location.origin && !localProxy && client.type !== "window") return fetch(request);
-    // the shell's own page (its Java networking) is no WebView: nothing to rewrite
-    if (!client.url.includes("__wd_bridge") && new URL(client.url).pathname === "/") return fetch(request);
+    // Only a WebView page's renderer document names its bridge (Client.url is the URL it was created at,
+    // which replaceState leaves). The shell's page and Workers, under this worker for a local apk's assets,
+    // and a page's own Workers have no renderer to ask: they fetch as they are.
+    if (!client?.url.includes("__wd_bridge")) return fetch(request);
     const { page, agent, id, intercept, sub } = await context(client), isolated = !!id;
     const headers = new Headers();
     // client hints describe the host browser, not the WebView the user agent names
