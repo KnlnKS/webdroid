@@ -51,7 +51,7 @@ export class EglContext {
     (this.group = share?.group ?? new Set()).add(this);
   }
   makeCurrent(draw: GlSurface | null, thread: object = curThread, read: GlSurface | null = draw): boolean {
-    this.gl ??= this.canvas.getContext("webgl2", { alpha: false, antialias: false, depth: true, stencil: true, preserveDrawingBuffer: false, powerPreference: "high-performance" });
+    this.gl ??= this.canvas.getContext("webgl2", { alpha: false, antialias: configOf(this.config)!.get(0x3032) === 1, depth: true, stencil: true, preserveDrawingBuffer: false, powerPreference: "high-performance" });
     if (!this.gl || this.gl.isContextLost()) return false;
     const was = currentContext(thread);
     if (was && was !== this) was.thread = null;
@@ -137,15 +137,15 @@ export function queryString(t: object, dpy: number, n: number): string | null {
 }
 
 // ── configs: the attributes of EGL 1.5's table 3.1, 0x3020 (BUFFER_SIZE) to 0x3042 (CONFORMANT), then RECORDABLE_ANDROID and
-// COLOR_COMPONENT_TYPE_EXT; the WebGL2 context behind both is the same
+// COLOR_COMPONENT_TYPE_EXT; the WebGL2 context behind them is the same, multisampled (antialias) for the configs with sample buffers
 const SURFACES = 1 | 4, RENDERABLE = 1 | 4 | 0x40;                                 // PBUFFER | WINDOW; ES | ES2 | ES3
-const config = (id: number, alpha: number, visual: number): Attribs => new Map([
+const config = (id: number, alpha: number, visual: number, samples = 0): Attribs => new Map([
   [0x3020, 24 + alpha], [0x3021, alpha], [0x3022, 8], [0x3023, 8], [0x3024, 8], [0x3025, 24], [0x3026, 8], [0x3027, NONE], [0x3028, id],
-  [0x3029, 0], [0x302a, 4096], [0x302b, 1 << 24], [0x302c, 4096], [0x302d, 0], [0x302e, visual], [0x302f, NONE], [0x3031, 0], [0x3032, 0],
+  [0x3029, 0], [0x302a, 4096], [0x302b, 1 << 24], [0x302c, 4096], [0x302d, 0], [0x302e, visual], [0x302f, NONE], [0x3031, samples], [0x3032, +(samples > 0)],
   [0x3033, SURFACES], [0x3034, NONE], [0x3035, 0], [0x3036, 0], [0x3037, 0], [0x3039, 0], [0x303a, 0], [0x303b, 0], [0x303c, 1],
   [0x303d, 0], [0x303e, 0], [0x303f, 0x308e], [0x3040, RENDERABLE], [0x3042, RENDERABLE], [0x3142, 0], [0x3339, 0x333a],
 ]);
-const CONFIGS = [config(1, 8, 1), config(2, 0, 2)];
+const CONFIGS = [config(1, 8, 1), config(2, 0, 2), config(3, 8, 1, 4), config(4, 0, 2, 4)];
 const configOf = (h: number): Attribs | undefined => CONFIGS[h - 1];
 // EGL 1.5 table 3.4: which attributes select at least, or by a mask, or are ignored (the rest exactly), and the defaults besides DONT_CARE
 const AT_LEAST = new Set([0x3020, 0x3021, 0x3022, 0x3023, 0x3024, 0x3025, 0x3026, 0x3031, 0x3032, 0x303d, 0x303e]), MASK = new Set([0x3033, 0x3040, 0x3042]);
@@ -157,7 +157,7 @@ const selects = (c: Attribs, want: Attribs): boolean => [...c].every(([k, have])
   return v === DONT_CARE || IGNORED.has(k) || (AT_LEAST.has(k) ? have >= v : MASK.has(k) ? (have & v) === v : have === v);
 });
 export function getConfigs(t: object, dpy: number): number[] | null { begin(t); return ready(t, dpy) ? CONFIGS.map((c) => c.get(0x3028)!) : null; }
-/** the configs `want` selects, in 3.4.1.2's order: more of the color bits it asks for, then the smaller buffer */
+/** the configs `want` selects, in 3.4.1.2's order: more of the color bits it asks for, then the smaller buffer, then fewer samples */
 export function chooseConfig(t: object, dpy: number, want: Attribs): number[] | null {
   begin(t);
   if (!ready(t, dpy)) return null;
@@ -166,7 +166,7 @@ export function chooseConfig(t: object, dpy: number, want: Attribs): number[] | 
   if (id !== DONT_CARE) return configOf(id) ? [id] : [];
   if ((want.get(MATCH_NATIVE_PIXMAP) ?? NONE) !== NONE) return [];
   const bits = (c: Attribs) => [0x3021, 0x3022, 0x3023, 0x3024].reduce((n, k) => n + (wanted(want, k) > 0 ? c.get(k)! : 0), 0);
-  return CONFIGS.filter((c) => selects(c, want)).sort((a, b) => bits(b) - bits(a) || a.get(0x3020)! - b.get(0x3020)!).map((c) => c.get(0x3028)!);
+  return CONFIGS.filter((c) => selects(c, want)).sort((a, b) => bits(b) - bits(a) || a.get(0x3020)! - b.get(0x3020)! || a.get(0x3031)! - b.get(0x3031)!).map((c) => c.get(0x3028)!);
 }
 export function getConfigAttrib(t: object, dpy: number, config: number, attr: number): number | null {
   begin(t);
