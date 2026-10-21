@@ -64,6 +64,8 @@ export function uchar(name: string, desc: string): (...args: unknown[]) => unkno
   return (...args: unknown[]) => fn ? fn(...args) : after(linkInit("android/icu/lang/UCharacter"),
     (ucharacter) => (fn = ucharacter.call(name, desc))(...args));
 }
+/** u_getIntPropertyValue */
+export const intProperty = uchar("getIntPropertyValue", "(II)I") as (c: number, property: number) => number | Promise<number>;
 
 const natives: Record<string, Record<string, (...args: never[]) => unknown>> = {
   "libcore/icu/ICU": {

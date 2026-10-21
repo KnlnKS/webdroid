@@ -15,12 +15,13 @@ import { awaited, rt, driven, waits, type Gen } from "../jvm/runtime.ts";
 import { charsToString } from "../jvm/abi.ts";
 import { scall, vcall, after } from "../jvm/natives/jentry.ts";
 import { isLead, isTrail } from "../jvm/natives/jstring.ts";
+import { intProperty } from "../jvm/natives/jicu.ts";
 import { handle, deref, release, FINALIZER } from "./handles.ts";
 import { perf } from "../perf.ts";
 import { type NativePaint, paintAt, fontTop, fontBottom, setFontMetrics } from "./paint.ts";
 import { withFonts } from "./fonts.ts";
 import {
-  type Hyphenator, hyphenatorFor, hyphenate, intProperty, isLineBreakingHyphen, editForThisLine, editForNextLine, packHyphenEdit, startHyphenString,
+  type Hyphenator, hyphenatorFor, hyphenate, isLineBreakingHyphen, editForThisLine, editForNextLine, packHyphenEdit, startHyphenString,
   endHyphenString, DONT_BREAK, BREAK_AND_DONT_INSERT_HYPHEN, START_NO_EDIT, END_NO_EDIT,
 } from "./hyphenator.ts";
 import { type ShapeStyle, pieceOf, shapeStyle, pieceEnd, JOINING, f32, graphemes, isBidiControl } from "./shaping.ts";
