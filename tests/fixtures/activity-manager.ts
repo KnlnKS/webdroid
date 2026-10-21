@@ -7,7 +7,7 @@ import { classNameOf, newObj, vcall, scall } from "../../src/jvm/natives/jentry.
 import { setAppHost } from "../../src/android/apphost.ts";
 import { testAppHost, fixtureDeadline } from "../../tests/java.ts";
 import { packages, PackageRecord, packageUid } from "../../src/android/packages.ts";
-import { Resources } from "../../src/android/res.ts";
+import { emptyApk } from "../../src/android/res.ts";
 import { TV } from "../../src/android/axml.ts";
 import { setProcessIdentity, setProcessName } from "../../src/android/os.ts";
 import { hostedService } from "../../src/android/binder.ts";
@@ -77,7 +77,7 @@ const manifest = { name: "manifest", attrs: [attr("package", PKG)], children: [
   { name: "uses-sdk", attrs: [attr("minSdkVersion", null, 21), attr("targetSdkVersion", null, 35)], children: [] },
   { name: "application", attrs: [], children: [{ name: "service", attrs: [attr("name", SERVICE)], children: [] }] },
 ] };
-const record = new PackageRecord(manifest, new Resources(null, {}), `/${PKG}.apk`, packageUid(PKG), async () => [new Uint8Array([1])]);
+const record = new PackageRecord(manifest, emptyApk(), `/${PKG}.apk`, packageUid(PKG), async () => [new Uint8Array([1])]);
 packages.set(PKG, record);
 setProcessIdentity(4322, record.uid); setProcessName(PKG);
 setAppHost(testAppHost(record));

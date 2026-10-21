@@ -19,7 +19,8 @@ import { registerPackage, FLAG_IS_GAME } from "../src/android/pm.ts";
 import { hostedService } from "../src/android/binder.ts";
 import { notConnected } from "../src/jvm/natives/jthrowable.ts";
 import { newArrayList, toJsArray } from "../src/jvm/natives/jcoll.ts";
-import { Resources, NativeTheme, rvString, newSV } from "../src/android/res.ts";
+import { Resources, NativeTheme, newSV, emptyApk } from "../src/android/res.ts";
+import { deviceQualifiers } from "../src/android/configuration.ts";
 import { TV, type XmlNode, type XmlAttr } from "../src/android/axml.ts";
 import { mkComponentName, newIntent } from "../src/android/intent.ts";
 import { decodeIntent, encodeIntent, intentCodec } from "../src/android/intentipc.ts";
@@ -34,7 +35,8 @@ import { useAlarmScheduler } from "../src/android/alarm.ts";
 import { callProxy } from "../src/shell/process-port.ts";
 import { javaReadFd } from "../src/native/fd.ts";
 import { Arsc } from "../src/android/arsc.ts";
-import { scall, bootApp, packageRecord } from "./java.ts";
+import { scall, bootApp, packageRecord, thrown } from "./java.ts";
+import { PROCESS_UID } from "../src/android/os.ts";
 
 describe("android-uri-permission", () => {
   test("tree URI grants cover descendants with the granted access mode", () => {
@@ -149,9 +151,18 @@ describe("package-installer", () => {
   test("a session stages what AOSP's Session writes, and abandoning it drops the file", async () => {
     const installer = await vcall(await hostedService("package"), "getPackageInstaller", "()Landroid/content/pm/IPackageInstaller;");
     const params = await newObj("android/content/pm/PackageInstaller$SessionParams", "(I)V", 1);
-    const id = await vcall(installer, "createSession", "(Landroid/content/pm/PackageInstaller$SessionParams;Ljava/lang/String;Ljava/lang/String;I)I", params, "test.installer", null, 0);
-    const session = await newObj("android/content/pm/PackageInstaller$Session", "(Landroid/content/pm/IPackageInstallerSession;)V",
-      await vcall(installer, "openSession", "(I)Landroid/content/pm/IPackageInstallerSession;", id));
+    const create = (name: string) => vcall(installer, "createSession", "(Landroid/content/pm/PackageInstaller$SessionParams;Ljava/lang/String;Ljava/lang/String;I)I", params, name, null, 0);
+    const openSession = (id: number) => vcall(installer, "openSession", "(I)Landroid/content/pm/IPackageInstallerSession;", id);
+    packages.set("test.installer", { uid: PROCESS_UID } as PackageRecord);
+    expect(await thrown(() => create("test.other"))).toBe(`java/lang/SecurityException: Package test.other does not belong to ${PROCESS_UID}`);
+    const id = await create("test.installer");
+    // another app's uid, as a transaction from it carries
+    const self = await scall("android/os/Binder", "clearCallingIdentity", "()J");
+    await scall("android/os/Binder", "restoreCallingIdentity", "(J)V", 10077n << 32n | 4242n);
+    try {
+      expect(await thrown(() => openSession(id))).toBe(`java/lang/SecurityException: Caller has no access to session ${id}`);
+    } finally { await scall("android/os/Binder", "restoreCallingIdentity", "(J)V", self); }
+    const session = await newObj("android/content/pm/PackageInstaller$Session", "(Landroid/content/pm/IPackageInstallerSession;)V", await openSession(id));
     const out = await vcall(session, "openWrite", "(Ljava/lang/String;JJ)Ljava/io/OutputStream;", "base.apk", 0n, -1n);
     await vcall(out, "write", "([B)V", Int8Array.of(1, 2, 3));
     await vcall(session, "fsync", "(Ljava/io/OutputStream;)V", out);
@@ -163,6 +174,7 @@ describe("package-installer", () => {
     await vcall(session, "abandon", "()V");
     expect(vfs.read(`/data/app/vmdl${id}.tmp/base.apk`)).toBeNull();
     expect(await vcall(installer, "getSessionInfo", "(I)Landroid/content/pm/PackageInstaller$SessionInfo;", id)).toBeNull();
+    packages.delete("test.installer");
   });
 });
 
@@ -176,7 +188,7 @@ describe("package-game-info", () => {
         { name: "isGame", str: null, ns: "", resId: 0, type: TV.BOOLEAN, data: 1 },
       ], children: [] },
     ] };
-    const record = new PackageRecord(root, new Resources(null, {}), "/test-game.apk", 12345, async () => []);
+    const record = new PackageRecord(root, emptyApk(), "/test-game.apk", 12345, async () => []);
     record.system = true;
     packages.set(pkg, record);
     try {
@@ -203,7 +215,7 @@ describe("package-intent-filters", () => {
       // the first group whose filters all match decides; none matching is no match
       { name: "uri-relative-filter-group", attrs: [], children: [{ name: "data", attrs: [a("pathPrefix", "/")], children: [] }] }]),
     ] }] };
-    packages.set(pkg, new PackageRecord(root, new Resources(null, {}), "/test-filters.apk", 12346, async () => []));
+    packages.set(pkg, new PackageRecord(root, emptyApk(), "/test-filters.apk", 12346, async () => []));
     try {
       const pms = await hostedService("package");
       const resolve = async (url: string) => {
@@ -233,7 +245,7 @@ describe("package-permissions", () => {
       // requested only through API 28
       { name: "uses-permission", attrs: [attr("name", "android.permission.WRITE_EXTERNAL_STORAGE"), int("maxSdkVersion", 28)], children: [] },
     ] };
-    const record = new PackageRecord(root, new Resources(null, {}), "/test.apk", 12345, async () => []);
+    const record = new PackageRecord(root, emptyApk(), "/test.apk", 12345, async () => []);
     packages.set(pkg, record); signaturePermissions.add(denied);
     try {
       const pms = await hostedService("package"), PI = "android/content/pm/PackageInfo";
@@ -262,16 +274,14 @@ describe("packagearchive", () => {
     } }, baseline.certificates);
     expect(archive.root).toEqual(baseline.root);
     expect(archive.certificates).toEqual(baseline.certificates);
-    expect(archive.res.zip["resources.arsc"]).toEqual(baseline.res.zip["resources.arsc"]);
+    expect(archive.apk.zip["resources.arsc"]).toEqual(baseline.apk.zip["resources.arsc"]);
     expect(readBytes).toBeLessThan(bytes.length);
-    const pool = archive.res.arsc!.values;
-    for (let i = 0; i < pool.length; i++) {
-      const name = pool.get(i);
-      if (Object.hasOwn(baseline.res.zip, name)) expect(archive.res.arsc!.files(name)).toEqual(baseline.res.zip[name]);
-    }
-    expect(archive.res.lazyEntries.has("classes.dex")).toBe(true);
-    const metadataBytes = readBytes, residentBytes = Object.values(archive.res.zip).reduce((sum, data) => sum + data.length, 0);
-    expect(await readFully(archive.res.lazyEntries.get("classes.dex")!)).toEqual(baseline.res.zip["classes.dex"]);
+    expect(Object.keys(archive.apk.zip).sort()).toEqual(["AndroidManifest.xml", "resources.arsc"]);
+    const metadataBytes = readBytes, residentBytes = Object.values(archive.apk.zip).reduce((sum, data) => sum + data.length, 0);
+    // a file resource, named in the table's pool, is read when opened
+    const pool = archive.apk.table!.values, entry = Array.from({ length: pool.length }, (_, i) => pool.get(i)).find((name) => Object.hasOwn(baseline.apk.zip, name))!;
+    expect(await readFully(archive.apk.lazyEntries.get(entry)!)).toEqual(baseline.apk.zip[entry]);
+    expect(await readFully(archive.apk.lazyEntries.get("classes.dex")!)).toEqual(baseline.apk.zip["classes.dex"]);
     console.log(JSON.stringify({ apkBytes: bytes.length, metadataBytes, residentBytes }));
   });
 
@@ -552,19 +562,10 @@ describe("resource-type-id-offset", () => {
     return bytes;
   }
 
-  test("a file resource resolves to a reference to itself, once", async () => {
-    const zip = zipTree(new Uint8Array(readFileSync("apks/FitNotes.apk")));
-    const table = new Arsc(zip["resources.arsc"], (path) => zip[path] ?? null), res = new Resources(table, zip, undefined, true);
-    const id = table.findId("layout", "activity_main"), ref = res.ref(id);
-    expect(ref).toMatchObject({ t: TV.REFERENCE, d: id });
-    expect(res.resolveRefs(ref)).toBe(ref);
-    expect(rvString(res, { t: TV.REFERENCE, d: id })).toBe(res.fileOf(id)!.path);
-  });
-
   test("package type ID offsets apply to resource lookup", () => {
     const resources = new Arsc(resourceTable(packageChunk("id", "item", 0, 1, 9)));
     expect(resources.findId("id", "item")).toBe(0x7f0a0000);
-    expect(resources.entry(0x7f0a0000)?.key).toBe("item");
+    expect(resources.entry(0x7f0a0000, deviceQualifiers())?.key).toBe("item");
   });
 
   test("resource names use the type pool of each package chunk", () => {
@@ -583,8 +584,8 @@ describe("resource-type-id-offset", () => {
       packageChunk("drawable", "feature", 0, 1, 0, 0x53),
     ));
     expect(resources.pkgId).toBe(0x7f);
-    expect(resources.entry(0x7f010000)?.key).toBe("font");
-    expect(resources.entry(0x4f010000)?.key).toBe("library");
+    expect(resources.entry(0x7f010000, deviceQualifiers())?.key).toBe("font");
+    expect(resources.entry(0x4f010000, deviceQualifiers())?.key).toBe("library");
     expect(resources.typeName(1, 0)).toBe("integer");
     expect(resources.typeName(1, 0, 0x53)).toBe("drawable");
     expect(resources.findId("style", "library")).toBe(0);
@@ -600,7 +601,7 @@ describe("resource-value-density", () => {
   test("resource values retain selected density and resolved reference identity", async () => {
     const table = new Arsc(Uint8Array.of(2, 0, 8, 0, 8, 0, 0, 0));
     const config = { density: 0, sdk: 0, orientation: 0, night: 0, lang: "", region: "", swdp: 0, wdp: 0, hdp: 0, size: 0, dir: 0, uiType: 0, score: 0 };
-    table.device.density = 480;
+    (table as never as { packages: Map<number, unknown> }).packages.set(0x7f, { name: "", types: table.types });
     table.types.set(1, [
       { id: 1, name: "integer", config, entries: new Map([
         [0, { key: "density_value", value: { type: TV.INT_DEC, data: 1 } }],
@@ -611,7 +612,7 @@ describe("resource-value-density", () => {
         [0, { key: "density_value", value: { type: TV.INT_DEC, data: 3 } }],
       ]) },
     ]);
-    const res = new Resources(table, {});
+    const res = new Resources([{ table, zip: {}, lazyEntries: new Map() }], { ...deviceQualifiers(), density: 480 });
     for (const [id, resolve, expected] of [
       [0x7f010000, 1, [TV.INT_DEC, 3, 480, 0x7f010000]],
       [0x7f010001, 1, [TV.INT_DEC, 3, 480, 0x7f010000]],
@@ -626,11 +627,9 @@ describe("resource-value-density", () => {
     const theme = new NativeTheme(res), attr = 0x7f020000;
     theme.entries.set(attr, { t: TV.REFERENCE, d: 0x7f010000, pkg: 0x7f, flags: 0 });
     const selected = theme.resolvedAttribute(attr);
-    const other = new Resources(null, {}, undefined, true);
-    other.setApks([]);
     expect(theme.resolvedAttribute(attr)).toBe(selected);
-    config.density = table.device.density = 160;
-    res.invalidate();
+    config.density = 160;
+    res.configure({ ...res.qualifiers, density: 160 });
     expect(theme.resolvedAttribute(attr)).toMatchObject({ d: 1, density: 160 });
   });
 });

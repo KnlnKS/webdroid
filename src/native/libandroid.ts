@@ -14,7 +14,9 @@ import { dispatchUncaught } from "../jvm/natives/jthrowable.ts";
 import { msLeft, pollEntries, type PollEntry } from "./poll.ts";
 import { guestNow } from "../guest-clock.ts";
 import { BytesFile, readFully, type FileSource } from "../shell/lazyfile.ts";
-import { nativeAssets } from "../android/res.ts";
+import { Resources, nativeAssets } from "../android/res.ts";
+import { assetDir, assetEntry } from "../android/assetmanager.ts";
+import { handle, deref as handleObject } from "../android/handles.ts";
 import { HINT_RATE_NANOS, hintSessions, openHintSession, ashmemCreate, ashmemSize, ashmemSetProt } from "../android/os.ts";
 import { kernelResult } from "./kernel.ts";
 
@@ -218,10 +220,10 @@ const poll = (all: boolean): HostFn => async (cpu, a) => {
   }
 };
 
-// ── AAsset: the apk's assets/ entries
+// ── AAsset: assets/ entries as the AssetManager2 behind a Java AssetManager opens them. An
+// AAssetManager* is that AssetManager2's handle, as AOSP's is its address.
 interface Asset { source: FileSource; data?: Uint8Array; pos: number; buf: number }
-interface AssetSet { zip: Record<string, Uint8Array>; lazyEntries: Map<string, FileSource> }
-const zips: AssetSet[] = [{ zip: {}, lazyEntries: new Map() }];
+const manager = (a: ArgReader): Resources | null => { const res = handleObject(BigInt(a.i())); return res instanceof Resources ? res : null; };
 const assets: (Asset | null)[] = [null];
 const A = (a: ArgReader) => assets[a.i()];
 /** an open AAssetDir: the file names directly under it, and the one getNextFileName last returned */
@@ -311,23 +313,20 @@ export function ndkInit(): void {
     ASensor_getName: () => cstr(""), ASensor_getVendor: () => cstr(""),
 
     AAssetManager_fromJava: (cpu, a) => {
-      a.p(); const am = deref(a.i(), cpu);
-      if (!am) return 0;
-      zips.push(nativeAssets(am));
-      return zips.length - 1;
+      a.p(); const am = deref(a.i(), cpu), res = am && nativeAssets(am);
+      return res ? Number(handle(res)) : 0;
     },
     AAssetManager_open: (_c, a) => {
-      const set = zips[a.i()], path = "assets/" + a.str(), data = set?.zip[path];
-      const source = data ? new BytesFile(data) : set?.lazyEntries.get(path);
+      const res = manager(a), source = res && assetEntry(res, a.str());
       if (!source) return 0;
-      assets.push({ source, data, pos: 0, buf: 0 });
+      assets.push({ source, data: source instanceof BytesFile ? source.bytes : undefined, pos: 0, buf: 0 });
       return assets.length - 1;
     },
+    // AAssetDir_getNextFileName reports regular files only
     AAssetManager_openDir: (_c, a) => {
-      const set = zips[a.i()], dir = a.str().replace(/\/+$/, ""), prefix = dir ? `assets/${dir}/` : "assets/";
-      if (!set) return 0;
-      const names = [...new Set([...Object.keys(set.zip), ...set.lazyEntries.keys()])]
-        .filter((p) => p.startsWith(prefix) && !p.includes("/", prefix.length)).map((p) => p.slice(prefix.length));
+      const res = manager(a);
+      if (!res) return 0;
+      const names = assetDir(res, a.str()).flatMap(([name, regular]) => (regular ? [name] : []));
       assetDirs.push({ names, next: 0, name: 0 });
       return assetDirs.length - 1;
     },

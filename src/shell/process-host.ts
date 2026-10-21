@@ -75,7 +75,7 @@ export class ProcessHosts {
   prestart(): void { this.spare ??= spawn(this.nextPid++, true); }
   /** a host for a new process of `owner`'s, in the spare Worker when it runs the zygote of the package's bitness */
   create(owner: PackageRecord): ProcessHost {
-    const wide = is64BitPackage(packedArchives.get(owner.path)?.names() ?? Object.keys(owner.res.zip));
+    const wide = is64BitPackage(packedArchives.get(owner.path)?.names() ?? Object.keys(owner.apk.zip));
     let spare = this.spare;
     this.spare = undefined;
     if (spare && spare.url !== workerUrl(spare.pid, wide)) { spare.worker.terminate(); spare.release(); spare = undefined; }

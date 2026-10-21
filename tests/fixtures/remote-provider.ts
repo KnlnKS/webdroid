@@ -8,7 +8,7 @@ import { classNameOf, newObj, vcall, scall } from "../../src/jvm/natives/jentry.
 import { setAppHost } from "../../src/android/apphost.ts";
 import { testAppHost, fixtureDeadline, loadPlatform } from "../../tests/java.ts";
 import { packages, PackageRecord, packageUid } from "../../src/android/packages.ts";
-import { Resources } from "../../src/android/res.ts";
+import { emptyApk } from "../../src/android/res.ts";
 import { TV } from "../../src/android/axml.ts";
 import { setProcessIdentity, setProcessName, mkPfd, pfdContents } from "../../src/android/os.ts";
 import { hostedService, binderTransport, receiveTransaction, importBinder, exportBinder, type ParcelData } from "../../src/android/binder.ts";
@@ -26,7 +26,7 @@ const manifest = (pkg: string, providers: { name: string; attrs: ReturnType<type
   { name: "application", attrs: [], children: providers },
 ] });
 const install = (pkg: string, providers: Parameters<typeof manifest>[1] = []) => {
-  const record = new PackageRecord(manifest(pkg, providers) as never, new Resources(null, {}), `/${pkg}.apk`, packageUid(pkg), async () => [new Uint8Array([1])]);
+  const record = new PackageRecord(manifest(pkg, providers) as never, emptyApk(), `/${pkg}.apk`, packageUid(pkg), async () => [new Uint8Array([1])]);
   packages.set(pkg, record);
   return record;
 };

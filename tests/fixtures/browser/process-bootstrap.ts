@@ -1,7 +1,7 @@
 import { processBroker, type ProcessBroker, type ProcessBootstrap } from "../../../src/shell/processes.ts";
 import { brokerMethods, type BrokerCalls } from "../../../src/shell/broker-contract.ts";
 import { packages, PackageRecord } from "../../../src/android/packages.ts";
-import { Resources } from "../../../src/android/res.ts";
+import { emptyApk } from "../../../src/android/res.ts";
 import { TV } from "../../../src/android/axml.ts";
 import { vfs } from "../../../src/shell/vfs.ts";
 import { packedArchives } from "../../../src/shell/packedarchive.ts";
@@ -55,7 +55,7 @@ export async function bootstrapOwnership() {
   for (const [i, pkg] of ["test.archive.one", "test.archive.two"].entries()) {
     const path = `/data/app/${pkg}/base.apk`;
     const root = { name: "manifest", attrs: [{ ns: "", name: "package", resId: 0, type: TV.STRING, data: 0, str: pkg }], children: [] };
-    packages.set(pkg, new PackageRecord(root, new Resources(null, {}), path, 12000 + i, async () => []));
+    packages.set(pkg, new PackageRecord(root, emptyApk(), path, 12000 + i, async () => []));
     vfs.mount(path, { size: 64 << 20, read(offset) {
       reads++;
       if (offset === 7) { began(); return new Promise<Uint8Array>(() => {}); }
@@ -118,7 +118,7 @@ export async function endpointOwnership() {
   const names = ["test.endpoint.one", "test.endpoint.two"];
   const entries = names.map((pkg, i) => {
     const root = { name: "manifest", attrs: [{ ns: "", name: "package", resId: 0, type: TV.STRING, data: 0, str: pkg }], children: [] };
-    packages.set(pkg, new PackageRecord(root, new Resources(null, {}), `/data/app/${pkg}/base.apk`, 13000 + i, async () => []));
+    packages.set(pkg, new PackageRecord(root, emptyApk(), `/data/app/${pkg}/base.apk`, 13000 + i, async () => []));
     return broker.register(pkg, pkg, 8001 + i);
   });
   let entered!: () => void, killed = false, removed = false;
@@ -195,7 +195,7 @@ export async function cookieOwnership() {
   const broker = processBroker(), pkg = "test.cookies.shared", isolated = "test.cookies.other";
   for (const [i, name] of [pkg, isolated].entries()) {
     const root = {name:"manifest",attrs:[{ns:"",name:"package",resId:0,type:TV.STRING,data:0,str:name}],children:[]};
-    packages.set(name, new PackageRecord(root, new Resources(null, {}), `/data/app/${name}/base.apk`, 14000 + i, async () => []));
+    packages.set(name, new PackageRecord(root, emptyApk(), `/data/app/${name}/base.apk`, 14000 + i, async () => []));
   }
   for (const [i, name] of [pkg, pkg, isolated].entries()) broker.register(name, name + ":" + i, 8101 + i);
   const peers = [8102, 8103].map(pid => callProxy<BrokerCalls>(broker.brokerPort(pid), brokerMethods));
@@ -245,7 +245,7 @@ export async function clockBootstrapOwnership() {
   const broker = processBroker(), pkg = "test.clock.worker", pid = 8201;
   const root = {name:"manifest",attrs:[{ns:"",name:"package",resId:0,type:TV.STRING,data:0,str:pkg}],children:[]};
   const path = `/data/app/${pkg}/base.apk`;
-  packages.set(pkg, new PackageRecord(root, new Resources(null, {}), path, 15000, async () => []));
+  packages.set(pkg, new PackageRecord(root, emptyApk(), path, 15000, async () => []));
   vfs.mount(path, {size:1,read:()=>Uint8Array.of(31)});
   const clock = createGuestClockPort(pid), start = guestClockControl.now(), wall = wallMillis();
   const { worker, entry } = hosted(broker, pkg, pkg, pid, "clock"), workers = [worker];
@@ -311,7 +311,7 @@ export async function storeOwnership() {
   broker.files.attach(8302,vfs);
   for (const [i, name] of [pkg, foreign].entries()) {
     const root = {name:"manifest",attrs:[{ns:"",name:"package",resId:0,type:TV.STRING,data:0,str:name}],children:[]};
-    packages.set(name,new PackageRecord(root,new Resources(null,{}),`/data/app/${name}/base.apk`,16000+i,async()=>[]));
+    packages.set(name,new PackageRecord(root,emptyApk(),`/data/app/${name}/base.apk`,16000+i,async()=>[]));
   }
   const entries = [pkg,pkg,foreign].map((name,i)=>broker.register(name,name+":"+i,8301+i));
   broker.ready(8302,stubEndpoint()); broker.ready(8303,stubEndpoint());
@@ -390,7 +390,7 @@ export async function storeOwnership() {
 export async function pendingDescriptorRights() {
   const broker=processBroker(),pkg="test.pending.rights",pid=8401,path=`/data/data/${pkg}/retained.bin`;
   const manifest={name:"manifest",attrs:[{ns:"",name:"package",resId:0,type:TV.STRING,data:0,str:pkg}],children:[]};
-  packages.set(pkg,new PackageRecord(manifest,new Resources(null,{}),`/data/app/${pkg}/base.apk`,18000,async()=>[]));
+  packages.set(pkg,new PackageRecord(manifest,emptyApk(),`/data/app/${pkg}/base.apk`,18000,async()=>[]));
   vfs.mkdir("/data/data");
   broker.register(pkg,pkg,pid);
   const {ask,worker}=brokerWorker(broker,pid);
@@ -433,7 +433,7 @@ export async function pointerInputOwnership() {
 export async function workerDiagnosticOwnership() {
   const broker=processBroker(),pkg="test.worker.diagnostics",clients:ReturnType<typeof callProxy>[]=[];
   const root={name:"manifest",attrs:[{ns:"",name:"package",resId:0,type:TV.STRING,data:0,str:pkg}],children:[]};
-  packages.set(pkg,new PackageRecord(root,new Resources(null,{}),`/data/app/${pkg}/base.apk`,19000,async()=>[]));
+  packages.set(pkg,new PackageRecord(root,emptyApk(),`/data/app/${pkg}/base.apk`,19000,async()=>[]));
   const worker=fixtureWorker("control");
   const pids=[8401,8402,8403,8404,8405],foreground=broker.activities.foreground;
   try {

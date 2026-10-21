@@ -3,13 +3,13 @@ import { zipTree, centralDirOfSource } from "../zip.ts";
 import { ZipEntryFile } from "../shell/install.ts";
 import { readFully, type FileSource } from "../shell/lazyfile.ts";
 import { Arsc } from "./arsc.ts";
-import { Resources } from "./res.ts";
+import type { Apk } from "./res.ts";
 import { apkSigningBlock, signingSequence as sequence } from "./apksignature.ts";
 
 export interface PackageArchive {
   root: XmlNode;
   pkg: string;
-  res: Resources;
+  apk: Apk;
   certificates: Uint8Array[];
 }
 
@@ -50,28 +50,24 @@ export async function parsePackageArchive(bytes: Uint8Array): Promise<PackageArc
   const zip = zipTree(bytes);
   return packageArchive(zip, await apkCertificates(bytes, zip));
 }
-export function packageArchive(zip: Record<string, Uint8Array>, certificates: Uint8Array[], lazyEntries?: Map<string, FileSource>): PackageArchive {
+export function packageArchive(zip: Record<string, Uint8Array>, certificates: Uint8Array[], lazyEntries = new Map<string, FileSource>()): PackageArchive {
   if (!zip["AndroidManifest.xml"]) throw new Error("APK has no AndroidManifest.xml");
   const root = parseAXML(zip["AndroidManifest.xml"]);
   const pkg = attrStr(root, "package");
   if (!pkg || !/^[\w]+(?:\.[\w]+)+$/.test(pkg)) throw new Error("invalid APK package name");
-  return { root, pkg, res: new Resources(zip["resources.arsc"] ? new Arsc(zip["resources.arsc"], (path) => zip[path] ?? null) : null, zip, lazyEntries, true), certificates };
+  const table = zip["resources.arsc"] ? new Arsc(zip["resources.arsc"], (path) => zip[path] ?? null) : null;
+  return { root, pkg, apk: { table, zip, lazyEntries }, certificates };
 }
 
-/** Certificates come from the installed record. Resource-table files stay synchronous for
- *  Resources.fileOf; unrelated archive entries retain the normal lazy file path. */
+/** An installed package read over `source`: its manifest and table resident, every other entry
+ *  read when ApkAssets opens it. Certificates come from the installed record. */
 export async function packageArchiveSource(source: FileSource, certificates: Uint8Array[]): Promise<PackageArchive> {
   const entries = await centralDirOfSource(source), lazy = new Map<string, FileSource>();
   for (const [name, entry] of entries) if (!name.endsWith("/")) lazy.set(name, new ZipEntryFile(source, entry));
   const zip: Record<string, Uint8Array> = {};
-  for (const name of ["AndroidManifest.xml", "resources.arsc"]) {
+  await Promise.all(["AndroidManifest.xml", "resources.arsc"].map(async (name) => {
     const file = lazy.get(name);
     if (file) { zip[name] = await readFully(file); lazy.delete(name); }
-  }
-  const archive = packageArchive(zip, certificates, lazy), pool = archive.res.arsc?.values;
-  for (let i = 0; pool && i < pool.length; i++) {
-    const name = pool.get(i), file = lazy.get(name);
-    if (file) { zip[name] = await readFully(file); lazy.delete(name); }
-  }
-  return archive;
+  }));
+  return packageArchive(zip, certificates, lazy);
 }

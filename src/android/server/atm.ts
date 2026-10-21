@@ -19,7 +19,7 @@ import { decodeIntent } from "../intentipc.ts";
 import { fillIn$, pendingTransport, senderId$, sendPending$, START_CANCELED } from "../pendingintent.ts";
 import type { PendingOperation } from "../../shell/pendingintents.ts";
 import { GET_META_DATA, MATCH_DEFAULT_ONLY } from "../packages.ts";
-import { deviceConfiguration } from "../resnative.ts";
+import { deviceConfiguration } from "../configuration.ts";
 import { GL_ES_VERSION } from "../pm.ts";
 
 const CT = "android/app/servertransaction/";

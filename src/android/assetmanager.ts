@@ -6,56 +6,46 @@
 // getX() reads back, strings included: a string is (TYPE_STRING, pool index, cookie), read from
 // the XML block's pool for cookie -1 and from ApkAssets[cookie - 1]'s table pool otherwise.
 
-import { awaited, rt, driven, declaredField, getDeclared, setDeclared, type Gen } from "../jvm/runtime.ts";
+import { awaited, rt, driven, declaredField, getDeclared, setDeclared, type Gen, type JObj } from "../jvm/runtime.ts";
 import { handle, deref, release, FINALIZER } from "./handles.ts";
 import { newObj, vcall } from "../jvm/natives/jentry.ts";
 import { i8, u8, jarray } from "../jvm/abi.ts";
 import {
-  Resources, NativeTheme, type Apk, type SV, newSV, resolveAttributes, STYLE_NUM_ENTRIES,
+  Resources, NativeTheme, type Apk, type SV, newSV, emptyApk, resolveAttributes, STYLE_NUM_ENTRIES,
 } from "./res.ts";
 import { TV, XE, parseAXMLDoc, StringPool, type XmlDoc, type XmlEvent, type XmlNode } from "./axml.ts";
-import { sizeClass, type Arsc } from "./arsc.ts";
+import { qualifiers } from "./arsc.ts";
+import { deviceQualifiers } from "./configuration.ts";
 import { packages } from "./packages.ts";
-import { mkPfd } from "./os.ts";
+import { appHost } from "./apphost.ts";
+import { fdContents, mkPfd } from "./os.ts";
+import { fdInt } from "../jvm/natives/jio.ts";
 import { BytesFile, readFully, type FileSource } from "../shell/lazyfile.ts";
+import { apkPath } from "../shell/vfs.ts";
 
 const delegate = rt.registerJnis.bind(rt);
 
 // ── ApkAssets ───────────────────────────────────────────────────────────────────────────
 // An apk is one the package registry installed: the framework's at its device path, an app's at
-// the path PackageManager reports. The registry's Resources owns the table and the archive.
+// the path PackageManager reports. The registry's record owns the table and the archive.
 
 /** ApkAssets.PROPERTY_SYSTEM */
 const PROPERTY_SYSTEM = 1;
-interface ApkN extends Apk { system: boolean; strings: bigint }
-const loaded = new Map<string, Apk>();
+/** an ApkAssets: the apk as loaded from the registry's `origin` (null for one never installed) */
+interface ApkN extends Apk { path: string; origin: Apk | null; system: boolean; strings: bigint }
+/** a split of the running app's: its table and entries are merged into the base's (shell/install.ts),
+ *  so the ApkAssets ResourcesManager loads for its path adds nothing of its own */
+const SPLIT = emptyApk();
 /** the apk installed at `path`, as ApkAssets loads it */
 function apkAt(path: string): Apk | null {
-  let apk = loaded.get(path);
-  if (!apk) {
-    for (const record of packages.values()) {
-      if (record.path !== path) continue;
-      const r = record.res;
-      apk = { path, table: r.arsc ?? (r.tbl(0x01000000)?.pkgName === record.pkg ? r.tbl(0x01000000) : null), zip: r.zip, lazyEntries: r.lazyEntries };
-      loaded.set(path, apk);
-    }
-  }
-  return apk ?? null;
-}
-/** an apk the shell installed, before the package registry records it */
-export function registerApk(path: string, res: Resources): void {
-  if (!loaded.has(path)) loaded.set(path, { path, table: res.arsc, zip: res.zip, lazyEntries: res.lazyEntries });
-}
-/** a split installed with its base: its table and entries are merged into the base's (shell/install.ts),
- *  so the ApkAssets ResourcesManager loads for its path adds nothing of its own */
-export function registerSplit(path: string): void {
-  if (!loaded.has(path)) loaded.set(path, { path, table: null, zip: {}, lazyEntries: new Map() });
+  for (const record of packages.values()) if (record.path === path) return record.apk;
+  return appHost?.splits.some((name) => apkPath(name) === path) ? SPLIT : null;
 }
 const apkN = (h: bigint) => deref<ApkN>(h);
 function loadApk(path: string, flags: number): bigint {
   const apk = apkAt(path);
   if (!apk) throw rt.mkThrowable("java/io/IOException", "Failed to load asset path " + path);
-  return handle({ ...apk, system: (flags & PROPERTY_SYSTEM) !== 0, strings: 0n } satisfies ApkN);
+  return handle({ ...apk, path, origin: apk, system: (flags & PROPERTY_SYSTEM) !== 0, strings: 0n } satisfies ApkN);
 }
 /** the apks behind an AssetManager */
 const apksOf = (res: Resources) => res.apks as ApkN[];
@@ -73,11 +63,24 @@ function findEntry(res: Resources, path: string, cookie = 0): { apk: Apk; source
   for (let i = apks.length - 1; i >= 0; i--) { const hit = pick(apks[i]); if (hit) return hit; }
   return null;
 }
+/** AssetManager2::Open: assets/`path` from the last apk holding it */
+export const assetEntry = (res: Resources, path: string): FileSource | null => findEntry(res, "assets/" + path)?.source ?? null;
+/** AssetManager2::OpenDir: the names directly under assets/`dir` in every apk, sorted, each true
+ *  for a regular file and false for a directory; a later apk's entry replaces an earlier one's */
+export function assetDir(res: Resources, dir: string): [name: string, regular: boolean][] {
+  const path = "assets/" + dir, prefix = path.endsWith("/") ? path : path + "/", names = new Map<string, boolean>();
+  for (const apk of apksOf(res)) for (const entry of [...Object.keys(apk.zip), ...apk.lazyEntries.keys()]) {
+    if (!entry.startsWith(prefix) || entry.length === prefix.length) continue;
+    const slash = entry.indexOf("/", prefix.length);
+    names.set(entry.slice(prefix.length, slash < 0 ? undefined : slash), slash < 0);
+  }
+  return [...names].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+}
 
 delegate("android/content/res/ApkAssets", {
   "nativeLoad(ILjava/lang/String;ILandroid/content/res/loader/AssetsProvider;)J": (_format: number, path: string, flags: number) => loadApk(path, flags),
   "nativeLoadEmpty(ILandroid/content/res/loader/AssetsProvider;)J": (flags: number) =>
-    handle({ path: "empty", table: null, zip: {}, lazyEntries: new Map(), system: (flags & PROPERTY_SYSTEM) !== 0, strings: 0n } satisfies ApkN),
+    handle({ ...emptyApk(), path: "empty", origin: null, system: (flags & PROPERTY_SYSTEM) !== 0, strings: 0n } satisfies ApkN),
   // a descriptor is served by the path it was opened from; one with no installed apk behind it
   // fails as a device fails an unreadable one
   "nativeLoadFd(ILjava/io/FileDescriptor;Ljava/lang/String;ILandroid/content/res/loader/AssetsProvider;)J":
@@ -91,8 +94,8 @@ delegate("android/content/res/ApkAssets", {
     const apk = apkN(h);
     return apk.strings || (apk.strings = apk.table?.values ? handle(apk.table.values) : 0n);
   },
-  // installed archives never change underneath a process
-  "nativeIsUpToDate(J)Z": () => 1,
+  // stale once the registry holds another apk at its path, as a reinstall replaces it
+  "nativeIsUpToDate(J)Z": (h: bigint) => { const apk = apkN(h); return +(apk.origin === null || apkAt(apk.path) === apk.origin); },
   "nativeOpenXml(JLjava/lang/String;)J": driven(function* (h: bigint, path: string): Gen {
     const source = entrySource(apkN(h), path);
     if (!source) throw rt.mkThrowable("java/io/FileNotFoundException", path);
@@ -218,8 +221,8 @@ function bagValue(res: Resources, id: number, i: number): SV {
 }
 /** a resource's package, type and entry name, or null when it names nothing */
 function resourceName(res: Resources, id: number): [string, string, string] | null {
-  const table = res.tbl(id), entry = table?.entry(id);
-  return entry ? [table!.packageName(id >>> 24) ?? "", res.idType(id), entry.key] : null;
+  const table = res.tbl(id), entry = res.entry(id);
+  return entry ? [table!.packageName(id >>> 24) ?? "", table!.typeName((id >> 16) & 0xff, id & 0xffff, id >>> 24, res.qualifiers), entry.key] : null;
 }
 /** AssetManager2::GetResourceId over "[package:][type/]entry": packages in load order, the
  *  framework's first when no package is named */
@@ -238,7 +241,7 @@ function resourceId(res: Resources, name: string, defType: string | null, defPkg
     if (!table) continue;
     for (const id of table.packageIds()) {
       if (pkg && table.packageName(id) !== pkg) continue;
-      const found = table.findId(type, entry, id) || (type === "attr" ? table.findId("^attr-private", entry, id) : 0);
+      const found = table.findId(type, entry, id, res.qualifiers) || (type === "attr" ? table.findId("^attr-private", entry, id, res.qualifiers) : 0);
       if (found) return found;
     }
   }
@@ -250,19 +253,8 @@ function localesOf(res: Resources, excludeSystem: boolean): string[] {
   for (const apk of apksOf(res)) if (!(excludeSystem && apk.system)) for (const l of apk.table?.locales ?? []) out.add(l);
   return [...out];
 }
-/** the qualifiers selection reads, out of nativeSetConfiguration's arguments */
-function qualifiers(locale: string | null, orientation: number, density: number, swdp: number, wdp: number, hdp: number, screenLayout: number, uiMode: number, sdk: number) {
-  const [lang = "", ...rest] = (locale ?? "").split("-");
-  const region = rest.find((p) => /^[A-Z]{2}$|^\d{3}$/.test(p)) ?? "";
-  return {
-    lang: lang === "und" ? "" : lang, region, orientation: orientation as Arsc["device"]["orientation"], density, swdp, wdp, hdp,
-    size: (screenLayout & 0x0f) || sizeClass(swdp), dir: screenLayout & 0xc0,
-    uiType: uiMode & 0x0f, night: (uiMode & 0x30) === 0x20 ? 1 : 0, sdk,
-  };
-}
-
 delegate("android/content/res/AssetManager", {
-  "nativeCreate()J": () => { liveAssetManagers++; const res = new Resources(null, {}, undefined, true); res.setApks([]); return handle(res); },
+  "nativeCreate()J": () => { liveAssetManagers++; return handle(new Resources([], deviceQualifiers())); },
   "nativeDestroy(J)V": (h: bigint) => { liveAssetManagers--; release(h); },
   "getGlobalAssetManagerCount()I": () => liveAssetManagers,
   "getGlobalAssetCount()I": () => liveAssets,
@@ -325,7 +317,7 @@ delegate("android/content/res/AssetManager", {
     const res = assets(h), n = res.bag(id)?.keys.length ?? -1;
     if (n < 0) return null;
     const out: (string | null)[] = [];
-    for (let i = 0; i < n; i++) { const v = bagValue(res, id, i); out.push(v.t === TV.STRING ? res.tbl(v.pkg << 24)?.values.get(v.d) ?? null : null); }
+    for (let i = 0; i < n; i++) out.push(res.string(bagValue(res, id, i)));
     return jarray(out, "Ljava/lang/String;");
   },
   "nativeGetResourceStringArrayInfo(JI)[I": (h: bigint, id: number) => {
@@ -344,7 +336,7 @@ delegate("android/content/res/AssetManager", {
   "nativeGetResourcePackageName(JI)Ljava/lang/String;": (h: bigint, id: number) => resourceName(assets(h), id)?.[0] ?? null,
   "nativeGetResourceTypeName(JI)Ljava/lang/String;": (h: bigint, id: number) => resourceName(assets(h), id)?.[1] ?? null,
   "nativeGetResourceEntryName(JI)Ljava/lang/String;": (h: bigint, id: number) => resourceName(assets(h), id)?.[2] ?? null,
-  "nativeGetParentThemeIdentifier(JI)I": (h: bigint, id: number) => assets(h).tbl(id)?.entry(id)?.bag?.parent ?? 0,
+  "nativeGetParentThemeIdentifier(JI)I": (h: bigint, id: number) => assets(h).entry(id)?.bag?.parent ?? 0,
   "nativeGetSizeConfigurations(J)[Landroid/content/res/Configuration;": (h: bigint) => sizeConfigurations(assets(h), false),
   "nativeGetSizeAndUiModeConfigurations(J)[Landroid/content/res/Configuration;": (h: bigint) => sizeConfigurations(assets(h), true),
   "nativeGetOverlayableMap(JLjava/lang/String;)Ljava/util/Map;": driven(function* (h: bigint, pkg: string): Gen {
@@ -413,7 +405,16 @@ delegate("android/content/res/AssetManager", {
     if (!hit) throw rt.mkThrowable("java/io/FileNotFoundException", path);
     return handle(mkBlock(yield* awaited(readFully(hit.source)), res));
   }),
-  "nativeOpenXmlAssetFd(JILjava/io/FileDescriptor;)J": () => { throw rt.mkThrowable("java/io/FileNotFoundException", "Corrupt XML binary file"); },
+  // the descriptor's whole file, as Asset::createFromFd reads it
+  "nativeOpenXmlAssetFd(JILjava/io/FileDescriptor;)J": driven(function* (h: bigint, _cookie: number, descriptor: JObj | null): Gen {
+    const fd = fdInt(descriptor);
+    if (fd < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Bad FileDescriptor");
+    const bytes = yield* awaited(fdContents(fd));
+    let block: Block | null = null;
+    try { if (bytes) block = mkBlock(bytes, assets(h)); } catch { /* ResXMLTree::setTo refuses it */ }
+    if (!block) throw rt.mkThrowable("java/io/FileNotFoundException", "Corrupt XML binary file");
+    return handle(block);
+  }),
   "nativeOpenAssetFd(JLjava/lang/String;[J)Landroid/os/ParcelFileDescriptor;": (h: bigint, path: string, offsets: BigInt64Array) => openFd(assets(h), "assets/" + path, 0, offsets),
   "nativeOpenNonAssetFd(JILjava/lang/String;[J)Landroid/os/ParcelFileDescriptor;": (h: bigint, cookie: number, path: string, offsets: BigInt64Array) => openFd(assets(h), path, cookie, offsets),
   "nativeAssetDestroy(J)V": (a: bigint) => { liveAssets--; release(a); },
@@ -441,14 +442,8 @@ delegate("android/content/res/AssetManager", {
     c.pos = Math.max(0, Math.min(c.source.size, base + Number(off)));
     return BigInt(c.pos);
   },
-  "nativeList(JLjava/lang/String;)[Ljava/lang/String;": (h: bigint, path: string) => {
-    const dir = "assets/" + (path ? path + "/" : "");
-    const names = new Set<string>();
-    for (const apk of apksOf(assets(h))) for (const k of [...Object.keys(apk.zip), ...apk.lazyEntries.keys()]) {
-      if (k.startsWith(dir) && k.length > dir.length) names.add(k.slice(dir.length).split("/")[0]);
-    }
-    return jarray([...names].sort(), "Ljava/lang/String;");
-  },
+  "nativeList(JLjava/lang/String;)[Ljava/lang/String;": (h: bigint, path: string) =>
+    jarray(assetDir(assets(h), path).map(([name]) => name), "Ljava/lang/String;"),
 });
 
 interface Cursor { source: FileSource; pos: number }
@@ -474,7 +469,7 @@ const openFd = driven(function* (res: Resources, path: string, cookie: number, o
 /** the chain of styles a bag inherits from, itself first (AssetManager2::GetBagResIdStack) */
 function styleStack(res: Resources, id: number): number[] {
   const out: number[] = [];
-  while (id && !out.includes(id) && res.tbl(id)?.entry(id)?.bag) { out.push(id); id = res.tbl(id)!.entry(id)!.bag!.parent; }
+  for (let bag = res.entry(id)?.bag; id && bag && !out.includes(id); bag = res.entry(id)?.bag) { out.push(id); id = bag.parent; }
   return out;
 }
 function overlayablesOf(res: Resources, pkg: string): Map<string, string> | null {

@@ -2,8 +2,7 @@
 import { loadFramework, mountPlatformJars } from "../android/framework.ts";
 import { setProcessIdentity, setProcessName, PROCESS_PID } from "../android/os.ts";
 import { onMain } from "../android/mainloop.ts";
-import { applyDeviceConfiguration } from "../android/resources.ts";
-import { initDeviceLocales } from "../android/resnative.ts";
+import { applyDeviceConfiguration, initDeviceLocales } from "../android/configuration.ts";
 import { scall } from "../jvm/natives/jentry.ts";
 import { fixProcessBitness } from "../jvm/natives/jvmruntime.ts";
 import { loadAppCode, loadTier } from "../jvm/tier.ts";
@@ -47,7 +46,7 @@ export async function prepareWorkerInstall(install: import("./install.ts").Insta
   ]);
   const bytes = install.base instanceof Uint8Array ? install.base : await readFully(install.base);
   const archive = packageArchive(install.zip, await apkCertificates(bytes, install.zip), install.lazyEntries);
-  for (const split of install.splits) if (split.resources) archive.res.arsc?.add(split.resources);
+  for (const split of install.splits) if (split.resources) archive.apk.table?.add(split.resources);
   const record = registerPackage(archive);
   if (install.base instanceof Uint8Array) vfs.write(installedPath(record.pkg), install.base);
   else vfs.mount(installedPath(record.pkg), install.base);

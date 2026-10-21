@@ -11,7 +11,7 @@ import { installPackageArchive } from "./pm.ts";
 import { broadcastIntent } from "./server/broadcastqueue.ts";
 import { sendIntent } from "./pendingintent.ts";
 import { callingIdentity, newStub, binderEscape, parceledList } from "./binder.ts";
-import { packages } from "./packages.ts";
+import { ownedBy, packages } from "./packages.ts";
 import { checkUidPermission } from "./permissions.ts";
 import { deleteObserver, deleteVersioned, mayDeletePackages, notHeld } from "./appdata.ts";
 import { putExtra, type JIntent } from "./intent.ts";
@@ -19,14 +19,19 @@ import { putExtra, type JIntent } from "./intent.ts";
 const PI = "android/content/pm/PackageInstaller", S = "Ljava/lang/String;";
 const STATUS_SUCCESS = 0, STATUS_FAILURE_INVALID = 4, MODE_FULL_INSTALL = 1;
 const MODE_WRITE_ONLY = 0x20000000, MODE_CREATE = 0x08000000, MODE_TRUNCATE = 0x04000000;
-interface Session { id: number; mode: number; packageName: string | null; installer: string | null; names: string[]; sealed: boolean; binder: JObj | null }
+interface Session {
+  id: number; mode: number; installFlags: number; packageName: string | null; installer: string | null; installerUid: number;
+  names: string[]; sealed: boolean; binder: JObj | null;
+}
 const sessions = new Map<number, Session>();
 const callbacks = new Set<JObj>();
 let nextSession = 1;
 const stageDir = (id: number) => `/data/app/vmdl${id}.tmp`;
+const ROOT_UID = 0, SYSTEM_UID = 1000, SHELL_UID = 2000;
+/** a session the caller may open or abandon: its installer's, or any for root (isCallingUidOwner) */
 function session(id: number): Session {
-  const value = sessions.get(id);
-  if (!value) throw rt.mkThrowable("java/lang/SecurityException", `Caller has no access to session ${id}`);
+  const value = sessions.get(id), { uid } = callingIdentity();
+  if (!value || uid !== ROOT_UID && uid !== value.installerUid) throw rt.mkThrowable("java/lang/SecurityException", `Caller has no access to session ${id}`);
   return value;
 }
 function notify(name: string, desc: string, ...args: unknown[]): void {
@@ -67,8 +72,9 @@ function* commit$(s: Session, sender: JObj): Gen<void> {
 
 class JSessionService extends JObj { session: Session | null = null; }
 const own = (o: JSessionService) => {
-  const s = o.session;
+  const s = o.session, { uid } = callingIdentity();
   if (!s || !sessions.has(s.id)) throw rt.mkThrowable("java/lang/SecurityException", "Session was abandoned or committed");
+  if (uid !== ROOT_UID && uid !== s.installerUid) throw rt.mkThrowable("java/lang/SecurityException", `Session does not belong to uid ${uid}`);
   return s;
 };
 const unsealed = (o: JSessionService) => {
@@ -94,8 +100,8 @@ rt.register({ name: "webdroid/PackageInstallerSession", ctor: JSessionService, s
     s.sealed = true;
     detached(() => rt.drive(commit$(s, sender)), logUncaught);
   },
-  "abandon()V": function (this: JSessionService) { const s = this.session; if (s && sessions.has(s.id)) finish(s, false); },
-  "getInstallFlags()I": () => 0,
+  "abandon()V": function (this: JSessionService) { const s = this.session; if (s && sessions.has(s.id)) finish(own(this), false); },
+  "getInstallFlags()I": function (this: JSessionService) { return own(this).installFlags; },
   "getParentSessionId()I": () => -1,
   "isMultiPackage()Z": () => 0,
   "isStaged()Z": () => 0,
@@ -104,7 +110,7 @@ rt.register({ name: "webdroid/PackageInstallerSession", ctor: JSessionService, s
 
 function* sessionInfo$(s: Session): Gen<JObj> {
   const info: JObj = yield newObj(PI + "$SessionInfo", "()V");
-  return setDeclared(info, PI + "$SessionInfo", { sessionId: s.id, userId: 0, installerPackageName: s.installer, mode: s.mode,
+  return setDeclared(info, PI + "$SessionInfo", { sessionId: s.id, userId: 0, installerPackageName: s.installer, installerUid: s.installerUid, mode: s.mode,
     appPackageName: s.packageName, sealed: s.sealed ? 1 : 0, active: 1, parentSessionId: -1 });
 }
 function* sessionList$(installer: string | null | undefined): Gen {
@@ -113,10 +119,13 @@ function* sessionList$(installer: string | null | undefined): Gen {
   return parceledList(infos);
 }
 rt.register({ name: "webdroid/PackageInstallerService", ctor: class extends JObj {}, sup: "android/content/pm/IPackageInstaller$Stub", methods: {
+  // an app names itself as the installer; adb (shell, root) and the system may name another
   [`createSession(L${PI}$SessionParams;${S}${S}I)I`]: (params: JObj, installer: string | null) => {
-    const read = (name: string) => getDeclared(params, PI + "$SessionParams", name);
-    const s: Session = { id: nextSession++, mode: read("mode") as number, packageName: read("appPackageName") as string | null,
-      installer, names: [], sealed: false, binder: null };
+    const { uid } = callingIdentity(), read = (name: string) => getDeclared(params, PI + "$SessionParams", name);
+    if (uid !== ROOT_UID && uid !== SHELL_UID && uid !== SYSTEM_UID && !ownedBy(installer, uid))
+      throw rt.mkThrowable("java/lang/SecurityException", `Package ${installer} does not belong to ${uid}`);
+    const s: Session = { id: nextSession++, mode: read("mode") as number, installFlags: read("installFlags") as number,
+      packageName: read("appPackageName") as string | null, installer, installerUid: uid, names: [], sealed: false, binder: null };
     sessions.set(s.id, s);
     notify("onSessionCreated", "(I)V", s.id);
     return s.id;

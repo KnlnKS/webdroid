@@ -1,9 +1,7 @@
-import type { Resources } from "./res.ts";
-import type { Locales } from "./resnative.ts";
+import type { Locales } from "./configuration.ts";
 
 /** Host bundle shared by all contexts of the app */
 export interface AppHost {
-  res: Resources;
   pkg: string;
   assetKey: string;
   zip: Record<string, Uint8Array>;

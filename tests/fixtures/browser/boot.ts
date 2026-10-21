@@ -1,7 +1,7 @@
 import { loadSystemFontMap } from "../../../src/android/fonts.ts";
 import { mountPlatformData } from "../../../src/shell/apex.ts";
 import { preloadPaint } from "../../../src/android/paint.ts";
-import { initDeviceLocales } from "../../../src/android/resnative.ts";
+import { initDeviceLocales } from "../../../src/android/configuration.ts";
 import { mountPlatformJars } from "../../../src/android/framework.ts";
 import { JObj, rt } from "../../../src/jvm/runtime.ts";
 import { tierReady } from "../../../src/jvm/tier.ts";

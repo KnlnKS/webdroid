@@ -10,8 +10,8 @@ import { uuidDefault } from "./os.ts";
 import { vcall, after, newObj } from "../jvm/natives/jentry.ts";
 import { logUncaught, detached } from "../jvm/natives/jthrowable.ts";
 import { type XmlNode, attrStr, attr, TV } from "./axml.ts";
-import { normRV, resString, type Resources } from "./res.ts";
-import { apkCertificates, parsePackageArchive, packageArchive, type PackageArchive } from "./packagearchive.ts";
+import { resolved, resString, type Resources } from "./res.ts";
+import { parsePackageArchive, packageArchive, type PackageArchive } from "./packagearchive.ts";
 import { packedArchives } from "../shell/packedarchive.ts";
 import { verifyApkSignature } from "./apksignature.ts";
 import { persistPackage, restorePackages } from "../shell/packages.ts";
@@ -46,26 +46,17 @@ export const GL_ES_VERSION = 0x30000;
 
 // ── the booted package
 let currentPackage: PackageRecord | null = null;
-/** registers the package this process booted from its manifest, at /data/app/base.apk, with its
- *  native libraries where the installer leaves them */
+/** the installed package this process booted, with its native libraries where the installer leaves them */
 export function setManifest(root: XmlNode): void {
-  const pkg = attrStr(root, "package") ?? "";
-  if (currentPackage && packages.get(currentPackage.pkg) === currentPackage) packages.delete(currentPackage.pkg);
-  if (!appHost) return;
-  const host = appHost;
-  currentPackage = packages.get(pkg) ?? new PackageRecord(root, host.res, apkPath(), packageUid(pkg), async () => {
-    const bytes = await vfs.readFile(apkPath());
-    return bytes ? cachedCertificates(bytes, host.zip) : [];
-  });
-  packages.set(pkg, currentPackage);
-  extractNativeLibraries(currentPackage);
+  currentPackage = packages.get(attrStr(root, "package") ?? "") ?? null;
+  if (currentPackage) extractNativeLibraries(currentPackage);
 }
 
 // ── native libraries, laid out as PackageAbiHelper derives them for a cluster install
 const INSTRUCTION_SETS: Record<string, string> = { "arm64-v8a": "arm64", "armeabi-v7a": "arm", armeabi: "arm", x86_64: "x86_64", x86: "x86" };
 /** primaryCpuAbi: the ABI of the package's libraries a process here loads, null when it ships none */
 const primaryAbi = (record: PackageRecord): string | null =>
-  libraryAbi(record === currentPackage ? rt.classpathNames() : Object.keys(record.res.zip));
+  libraryAbi(record === currentPackage ? rt.classpathNames() : Object.keys(record.apk.zip));
 const nativeLibraryRoot = (record: PackageRecord): string => `${record.path.slice(0, record.path.lastIndexOf("/"))}/lib`;
 /** <codePath>/lib/<instruction set>, the device's own when the package ships no libraries */
 const nativeLibraryDir = (record: PackageRecord, abi: string | null): string => `${nativeLibraryRoot(record)}/${INSTRUCTION_SETS[abi ?? ABIS_64[0]]}`;
@@ -100,11 +91,10 @@ function* metaData$(node: XmlNode | null | undefined, res: Resources): Gen<JObj 
     const resource = attr(md, "resource"), raw = attr(md, "value") ?? resource;
     if (!raw) { yield put("putString", "Ljava/lang/String;", key, null); continue; }
     if (resource) { yield put("putInt", "I", key, raw.data); continue; }
-    const direct = normRV({ t: raw.type, d: raw.data, s: raw.str ?? undefined });
-    const v = direct.t === TV.REFERENCE ? res.resolveRefs(direct) : direct;
-    if (v.t === TV.STRING) yield put("putString", "Ljava/lang/String;", key, v.s ?? null);
+    const v = resolved(res, raw.type, raw.data);
+    if (v.t === TV.STRING) yield put("putString", "Ljava/lang/String;", key, v.pkg < 0 ? raw.str : res.string(v));
     else if (v.t === TV.BOOLEAN) yield put("putBoolean", "Z", key, v.d ? 1 : 0);
-    else if (v.t === TV.FLOAT) yield put("putFloat", "F", key, v.d);
+    else if (v.t === TV.FLOAT) yield put("putFloat", "F", key, intBitsToFloat(v.d));
     else yield put("putInt", "I", key, v.d);
   }
   return bundle;
@@ -511,12 +501,6 @@ function* packageInfo$(record: PackageRecord, flags: number): Gen<JObj> {
 
 // ── installed archives under /data/app, registered when first asked for
 const archiveCache = new WeakMap<Uint8Array, Promise<PackageArchive>>();
-const certificateCache = new WeakMap<Uint8Array, Promise<Uint8Array[]>>();
-function cachedCertificates(bytes: Uint8Array, zip: Parameters<typeof apkCertificates>[1]): Promise<Uint8Array[]> {
-  let pending = certificateCache.get(bytes);
-  if (!pending) certificateCache.set(bytes, pending = apkCertificates(bytes, zip));
-  return pending;
-}
 async function readArchive(path: string): Promise<PackageArchive | null> {
   const packed = packedArchives.get(path);
   if (packed) return packageArchive(packed.zip, packed.index.certificates.map(hexBytes));
@@ -535,7 +519,7 @@ rt.registerJnis("android/os/incremental/IncrementalManager", {
 });
 export const installedPath = (pkg: string) => `/data/app/${pkg}/base.apk`;
 export function registerPackage(archive: PackageArchive, path = installedPath(archive.pkg), uid = packageUid(archive.pkg)): PackageRecord {
-  const record = new PackageRecord(archive.root, archive.res, path, uid, () => Promise.resolve(archive.certificates));
+  const record = new PackageRecord(archive.root, archive.apk, path, uid, () => Promise.resolve(archive.certificates));
   packages.set(record.pkg, record);
   for (const node of archive.root.children) if (node.name === "permission" && (intAttr(node, "protectionLevel", 0) & 3) >= 2) {
     const name = attrStr(node, "name");

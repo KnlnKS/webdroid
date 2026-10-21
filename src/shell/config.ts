@@ -125,8 +125,6 @@ export const device = {
   get smallestWidthDp(): number { return Math.round(Math.min(this.width, this.height) / this.density); },
   /** the activity's height in dp — the status bar is not part of it */
   get heightDp(): number { return Math.round((this.height - this.statusBar) / this.density); },
-  /** full display height in dp, status bar included (resource qualifiers use this) */
-  get screenHeightDp(): number { return Math.round(this.height / this.density); },
   /** unrounded: stroke widths and glyph offsets are legitimately fractional */
   dp(n: number): number { return n * this.density; },
 };
