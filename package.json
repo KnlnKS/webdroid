@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "vp dev --configLoader native",
     "build:prod": "vp build --configLoader native",
+    "build:renderer": "node scripts/generated.ts --pages",
     "worker:dev": "vp build --configLoader native && wrangler dev",
     "worker:check": "vp build --configLoader native && wrangler deploy --env=\"\" --dry-run",
     "generate": "node scripts/generated.ts --force",

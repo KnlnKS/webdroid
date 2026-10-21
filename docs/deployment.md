@@ -10,13 +10,23 @@ Install Node 24 (`.node-version`), pnpm, Zig 0.16 and project dependencies, then
 pnpm install
 pnpm typecheck
 pnpm worker:check
+pnpm build:renderer
+pnpm exec wrangler pages functions build --outdir /tmp/webdroid-pages-check
 ```
 
 The production build prepares the pinned system package data and framework resources, bundles both browser entrypoints, and copies their runtime assets. It includes the platform class path under `vendor/aosp` (`pnpm gen-framework`) and fails if any of its files is missing. Files over Cloudflare's static asset size limit are split and streamed by the Worker. If `vendor/wasm-aot` holds a platform build (`pnpm aot`), it is copied under `aot/` with immutable cache headers; a build made from other sources fails the production build. The generated `dist/` directory is disposable.
 
-For local Worker testing, use `pnpm worker:dev`. To deploy after configuring the sites below, run `pnpm build:prod` followed by `pnpm exec wrangler deploy --env=""`. The Pages project deploys from Git automatically.
+For local Worker testing, use `pnpm worker:dev`. To deploy after configuring the sites below, run `pnpm build:prod` followed by `pnpm exec wrangler deploy --env=""`.
 
-Cloudflare Workers Builds connects the main Worker to the `main` branch of `KnlnKS/webdroid`. It uses `sh scripts/build-cloudflare.sh`, Node from `.node-version`, build variables `PNPM_VERSION=11.0.8`, `WEBDROID_AOSP_URL` and `WEBDROID_AOSP_SHA256`, and deploy command `npx wrangler deploy --env=""`. The Pages project `webdroid-renderer` connects to the same branch with automatic deployments enabled, build command `pnpm install --frozen-lockfile`, and `pages-renderer` as its output directory. The install supplies dependencies for Pages Functions, which compile the shared Worker modules and serve the WebView routes; Pages does not rebuild or upload the emulator assets. In Pages Settings > Bindings, bind `WEB_BRIDGES` to the main Worker's `webdroid_WebBridgeSession` Durable Object namespace, then redeploy Pages so the binding takes effect. The Worker build script downloads checksum-pinned Zig 0.16.0 and the platform class path: `vendor/aosp` comes from the reference device, which a build machine lacks, so `WEBDROID_AOSP_URL` names an archive of it made after `pnpm gen-framework` (`tar -C vendor -czhf aosp.tar.gz aosp`) and `WEBDROID_AOSP_SHA256` pins that archive's digest. The existing sql.js build script fetches Emscripten 4.0.9 and its pinned sources. Each Worker build generates assets from the checked out commit; generated assets remain out of Git.
+The Pages project deploys from Git automatically.
+
+Cloudflare Workers Builds connects the main Worker to the `main` branch of `KnlnKS/webdroid`. It uses `sh scripts/build-cloudflare.sh`, Node from `.node-version`, build variables `PNPM_VERSION=11.0.8`, `WEBDROID_AOSP_URL` and `WEBDROID_AOSP_SHA256`, and deploy command `npx wrangler deploy --env=""`.
+
+The Pages project `webdroid-renderer` deploys `main` to production and other branches to preview URLs, with `pages-renderer` as its output directory. Pages automatically installs dependencies; set `PNPM_VERSION=11.0.8` and build command `npm run build:renderer --if-present`. The optional script keeps the older `main` revision, which embeds its renderer sources and has no build step, deployable until this branch merges. On this branch, `build:renderer` runs the shared generator with `--pages` to create `src/shell/webpage.gen.ts` before Pages compiles Functions. It needs Node and the locked dependencies, but no Zig, Emscripten or reference-device assets. Pages does not rebuild or upload the emulator assets.
+
+In Pages Settings > Bindings, bind `WEB_BRIDGES` to the main Worker's `webdroid_WebBridgeSession` Durable Object namespace, then redeploy Pages so the binding takes effect.
+
+The Worker build script downloads checksum-pinned Zig 0.16.0 and the platform class path: `vendor/aosp` comes from the reference device, which a build machine lacks, so `WEBDROID_AOSP_URL` names an archive of it made after `pnpm gen-framework` (`tar -C vendor -czhf aosp.tar.gz aosp`) and `WEBDROID_AOSP_SHA256` pins that archive's digest. The existing sql.js build script fetches Emscripten 4.0.9 and its pinned sources. Each Worker build generates assets from the checked out commit; generated assets remain out of Git.
 
 ## Sites and configuration
 

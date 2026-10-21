@@ -4,7 +4,7 @@
 //           map and libc.zig's function table
 //   pages   the programs a WebView's renderer runs (src/shell/webpage) as strings in src/shell/webpage.gen.ts
 //   sql.js  vendor/sql.js/dist, as rebuild.sh builds it with its patch
-//   node scripts/generated.ts [--force]
+//   node scripts/generated.ts [--force] [--pages]
 import { execFile, spawn } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { promisify } from "node:util";
@@ -69,11 +69,16 @@ const sqlJsBuilt = () => existsSync(`${SQLJS}/dist/sqljs.patch`) && readFileSync
 const buildSqlJs = () => new Promise<void>((resolve, reject) => spawn("sh", [`${SQLJS}/rebuild.sh`], { stdio: ["ignore", "inherit", "inherit"] })
   .on("error", reject).on("exit", (code) => code ? reject(new Error("vendor/sql.js/rebuild.sh failed")) : resolve()));
 
+const ensurePages = async (force: boolean) => { if (force || stale(PAGES, [PAGES_OUT])) await buildPages(); };
+
 export async function ensureGenerated(force = false): Promise<void> {
   await Promise.all([
     (force || stale(CORE, [...MODES.map(([, name]) => `${NATIVE}/${name}.ts`), `${NATIVE}/native-core.wasm`, ABI])) && buildCore(),
-    (force || stale(PAGES, [PAGES_OUT])) && buildPages(),
+    ensurePages(force),
     (force || !sqlJsBuilt()) && buildSqlJs(),
   ]);
 }
-if (import.meta.main) await ensureGenerated(!!cli("node scripts/generated.ts [--force]", { force: { type: "boolean" } }).values.force);
+if (import.meta.main) {
+  const { values } = cli("node scripts/generated.ts [--force] [--pages]", { force: { type: "boolean" }, pages: { type: "boolean" } });
+  await (values.pages ? ensurePages : ensureGenerated)(!!values.force);
+}

@@ -798,6 +798,8 @@ current state and keep the measured reason for any rejected alternative. Record 
 
 ### Production build
 
+- **Pages needs its generated renderer** (2026-10-20). Branch previews failed resolving `webpage.gen.ts`: the Pages build command still ran only `bun install`, while the Node migration moved renderer bundling into the shared generator. `build:renderer` uses the same generator as dev and Worker builds, with `--pages` selecting only the WebView scripts. A clean checkout reproduced the missing import before generation and compiled Pages Functions afterward without native-core or sql.js outputs. Pages now relies on automatic dependency installation and invokes the renderer script when present, preserving the older production branch until merge.
+
 - **Import cycles break only in production**. Chunking reorders modules under cycles, so a top-level `extends` hit the TDZ only in the production bundle. Remove top-level uses of cyclic imports (`tests/import-cycles.test.ts` rejects them) and verify shell changes on `build:prod` under `wrangler dev`.
 - **Gzip transport for WebKit** (`9e208dd2`). Bun's synthesized gzip filename/MIME made WebKit keep compressed bytes despite `Content-Encoding`; binary MIME with inline disposition decodes in both engines.
 - **Deployment checks**. They skip arbitrary APKs and the UDP path; the Worker/Pages split and its same-site reason are in `docs/deployment.md`.
