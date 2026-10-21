@@ -13,7 +13,7 @@ import { vfs, storageEstimate } from "../shell/vfs.ts";
 import { filePaths } from "../shell/file-path.ts";
 import { FS_SYSCALLS, fallocate, fdRead, fdWrite, statProcess, faccessatPath, renameProcess, mkdirProcess, removeProcess, mknodProcess, changeProcess,
   modifiedTime, makePipe, pread, pwrite, getdents64 } from "./fs.ts";
-import { type FileStat, openFd, javaCloseFd, javaDup2Fd, javaLseekFd, javaPreadFd, javaTruncateFd, javaAllocateFd, javaChangeFdAttributes } from "./fd.ts";
+import { type FileStat, openFd, javaCloseFd, javaDup2Fd, javaLseekFd, javaReadFd, javaPreadFd, javaTruncateFd, javaAllocateFd, javaChangeFdAttributes } from "./fd.ts";
 import { processOpenFd } from "./process-fd.ts";
 import { POLL_SYSCALLS, epollCreate } from "./poll.ts";
 const utf8 = (s: string) => codec.enc.encode(s);
@@ -84,15 +84,11 @@ let scratch = 0;
 function fgetc(cpu: Cpu, fp: number): number | Promise<number> {
   const pending = pushback.get(fp), c = pending?.pop();
   if (c !== undefined) { if (!pending?.length) pushback.delete(fp); return c; }
-  const fd = fileFd(fp);
-  const f = openFd(fd);
-  if (!f) { setFlag(fp, F_ERR); return -1; }
-  const byte = f.byte ?? (f.byte = mem.hostAlloc(1));
-  const done = (read: number) => {
+  const byte = new Uint8Array(1);
+  return complete(kernelResult(cpu, javaReadFd(fileFd(fp), byte)), (read) => {
     if (read <= 0) { setFlag(fp, read < 0 ? F_ERR : F_EOF); return -1; }
-    return mem.u8[byte];
-  };
-  return complete(kernelResult(cpu, fdRead(fd, byte, 1)), done);
+    return byte[0];
+  });
 }
 function fwriteBytes(cpu: Cpu, fp: number, p: number, n: number): number | Promise<number> {
   return complete(kernelResult(cpu, fdWrite(cpu, fileFd(fp), p, n)), written => { if (written < 0) { setFlag(fp,F_ERR); return 0; } return written; });

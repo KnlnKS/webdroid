@@ -36,8 +36,6 @@ export interface OpenFile {
   entries?: string[];
   /** a log stream's priority, and its unfinished line */
   log?: number; line?: string;
-  /** the ARM32 libc's getc buffer (stdio.ts) */
-  byte?: number;
   /** run when the last descriptor sharing this open file closes it */
   onLastClose?: () => void;
 }

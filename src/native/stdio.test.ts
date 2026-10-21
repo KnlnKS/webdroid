@@ -306,6 +306,10 @@ test("a fifo goes with its file and ends when its last writer closes", async () 
     const file = javaOpenFd("/fifo-test", 0);
     expect(await call("read", file, buf, 4)).toBe(1);
     javaCloseFd(file);
+    mem.st16(buf, 0x72);                                                          // "r"
+    const fp = await call("fopen", path, buf);
+    expect([await call("fgetc", fp), await call("fgetc", fp), await call("feof", fp)]).toEqual([7, -1, 1]);
+    expect(await call("fclose", fp)).toBe(0);
     vfs.delete("/fifo-test");
     expect(await call("mkfifo", path, 0o600)).toBe(0);
   } finally { vfs.delete("/fifo-test"); mem.free(path); mem.free(buf); cpu.dispose(); setA64(false); }
