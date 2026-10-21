@@ -35,7 +35,8 @@ import { useAlarmScheduler } from "../src/android/alarm.ts";
 import { callProxy } from "../src/shell/process-port.ts";
 import { javaReadFd } from "../src/native/fd.ts";
 import { Arsc } from "../src/android/arsc.ts";
-import { scall, bootApp, packageRecord } from "./java.ts";
+import { scall, bootApp, packageRecord, thrown } from "./java.ts";
+import { PROCESS_UID } from "../src/android/os.ts";
 
 describe("android-uri-permission", () => {
   test("tree URI grants cover descendants with the granted access mode", () => {
@@ -150,9 +151,18 @@ describe("package-installer", () => {
   test("a session stages what AOSP's Session writes, and abandoning it drops the file", async () => {
     const installer = await vcall(await hostedService("package"), "getPackageInstaller", "()Landroid/content/pm/IPackageInstaller;");
     const params = await newObj("android/content/pm/PackageInstaller$SessionParams", "(I)V", 1);
-    const id = await vcall(installer, "createSession", "(Landroid/content/pm/PackageInstaller$SessionParams;Ljava/lang/String;Ljava/lang/String;I)I", params, "test.installer", null, 0);
-    const session = await newObj("android/content/pm/PackageInstaller$Session", "(Landroid/content/pm/IPackageInstallerSession;)V",
-      await vcall(installer, "openSession", "(I)Landroid/content/pm/IPackageInstallerSession;", id));
+    const create = (name: string) => vcall(installer, "createSession", "(Landroid/content/pm/PackageInstaller$SessionParams;Ljava/lang/String;Ljava/lang/String;I)I", params, name, null, 0);
+    const openSession = (id: number) => vcall(installer, "openSession", "(I)Landroid/content/pm/IPackageInstallerSession;", id);
+    packages.set("test.installer", { uid: PROCESS_UID } as PackageRecord);
+    expect(await thrown(() => create("test.other"))).toBe(`java/lang/SecurityException: Package test.other does not belong to ${PROCESS_UID}`);
+    const id = await create("test.installer");
+    // another app's uid, as a transaction from it carries
+    const self = await scall("android/os/Binder", "clearCallingIdentity", "()J");
+    await scall("android/os/Binder", "restoreCallingIdentity", "(J)V", 10077n << 32n | 4242n);
+    try {
+      expect(await thrown(() => openSession(id))).toBe(`java/lang/SecurityException: Caller has no access to session ${id}`);
+    } finally { await scall("android/os/Binder", "restoreCallingIdentity", "(J)V", self); }
+    const session = await newObj("android/content/pm/PackageInstaller$Session", "(Landroid/content/pm/IPackageInstallerSession;)V", await openSession(id));
     const out = await vcall(session, "openWrite", "(Ljava/lang/String;JJ)Ljava/io/OutputStream;", "base.apk", 0n, -1n);
     await vcall(out, "write", "([B)V", Int8Array.of(1, 2, 3));
     await vcall(session, "fsync", "(Ljava/io/OutputStream;)V", out);
@@ -164,6 +174,7 @@ describe("package-installer", () => {
     await vcall(session, "abandon", "()V");
     expect(vfs.read(`/data/app/vmdl${id}.tmp/base.apk`)).toBeNull();
     expect(await vcall(installer, "getSessionInfo", "(I)Landroid/content/pm/PackageInstaller$SessionInfo;", id)).toBeNull();
+    packages.delete("test.installer");
   });
 });
 
