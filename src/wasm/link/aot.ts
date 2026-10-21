@@ -317,7 +317,7 @@ export class AotRuntime {
     const w = this.w, mod = this.module(file);
     if (!mod) return undefined;
     const head = header<DHeader>(mod);
-    if (head.version !== VERSION) { this.rejectedData.add(file); return undefined; }
+    if (!w.units.admits(head)) { this.rejectedData.add(file); return undefined; }
     ex = memo[g] = w.instantiate(mod, { rt: w.rtImports(), host: w.host, stub: w.stubs.stubImports(mod) }).exports;
     w.stats.aot.d++;
     // the classes the vtables and `ensure` functions of the group name must have stubs before anything runs
@@ -337,14 +337,12 @@ export class AotRuntime {
     const head = header<SHeader>(mod);
     if (!w.units.admits(head)) return dead();
     // the functions of this module are not made twice: they are in it
-    w.units.linkHeader(head, (s) => this.synthIn.get(s) === file);
-    const imports = w.units.ofHeader(head);
-    w.units.classImports(head.classImports, imports);
+    const placed = w.units.link({ head, module: mod, defines: (s) => this.synthIn.get(s) === file }, () => {
+      for (const n of head.names) { const slot = w.slots.synthSlotOf(n); if (slot !== undefined && !w.slots.isStubbed(slot)) w.slots.holdsSynth(n, slot); }
+      return true;
+    });
     // a class whose module is being built, naming this function, has no globals yet: a stub stands in for the function, and the module serves the next one asked for
-    if (head.classImports.some(([m, n]) => imports[m][n] === undefined)) { this.synthState.delete(file); return false; }
-    w.instantiate(mod, imports);
-    for (const n of head.names) { const slot = w.slots.synthSlotOf(n); if (slot !== undefined && !w.slots.isStubbed(slot)) w.slots.holdsSynth(n, slot); }
-    w.units.recordHeader(head);
+    if (!placed) { this.synthState.delete(file); return false; }
     this.synthState.set(file, LIVE);
     return true;
   }
@@ -481,21 +479,21 @@ export class AotRuntime {
     }
     this.cState[c] = LIVE; this.cModule[c] = mod; this.cAbsent[c] = absent;
     if (app) this.cClasses[c] = head.classes;
-    w.units.linkHeader(head);
-    const imports = w.units.ofHeader(head);
     // Retired data groups bind each class's published globals instead of creating another owner.
-    let bindClasses = app;
-    for (const m of head.mods) { const ex = this.dExports[+m.slice(1)]; if (ex) imports[m] = ex; else bindClasses = true; }
-    if (bindClasses) w.units.classImports(head.classImports, imports);
-    w.instantiate(mod, imports);
-    w.stats.aot.c++;
-    const t2 = performance.now();
-    // slots made before the module was loaded say it is not there; the rest are made from the module's state
-    for (const b of head.classes) {
-      const base = w.slots.blockBase[b], n = w.slots.methodsIn(b);
-      for (let i = 0; i < n; i++) { const s = w.slots.peek(base + i); if (s?.k === "method" && this.has(c, base + i)) s.done = true; }
-    }
-    w.units.recordHeader(head);
+    const modules: Record<string, WebAssembly.Exports> = {};
+    for (const m of head.mods) { const ex = this.dExports[+m.slice(1)]; if (ex) modules[m] = ex; }
+    let t2 = 0;
+    const placed = w.units.link({ head, module: mod, modules }, () => {
+      w.stats.aot.c++;
+      t2 = performance.now();
+      // slots made before the module was loaded say it is not there; the rest are made from the module's state
+      for (const b of head.classes) {
+        const base = w.slots.blockBase[b], n = w.slots.methodsIn(b);
+        for (let i = 0; i < n; i++) { const s = w.slots.peek(base + i); if (s?.k === "method" && this.has(c, base + i)) s.done = true; }
+      }
+      return true;
+    });
+    if (!placed) { this.cState[c] = 0; return false; }
     for (const slot of this.overriddenBy.get(c) ?? []) if (!this.cAbsent[c]!.has(slot)) { w.assumptions.undoCode(slot); this.cAbsent[c]!.add(slot); }
     // code that holds a method of another module the host took since the build: that module may have undone the method before this one was loaded
     for (const [callee, ...by] of head.held ?? []) if (taken.has(callee)) for (const x of by) w.assumptions.undoCode(x);

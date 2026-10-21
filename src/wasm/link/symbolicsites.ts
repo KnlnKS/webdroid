@@ -44,12 +44,12 @@ export class SymbolicSites {
       })));
       const imports = this.w.units.of(cx); imports.symbolic = binding;
       this.w.stats.units++;
-      this.w.units.instantiate(cx, imports, built, this.w.slotOf(pending[0].method), clock, (exports) => {
+      this.w.units.link(this.w.units.compiled(cx, imports, built, this.w.slotOf(pending[0].method)), (exports) => {
         for (const { name, slot } of pending) {
           this.symbolicSites.set(name, new WebAssembly.Global({ value: "i32" }, slot));
           this.symbolicTable.set(slot, exports[name] as Function);
         }
-      });
+      }, clock);
       this.symbolicStubModules++;
     }
     for (const [name] of sites) out[name] = this.symbolicSites.get(name)!;
@@ -73,7 +73,7 @@ export class SymbolicSites {
         else {
           const { cx, built } = compileSymbolicSite(this.w, method, ins, inputs, output);
           this.w.stats.units++;
-          operation = this.w.units.instantiate(cx, this.w.units.of(cx), built, this.w.slotOf(method), clock, (e) => e.m as Function);
+          operation = this.w.units.link(this.w.units.compiled(cx, this.w.units.of(cx), built, this.w.slotOf(method)), (e) => e.m as Function, clock)!;
           const mb = cx.mb;
           if (cx.assumptions.length || cx.absent.length || cx.gaps.length || cx.linkErrors.length || cx.nativeImports.size
             || built.traces.some(t => t.m) || mb.globals.length || mb.tables.length || mb.tags.length || mb.elems.length || mb.datas.length) {

@@ -9,7 +9,7 @@ import { mid, methodOf } from "../compiler/ids.ts";
 import { definitionReady, initiatedType } from "./resolution.ts";
 import { defaultLoop } from "./sched.ts";
 import type { Slot } from "./slots.ts";
-import type { UnitHeader } from "./aot.ts";
+import type { LinkedUnit } from "./units.ts";
 import type { UnitResult, UpgradeJob } from "./unit.ts";
 import type { Built, Clock, World } from "./world.ts";
 
@@ -195,8 +195,8 @@ export class Tiering {
     if (!hot) cx.shareHelpers();
     const { methods, copies = 0, built } = build(cx, this.unitSeq++);
     this.w.stats.units++; this.w.stats.methods += methods.length + copies;
-    const group = methods.map((m) => this.w.slotOf(m)), imports = this.w.units.of(cx);
-    this.install(group, hot, cx, imports, built, slot, clock);
+    const group = methods.map((m) => this.w.slotOf(m));
+    this.install(group, hot, this.w.units.compiled(cx, this.w.units.of(cx), built, slot), slot, clock);
     return group;
   }
   private upgradeAllowed(now: number): boolean {
@@ -269,50 +269,45 @@ export class Tiering {
   }
   /** the second-tier compile of the method in `slot` will not come: it may ask for it again, or be compiled inline */
   release(slot: number): void { this.clear(slot, PENDING); }
-  /** installs the second-tier unit a compile worker made for `slot`, if it is still sound here: nothing was added to the Program since `epoch`, and the numbering its code relies on
-   *  is this World's (it was numbered from `result.numbering.from`) */
+  /** installs the second-tier unit a compile worker made for `slot`, if it is still sound here (Tiering.received) */
   adoptUnit(slot: number, job: UpgradeJob, result: UnitResult, epoch: number): boolean {
     if (job.merge) return this.adoptMerged(job, result, epoch);
     const s = this.w.slots.at(slot), clock = this.w.units.clock();
     this.release(slot);
-    if (!this.sound(result, epoch) || s?.k !== "method" || !s.done || this.is(slot, HOT)) return false;
-    const r = this.received(result);
-    if (!r) return false;
+    if (s?.k !== "method" || !s.done || this.is(slot, HOT)) return false;
+    const u = this.received(result, epoch);
+    if (!u || !this.install(job.installed.map((id) => this.w.slotOf(methodOf(this.w.prog, id)!)), true, u, slot, clock)) return false;
     this.w.stats.methods += job.installed.length + job.copies.length; this.w.stats.upgrades++;
-    this.install(job.installed.map((id) => this.w.slotOf(methodOf(this.w.prog, id)!)), true, r.head, r.imports, r.built, slot, clock);
     return true;
   }
-  /** whether a worker's unit was made for this World as it is: nothing was added to the Program since `epoch`, and its natives are bound here */
-  private sound(result: UnitResult, epoch: number): boolean {
-    const head = result.header;
-    return epoch === this.w.epoch && this.w.units.admits(head);
-  }
-  /** takes the numbering of a worker's unit and links what it names; its module and imports, undefined if the numbering does not follow this World's */
-  private received(result: UnitResult) {
+  /** a worker's unit, if it was made for this World as it is (nothing was added to the Program since `epoch`, its natives are bound here) and the numbering its code
+   *  relies on follows this World's (it was numbered from `result.numbering.from`), which takes it */
+  private received(result: UnitResult, epoch: number): LinkedUnit | undefined {
     const head = result.header, n = result.numbering;
+    if (!this.w.units.admits(head, epoch)) return undefined;
     if ((n.names.length || n.tail.length || n.selectors.length || n.gaps.length || n.links.length) && !this.w.adopt(n)) return undefined;
-    this.w.units.linkHeader(head);
-    const imports = this.w.units.ofHeader(head);
-    this.w.units.classImports(head.classImports, imports);
     const traces = result.traces.map((t) => ({ name: t.name, m: t.m ? methodOf(this.w.prog, t.m) : undefined, offsets: t.offsets, pcs: t.pcs,
       inline: t.inline?.map(([m, pc, at]): InlineFrame => [methodOf(this.w.prog, m)!, pc, at]) }));
-    return { head, imports, built: { bytes: result.module, traces } };
+    return { head, module: result.module, traces };
   }
   /** installs merged first-tier code in the slots of the units it was merged from that still hold them; the others keep what they have */
   private adoptMerged(job: UpgradeJob, result: UnitResult, epoch: number): boolean {
     const groups = this.merging, clock = this.w.units.clock();
     this.merging = [];
-    const r = this.sound(result, epoch) ? this.received(result) : undefined;
-    if (!r) { this.loose.push(...groups.filter((g) => this.mergeable(g))); return false; }
-    const liveGroups = groups.filter((g) => this.mergeable(g)), live = liveGroups.flat(), merged = new Set(live);
+    const u = this.received(result, epoch), liveGroups = groups.filter((g) => this.mergeable(g));
+    if (!u) { this.loose.push(...liveGroups); return false; }
+    const live = liveGroups.flat(), merged = new Set(live);
     if (!live.length) return true;
     // one function of each unit holds its instance, and so its module
-    this.retire(liveGroups.map((g) => this.w.table.get(g[0]) as Function));
+    const units = liveGroups.map((g) => this.w.table.get(g[0]) as Function);
     const kept = job.installed.map((id) => this.w.slotOf(methodOf(this.w.prog, id)!)).filter((at) => !merged.has(at)).map((at) => [at, this.w.table.get(at)] as const);
-    this.w.units.instantiate(r.head, r.imports, r.built, live[0], clock, () => {
+    const placed = this.w.units.link(u, () => {
       for (const [at, f] of kept) this.w.table.set(at, f);
       for (const at of live) this.groupOf.set(at, [at]);
-    });
+      return true;
+    }, clock);
+    if (!placed) { this.loose.push(...liveGroups); return false; }
+    this.retire(units);
     this.w.stats.merged += live.length;
     return true;
   }
@@ -332,19 +327,20 @@ export class Tiering {
     this.w.stats.retired += batch.length;
     (this.w.opts.loop ?? defaultLoop).after(RETIRE_WAIT_MS, () => { if (this.retireBatch === id) this.dropRetired(); });
   }
-  /** instantiates a built unit and puts its functions (`group`, by slot) in the table; a slot already compiled keeps its original stub */
-  install(group: number[], hot: boolean, cx: Compiler | UnitHeader, imports: Record<string, any>, built: Built, slot: number, clock: Clock): void {
+  /** installs unit `u`, putting its functions (`group`, by slot) in the table; a slot already compiled keeps its original stub. Whether it was installed (Units.link) */
+  install(group: number[], hot: boolean, u: LinkedUnit, slot: number, clock: Clock): boolean {
     const s = this.w.slots.at(slot)!;
     const place = (exports: Record<string, any>) => {
       const set = (at: number, name: string) => {
         this.w.slots.at(at)!.done = true;
         this.w.table.set(at, exports[name]);
       };
-      if (s.k !== "method" && s.k !== "ensure") { set(slot, "m"); return; }
+      if (s.k !== "method" && s.k !== "ensure") { set(slot, "m"); return true; }
       for (const x of group) { set(x, "m" + x); this.groupOf.set(x, group); if (hot) this.set(x, HOT); else this.clear(x, HOT); if (x < COUNT_SLOTS) this.counts()[x] = 0; }
       if (s.k === "ensure") { s.done = true; this.w.table.set(slot, exports["m" + slot]); }
+      return true;
     };
-    try { this.w.units.instantiate(cx, imports, built, slot, clock, place); } catch (e) { throw new Error(`linking ${s.k === "method" ? mid(s.m) : s.k === "ensure" ? s.k : s.name}: ${(e as Error).message}`); }
+    try { return !!this.w.units.link(u, place, clock); } catch (e) { throw new Error(`linking ${s.k === "method" ? mid(s.m) : s.k === "ensure" ? s.k : s.name}: ${(e as Error).message}`); }
   }
   /** calls and loop iterations counted so far for the method in `slot` */
   count(slot: number): number { return slot < COUNT_SLOTS ? this.counts()[slot] : 0; }

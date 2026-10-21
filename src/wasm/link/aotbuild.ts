@@ -69,16 +69,28 @@ export function invalidFunction(bytes: Uint8Array, cx?: Compiler): { name: strin
   return undefined;
 }
 
-/** what compiled code (built by `cx`, naming the table slots `touched`) relies on, by the numbers of `w` */
-export function unitHeader(w: World, cx: Compiler, touched: Touched): UnitHeader {
-  const held = cx.held;
-  const seen = new Set<string>(), assumptions: UnitHeader["assumptions"] = [];
-  for (const [decl, name, desc, target, owner] of cx.assumptions) {
-    const slot = w.slotOf(owner!), key = `${decl}.${name}${desc}@${slot}`;
-    if (!seen.has(key)) { seen.add(key); assumptions.push([decl, name, desc, target?.cls ?? "", target?.key ?? "", slot]); }
+/** what code built by `cx` relies on, by the numbers of `w`: `slot` owns what no method of it does (a helper's code, a symbolic site's) */
+function reliance(w: World, cx: Compiler, slot?: number): Pick<UnitHeader, "assumptions" | "allocs" | "missing" | "held"> {
+  const owner = (m: MethodInfo | undefined): number => {
+    const at = m ? w.slotOf(m) : slot;
+    if (at === undefined) throw new Error("compiled code relies on something with no invalidation owner");
+    return at;
+  };
+  const held = cx.held, seen = new Set<string>(), assumptions: UnitHeader["assumptions"] = [];
+  for (const [decl, name, desc, target, m] of cx.assumptions) {
+    const at = owner(m), key = `${decl}.${name}${desc}@${at}`;
+    if (!seen.has(key)) { seen.add(key); assumptions.push([decl, name, desc, target?.cls ?? "", target?.key ?? "", at]); }
   }
-  return { version: VERSION, ...touched, classImports: cx.classImports(), natives: [...cx.nativeImports.keys()], symbols: [...cx.symbolicImports.values()].map(v => v.site), assumptions,
-    allocs: [...cx.allocs], missing: cx.absent.map(([name, owner]) => [name, w.slotOf(owner!)] as [string, number]), ...held.length && { held } };
+  return { assumptions, allocs: [...cx.allocs], missing: cx.absent.map(([name, m]) => [name, owner(m)] as [string, number]), ...held.length && { held } };
+}
+/** what code made by `cx` for another World (naming the table slots `touched`) needs and relies on, by the numbers of `w` */
+export function unitHeader(w: World, cx: Compiler, touched: Touched): UnitHeader {
+  return { version: VERSION, ...touched, classImports: cx.classImports(), natives: [...cx.nativeImports.keys()], symbols: [...cx.symbolicImports.values()].map(v => v.site), ...reliance(w, cx) };
+}
+/** the header of a unit compiled here by `cx`, whose imports are made from what its compile linked (Units.of): what its code relies on, `slot` owning what no
+ *  method of it does */
+export function compiledHeader(w: World, cx: Compiler, slot?: number): UnitHeader {
+  return { version: VERSION, touch: [], synth: [], classImports: [], natives: [], ...reliance(w, cx, slot) };
 }
 /** `wasm` with the custom sections the runtime reads: the header, and the traces of its functions (methods numbered by `w`) */
 export function packModule(header: object, wasm: Uint8Array, traced?: { w: World; traces: FnTrace[] }): Uint8Array {

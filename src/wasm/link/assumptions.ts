@@ -4,7 +4,6 @@
 // method's alone; any other undoing takes that code too (undoCode).
 import { ACC, type MethodInfo } from "../compiler/program.ts";
 import { failed } from "../compiler/linkage.ts";
-import type { Compiler } from "../compiler/j2w.ts";
 import type { World } from "./world.ts";
 import type { UnitHeader } from "./aot.ts";
 
@@ -23,15 +22,8 @@ export class Assumptions {
   private holders = new Map<number, Set<number>>();
   constructor(w: World) { this.w = w; }
 
-  /** records what the code of a unit compiled here relies on: `slot` owns what no method of the unit does */
-  record(cx: Pick<Compiler, "assumptions" | "absent" | "held">, slot?: number): void {
-    const late = this.lateFor(cx.assumptions);
-    for (const [decl, name, desc, target, owner] of cx.assumptions) this.decide(decl, name, desc, target?.cls ?? "", target?.key ?? "", this.owner(owner, slot), late);
-    for (const [name, owner] of cx.absent) this.absentAt(name, this.owner(owner, slot));
-    this.hold(cx.held);
-  }
-  /** records what the code of a unit made elsewhere relies on, once it is in its slots: a site failing on a class missing where it was made is undone if the class is here */
-  recordHeader(head: Pick<UnitHeader, "assumptions" | "missing" | "held">): void {
+  /** records what the code of a unit relies on, once it is in its slots: a site failing on a class missing where it was made is undone if the class is here */
+  record(head: Pick<UnitHeader, "assumptions" | "missing" | "held">): void {
     const late = this.lateFor(head.assumptions);
     for (const [decl, name, desc, tc, tk, at] of head.assumptions) this.decide(decl, name, desc, tc, tk, at, late);
     for (const [name, at] of head.missing) if (this.w.prog.get(name)) this.undoCode(at); else this.absentAt(name, at);
@@ -40,11 +32,6 @@ export class Assumptions {
   // a compile can link a class after deciding about its supertypes' implementations, and a worker's hierarchy has only the deferred classes it linked
   private lateFor(decisions: readonly (readonly [string, ...unknown[]])[]): Map<string, string[]> | undefined {
     return this.w.cha.late.size && decisions.length ? this.lateBy(new Set(decisions.map(([decl]) => decl)), this.w.cha.late) : undefined;
-  }
-  private owner(owner: MethodInfo | undefined, slot: number | undefined): number {
-    const at = owner ? this.w.slotOf(owner) : slot;
-    if (at === undefined) throw new Error("compiled code relies on something with no invalidation owner");
-    return at;
   }
   /** code in slot `at` runs only `tc`'s method `tk` for calls of decl.name+desc, unless a class linked late (`late`) already falsifies that */
   private decide(decl: string, name: string, desc: string, tc: string, tk: string, at: number, late: Map<string, string[]> | undefined): void {
