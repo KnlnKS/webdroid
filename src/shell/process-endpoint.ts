@@ -42,7 +42,7 @@ let calls: ReturnType<typeof callProxy<BrokerCalls>> | undefined;
 const brokerCalls = (): BrokerCalls => calls!.endpoint;
 const life = remoteProcessLife(() => brokerCalls().process, logUncaught);
 /** what both realms ask the broker for: other processes' services, providers, broadcasts, binders
- *  and lives, SQLite, cookies, PendingIntents, service starts and package data changes */
+ *  and lives, SQLite, cookies, WebView storage, PendingIntents, service starts and package data changes */
 function connectCommandTransports(broker: BrokerCalls): void {
   const service = (pkg: string, process: string, request: ServiceRequest) => remote(broker.service(pkg, process, request));
   serviceTransport.bind = driven(function* (owner, process, cls, intent, key, flags) {
@@ -62,6 +62,7 @@ function connectCommandTransports(broker: BrokerCalls): void {
   binderTransport.transact = request => remote(broker.transact(request));
   sqliteTransport.call = broker.sqlite;
   cookieTransport.calls = brokerCalls;
+  webStorageTransport.calls = () => broker.webStorage;
   Object.assign(pendingTransport, broker.pending);
   serviceTransport.starts = () => broker.starts;
   serviceTransport.connected = (key, binder, dead) => broker.serviceConnected(key, exportBinder(binder), dead);
@@ -72,7 +73,6 @@ function connectCommandTransports(broker: BrokerCalls): void {
 }
 /** the stores and system services a Worker reaches through the broker, which system_server's realm holds */
 function connectRemoteStores(broker: BrokerCalls): void {
-  webStorageTransport.calls = () => broker.webStorage;
   useSystemServiceAccess(SYSTEM_SERVICES, broker.systemService);
   systemProviderTransport.lookup = broker.systemProvider;
   notificationTransport.foreground = broker.notificationForeground;
