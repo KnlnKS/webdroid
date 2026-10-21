@@ -7,8 +7,8 @@ import { mem } from "./mem.ts";
 import { hostLib, lookupHost, defineHost, probed, cstr, stp, type HostFn } from "./host.ts";
 import { EglContext, bufferHeight, bufferWidth, eglConfigAttrib, eglFailure, setEglSwapInterval, takeEglError, type GlSurface } from "../android/glsurface.ts";
 import { windowOf } from "./libandroid.ts";
-import { gles1Procs } from "./gles1.ts";
-import { gles3Procs, clientWait } from "./gles3.ts";
+import { gles1Procs, gles1Init } from "./gles1.ts";
+import { gles3Procs, gles3Init, clientWait } from "./gles3.ts";
 import { activate, bindContext, currentContext } from "./gl-context.ts";
 import { noteNativeFrame } from "./cpu.ts";
 
@@ -27,6 +27,20 @@ function attrs(p: number): Map<number, number> {
   const m = new Map<number, number>();
   if (p) for (let q = p; mem.ld32(q) !== 0x3038; q += 8) m.set(mem.ld32(q), mem.ld32(q + 4));
   return m;
+}
+
+const own = (procs: Record<string, HostFn>, name: string): HostFn | undefined => (Object.hasOwn(procs, name) ? procs[name] : undefined);
+const dispatch = new Map<string, HostFn>();
+/** libGLES's entry point `name`, as the calling thread's current context dispatches it: an ES 1.1
+ *  context to the fixed-function pipeline, any other to ES 3.0 */
+export function glProc(name: string): HostFn | undefined {
+  let p = dispatch.get(name);
+  if (p) return p;
+  gles1Init(); gles3Init();
+  const one = own(gles1Procs, name), two = own(gles3Procs, name);
+  p = one && two ? (cpu, a) => (activate(cpu.jthread)?.major === 1 ? one : two)(cpu, a) : one ?? two;
+  if (p) dispatch.set(name, p);
+  return p;
 }
 
 export function eglInit(): void {
@@ -148,10 +162,9 @@ export function eglInit(): void {
       const n = a.str();
       let p = procs.get(n);
       if (p !== undefined) return p;
-      const one = Object.hasOwn(gles1Procs, n) ? gles1Procs[n] : undefined;
-      const two = Object.hasOwn(gles3Procs, n) ? gles3Procs[n] : undefined;
+      const one = own(gles1Procs, n), two = own(gles3Procs, n);
       // Proc addresses survive context switches; overlapping ES1/ES3 names dispatch at call time.
-      if (one && two) p = defineHost(n, (cpu, args) => (activate(cpu.jthread)?.major === 1 ? one : two)(cpu, args));
+      if (one && two) p = defineHost(n, glProc(n)!);
       else p = lookupHost(n, one ? "libGLESv1_CM.so" : two ? "libGLESv2.so" : "libEGL.so");
       if (p !== undefined) { procs.set(n, p); return p; }
       probed.add("eglGetProcAddress!" + n); return 0;

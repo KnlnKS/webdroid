@@ -2,6 +2,8 @@
 // most one EGL context current; every GL entry point first selects its caller's, whose WebGL
 // context, handle tables and error flags gles1, gles3 and the Java bindings then work on.
 import type { EglContext } from "../android/glsurface.ts";
+import type { HostFn } from "./host.ts";
+import type { Cpu } from "./cpu.ts";
 
 export type GL = WebGL2RenderingContext | WebGLRenderingContext;
 // handle tables: index 1.. → object (0 = null/none, matching GL semantics). They belong to the
@@ -42,6 +44,16 @@ export function activate(thread: object): EglContext | null {
   if (thread !== owner) { owner = thread; select(current.get(thread) ?? null); }
   return selected;
 }
+const warned = new WeakSet<object>();
+function none(cpu: Cpu, name: string): number {
+  if (!warned.has(cpu.jthread)) { warned.add(cpu.jthread); console.warn(`[gl] ${name}: call to OpenGL ES API with no current context`); }
+  return 0;
+}
+/** libGLES's entry point `name`: it selects the calling thread's current context, then runs `before` and `fn`. With none current it is
+ *  a logged no-op, as libEGL makes it; it never faults the thread (MapLibre deletes its textures on a GLThread whose context is already released) */
+export const entry = (name: string, fn: HostFn, before?: () => void): HostFn => before
+  ? (cpu, a) => { if (activate(cpu.jthread) === null) return none(cpu, name); before(); return fn(cpu, a); }
+  : (cpu, a) => (activate(cpu.jthread) === null ? none(cpu, name) : fn(cpu, a));
 function select(context: EglContext | null): void {
   selected = context;
   const next = context?.gl ?? null;

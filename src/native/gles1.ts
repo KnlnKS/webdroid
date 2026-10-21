@@ -45,7 +45,7 @@ function invert(inv: Float32Array, io: number, src: Float32Array, so: number) {
   inv[io + 15] = (i * bc - j * ac + k * ab) * r;
   return 1;
 }
-export function gles1String(context: GL, name: number): string | null {
+function gles1String(context: GL, name: number): string | null {
   switch (name) {
     case 0x1f00: return "webdroid";
     case 0x1f01: return String(context.getParameter(context.RENDERER) ?? "WebGL");
@@ -311,6 +311,7 @@ const EXTENSIONS = "GL_OES_blend_subtract GL_OES_blend_func_separate GL_OES_blen
 export let gles1Procs: Record<string, HostFn> = {};
 
 export function gles1Init(): void {
+  if (gles1Procs.glClear) return;
   const noCtx = () => { calledMissing.add("gles1:call without a current context"); };
   /** wrap: current-context guard + optional getError probe */
   const W = (name: string, fn: (c: Ctx, a: ArgReader, cpu: Cpu) => HostRet): HostFn => (cpu, a) => {

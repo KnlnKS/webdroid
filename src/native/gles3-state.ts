@@ -77,9 +77,11 @@ export interface ContextState {
 }
 export interface ClientArray { size: number; type: number; normalized: boolean; stride: number; ptr: number; integer: boolean }
 const contextStates = new WeakMap<GL, ContextState>();
+let lastGL: GL | null = null, last: ContextState | null = null;
 
 export function contextState(): ContextState {
   const gl = g();
+  if (gl === lastGL) return last!;
   let state = contextStates.get(gl);
   if (!state) {
     const active = gl.getParameter(ACTIVE_TEXTURE) as number;
@@ -89,7 +91,8 @@ export function contextState(): ContextState {
       limits: Int32Array.from([0x8b4d, 0x0d33, 0x851c, 0x84e8], (pname) => gl.getParameter(pname) as number) };
     contextStates.set(gl, state);
   }
-  return state;
+  lastGL = gl;
+  return last = state;
 }
 
 export function textureRec(texture: WebGLTexture): TexRec {

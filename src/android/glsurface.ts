@@ -5,7 +5,8 @@ import { awaited, rt, JObj, stubs, driven, peerField, getDeclared, setDeclared, 
 import { vcall, type JThread, curThread, scall, after, iof, linkClass } from "../jvm/natives/jentry.ts";
 import { deref, handle, ownedHandle, release } from "./handles.ts";
 import { uptimeMillis } from "../guest-clock.ts";
-import { gl, tables, untracked, activate, bindContext, currentContext } from "../native/gl-context.ts";
+import { gl, tables, activate, bindContext, currentContext } from "../native/gl-context.ts";
+import { bindTexture, texImageSource } from "../native/gles3.ts";
 import { vsync } from "./vsync.ts";
 import { perf } from "../perf.ts";
 import { nativeSurface, glSurfaceOf, type Surface } from "./surfaceflinger.ts";
@@ -154,10 +155,8 @@ export class NativeSurfaceTexture {
   /** bindTextureImageLocked, uploading `frame` when it is new */
   private bind(frame: ImageBitmap | VideoFrame | null): void {
     if (!gl) return;
-    const texture = tables().textures[this.texName] ?? null;
-    untracked();
-    gl.bindTexture(gl.TEXTURE_2D, texture);
-    if (texture && frame) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, frame);
+    bindTexture(0x8d65, this.texName);                                         // GL_TEXTURE_EXTERNAL_OES
+    if (frame && tables().textures[this.texName]) texImageSource(0x0de1, 0, 0x1908, 0x1908, 0x1401, frame);
   }
   update(thread: object = curThread): number {
     if (this.abandoned) return NO_INIT;
