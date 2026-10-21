@@ -14,7 +14,7 @@ import { inputMethods, receiveIme, type InputCalls } from "../../../src/shell/in
 import { ProcessHost, workerControlMethods } from "../../../src/shell/process-host.ts";
 import type { WorkerControl } from "../../../src/shell/worker-control.ts";
 import { NOT_CRASHED, recordRemoteExit } from "../../../src/android/server/appexitinfo.ts";
-import { visibleWorkerProcesses, visibleWorkersAlive, workerAotProfiles, workerSnapshots } from "../../../src/shell/worker-diagnostics.ts";
+import { visibleWorkersAlive, workerAotProfiles, workerSnapshots } from "../../../src/shell/worker-diagnostics.ts";
 import { fixtureUrl, fixtureWorker, stubEndpoint, type BrokerInit, type PointerCalls } from "./fixture-calls.ts";
 
 const failed = (reply: unknown) => !!(reply as { error?: string } | null)?.error;
@@ -447,7 +447,7 @@ export async function workerDiagnosticOwnership() {
     const profiles=await workerAotProfiles(broker.processes());
     const profileFailure=(pid:number)=>{const row=profiles.find(row=>row.pid===pid)!;return 'error' in row?row.error:null;};
     broker.activities.setForeground(8405);
-    const blocked=await visibleWorkerProcesses(broker,30);
+    const blocked=await workerSnapshots([broker.entry(8405)]);
     const stillBlocked=await visibleWorkersAlive(broker,30);
     broker.activities.setForeground(8401);
     const live=await visibleWorkersAlive(broker,1000);
@@ -468,8 +468,8 @@ export async function workerDiagnosticOwnership() {
     const healthy=row(first,8401);
     return {pendingTerminal,healthy:'snapshot' in healthy,rejected:failure(first,8402),hung:failure(first,8403),
       phase:failure(first,8404),profilePending:profileFailure(8404),profileIdentity:profileFailure(8405),secondHealthy:'snapshot' in row(second,8401),hungCalls:count.hungCalls,
-      queueBlocked:'snapshot' in blocked[0] && !blocked[0].alive && !stillBlocked,live,aliveCalls:count.aliveCalls,
-      retained:failure(ended,8401),identity:'snapshot' in healthy?healthy.snapshot.identity.pid:null};
+      queueBlocked:'snapshot' in blocked[0] && !stillBlocked,live,aliveCalls:count.aliveCalls,
+      retained:failure(ended,8401),identity:healthy.snapshot?.identity.pid ?? null};
   } finally {
     broker.activities.setForeground(foreground);
     for(const pid of pids)broker.fail(pid,"diagnostic fixture cleanup",NOT_CRASHED);

@@ -110,7 +110,6 @@ export function stepDeadlineMs(spec: StepSpec): number {
 }
 
 declare global {
-  var wd: any;
   var __wd: {
     step(spec: StepSpec): Promise<StepResult>;
     /** the shown display as a base64 PNG: every shown canvas, from its latest mirrored frame */

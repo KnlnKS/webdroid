@@ -437,11 +437,10 @@ function installed(pkg: string) {
   if (!owner) throw new Error("Package not installed: " + pkg);
   return owner;
 }
-declare global { interface Window { __wdProcesses?: ProcessBroker; } }
+let pageBroker: ProcessBroker | undefined;
 export function processBroker(): ProcessBroker {
-  if (!window.__wdProcesses) {
-    const broker = window.__wdProcesses = new ProcessBroker();
-    addEventListener("pagehide", () => { void broker.files.flush().catch((error) => console.error("[private files]", error)); });
-  }
-  return window.__wdProcesses;
+  if (pageBroker) return pageBroker;
+  const broker = pageBroker = new ProcessBroker();
+  addEventListener("pagehide", () => { void broker.files.flush().catch((error) => console.error("[private files]", error)); });
+  return broker;
 }

@@ -51,7 +51,7 @@ for (const apk of apks.length ? apks : ["FitNotes.apk", "calculatorm.apk", "miho
           await Promise.race([(async () => {
             for (;;) {
               const wd = globalThis.wd, foreground = await wd?.foregroundWorkerSnapshot?.();
-              if (wd && (foreground?.snapshot.perf ?? wd.perf).presentations > 0) return;
+              if (wd && (foreground?.snapshot?.perf ?? wd.perf).presentations > 0) return;
               await new Promise(resolve => setTimeout(resolve, 200));
             }
           })(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("First presentation timed out")), 90_000); })]);

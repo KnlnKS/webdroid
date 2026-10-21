@@ -53,7 +53,7 @@ async function waitForDraw(page: Page, ms = 60_000): Promise<void> {
       return row?.snapshot ? { pkg: row.pkg, draws: row.snapshot.perf.draws ?? 0 }
         : row && { pkg: row.pkg, error: row.error ?? null, exit: row.terminal?.cause ?? null };
     });
-    if (shown && "draws" in shown && shown.draws > 0) return;
+    if ((shown?.draws ?? 0) > 0) return;
     if (shown && "exit" in shown && shown.exit) throw new Error(`${shown.pkg} exited before drawing: ${shown.exit}`);
     if (performance.now() > end) throw new Error(`no app drew within ${ms}ms: ${JSON.stringify(shown)}`);
     await setTimeout(250);

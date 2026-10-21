@@ -1,4 +1,4 @@
-// What the harness reads of the process Workers (main.ts's wd): each one's copied snapshot or how it
+// What the harness reads of the process Workers (harness.ts's wd): each one's copied snapshot or how it
 // ended, its AOT profile, and whether its main queue still dispatches.
 import { copyExitRecord, REASON_EXIT_SELF, REASON_USER_REQUESTED, type ExitRecord } from "../android/server/appexitinfo.ts";
 import type { ProcessHost } from "./process-host.ts";
@@ -11,7 +11,7 @@ type WorkerIdentity = { pid: number; pkg: string; process: string; url: string }
 type Snapshot = Awaited<ReturnType<WorkerControl["snapshot"]>>;
 export type WorkerDiagnosticRow = WorkerIdentity & (
   { snapshot: Snapshot; terminal?: never; error?: never } |
-  { error: string; terminal?: WorkerTerminal } | { terminal: WorkerTerminal; error?: never });
+  { error: string; terminal?: WorkerTerminal; snapshot?: never } | { terminal: WorkerTerminal; error?: never; snapshot?: never });
 
 /** one in-flight read per Worker, shared by concurrent callers */
 function shared<T>(reads: WeakMap<ProcessHost, Promise<T>>, host: ProcessHost, start: () => Promise<T>): Promise<T> {
@@ -83,9 +83,4 @@ const shownWorkers = (broker: ProcessBroker) => broker.activities.shownEntries()
 export async function visibleWorkersAlive(broker: ProcessBroker, ms: number): Promise<boolean | null> {
   const entries = shownWorkers(broker);
   return entries.length ? (await Promise.all(entries.map(entry => alive(entry, ms)))).every(Boolean) : null;
-}
-export async function visibleWorkerProcesses(broker: ProcessBroker, ms: number) {
-  const entries = shownWorkers(broker);
-  const [rows, live] = await Promise.all([workerSnapshots(entries), Promise.all(entries.map(entry => alive(entry, ms)))]);
-  return rows.map((row, i) => ({ ...row, alive: live[i] }));
 }
