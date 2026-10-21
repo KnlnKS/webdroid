@@ -106,7 +106,6 @@ export class PackageRecord {
 }
 
 export const packages = new Map<string, PackageRecord>();
-export const signaturePermissions = new Set<string>();
 /** the uids packages were given (wd:package-uids) */
 const savedUids = persisted("wd:", (saved) => Array.isArray(saved) ? saved.filter((entry): entry is [string, number] =>
   Array.isArray(entry) && typeof entry[0] === "string" && Number.isInteger(entry[1]) && entry[1] >= 10001) : null);

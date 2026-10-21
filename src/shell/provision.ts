@@ -5,7 +5,7 @@ import { installedPath, registerPackage } from "../android/pm.ts";
 import { attr, attrStr, TV } from "../android/axml.ts";
 import { resString } from "../android/res.ts";
 import { vfs } from "./vfs.ts";
-import { packages, signaturePermissions, componentState } from "../android/packages.ts";
+import { packages, componentState } from "../android/packages.ts";
 import { mkComponentName, newIntent, putExtra } from "../android/intent.ts";
 import { vcall } from "../jvm/natives/jentry.ts";
 import { awaited, rt, type Gen } from "../jvm/runtime.ts";
@@ -26,8 +26,7 @@ export function provisionPackages(): Promise<void> {
       const component = { pkg: record.pkg, cls: name };
       if (componentState.get(component) === null) componentState.set(component, 2);
     }
-    for (const permission of spec.grants) { record.grants.add(permission); signaturePermissions.add(permission); }
-    for (const permission of spec.defaultGrants) record.grants.add(permission);
+    for (const permission of [...spec.grants, ...spec.defaultGrants]) record.grants.add(permission);
     const metadata = record.application?.children.find((n) => n.name === "meta-data" && attrStr(n, "name") === spec.signatureMetadata);
     const value = metadata && attr(metadata, "value");
     const signature = value?.type === TV.REFERENCE ? resString(record.res, value.data) : value?.str;

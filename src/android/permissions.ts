@@ -8,8 +8,9 @@ import { newArrayList } from "../jvm/natives/jcoll.ts";
 import { type XmlNode, attrStr, attr } from "./axml.ts";
 import { appHost } from "./apphost.ts";
 import { registerSystemActivity, newIntent, putExtra, type JIntent } from "./intent.ts";
-import { type PackageRecord, packages, signaturePermissions, usesSdk } from "./packages.ts";
+import { type PackageRecord, packages, usesSdk } from "./packages.ts";
 import { persisted } from "../shell/device-storage.ts";
+import { SYSTEM_PACKAGES } from "../shell/system-packages.ts";
 import { hostService } from "./binder.ts";
 import { permissionInfo$ } from "./pm.ts";
 
@@ -124,21 +125,28 @@ const declaredPermission = (name: string): [PackageRecord, XmlNode] | null => {
   }
   return null;
 };
-/** PERMISSION_GRANTED (0) or PERMISSION_DENIED (-1) for a package */
+/** the permissions provisioning grants the system packages, which no other package holds by asking */
+const PROVISIONED = new Set<string>(SYSTEM_PACKAGES.flatMap((spec) => spec.grants));
+/** an install grants a permission by signature when its declaration's base protection level is
+ *  signature, signatureOrSystem or internal, or provisioning grants it */
+const bySignature = (name: string): boolean => PROVISIONED.has(name) || ((protectionLevel(name) ?? 0) & 0xf) >= 2;
+/** PERMISSION_GRANTED (0) or PERMISSION_DENIED (-1) for a package: one granted by signature is held by
+ *  a system package that requests it, as holdsPlatformPermission answers, or one signed as its declarer */
 export function checkPermission(permission: string, pkg: string): number | Promise<number> {
   const record = packages.get(pkg);
   if (record?.grants.has(permission)) return 0;
   if (!record?.requested.has(permission)) return -1;
-  if (signaturePermissions.has(permission)) return signerHolds(record, permission);
+  if (!RUNTIME_PERMISSIONS.has(permission) && !SPECIAL_ACCESS.has(permission) && bySignature(permission)) return record.system ? 0 : signerHolds(record, permission);
   return after(permissionGranted(pkg, permission), granted => granted ? 0 : -1);
 }
 /** a signature permission: held when the package is signed as the one declaring it */
 async function signerHolds(record: PackageRecord, permission: string): Promise<number> {
   const certificates = await record.certificates();
+  if (!certificates.length) return -1;
   for (const owner of packages.values()) {
     if (!declaration(owner, permission)) continue;
     const signers = await owner.certificates();
-    if (certificates.length && certificates.length === signers.length && certificates.every((c, i) => sameBytes(c, signers[i]))) return 0;
+    if (certificates.length === signers.length && certificates.every((c, i) => sameBytes(c, signers[i]))) return 0;
   }
   return -1;
 }

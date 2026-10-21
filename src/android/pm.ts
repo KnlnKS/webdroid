@@ -23,7 +23,7 @@ import { SHARED_LIBRARIES } from "../jvm/bootclasspath.ts";
 import { once } from "../jvm/suspend.ts";
 import { systemActivity, SYSTEM_ACTIVITY, intentQuery$, type IntentQuery } from "./intent.ts";
 import { intentTarget$, manifestFilter$, matches$ } from "./intent-filter.ts";
-import { PackageRecord, packages, packageUid, uidPackages, qualifyComponent, signaturePermissions, componentState, installTime, type ComponentKind,
+import { PackageRecord, packages, packageUid, uidPackages, qualifyComponent, componentState, installTime, type ComponentKind,
   GET_ACTIVITIES, GET_RECEIVERS, GET_SERVICES, GET_PROVIDERS, GET_INSTRUMENTATION, GET_SIGNATURES, GET_META_DATA, GET_SHARED_LIBRARY_FILES,
   GET_PERMISSIONS, GET_CONFIGURATIONS, GET_SIGNING_CERTIFICATES, MATCH_DISABLED_COMPONENTS, MATCH_DEFAULT_ONLY, MATCH_DIRECT_BOOT_UNAWARE,
   MATCH_DIRECT_BOOT_AWARE, MATCH_SYSTEM_ONLY } from "./packages.ts";
@@ -538,10 +538,6 @@ export const installedPath = (pkg: string) => `/data/app/${pkg}/base.apk`;
 export function registerPackage(archive: PackageArchive, path = installedPath(archive.pkg), uid = packageUid(archive.pkg)): PackageRecord {
   const record = new PackageRecord(archive.root, archive.res, path, uid, () => Promise.resolve(archive.certificates));
   packages.set(record.pkg, record);
-  for (const node of archive.root.children) if (node.name === "permission" && (intAttr(node, "protectionLevel", 0) & 3) >= 2) {
-    const name = attrStr(node, "name");
-    if (name) signaturePermissions.add(name);
-  }
   return record;
 }
 /** the package's record, registering its persisted install on first use; synchronous when known */

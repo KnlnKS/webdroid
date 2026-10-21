@@ -8,7 +8,7 @@ import { jarray } from "../src/jvm/abi.ts";
 import { newObj, vcall, vcallAsync, iof } from "../src/jvm/natives/jentry.ts";
 import { checkUriPermission, grantUriPermission, revokeUriPermission } from "../src/android/urigrants.ts";
 import { mkUri } from "../src/android/net.ts";
-import { packages, PackageRecord, signaturePermissions } from "../src/android/packages.ts";
+import { packages, PackageRecord } from "../src/android/packages.ts";
 import { vfs } from "../src/shell/vfs.ts";
 import { pickFiles } from "../src/shell/hostfs.ts";
 import { centralDir, zipTree } from "../src/zip.ts";
@@ -34,7 +34,7 @@ import { useAlarmScheduler } from "../src/android/alarm.ts";
 import { callProxy } from "../src/shell/process-port.ts";
 import { javaReadFd } from "../src/native/fd.ts";
 import { Arsc } from "../src/android/arsc.ts";
-import { scall, bootApp, packageRecord } from "./java.ts";
+import { scall, bootApp, packageRecord, loadPlatform } from "./java.ts";
 
 describe("android-uri-permission", () => {
   test("tree URI grants cover descendants with the granted access mode", () => {
@@ -224,7 +224,9 @@ describe("package-permissions", () => {
   const attr = (name: string, str: string): XmlAttr => ({ name, str, ns: "", resId: 0, type: TV.STRING, data: 0 });
 
   test("PackageInfo aligns requested permission flags with actual package grants", async () => {
-    const pkg = "test.permissions", denied = "test.permissions.SIGNATURE";
+    // framework-res declares WRITE_SECURE_SETTINGS signature|privileged|development
+    await loadPlatform();
+    const pkg = "test.permissions", denied = "android.permission.WRITE_SECURE_SETTINGS";
     const int = (name: string, data: number): XmlAttr => ({ name, str: null, ns: "", resId: 0, type: TV.INT_DEC, data });
     const root: XmlNode = { name: "manifest", attrs: [attr("package", pkg)], children: [
       { name: "uses-sdk", attrs: [int("targetSdkVersion", 35)], children: [] },
@@ -234,7 +236,7 @@ describe("package-permissions", () => {
       { name: "uses-permission", attrs: [attr("name", "android.permission.WRITE_EXTERNAL_STORAGE"), int("maxSdkVersion", 28)], children: [] },
     ] };
     const record = new PackageRecord(root, new Resources(null, {}), "/test.apk", 12345, async () => []);
-    packages.set(pkg, record); signaturePermissions.add(denied);
+    packages.set(pkg, record);
     try {
       const pms = await hostedService("package"), PI = "android/content/pm/PackageInfo";
       const packageInfo = (flags: bigint) => vcall(pms, "getPackageInfo", "(Ljava/lang/String;JI)Landroid/content/pm/PackageInfo;", pkg, flags, 0);
@@ -246,7 +248,7 @@ describe("package-permissions", () => {
       const omitted = await packageInfo(0n);
       expect(getDeclared(omitted, PI, "requestedPermissions")).toBeNull();
       expect(getDeclared(omitted, PI, "requestedPermissionsFlags")).toBeNull();
-    } finally { packages.delete(pkg); signaturePermissions.delete(denied); }
+    } finally { packages.delete(pkg); }
   });
 });
 
