@@ -1,8 +1,9 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
-// The guest address map, which scripts/generated.ts also gives TS (src/native/core-abi.gen.ts): every
-// `pub const` here must be an integer expression JS evaluates alike.
+// The guest address map and the rules the core shares with the host, which scripts/generated.ts also
+// gives TS (src/native/core-abi.gen.ts): every `pub const` here must be an integer expression JS
+// evaluates alike.
 pub const PAGE_SHIFT = 12;
 pub const PAGE_SIZE: u32 = 1 << PAGE_SHIFT;
 /// The first 64 KiB is never mapped: a null-ish pointer faults instead of reading zeros.
@@ -55,6 +56,13 @@ pub const KERN_DEAD: u32 = KERN_SLOT_FN + 0x4_0000;
 pub const KERN_DEAD_END: u32 = KERN_DEAD + JIT_SLOTS * 1;
 /// The JIT's emit buffer, carved off the top of the kernel region.
 pub const JIT_BUF: u32 = KERN_END - 0x0010_0000;
+
+/// The entries of a block before the JIT takes it, the most its u8 heat holds (jit.zig).
+pub const JIT_HEAT = 255;
+/// clock_gettime: REALTIME, REALTIME_COARSE and REALTIME_ALARM read the wall clock; every other
+/// clock is the guest's monotonic one, offset so it is never 0 (libc.zig, kernel.ts clockTime).
+pub const WALL_CLOCKS: u32 = (1 << 0) | (1 << 5) | (1 << 8);
+pub const MONOTONIC_BASE_MS = 1000;
 
 /// A check that survives ReleaseFast, which is the build that ships. `assert` is the right tool
 /// for an invariant the core owns -- it costs nothing here and the ReleaseSafe build the tests run

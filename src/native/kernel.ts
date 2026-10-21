@@ -7,6 +7,7 @@ import { PTR, ldLong, stLong, type HostFn, type HostRet } from "./host.ts";
 import type { Cpu } from "./cpu.ts";
 import type { FileStat } from "./fd.ts";
 import { guestNow, wallMillis } from "../guest-clock.ts";
+import { MONOTONIC_BASE_MS, WALL_CLOCKS } from "./core-abi.gen.ts";
 
 /** the structs the kernel fills, as each ABI lays them out (stat64 and statfs64 on ILP32) */
 const KERNEL32 = {
@@ -39,8 +40,8 @@ export const wrapped = (fn: HostFn): HostFn => (cpu, a) => kernelResult(cpu, fn(
 export const asWrappers = (calls: Record<string, HostFn>): Record<string, HostFn> =>
   Object.fromEntries(Object.entries(calls).map(([name, fn]) => [name, wrapped(fn)]));
 
-/** REALTIME, REALTIME_COARSE and REALTIME_ALARM are the wall clock (core/libc.zig matches) */
-export const clockTime = (id: number): number => id === 0 || id === 5 || id === 8 ? wallMillis() : guestNow() + 1000;
+/** the milliseconds clock `id` reads, by core/abi.zig's rule, which the core's clock_gettime shares */
+export const clockTime = (id: number): number => id >= 0 && id < 32 && WALL_CLOCKS >>> id & 1 ? wallMillis() : guestNow() + MONOTONIC_BASE_MS;
 /** a struct timespec / timeval as milliseconds, and back (the second field is nanoseconds or microseconds) */
 export function readTs(p: number, unit = 1e6): number { return ldLong(p + KLAYOUT.TS_SEC) * 1000 + ldLong(p + KLAYOUT.TS_NSEC) / unit; }
 /** a relative timeout's timespec in milliseconds, -1 (forever) for none */
