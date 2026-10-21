@@ -39,6 +39,7 @@ import { startRuntime, type Runtime } from "./runtime.ts";
 import { hostImports, type HostImports } from "./hostimports.ts";
 import { Assumptions } from "./assumptions.ts";
 import { Namespaces } from "./namespaces.ts";
+import { PerWorld } from "./perworld.ts";
 
 export interface WorldOptions {
   intrinsics: Map<string, Intrinsic>;
@@ -138,8 +139,10 @@ export class World {
   aot?: AotRuntime;
   /** what the World had numbered when its constructor returned, or once an app build was attached: where a compile worker's numbering starts */
   base!: Marks;
-  /** how many times the default namespace was extended or something a compile worker cannot follow was added: results made before are not adopted */
+  /** how many times the Program changed (World.changed): results a compile worker made before are not adopted */
   epoch = 0;
+  /** compiles second-tier units elsewhere (WorldOptions.compiler), from when the host has one */
+  compiler?: CompileService;
   private touching: Set<string> | null = null;
 
   constructor(prog: Program, opts: WorldOptions) {
@@ -152,6 +155,7 @@ export class World {
     this.rt = startRuntime(this);
     this.sched = new Sched(this, this.rt, opts.loop ?? defaultLoop);
     this.host = hostImports(this);
+    this.compiler = opts.compiler;
     this.aot = opts.aot && !opts.build ? AotRuntime.attach(this, opts.aot) : undefined;
     this.base = this.numbers.marks();
     if (opts.app) this.attachApp(opts.app);
@@ -314,8 +318,7 @@ export class World {
    *  compiles against the new hierarchy. Frames already executing keep the old code. */
   addDexes(dexes: DexFile[], loader: Loader = this.prog.root): string[] {
     const added = this.prog.add(dexes, loader);
-    this.epoch++;
-    this.opts.compiler?.added(dexes, loader);
+    this.changed((s) => s.added(dexes, loader));
     if (loader === this.prog.root || loader === this.prog.boot) this.assumptions.joined(this.cha.index(added));
     else this.cha.defer(dexes);
     this.loaded(added);
@@ -342,28 +345,35 @@ export class World {
   /** whether the guest memory is shared, which a module that imports it must declare */
   get guestShared(): boolean { return !!this.opts.guest && !(this.opts.guest.memory.buffer instanceof ArrayBuffer); }
   /** makes the class a registered spec implements in the host a Java class, now or once its superclass is defined (hostclass.ts) */
-  addHostClass(spec: HostSpec): void { this.hosts.add(spec); this.opts.compiler?.retire(`host class ${spec.name} was added`); }
+  addHostClass(spec: HostSpec): void { this.hosts.add(spec); this.compiler?.retire(`host class ${spec.name} was added`); }
   /** the classes this World made without a dex (the host's, their hidden halves, proxies): a compile worker applies the same specs and must end with the same ones */
   hostClassNames(): string[] { return [...this.prog.own()].filter((c) => !c.dex).map((c) => c.name).sort(); }
-  private settlingHosts = false;
   readonly proxies = new Map<string, ProxyDefinition>();
-  /** adds a class that no dex defines, with the body of each of its methods */
+  /** adds a class that no dex defines, with the body of each of its methods: a proxy class (`proxy`), which a compile worker makes too, or one it cannot follow */
   addClass(jc: JClass, bodies: Map<MethodInfo, Intrinsic>, loader = this.prog.root, proxy?: ProxyDefinition): void {
+    if (proxy) this.proxies.set(jc.name, proxy);
+    this.defineClass(jc, bodies, loader, (s) => proxy ? s.proxy(proxy) : s.retire(`class ${jc.name} was added without a dex`));
+  }
+  /** adds a class that no dex defines, with the body of each of its methods; `notice` tells the compile service, which otherwise makes it too (the classes of host
+   *  specs that dexes arriving let it define, hostclass.ts) */
+  defineClass(jc: JClass, bodies: Map<MethodInfo, Intrinsic>, loader = this.prog.root, notice?: (service: CompileService) => void): void {
     for (const [m, body] of bodies) this.madeUp.set(mid(m), body);
     this.prog.addClass(jc, loader);
-    this.epoch++;
-    // the host classes a dex arriving defines are defined by the worker's own settling of the same dex
-    if (proxy) {
-      this.proxies.set(jc.name, proxy); this.opts.compiler?.proxy(proxy);
-    } else if (!this.settlingHosts) this.opts.compiler?.retire(`class ${jc.name} was added without a dex`);
+    this.changed(notice);
     this.assumptions.joined(this.cha.index([jc.name]));
     this.loaded([jc.name]);
   }
   private loaded(added: string[]): void {
-    this.planner.forgetImplementations();
     this.assumptions.loaded(added);
-    this.settlingHosts = true;
-    try { this.hosts.loaded(); } finally { this.settlingHosts = false; }
+    this.hosts.loaded();
+  }
+  /** the Program changed: results a compile worker made before are not adopted (epoch), the compile service hears of it (`notice`), and what was worked out from
+   *  its classes is forgotten; where namespaces resolve them differently (`rebound`), what was worked out from their types too */
+  changed(notice?: (service: CompileService) => void, rebound = false): void {
+    this.epoch++;
+    if (notice && this.compiler) notice(this.compiler);
+    this.planner.forgetImplementations();
+    if (rebound) { this.cha.reindex(); this.helpers.forgetFieldReaders(); PerWorld.rebound(this); }
   }
 
   // ---------- calling in from JS, and exceptions

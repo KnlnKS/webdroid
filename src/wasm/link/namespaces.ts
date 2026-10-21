@@ -5,7 +5,6 @@ import { changedTypes } from "../compiler/loadergraph.ts";
 import { failed, symbolicDispatchFor } from "../compiler/linkage.ts";
 import { hasHierarchy } from "./unit.ts";
 import type { World } from "./world.ts";
-import { PerWorld } from "./perworld.ts";
 
 export class Namespaces {
   private readonly w: World;
@@ -30,8 +29,7 @@ export class Namespaces {
       const dex = prog.get(slots.blockClass[b])?.dex;
       if (dex && prog.loaderOfDex(dex) === prog.root) for (let i = 0; i < slots.methodsIn(b); i++) w.assumptions.undoCode(slots.blockBase[b] + i);
     }
-    w.epoch++;
-    w.opts.compiler?.namespaces();
+    w.changed((s) => s.namespaces());
   }
   initiateClass(loader: Loader, name: string, key: string): void {
     const w = this.w, prog = w.prog, prior = prog.initiatedBy(loader, name);
@@ -47,7 +45,7 @@ export class Namespaces {
     const changing = changed.size ? prog.resolutionClasses(loader, changed) : undefined;
     // With no class resolving through the loader yet (one binding its libraries before it opens its dexes), the graph still changes what later definitions
     // resolve to, in the compile worker too.
-    if (!changing?.size) { change(); w.opts.compiler?.namespaces(); return; }
+    if (!changing?.size) { change(); w.compiler?.namespaces(); return; }
     const resolved = w.assumptions.resolved();
     const dependentOn = (changed: Set<string>) => {
       const affected = new Map<string, boolean>();
@@ -85,6 +83,7 @@ export class Namespaces {
     });
     const names = change();
     if (!names.length) return;
+    // worked out again for the checks below, it holds after them
     w.dispatch.forget();
     const refuse = (what: string, name: string) => {
       undo(); w.dispatch.forget();
@@ -109,11 +108,7 @@ export class Namespaces {
         if (oldKey in old.rt.exports && !(newKey in old.rt.exports)) old.rt.exports = { ...old.rt.exports, [newKey]: old.rt.exports[oldKey] };
       }
     }
-    w.epoch++;
-    w.opts.compiler?.namespaces();
-    w.cha.reindex(); w.planner.forgetImplementations();
-    w.helpers.forgetFieldReaders(); PerWorld.rebound(w);
-    w.dispatch.forget();
+    w.changed((s) => s.namespaces(), true);
     // Existing code and app builds used the previous namespace, except a kept build, which was made under this one. Platform code retains its defining boot namespace.
     const refreshed = new Set(names);
     // a slot without state has never been compiled here

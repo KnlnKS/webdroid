@@ -187,7 +187,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
       } catch (error) { if (processExited() || lifetime.signal.aborted) return; throw error; }
       if (lifetime.signal.aborted) { code.close(); return; }
       const made = code;
-      w.opts.compiler = made.compiler;
+      w.compiler = made.compiler;
       if (made.saved) w.attachApp(made.saved);
       mark(made.hit ? "appCodeSaved" : "appCode");
       made.start(w);

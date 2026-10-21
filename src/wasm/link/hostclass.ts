@@ -156,7 +156,11 @@ export class HostClasses {
       bodies.set(m, (cx, _m, c) => { const init = cx.prog.resolve(sup, "<init>", "()V"); if (init) { c.lget(0); cx.callMethod(c, init); } });
     }
     const owner = loader ?? (this.w.prog.loaderOf(spec.name).id ? this.w.prog.loaderOf(spec.name) : this.w.prog.boot);
-    this.w.addClass(jc, bodies, owner);
+    this.addClass(jc, bodies, owner);
+  }
+  /** adds class `jc` of natives: a compile worker settling on the same dexes makes it from the same specs, but not one made later (for a host object, javaClass) */
+  private addClass(jc: JClass, bodies: Map<MethodInfo, Intrinsic>, loader?: Loader): void {
+    this.w.defineClass(jc, bodies, loader, this.settling ? undefined : (s) => s.retire(`class ${jc.name} was added without a dex`));
   }
 
   /** the natives of `spec` take the place of the methods of the dex class `jc` they name, in a class of this World's Program that stands for it: the platform's own classes, which
@@ -183,10 +187,10 @@ export class HostClasses {
       hosted.methods.push(m); over.byKey.set(m.key, m);
       if (!m.isStatic) virtual.push(m.key);
     }
-    this.w.addClass(over, bodies);
+    this.addClass(over, bodies);
     if (virtual.length) { this.changed.push({ cls: jc.name, keys: virtual }); this.w.classModules.repairLinked(); }
     for (const m of taken) this.take(m);
-    if (hosted.methods.length) this.w.addClass(hosted, new Map(), prog.base?.get(jc.name)?.dex ? prog.boot : prog.loaderOf(jc.name));
+    if (hosted.methods.length) this.addClass(hosted, new Map(), prog.base?.get(jc.name)?.dex ? prog.boot : prog.loaderOf(jc.name));
   }
 
   /** the spec that implements class `cls` or its nearest superclass */

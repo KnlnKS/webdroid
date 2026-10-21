@@ -79,9 +79,9 @@ export class Tiering {
       this.w.ahead.noteRun(batch);
       return { methods: batch, built: cx.buildUnit(batch) };
     })!;
-    if (group.length && this.w.opts.compiler) {
+    if (group.length && this.w.compiler) {
       this.loose.push(group);
-      if (this.loose.length >= this.mergeAt) this.w.opts.compiler.merge(this.w);
+      if (this.loose.length >= this.mergeAt) this.w.compiler.merge(this.w);
     }
   }
   private mergeable(g: number[]): boolean {
@@ -176,7 +176,7 @@ export class Tiering {
   }
   /** hands the second-tier compile of the method in `slot` to a compile worker; whether it was taken, or is to be asked for later */
   private offload(slot: number): boolean {
-    const taken = this.w.opts.compiler?.submit(this.w, slot);
+    const taken = this.w.compiler?.submit(this.w, slot);
     if (taken === true) this.set(slot, PENDING);
     return !!taken;
   }
