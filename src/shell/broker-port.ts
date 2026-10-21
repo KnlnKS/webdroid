@@ -58,11 +58,10 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
   const watches = new Map<number, () => void>();
   const calls: Answers<BrokerCalls> = {
     process: {
-      processAlive: target => target === 0 || broker.alive(target),
+      processAlive: target => broker.alive(target),
       processSignal: (target, signal) => broker.signal(pid, target, signal),
       processWatch: (target, token) => {
         watches.get(token)?.(); watches.delete(token);
-        if (target === 0) return;
         watches.set(token, broker.watch(target, () => {
           watches.delete(token);
           if (broker.alive(pid)) unawaited(broker.request(broker.entry(pid), endpoint => endpoint.processDied(token)));

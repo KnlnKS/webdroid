@@ -1,7 +1,8 @@
 import { awaited, type JObj, rt, driven, type Gen } from "../jvm/runtime.ts";
 import { newObj, vcall, scall, after, iof } from "../jvm/natives/jentry.ts";
 import { type JIntent, newIntent } from "./intent.ts";
-import { asBinder, exportBinder, importBinder, type ParcelData } from "./binder.ts";
+import { asBinder, exportBinder, importBinder, type BinderHandle, type ParcelData } from "./binder.ts";
+import { SYSTEM_SERVER_PID } from "./os.ts";
 import { notConnected } from "../jvm/natives/jthrowable.ts";
 import { encodeIntent, decodeIntent } from "./intentipc.ts";
 import type { PendingOperation } from "../shell/pendingintents.ts";
@@ -27,10 +28,14 @@ export type PendingAccess = {
 };
 /** ActivityManagerService's PendingIntentController: the broker's records, which every process asks */
 export const pendingTransport: PendingAccess = { create: notConnected, cancel: notConnected, send: notConnected, take: notConnected, peek: notConnected };
+/** a record's IIntentSender: a binder of system_server's, numbered apart from those it exports */
+export const senderHandle = (id: number): BinderHandle => ({ pid: SYSTEM_SERVER_PID, id: -id });
+/** the record a sender's handle stands for */
+export const senderRecord = (h: BinderHandle): number | null => h.pid === SYSTEM_SERVER_PID && h.id < 0 ? -h.id : null;
 function targetId(target: unknown): number {
-  const handle = exportBinder(target);
-  if (!handle || handle.pid !== 0) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Unknown intent sender");
-  return handle.id;
+  const handle = exportBinder(target), id = handle && senderRecord(handle);
+  if (!id) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Unknown intent sender");
+  return id;
 }
 /** a PendingIntent's (or IntentSender's) record, through its IIntentSender */
 export function* senderId$(sender: JObj): Gen<number> {
@@ -50,7 +55,7 @@ export const START_CANCELED = -96;
 const KINDS: Record<PendingOperation["kind"], number> = { broadcast: 1, activity: 2, service: 4, "foreground-service": 5 };
 const KIND_OF: Record<number, PendingOperation["kind"]> = { 1: "broadcast", 2: "activity", 4: "service", 5: "foreground-service" };
 /** an IIntentSender over a record of the shell's registry, as AOSP's PendingIntent holds one */
-export const intentSender = (id: number) => after(importBinder({ pid: 0, id }), (binder) => scall("android/content/IIntentSender$Stub", "asInterface",
+export const intentSender = (id: number) => after(importBinder(senderHandle(id)), (binder) => scall("android/content/IIntentSender$Stub", "asInterface",
   "(Landroid/os/IBinder;)Landroid/content/IIntentSender;", binder));
 /** IActivityManager's IntentSender calls, over the shell's records */
 export const intentSenderMethods = {

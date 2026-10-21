@@ -44,7 +44,8 @@ const callerDeaths = new Map<number, Set<(pid: number) => void>>();
 /** `died(pid)` once process `pid` dies, until the returned function is called, as a hosted service's
  *  death recipient on its caller's binder drops what it kept for the caller; one watch serves each process */
 export function onCallerDeath(pid: number, died: (pid: number) => void): () => void {
-  if (pid === PROCESS_PID) return () => {};
+  // calls from this process and from system_server: neither caller dies while this process runs
+  if (pid === PROCESS_PID || pid === SYSTEM_CALLER.pid) return () => {};
   const recipients = callerDeaths.get(pid) ?? new Set<(pid: number) => void>();
   if (!callerDeaths.has(pid)) {
     callerDeaths.set(pid, recipients);
@@ -83,7 +84,8 @@ function proxyFor(key: string, h: BinderHandle): JObj | Promise<JObj> {
 }
 export function importBinder(h: BinderHandle | null): JObj | null | Promise<JObj> {
   if (!h) return null;
-  if (h.pid === PROCESS_PID) return appView(local.get(h.id) ?? null) as JObj | null | Promise<JObj>;
+  // system_server's ids it never exported (PendingIntent records) are proxies even there
+  if (h.pid === PROCESS_PID && h.id > 0) return appView(local.get(h.id) ?? null) as JObj | null | Promise<JObj>;
   return proxyFor(h.pid + ":" + h.id, h);
 }
 /** binders hosted here on system_server's behalf, the webdroid/ classes: its services and the binders they hand out */
@@ -289,7 +291,9 @@ export async function withCallingIdentity<T>(caller: Caller, call: () => T | Pro
   try { return await callOn(thread, call); }
   finally { state.caller = undefined; }
 }
-/** system_server's identity: what a hosted service's binder calls carry, local or remote */
+/** system_server's identity: what a hosted service's binder calls carry, local or remote. Its pid is
+ *  the 0 Binder.getCallingPid reports when a caller's is unavailable: system_server's halves also run
+ *  in app processes, beside app code whose AttributionSources carry that process's pid */
 export const SYSTEM_CALLER: Caller = { pid: 0, uid: 1000 };
 /** run a hosted service's calls into other binders as system_server makes them */
 export function asSystem<T>(call: () => T | Promise<T>): Promise<T> {
