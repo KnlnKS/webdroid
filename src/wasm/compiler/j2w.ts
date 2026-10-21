@@ -214,7 +214,6 @@ export class Compiler implements Base {
     return c.indirect > 0 || c.targets.some((f) => (f < this.mb.nImportedFuncs ? f >= this.fixedImports || RUNS_JAVA.has(f) : methods.has(f)));
   }
   get natives() { return this.w.natives; }
-  intrinsic(m: MethodInfo): Intrinsic | undefined { return this.w.intrinsic(m); }
   /** the linear memory natives copy arrays through, and its allocation top */
   scratch(): number {
     if (!this.memory) { this.mb.importMemory("rt", "mem", 1); this.memory = true; }
@@ -383,7 +382,7 @@ export class Compiler implements Base {
     if (this.install) this.dependsOn(m);
   }
   /** whether a call of `m` may run its bytecode in place (inline.ts): the code is the method's, not an intrinsic's or the host's */
-  inlines(m: MethodInfo): boolean { return !this.intrinsic(m) && this.mayHold(m); }
+  inlines(m: MethodInfo): boolean { return !this.w.intrinsic(m) && this.mayHold(m); }
   /** the only implementation of decl.name+desc among all loaded classes, or "many": none yet is a dispatch like any other, since a class made later (a proxy
    *  class, a dex) may implement it, even for a frame that is already running */
   devirt(decl: string, name: string, desc: string): MethodInfo | "many" {

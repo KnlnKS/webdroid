@@ -47,7 +47,7 @@ export function emitSymbolicSite(mc: MC, ins: PreparedInstruction): boolean {
 export function declareSymbolicSites(cx: Compiler, methods: MethodInfo[]): void {
   for (const m of methods) {
     if (cx.w.aot?.building && !cx.w.opts.build?.appDexes?.has(m.dex)) continue;
-    if (!m.codeOff || cx.intrinsic(m) || cx.prog.linksStatically(cx.prog.loaderOf(m.cls))) continue;
+    if (!m.codeOff || cx.w.intrinsic(m) || cx.prog.linksStatically(cx.prog.loaderOf(m.cls))) continue;
     const { prepared, typing } = cx.analysis(m);
     for (const ins of prepared.instructions) {
       if (!typing.reached(ins.pc) || !cx.w.needsSymbolicSite(m, ins)) continue;
