@@ -6,11 +6,12 @@ import { rt, type JObj, declaredField, peerField } from "../jvm/runtime.ts";
 import { ownedHandle, deref } from "./handles.ts";
 import { matrixOf } from "./matrix.ts";
 import { readInt, readLong, writeInt, writeLong, readFloat, writeFloat, type NativeParcel, nativeParcel } from "./parcel.ts";
+import { ACTION_CANCEL, ACTION_DOWN, ACTION_MOVE, ACTION_POINTER_DOWN, ACTION_POINTER_UP, ACTION_UP, AXIS_ORIENTATION, AXIS_PRESSURE,
+  AXIS_RELATIVE_X, AXIS_RELATIVE_Y, AXIS_SIZE, AXIS_TOOL_MAJOR, AXIS_TOOL_MINOR, AXIS_TOUCH_MAJOR, AXIS_TOUCH_MINOR, AXIS_X, AXIS_Y,
+  FLAG_CANCELED, SOURCE_CLASS_JOYSTICK, SOURCE_CLASS_POINTER, SOURCE_CLASS_POSITION, SOURCE_MOUSE_RELATIVE } from "./input-codes.ts";
 
 const ME = "android/view/MotionEvent", PC = "android/view/MotionEvent$PointerCoords", PP = "android/view/MotionEvent$PointerProperties";
 const HISTORY_CURRENT = -0x80000000;
-export const AXIS_X = 0, AXIS_Y = 1, AXIS_ORIENTATION = 8, AXIS_RELATIVE_X = 27, AXIS_RELATIVE_Y = 28;
-const SOURCE_CLASS_POINTER = 2, SOURCE_CLASS_POSITION = 8, SOURCE_CLASS_JOYSTICK = 16, SOURCE_MOUSE_RELATIVE = 0x20004;
 /** AMOTION_EVENT_PRIVATE_FLAG_SUPPORTS_ORIENTATION and _SUPPORTS_DIRECTIONAL_ORIENTATION: kept from Java */
 const SUPPORTS_ORIENTATION = 0x80;
 const DIRECTIONAL = 0x100, PRIVATE_FLAGS = 0x180;
@@ -237,7 +238,7 @@ const g6 = (v: number) => String(Number(v.toPrecision(6)));
 /** operator<<(std::ostream&, const MotionEvent&), as the natives' exception messages carry it */
 function describe(e: NativeMotionEvent): string {
   const masked = e.action & 0xff, index = e.action >> 8;
-  let s = `MotionEvent { action=${ACTIONS[masked] ?? masked}${masked === 5 || masked === 6 ? `(${index})` : ""}`;
+  let s = `MotionEvent { action=${ACTIONS[masked] ?? masked}${masked === ACTION_POINTER_DOWN || masked === ACTION_POINTER_UP ? `(${index})` : ""}`;
   if (e.actionButton) s += `, actionButton=${e.actionButton}`;
   for (let i = 0; i < e.pointerCount; i++) {
     s += `, id[${i}]=${e.ids[i]}`;
@@ -267,8 +268,9 @@ const pcFields = (): PCFields => pcf ??= {
 let ppf: [id: string, toolType: string] | null = null;
 const ppFields = () => ppf ??= [declaredField(PP, "id"), declaredField(PP, "toolType")];
 /** the axes PointerCoords keeps as fields, in field order with their axis */
-const FIELD_AXES: [keyof PCFields, number][] = [["x", 0], ["y", 1], ["pressure", 2], ["size", 3], ["touchMajor", 4], ["touchMinor", 5],
-  ["toolMajor", 6], ["toolMinor", 7], ["orientation", 8], ["relativeX", 27], ["relativeY", 28]];
+const FIELD_AXES: [keyof PCFields, number][] = [["x", AXIS_X], ["y", AXIS_Y], ["pressure", AXIS_PRESSURE], ["size", AXIS_SIZE],
+  ["touchMajor", AXIS_TOUCH_MAJOR], ["touchMinor", AXIS_TOUCH_MINOR], ["toolMajor", AXIS_TOOL_MAJOR], ["toolMinor", AXIS_TOOL_MINOR],
+  ["orientation", AXIS_ORIENTATION], ["relativeX", AXIS_RELATIVE_X], ["relativeY", AXIS_RELATIVE_Y]];
 const FIELD_HI = FIELD_AXES.reduce((m, [, a]) => m | 1 << (31 - a), 0);
 /** pointerCoordsToNative: Java coordinates mapped by `t`, the inverse of the event's transform, as
  *  calculateTransformedXY maps them (rounded) */
@@ -328,11 +330,11 @@ function split(dst: NativeMotionEvent, src: NativeMotionEvent, idBits: number): 
   const kept: number[] = [];
   for (let i = 0; i < src.pointerCount; i++) if (idBits >>> src.ids[i] & 1) kept.push(i);
   let action = src.action;
-  if (masked === 5 || masked === 6) {
+  if (masked === ACTION_POINTER_DOWN || masked === ACTION_POINTER_UP) {
     if (idBits >>> actionId & 1) {
-      action = kept.length === 1 ? masked === 5 ? 0 : src.flags & 0x20 ? 3 : 1
+      action = kept.length === 1 ? masked === ACTION_POINTER_DOWN ? ACTION_DOWN : src.flags & FLAG_CANCELED ? ACTION_CANCEL : ACTION_UP
         : masked | kept.findIndex((i) => src.ids[i] === actionId) << 8;
-    } else action = 2;
+    } else action = ACTION_MOVE;
   }
   dst.copyFrom(src, true);
   dst.id = nextId(); dst.action = action;
@@ -398,6 +400,8 @@ const AXIS_LABELS = [
   ..."GESTURE_X_OFFSET GESTURE_Y_OFFSET GESTURE_SCROLL_X_DISTANCE GESTURE_SCROLL_Y_DISTANCE GESTURE_PINCH_SCALE_FACTOR GESTURE_SWIPE_FINGER_COUNT".split(" "),
 ];
 
+/** the axes PointerCoords::scale scales */
+const SCALED_AXES = [AXIS_X, AXIS_Y, AXIS_TOUCH_MAJOR, AXIS_TOUCH_MINOR, AXIS_TOOL_MAJOR, AXIS_TOOL_MINOR, AXIS_RELATIVE_X, AXIS_RELATIVE_Y];
 rt.registerJnis(ME, {
   "nativeInitialize(JIIIIIIIIIFFFFJJI[Landroid/view/MotionEvent$PointerProperties;[Landroid/view/MotionEvent$PointerCoords;)J": (ptr: bigint,
     deviceId: number, source: number, displayId: number, action: number, flags: number, edgeFlags: number, metaState: number, buttonState: number,
@@ -491,7 +495,7 @@ rt.registerJnis(ME, {
   "nativeSetActionButton(JI)V": (ptr: bigint, button: number) => { at(ptr).actionButton = button; },
   "nativeIsTouchEvent(J)Z": (ptr: bigint) => {
     const e = at(ptr), masked = e.action & 0xff;
-    return +((e.source & SOURCE_CLASS_POINTER) === SOURCE_CLASS_POINTER && masked <= 6);
+    return +((e.source & SOURCE_CLASS_POINTER) === SOURCE_CLASS_POINTER && masked <= ACTION_POINTER_UP);
   },
   // Java sees the flags without the private orientation bits, and cannot change those
   "nativeGetFlags(J)I": (ptr: bigint) => at(ptr).flags & ~PRIVATE_FLAGS,
@@ -524,7 +528,7 @@ rt.registerJnis(ME, {
     e.rawXform = Float32Array.from(e.rawXform); e.rawXform[2] = f32(e.rawXform[2] * s); e.rawXform[5] = f32(e.rawXform[5] * s);
     e.xPrecision = f32(e.xPrecision * s); e.yPrecision = f32(e.yPrecision * s);
     e.rawXCursor = f32(e.rawXCursor * s); e.rawYCursor = f32(e.rawYCursor * s);
-    for (const c of e.coords) for (const axis of [0, 1, 4, 5, 6, 7, 27, 28]) scaleAxis(c, axis, s);
+    for (const c of e.coords) for (const axis of SCALED_AXES) scaleAxis(c, axis, s);
   },
   // MotionEvent::getSurfaceRotation: the inverse of the rotation the event's transform applies
   "nativeGetSurfaceRotation(J)I": (ptr: bigint) => {

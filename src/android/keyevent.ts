@@ -7,12 +7,11 @@ import { jarray } from "../jvm/abi.ts";
 import { after, newObj, scall } from "../jvm/natives/jentry.ts";
 import { ownedHandle, deref } from "./handles.ts";
 import { type NativeParcel, nativeParcel, readInt, writeInt, readCString, writeCString } from "./parcel.ts";
-import { keyCodes } from "./keycodes.ts";
+import { KEY_ACTION_DOWN, KEY_ACTION_UP, SOURCE_KEYBOARD, keyCodes } from "./input-codes.ts";
 import { nextId } from "./motionevent.ts";
 import { uptimeMillis } from "../guest-clock.ts";
 
 const KE = "android/view/KeyEvent", KCM = "android/view/KeyCharacterMap";
-export const SOURCE_KEYBOARD = 0x101;
 const labels = [...keyCodes.keys()];
 
 // ── KeyCharacterMap
@@ -286,7 +285,7 @@ rt.registerJnis(KCM, {
     if (!list) return null;
     const now = BigInt(Math.round(uptimeMillis() * 1e6)), events: JObj[] = [];
     const next = (i: number): unknown => i === list.length ? jarray(events, `L${KE};`)
-      : after(scall(KE, "obtain", `(IJJIIIIIIIII[BLjava/lang/String;)L${KE};`, nextId(), now, now, list[i].down ? 0 : 1, list[i].code, 0,
+      : after(scall(KE, "obtain", `(IJJIIIIIIIII[BLjava/lang/String;)L${KE};`, nextId(), now, now, list[i].down ? KEY_ACTION_DOWN : KEY_ACTION_UP, list[i].code, 0,
         list[i].meta, k.deviceId, 0, 0, SOURCE_KEYBOARD, -1, new Int8Array(32), null) as JObj | Promise<JObj>, (ev: JObj) => { events.push(ev); return next(i + 1); });
     return next(0);
   }),

@@ -13,8 +13,8 @@ import { javaConfiguration } from "../resources.ts";
 import { deviceConfiguration, systemResource } from "../resnative.ts";
 import { edges } from "../graphics.ts";
 import { TOUCHSCREEN, TOUCH_SOURCE, VIRTUAL_KEYBOARD, touchPrecision } from "../inputdevices.ts";
-import { SOURCE_KEYBOARD } from "../keyevent.ts";
-import { ACTION_CANCEL, ACTION_DOWN, ACTION_UP, type TouchPointer } from "../../shell/pointer-queue.ts";
+import { ACTION_CANCEL, ACTION_DOWN, ACTION_UP, KEY_ACTION_DOWN, KEY_ACTION_UP, KEY_FLAG_FROM_SYSTEM, SOURCE_KEYBOARD } from "../input-codes.ts";
+import type { TouchPointer } from "../../shell/pointer-queue.ts";
 
 const VISIBLE = 0;
 const ADD_OKAY = 0, ADD_FLAG_IN_TOUCH_MODE = 1, ADD_FLAG_APP_VISIBLE = 2;
@@ -298,9 +298,9 @@ export const dispatchKey = (keyCode: number): Promise<void> => onInputThread(fun
   const ws = focused;
   if (!ws?.channel) return;
   const down = BigInt(Math.floor(uptimeMillis()));
-  for (const action of [ACTION_DOWN, ACTION_UP]) {
-    const now = action === ACTION_DOWN ? down : BigInt(Math.floor(uptimeMillis()));
-    const event = yield newObj("android/view/KeyEvent", "(JJIIIIIIII)V", down, now, action, keyCode, 0, 0, VIRTUAL_KEYBOARD, 0, 0x8, SOURCE_KEYBOARD);
+  for (const action of [KEY_ACTION_DOWN, KEY_ACTION_UP]) {
+    const now = action === KEY_ACTION_DOWN ? down : BigInt(Math.floor(uptimeMillis()));
+    const event = yield newObj("android/view/KeyEvent", "(JJIIIIIIII)V", down, now, action, keyCode, 0, 0, VIRTUAL_KEYBOARD, 0, KEY_FLAG_FROM_SYSTEM, SOURCE_KEYBOARD);
     yield publish(ws.channel, event);
   }
 }());

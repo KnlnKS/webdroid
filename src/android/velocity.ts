@@ -4,9 +4,10 @@
 
 import { rt } from "../jvm/runtime.ts";
 import { ownedHandle, deref } from "./handles.ts";
-import { motionOf, AXIS_X, AXIS_Y, type NativeMotionEvent } from "./motionevent.ts";
+import { motionOf, type NativeMotionEvent } from "./motionevent.ts";
+import { ACTION_CANCEL, ACTION_DOWN, ACTION_HOVER_ENTER, ACTION_HOVER_MOVE, ACTION_MOVE, ACTION_POINTER_DOWN, ACTION_POINTER_UP, ACTION_SCROLL,
+  ACTION_UP, AXIS_SCROLL, AXIS_X, AXIS_Y, FLAG_CANCELED } from "./input-codes.ts";
 
-const AXIS_SCROLL = 26;
 const S = { DEFAULT: -1, IMPULSE: 0, LSQ1: 1, LSQ2: 2, LSQ3: 3, WLSQ2_DELTA: 4, WLSQ2_CENTRAL: 5, WLSQ2_RECENT: 6, INT1: 7, INT2: 8, LEGACY: 9 } as const;
 const W = { NONE: 0, DELTA: 1, CENTRAL: 2, RECENT: 3 } as const;
 type W = (typeof W)[keyof typeof W];
@@ -255,17 +256,17 @@ class Tracker {
   addEvent(e: NativeMotionEvent) {
     let axes: number[];
     switch (e.action & 0xff) {
-      case 0: case 9: this.clear(); axes = PLANAR; break;
-      case 5: this.clearPointer(e.ids[e.action >> 8 & 0xff]); axes = PLANAR; break;
-      case 2: case 7: axes = PLANAR; break;
-      case 6:
-        if (e.flags & 0x20) { this.clearPointer(e.ids[e.action >> 8 & 0xff]); return; }
+      case ACTION_DOWN: case ACTION_HOVER_ENTER: this.clear(); axes = PLANAR; break;
+      case ACTION_POINTER_DOWN: this.clearPointer(e.ids[e.action >> 8 & 0xff]); axes = PLANAR; break;
+      case ACTION_MOVE: case ACTION_HOVER_MOVE: axes = PLANAR; break;
+      case ACTION_POINTER_UP:
+        if (e.flags & FLAG_CANCELED) { this.clearPointer(e.ids[e.action >> 8 & 0xff]); return; }
       // fall through: an up ends the trace, after the stopped-pointer check
-      case 1:
+      case ACTION_UP:
         if (e.eventTime - this.lastEventTime > ASSUME_STOPPED) for (const axis of PLANAR) this.strategies.delete(axis);
         return;
-      case 3: this.clear(); return;
-      case 8: axes = [AXIS_SCROLL]; break;
+      case ACTION_CANCEL: this.clear(); return;
+      case ACTION_SCROLL: axes = [AXIS_SCROLL]; break;
       default: return;
     }
     for (let h = 0; h <= e.historySize; h++) {

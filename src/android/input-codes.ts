@@ -1,4 +1,16 @@
-// Android 15 KeyEvent key codes, in numeric order: InputEventLookup's labels.
+// Android 15's input constants, for the natives and the shell's input alike.
+
+/** MotionEvent's actions; POINTER_DOWN and POINTER_UP carry the changed pointer's index from bit 8 */
+export const ACTION_DOWN = 0, ACTION_UP = 1, ACTION_MOVE = 2, ACTION_CANCEL = 3, ACTION_POINTER_DOWN = 5, ACTION_POINTER_UP = 6,
+  ACTION_HOVER_MOVE = 7, ACTION_SCROLL = 8, ACTION_HOVER_ENTER = 9;
+export const FLAG_CANCELED = 0x20;
+export const AXIS_X = 0, AXIS_Y = 1, AXIS_PRESSURE = 2, AXIS_SIZE = 3, AXIS_TOUCH_MAJOR = 4, AXIS_TOUCH_MINOR = 5, AXIS_TOOL_MAJOR = 6,
+  AXIS_TOOL_MINOR = 7, AXIS_ORIENTATION = 8, AXIS_SCROLL = 26, AXIS_RELATIVE_X = 27, AXIS_RELATIVE_Y = 28;
+/** KeyEvent's actions, and its FLAG_FROM_SYSTEM */
+export const KEY_ACTION_DOWN = 0, KEY_ACTION_UP = 1, KEY_FLAG_FROM_SYSTEM = 8;
+export const SOURCE_CLASS_POINTER = 2, SOURCE_CLASS_POSITION = 8, SOURCE_CLASS_JOYSTICK = 16, SOURCE_KEYBOARD = 0x101, SOURCE_MOUSE_RELATIVE = 0x20004;
+
+/** KeyEvent's key codes, in numeric order: InputEventLookup's labels */
 export const keyCodes = new Map(`
 UNKNOWN SOFT_LEFT SOFT_RIGHT HOME BACK CALL ENDCALL 0 1 2 3 4 5 6 7 8 9 STAR POUND DPAD_UP DPAD_DOWN DPAD_LEFT
 DPAD_RIGHT DPAD_CENTER VOLUME_UP VOLUME_DOWN POWER CAMERA CLEAR A B C D E F G H I J K L M N O P Q R S T U V W

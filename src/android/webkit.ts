@@ -31,7 +31,7 @@ import { interceptRequest, mkError, mkRequest } from "./webrequests.ts";
 import { RendererFrame, Subframes, dropFrame, reply, unbridge, viewFrame, type FrameHold, type FrameLoad } from "./webframes.ts";
 
 import type { FrameAnnouncement } from "../shell/web-surface.ts";
-import { domKeyOf } from "./keycodes.ts";
+import { domKeyOf } from "./input-codes.ts";
 
 /** the main frame's port once its page script listens, and the page's end */
 const newPage = () => ({ script: Promise.withResolvers<MessagePort>(), closed: new AbortController() });
