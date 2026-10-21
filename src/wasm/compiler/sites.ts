@@ -1,10 +1,11 @@
 import { registersOf, type PreparedInstruction } from "../../jvm/prepared.ts";
-import { Invoke, Pool, invokeKind, isInvoke, referenceIndex, referenceOf } from "../../jvm/opcodes.ts";
+import { Pool, isInvoke, referenceIndex, referenceOf } from "../../jvm/opcodes.ts";
 import { kindOf, type Kind, type MethodInfo } from "./program.ts";
 import { KINDS, type Typing } from "./infer.ts";
 import type { Compiler } from "./j2w.ts";
 import { T } from "./wasmbin.ts";
 import type { MC } from "./method.ts";
+import { stringSite } from "./strings.ts";
 
 export type SymbolicSite = [name: string, cls: string, method: number, pc: number, inputs: [reg: number, kind: Kind][], ret: Kind | "V"];
 /** the name of the symbolic site of `ins` in `m` */
@@ -23,10 +24,8 @@ export function symbolicOperationKey(m: MethodInfo, ins: PreparedInstruction, in
 }
 
 export function symbolicInstruction(m: MethodInfo, ins: PreparedInstruction): boolean {
-  const op = ins.op, pool = referenceOf(op), dex = m.dex;
-  if (pool < Pool.Type || pool === Pool.CallSite) return false;
-  if (op === 0x22) return dex.rawType(ins.b) !== "Ljava/lang/String;";
-  return !(pool === Pool.Method && invokeKind(op) === Invoke.Direct && dex.method(ins.b).name === "<init>" && dex.rawType(dex.method(ins.b).cls) === "Ljava/lang/String;");
+  const pool = referenceOf(ins.op);
+  return pool >= Pool.Type && pool !== Pool.CallSite && !stringSite(m.dex, ins);
 }
 
 function siteOperands(m: MethodInfo, ins: PreparedInstruction, typing: Typing): { inputs: SymbolicSite[4]; output: SymbolicSite[5] } {

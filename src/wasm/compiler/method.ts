@@ -1,5 +1,5 @@
 import { emitSymbolicSite, siteKey } from "./sites.ts";
-import { STRING } from "./strings.ts";
+import { STRING, stringSite } from "./strings.ts";
 import { Code, OP, inlineMark } from "./code.ts";
 import { T, ref, refNull, type VT } from "./wasmbin.ts";
 import { kindOf, type FieldInfo, type Kind, type MethodInfo } from "./program.ts";
@@ -16,11 +16,11 @@ import { failed, invokeSite, resolveFieldRef, typeFailure, type InvokeSite, type
 import { MethodFacts, cloneFacts, newFacts, type Facts } from "./facts.ts";
 import { isStackOverflow } from "./exc.ts";
 import { WHOLE_FRAME, planDepth, type DepthPlan } from "./depth.ts";
-import { Invoke, invokeKind, isInvoke, narrowBits, wideBits } from "../../jvm/opcodes.ts";
+import { invokeKind, isInvoke, narrowBits, wideBits } from "../../jvm/opcodes.ts";
 import { emitRestored } from "./hostcalls.ts";
 import { OutlinedCode, Outliner } from "./outline.ts";
 import { isEmpty, trivialOf, type Seq, type Trivial, type Val } from "./inline.ts";
-import { KINDS, BINOPS, UNARY, binopKind, binopName, I as KI, F as KF, R as KR, J as KJ, D as KD, type Binop, type Typing } from "./infer.ts";
+import { KINDS, BINOPS, UNARY, binopKind, binopName, uninitAliases, I as KI, F as KF, R as KR, J as KJ, D as KD, type Binop, type Typing } from "./infer.ts";
 
 /** how an invoke reaches the Java method it calls: a fixed one, whose body may run in place; a dispatch, through the only implementation the class hierarchy has if
  *  it has one (Compiler.devirt); String's constructor, which makes the string */
@@ -108,8 +108,10 @@ export class MC {
     if (l === undefined) this.webLocal[web] = l = this.code.newLocal(KINDS[this.typing.kind[web]].vt);
     return l;
   }
+  /** by web, the first and last instruction it is live at: webs whose intervals are disjoint share storage */
+  private spans!: { start: number[]; end: number[] };
   private allocateWebs() {
-    const { start, end } = this.typing.ranges(), reserved = new Set<number>();
+    const { start, end } = this.spans = this.typing.ranges(), reserved = new Set<number>();
     for (let r = this.item.regs - this.item.ins; r < this.item.regs; r++) { const w = this.typing.param(r); if (w >= 0) reserved.add(w); }
     const pools = new Map<VT, { local: number; end: number }[]>();
     const webs = start.map((_, w) => w).filter(w => start[w] !== undefined && !reserved.has(w)).sort((a, b) => start[a] - start[b] || a - b);
@@ -277,7 +279,7 @@ export class MC {
   private bind(ins: Ins): Binding | null {
     const { decl, name, target } = this.invoke(ins), kind = invokeKind(ins.op);
     if (target === "clone" || failed(target)) return null;
-    if (kind === Invoke.Direct && decl === STRING && name === "<init>") return { k: "string" };
+    if (stringSite(this.dex, ins) === "init") return { k: "string" };
     if (staticallyBound(this.cx.w, kind, decl, target)) return { k: "fixed", m: target, body: this.bodyOf(target) };
     const only = this.cx.devirt(decl, name, target.desc);
     return { k: "virtual", only: only === "many" ? undefined : only };
@@ -477,9 +479,8 @@ export class MC {
       case 0x21: this.arrayLength(b); this.set("I"); return;
       case 0x22: { // new-instance
         if (this.unresolved(types.type(b))) return;
-        const name = types.typeName(b);
-        // a String is made by the constructor call, which assigns its register
-        if (name === STRING) c.anyNull(); else { this.ensure(name); cx.emitNew(c, name); }
+        // a String is made by the constructor call, which assigns its registers
+        if (stringSite(dex, ins) === "alloc") c.anyNull(); else { const name = types.typeName(b); this.ensure(name); cx.emitNew(c, name); }
         this.set("L"); return;
       }
       case 0x23: if (this.unresolved(types.type(ins.c))) return; cx.emitNewArray(c, types.type(ins.c), () => this.get("I", ins.b)); this.set("L"); return;
@@ -703,7 +704,11 @@ export class MC {
     if (b.k === "string") {
       const make = cx.str.factory(desc);
       if (make === undefined) { this.invokeGap(ins, `String.<init>${desc}`); return; }
-      pushArgs(this, ins, p.params); c.call(make); if (site) this.leaveSite(); c.lset(this.local(this.useWeb(ins.regs[0]))); return;
+      pushArgs(this, ins, p.params); c.call(make); if (site) this.leaveSite();
+      const own = this.local(this.useWeb(ins.regs[0]));
+      c.lset(own);
+      for (const w of this.stringCopies(ins)) c.lget(own).lset(this.local(w));
+      return;
     } else if (b.k === "fixed") {
       if (target.isStatic) { this.ensure(target.cls); pushArgs(this, ins, p.params, 0); } else { this.nonNull(ins.regs[0]); pushArgs(this, ins, p.params); }
       cx.callMethod(c, target);
@@ -727,6 +732,15 @@ export class MC {
     }
     if (site) this.leaveSite();
     this.finishResult(ins, retK);
+  }
+  private aliases?: Map<number, number[]>;
+  /** the webs besides the receiver's that the String.<init> call `ins` assigns the String it makes, as ART assigns every copy of the allocation
+   *  (SetStringInitValueToAllAliases): those that own their storage there */
+  private stringCopies(ins: Ins): number[] {
+    const regs = (this.aliases ??= uninitAliases(this.dex, this.item, this.prepared, (x) => stringSite(this.dex, x))).get(ins.pc);
+    if (!regs) return [];
+    const i = this.prepared.indexAt[ins.pc], own = this.useWeb(ins.regs[0]), { start, end } = this.spans;
+    return regs.map((r) => this.typing.holds(ins.pc, r)).filter((w) => w >= 0 && w !== own && start[w] <= i && i <= end[w]);
   }
   /** the body of `m` (inline.ts) in place of the call `ins`: the checks the invoke makes in its own frame, then the body's steps */
   private emitBody(ins: Ins, m: MethodInfo, t: Trivial, retK: Kind | "V", site: boolean) {

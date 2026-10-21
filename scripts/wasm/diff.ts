@@ -28,6 +28,15 @@ const dex = join(out, "classes.dex");
       for (let pc = 0; pc < code.insns.length; pc += insnLen(code.insns, pc)) if ((code.insns[pc] & 0xff) >= 0x0a && (code.insns[pc] & 0xff) <= 0x0c) moves.add(pc);
       const items = m.codeOff + 16 + code.insns.length * 2 + (code.insns.length & 1) * 2;
       code.tries.forEach((t, k) => { if (moves.has(t.end - 1)) view.setUint16(items + k * 8 + 4, t.end - t.start - 1, true); });
+      // ART hands the String a constructor call makes to every copy of its allocation, which d8 never makes: stringAlias copies it, before the call, into
+      // the register n arrived in, and reads the String through the copy
+      if (d.method(m.methodIdx).name === "stringAlias") {
+        const units = Array.from(code.insns), shape = [0x0022, -1, 0x01dd, 0x0701, 0x1123, -1, 0x2070, -1, 0x0010, 0x106e, -1, 0x0000, 0x010a, 0x01da, 0x0201, 0x010f];
+        if (code.regs !== 2 || units.length !== shape.length || shape.some((u, k) => u >= 0 && units[k] !== u)) throw new Error("W.stringAlias: d8 emitted other code");
+        view.setUint16(m.codeOff, 3, true);
+        [0x0022, units[1], 0x01dd, 0x0702, 0x1123, units[5], 0x0207, 0x2070, units[7], 0x0010, 0x106e, units[10], 0x0002, 0x010a, 0x11b0, 0x010f]
+          .forEach((u, k) => view.setUint16(m.codeOff + 16 + 2 * k, u, true));
+      }
     }
   }
   writeFileSync(dex, bytes);
