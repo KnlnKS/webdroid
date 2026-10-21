@@ -4,7 +4,7 @@ import { device } from "./config.ts";
 import { dispatchTouches } from "./device.ts";
 import { imeActive } from "../android/ime.ts";
 import { inputMethods, receiveIme, serveInput, type InputCalls } from "./input-port.ts";
-import { callProxy } from "./process-port.ts";
+import { callProxy } from "./rpc.ts";
 import { onProcessExit } from "../process-exit.ts";
 import { attachPointerInput } from "./pointer-input.ts";
 let closeInput: (() => void) | undefined;

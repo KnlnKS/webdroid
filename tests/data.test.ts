@@ -28,7 +28,7 @@ import { cookieCalls, type CookieCalls } from "../src/shell/cookie-access.ts";
 import { WebCookies } from "../src/shell/webcookies.ts";
 import { NativeWindow } from "../src/android/cursorwindow.ts";
 import { handle, release } from "../src/android/handles.ts";
-import { callProxy, serveCalls } from "../src/shell/process-port.ts";
+import { callProxy, serveCalls } from "../src/shell/rpc.ts";
 import { usePathOwner } from "../src/shell/file-path.ts";
 import { notConnected } from "../src/jvm/natives/jthrowable.ts";
 import { descriptorTransport } from "../src/native/process-fd.ts";
@@ -328,7 +328,7 @@ describe("sqlite", () => {
     type Calls = { sqlite(request: SQLiteRequest): Promise<SQLiteReply> };
     const ports = new MessageChannel();
     const stop = serveCalls<Calls>(ports.port1, { sqlite: request => session.call(request) });
-    const proxy = callProxy<Calls>(ports.port2, ["sqlite"], [], error => rt.mkThrowable(error.javaClass ?? "java/lang/RuntimeException", error.message));
+    const proxy = callProxy<Calls>(ports.port2, ["sqlite"], { makeError: error => rt.mkThrowable(error.javaClass ?? "java/lang/RuntimeException", error.message) });
     sqliteTransport.call = request => proxy.endpoint.sqlite(request);
     let first: unknown, second: unknown;
     try {

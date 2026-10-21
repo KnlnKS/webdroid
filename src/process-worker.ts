@@ -17,8 +17,8 @@ async function prepare({ clock, jars, tier: ports }: Extract<ProcessWorkerMessag
   (await import("./guest-clock.ts")).attachGuestClockPort(clock);
   await import("./natives.ts");
   (await import("./android/framework.ts")).receivePlatformJars(jars);
-  const [control, port, core, apex, cacerts, packages, device, skia, tier, config, jvmruntime] = await Promise.all([
-    import("./shell/worker-control.ts"), import("./shell/process-port.ts"), import("./native/core.ts"), import("./shell/apex.ts"), import("./shell/cacerts.ts"), import("./shell/process-bootstrap.ts"),
+  const [control, rpc, core, apex, cacerts, packages, device, skia, tier, config, jvmruntime] = await Promise.all([
+    import("./shell/worker-control.ts"), import("./shell/rpc.ts"), import("./native/core.ts"), import("./shell/apex.ts"), import("./shell/cacerts.ts"), import("./shell/process-bootstrap.ts"),
     import("./shell/device.ts"), import("./android/skia.ts"), import("./jvm/tier.ts"), import("./shell/config.ts"), import("./jvm/natives/jvmruntime.ts"),
   ]);
   apex.mountPlatformData(); cacerts.mountSystemCertificates(); packages.prepareSystemPackages();
@@ -28,7 +28,7 @@ async function prepare({ clock, jars, tier: ports }: Extract<ProcessWorkerMessag
   // the zygote this process is forked from runs before its package is known, of the bitness the page chose by the package
   jvmruntime.setZygoteBitness(new URLSearchParams(location.search).get("abi") !== "32");
   void runtime.then(() => device.startZygote(rate.then((hz) => { config.device.refreshRate = hz; }))).catch(() => {});
-  return { control, port, core, packages, device, config, runtime };
+  return { control, rpc, core, packages, device, config, runtime };
 }
 
 let prepared: ReturnType<typeof prepare> | undefined, started = false;
@@ -43,7 +43,7 @@ globalThis.onmessage = async ({ data }: MessageEvent<ProcessWorkerMessage>) => {
     await attachWorkerBootstrap(data.bootstrap);
     const { processPresentation } = await import("./shell/process-endpoint.ts");
     processPresentation.visible = false;
-    closeControl = p.port.serveCalls(data.control, p.control.workerControl(logs, () => phase, p.control.countVsyncs()));
+    closeControl = p.rpc.serveCalls(data.control, p.control.workerControl(logs, () => phase, p.control.countVsyncs()));
     p.core.jitStats.on = new URLSearchParams(location.search).get("jit") !== "0";
     phase = "packages";
     const boot = await p.packages.loadProcessPackages(data.bootstrap);
@@ -61,8 +61,8 @@ globalThis.onmessage = async ({ data }: MessageEvent<ProcessWorkerMessage>) => {
     console.error("[process Worker]", data.bootstrap.pid, error);
     data.endpoint.close();
     closeProcessBootstrap(data.bootstrap);
-    const { processFailure } = await import("./shell/process-port.ts");
-    post({ kind: "failed", error: processFailure(error), logs: logs.slice() });
+    const { callFailure } = await import("./shell/rpc.ts");
+    post({ kind: "failed", error: callFailure(error), logs: logs.slice() });
     // Keep copied diagnostic state available until the page's explicit teardown.
     if (!closeControl) data.control.close();
   }

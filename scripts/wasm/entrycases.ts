@@ -5,7 +5,7 @@ import { JThrowable } from "../../src/jvm/natives/jthrowable.ts";
 import { boxDesc, unbox } from "../../src/jvm/natives/jbox.ts";
 import { JThread, callOn, classNameOf, iof, linkClass, newObj, scall, staticField, vcall } from "../../src/jvm/natives/jentry.ts";
 import { javaInterface } from "../../src/android/webjavabridge.ts";
-import { processFailure } from "../../src/shell/process-port.ts";
+import { callFailure } from "../../src/shell/rpc.ts";
 import { JAVA } from "./paths.ts";
 import { androidFixture } from "../java.ts";
 
@@ -95,7 +95,7 @@ export async function entryCases(): Promise<string[]> {
   await line("string receiver", () => vcall("abc", "length", "()I"));
   await line("boom", () => scall(E, "boom", "(I)I", -3));
   await line("process exception", async () => {
-    const error = processFailure(await caught(() => scall(E, "boom", "(I)I", -3)));
+    const error = callFailure(await caught(() => scall(E, "boom", "(I)I", -3)));
     return [error.javaClass, error.message];
   });
   await line("boom ok", () => scall(E, "boom", "(I)I", 3));

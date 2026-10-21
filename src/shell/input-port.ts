@@ -2,7 +2,7 @@
 // port, and the IME state it tells the page's text control on another.
 import type { ImeState } from "../android/ime.ts";
 import type { TouchPointer } from "./pointer-queue.ts";
-import { callProxy, methodsOf, serveCalls } from "./process-port.ts";
+import { callProxy, methodsOf, serveCalls } from "./rpc.ts";
 
 type ImeCalls = {
   input(generation: number, text: string, start: number, end: number, composing: boolean): Promise<void>;
@@ -19,7 +19,7 @@ export type ImeView = { state(state: ImeState): void };
  * again when its main-looper job runs, not merely when the message arrives. */
 export async function serveInput(input: MessagePort, view: MessagePort): Promise<() => void> {
   const [ime, { dispatchTouches }] = await Promise.all([import("../android/ime.ts"), import("./device.ts")]);
-  const page = callProxy<ImeView>(view, ["state"], ["state"]);
+  const page = callProxy<ImeView>(view, ["state"], { notifications: ["state"] });
   const changed = (state: ImeState) => page.endpoint.state(state);
   ime.imeTransport.changed = changed;
   const close = serveCalls<InputCalls>(input, {

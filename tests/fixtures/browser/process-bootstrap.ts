@@ -7,7 +7,7 @@ import { vfs } from "../../../src/shell/vfs.ts";
 import { packedArchives } from "../../../src/shell/packedarchive.ts";
 import { RemoteFile } from "../../../src/shell/remote-file.ts";
 import { guestClockControl, setSystemTimeout, wallMillis, bootTime, createGuestClockPort } from "../../../src/guest-clock.ts";
-import { callProxy } from "../../../src/shell/process-port.ts";
+import { callProxy } from "../../../src/shell/rpc.ts";
 import { sendFrames } from "../../../src/shell/frame-port.ts";
 import { attachPointerInput } from "../../../src/shell/pointer-input.ts";
 import { inputMethods, receiveIme, type InputCalls } from "../../../src/shell/input-port.ts";

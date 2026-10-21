@@ -17,7 +17,7 @@ import { cookieCalls } from "./cookie-access.ts";
 import { storageAccess, storageWrite } from "./device-storage.ts";
 import { canonicalFilePaths, isMutablePath, packageOfPath, sameUidOrSystem } from "./file-path.ts";
 import { hostUi, hostUiMethods, type HostUi } from "./host-ui.ts";
-import { serveCalls } from "./process-port.ts";
+import { serveCalls } from "./rpc.ts";
 import type { ProcessBroker } from "./processes.ts";
 
 type Methods = { [name: string]: Methods | ((...args: never[]) => unknown) };

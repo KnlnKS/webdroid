@@ -40,7 +40,7 @@ export async function attachWorkerBootstrap(data: ProcessBootstrap): Promise<Bro
 
 /** Publish only after package/JVM boot; transfer the peer port to the page's readyPort owner. */
 export async function serveWorkerEndpoint(port: MessagePort): Promise<() => void> {
-  const { closePort, serveProcess } = await import("./process-port.ts");
-  try { return serveProcess(port, (await import("./process-endpoint.ts")).createProcessEndpoint()); }
+  const { closePort, serveCalls } = await import("./rpc.ts");
+  try { return serveCalls(port, (await import("./process-endpoint.ts")).createProcessEndpoint()); }
   catch (error) { closePort(port); throw error; }
 }

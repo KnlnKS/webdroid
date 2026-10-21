@@ -13,7 +13,8 @@ import { vfs } from "../shell/vfs.ts";
 import { handle, deref, release } from "./handles.ts";
 import { NativeWindow, FIELD_INTEGER, FIELD_FLOAT, FIELD_STRING, FIELD_BLOB, sqliteException, noHandle, SQLITE_BUSY, SQLITE_LOCKED,
   SQLITE_INTERRUPT, SQLITE_CANTOPEN, SQLITE_TOOBIG, SQLITE_MISUSE, SQLITE_RANGE, SQLITE_ROW as ROW, SQLITE_DONE as DONE } from "./cursorwindow.ts";
-import { processFailure, processError, type ProcessFailure } from "../shell/process-port.ts";
+import { callFailure, type CallFailure } from "../shell/rpc.ts";
+import { javaFailure } from "../shell/broker-contract.ts";
 import type { PackageState } from "../shell/packagedata.ts";
 import { storedKeys, storedText, storeText } from "../shell/device-storage.ts";
 
@@ -321,7 +322,7 @@ type SQLiteValue = number | bigint | string | null | Int8Array | void;
 type WindowData = Pick<NativeWindow, "rows" | "cols" | "used" | "types" | "values">;
 export type SQLiteRequest = { family: SQLiteFamily; method: string; args: SQLiteValue[];
   window?: Pick<NativeWindow, "name" | "size" | "readOnly"> };
-export type SQLiteReply = { value: SQLiteValue; window?: WindowData; error?: ProcessFailure };
+export type SQLiteReply = { value: SQLiteValue; window?: WindowData; error?: CallFailure };
 export const sqliteTransport = { call: null as ((request: SQLiteRequest) => Promise<SQLiteReply>) | null };
 type NativeCall = (...args: never[]) => SQLiteValue | Promise<SQLiteValue>;
 type Handle = "connection" | "statement" | "window";
@@ -349,7 +350,7 @@ function registerSQLite(family: SQLiteFamily, cls: string, handles: Handle[], li
         args: window ? args.map((value, i) => i === at ? 0n : value) : args,
         ...(window ? { window: { name: window.name, size: window.size, readOnly: window.readOnly } } : {}) }));
       if (window && !window.readOnly && reply.window) Object.assign(window, reply.window);
-      if (reply.error) throw reply.error.javaClass ? rt.mkThrowable(reply.error.javaClass, reply.error.message) : processError(reply.error);
+      if (reply.error) throw javaFailure(reply.error);
       return reply.value;
     })];
   })));
@@ -413,7 +414,7 @@ export function createSQLiteSession() {
     } catch (error) {
       // Cursor filling mutates the window even when it throws (for example, an oversized row).
       if (!window) throw error;
-      return { value: undefined, window: windowData(), error: processFailure(error) };
+      return { value: undefined, window: windowData(), error: callFailure(error) };
     } finally { if (windowHandle !== undefined) release(windowHandle); }
   };
   const pump = () => {

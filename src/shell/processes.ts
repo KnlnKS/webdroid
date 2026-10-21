@@ -38,9 +38,9 @@ import { packedArchives } from "./packedarchive.ts";
 import { serveFile } from "./remote-file.ts";
 import { storageEntries } from "./device-storage.ts";
 import { bootstrapTransfers, type ProcessBootstrap } from "./process-bootstrap-data.ts";
-import { serveProcess, processProxy, processError, closePort } from "./process-port.ts";
+import { serveCalls, closePort } from "./rpc.ts";
 import { serveBrokerPort } from "./broker-port.ts";
-import { asBroker, forgetRemoved, permissionDenied, receivers, unawaited, type BroadcastData, type ProcessEndpoint, type Receiver } from "./broker-contract.ts";
+import { asBroker, forgetRemoved, permissionDenied, processProxy, receivers, unawaited, type BroadcastData, type ProcessEndpoint, type Receiver } from "./broker-contract.ts";
 
 export type { ProcessBootstrap } from "./process-bootstrap-data.ts";
 
@@ -234,7 +234,7 @@ export class ProcessBroker {
   ready(pid: number, endpoint: ProcessEndpoint): void {
     if (this.entry(pid).session.endpoint) return;
     const { port1, port2 } = new MessageChannel();
-    this.publishEndpoint(pid, port2, serveProcess(port1, endpoint));
+    this.publishEndpoint(pid, port2, serveCalls(port1, endpoint));
   }
   /** A Worker transfers its serving port here; the broker owns it until process death. */
   readyPort(pid: number, port: MessagePort): void { this.publishEndpoint(pid, port); }
@@ -242,8 +242,7 @@ export class ProcessBroker {
     try {
       const entry = this.entry(pid);
       if (entry.session.endpoint) { closePort(port); stop(); return; }
-      const proxy = processProxy(port, error => error.javaClass ? rt.mkThrowable(error.javaClass, error.message) : processError(error),
-        error => { if (!entry.dead) this.fail(pid, error.message ?? "Process endpoint closed", NOT_CRASHED); });
+      const proxy = processProxy(port, { onClose: error => { if (!entry.dead) this.fail(pid, error.message ?? "Process endpoint closed", NOT_CRASHED); } });
       entry.session.endpoint = () => { stop(); proxy.close(); };
       entry.resolve(proxy.endpoint);
     } catch (error) { closePort(port); stop(); throw error; }

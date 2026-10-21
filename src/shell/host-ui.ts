@@ -2,7 +2,7 @@
 // chooser, a browser tab and the print dialog. It needs the page's document and
 // the user's gesture there, so a process Worker reaches it through the broker.
 
-import { methodsOf } from "./process-port.ts";
+import { methodsOf } from "./rpc.ts";
 
 // lib.dom types the handles but not the pickers
 declare global {

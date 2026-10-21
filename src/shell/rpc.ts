@@ -1,5 +1,5 @@
+// Typed calls across a MessagePort: one side serves a contract's methods, the other calls them by name.
 import { note, Ev } from "../timeline.ts";
-import type { ProcessEndpoint } from "./broker-contract.ts";
 
 type Contract = Record<string, (...args: never[]) => unknown>;
 /** a contract's method names by domain, "" naming its own: a domain's are called as `domain.method` */
@@ -9,16 +9,15 @@ export const qualified = (methods: MethodTree): string[] =>
   Object.entries(methods).flatMap(([domain, names]) => domain ? names.map((name) => `${domain}.${name}`) : names);
 type Message = { kind: "call" | "notify"; id: number; method: string; args: unknown[] }
   | { kind: "result"; id: number; value: unknown }
-  | { kind: "error"; id: number; error: ProcessFailure } | { kind: "close"; error?: ProcessFailure };
+  | { kind: "error"; id: number; error: CallFailure } | { kind: "close"; error?: CallFailure };
 /** `names`, which must list every method of C; a proxy can only call the methods it names */
 export const methodsOf = <C extends Contract>() => <const L extends readonly (keyof C & string)[]>(
   names: L & ([Exclude<keyof C, L[number]>] extends [never] ? unknown : { missing: Exclude<keyof C, L[number]> })): L => names;
-const methods = methodsOf<ProcessEndpoint>()(["processDied", "activity", "transact", "service", "serviceConnected", "contentProvider", "broadcast", "cookiesChanged", "storageChanged", "packageRemoved", "kill"]);
 
-export type ProcessFailure = { javaClass: string | null; name: string; message: string | null; stack?: string };
+export type CallFailure = { javaClass: string | null; name: string; message: string | null; stack?: string };
 
 /** Java exceptions cross as class/message data, never as objects belonging to another VM. */
-export function processFailure(error: unknown): ProcessFailure {
+export function callFailure(error: unknown): CallFailure {
   if (error && typeof error === "object") {
     const explicit: unknown = Reflect.get(error, "$javaClass");
     const ctor: unknown = Reflect.get(error, "constructor"), info: unknown = typeof ctor === "function" ? Reflect.get(ctor, "$i") : null;
@@ -31,15 +30,15 @@ export function processFailure(error: unknown): ProcessFailure {
   }
   return { javaClass: null, name: "Error", message: String(error) };
 }
-export function processError(error: ProcessFailure): Error {
+export function callError(error: CallFailure): Error {
   const result = new Error(error.message ?? ""); result.name = error.javaClass ?? error.name;
   if (!error.javaClass && typeof error.stack === "string") result.stack = error.stack;
   return result;
 }
-const closedFailure: ProcessFailure = { javaClass: "android/os/DeadObjectException", name: "Error", message: "Process endpoint closed" };
+const closedFailure: CallFailure = { javaClass: "android/os/DeadObjectException", name: "Error", message: "Process endpoint closed" };
 /** closes `port` once its peer is told, with `error` as the reason; a port a failed transfer
  *  detached is only closed */
-export function closePort(port: MessagePort, error?: ProcessFailure): void {
+export function closePort(port: MessagePort, error?: CallFailure): void {
   try { port.postMessage({ kind: "close", error } satisfies Message); } catch { /* detached */ }
   port.close();
 }
@@ -65,7 +64,7 @@ export function serveCalls<C extends object>(port: MessagePort, endpoint: C, onC
   };
   serve(endpoint as Record<string, unknown>, "");
   let closed = false;
-  const close = (error?: ProcessFailure) => {
+  const close = (error?: CallFailure) => {
     if (closed) return;
     closed = true;
     closePort(port, error); onClose();
@@ -90,19 +89,26 @@ export function serveCalls<C extends object>(port: MessagePort, endpoint: C, onC
       else try { port.postMessage({ kind: "result", id: data.id, value } satisfies Message, given?.(value) ?? NONE); }
       catch (error) { await release?.(value); throw error; }
     } catch (error) {
-      if (data.kind === "notify") close(processFailure(error));
-      else if (!closed) port.postMessage({ kind: "error", id: data.id, error: processFailure(error) } satisfies Message);
+      if (data.kind === "notify") close(callFailure(error));
+      else if (!closed) port.postMessage({ kind: "error", id: data.id, error: callFailure(error) } satisfies Message);
     }
   });
   port.start();
   return close;
 }
 
-/** The proxy of an endpoint with the methods `names` lists, or with each domain of methods a tree lists. The caller supplies
- *  its own VM's exception constructor; `transfer` names what a call's arguments give away. */
+export type ProxyOptions<C> = {
+  /** the methods sent without a reply */
+  notifications?: readonly (keyof C & string)[];
+  /** the caller's own VM's exception for a failure */
+  makeError?: (error: CallFailure) => unknown;
+  onClose?: (error: CallFailure) => void;
+  /** what a call's arguments give away */
+  transfer?: ByArgs<C, Transferable[]>;
+};
+/** The proxy of an endpoint with the methods `names` lists, or with each domain of methods a tree lists. */
 export function callProxy<C extends object>(port: MessagePort, names: readonly (keyof C & string)[] | MethodTree,
-  notifications: readonly (keyof C & string)[] = [], makeError: (error: ProcessFailure) => unknown = processError,
-  onClose: (error: ProcessFailure) => void = () => {}, transfer: ByArgs<C, Transferable[]> = {}): { endpoint: C; close(): void } {
+  { notifications = [], makeError = callError, onClose = () => {}, transfer = {} }: ProxyOptions<C> = {}): { endpoint: C; close(): void } {
   let closed = false, nextId = 1;
   const pending = new Map<number, { resolve(value: unknown): void; reject(error: unknown): void; method: number }>();
   const finish = (error = closedFailure) => {
@@ -154,15 +160,9 @@ export function callProxy<C extends object>(port: MessagePort, names: readonly (
 /** `endpoint` served and `names` called over one port, so that messages keep one order both ways; either
  *  side's close closes both */
 export function duplex<S extends Contract, C extends Contract>(port: MessagePort, endpoint: S, names: readonly (keyof C & string)[],
-  notifications: readonly (keyof C & string)[], onClose: () => void, transfer: ByArgs<C, Transferable[]> = {}): { endpoint: C; close(): void } {
+  { onClose = () => {}, ...options }: Omit<ProxyOptions<C>, "makeError" | "onClose"> & { onClose?: () => void } = {}): { endpoint: C; close(): void } {
   let closed = false;
   const close = () => { if (closed) return; closed = true; stop(); proxy.close(); onClose(); };
-  const stop = serveCalls(port, endpoint, close), proxy = callProxy<C>(port, names, notifications, processError, close, transfer);
+  const stop = serveCalls(port, endpoint, close), proxy = callProxy<C>(port, names, { ...options, onClose: close });
   return { endpoint: proxy.endpoint, close };
-}
-
-export const serveProcess = (port: MessagePort, endpoint: ProcessEndpoint): (() => void) => serveCalls(port, endpoint);
-export function processProxy(port: MessagePort, makeError: (error: ProcessFailure) => unknown = processError,
-  onClose: (error: ProcessFailure) => void = () => {}): { endpoint: ProcessEndpoint; close(): void } {
-  return callProxy<ProcessEndpoint>(port, methods, ["kill"], makeError, onClose);
 }

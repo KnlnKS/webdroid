@@ -1,5 +1,5 @@
 import type { ControlledGuestClock } from "../guest-clock.ts";
-import { duplex, methodsOf } from "./process-port.ts";
+import { duplex, methodsOf } from "./rpc.ts";
 
 export type ClockBootstrap = { controlled: boolean; now: number; bootTime: number; wallAtStart: number; port?: MessagePort };
 export interface ClockClient {
@@ -28,7 +28,7 @@ export function serveClock(port: MessagePort, clock: ControlledGuestClock, realm
       if (at <= clock.nowMs) due();
     },
     cancel(id) { const timer = timers.get(id); if (timer !== undefined) clock.cancel(timer); timers.delete(id); },
-  }, ["tick"], [], () => { for (const timer of timers.values()) clock.cancel(timer); timers.clear(); onClose(); });
+  }, ["tick"], { onClose: () => { for (const timer of timers.values()) clock.cancel(timer); timers.clear(); onClose(); } });
   return { close: worker.close, synchronize: (now: number) => tick(now) };
 }
 
@@ -43,7 +43,7 @@ export function connectClock(data: ClockBootstrap): ClockClient | null {
     // a throwing callback is the realm's unhandled error, as a timer's is
     try { callback?.(); } catch (error) { void Promise.reject(error); }
     await Promise.resolve();
-  } }, clockMethods, clockMethods, () => { closed = true; timers.clear(); });
+  } }, clockMethods, { notifications: clockMethods, onClose: () => { closed = true; timers.clear(); } });
   return {
     get now() { return now; },
     close() { const count = timers.size; page.close(); return count; },

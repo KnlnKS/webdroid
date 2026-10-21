@@ -2,7 +2,7 @@
 // ends of its surfaces and its control port. The broker (processes.ts) registers the process and
 // answers the host's bootstrap; the Worker itself is process-worker.ts.
 import { bootstrapTransfers, closeProcessBootstrap, type ProcessBootstrap } from "./process-bootstrap-data.ts";
-import { callProxy, methodsOf, processError, type ProcessFailure } from "./process-port.ts";
+import { callProxy, methodsOf, type CallFailure } from "./rpc.ts";
 import type { WorkerControl } from "./worker-control.ts";
 import type { WorkerTerminal } from "./worker-diagnostics.ts";
 import { attachPointerInput } from "./pointer-input.ts";
@@ -26,7 +26,7 @@ import { WORKER_SCRIPTS } from "../worker-scripts.ts";
 export type ProcessWorkerMessage = { kind: "prestart"; clock: ClockBootstrap; jars: MessagePort; tier: TierPorts }
   | { kind: "rate"; rate: number } | { kind: "start"; bootstrap: ProcessBootstrap; endpoint: MessagePort; control: MessagePort };
 /** what a process Worker posts the page once its start succeeds or fails */
-export type ProcessWorkerStatus = { kind: "ready" } | { kind: "failed"; error: ProcessFailure; logs: string[] };
+export type ProcessWorkerStatus = { kind: "ready" } | { kind: "failed"; error: CallFailure; logs: string[] };
 const post = (worker: Worker, message: ProcessWorkerMessage, transfer: Transferable[] = []) => worker.postMessage(message, transfer);
 export const workerControlMethods = methodsOf<WorkerControl>()(["snapshot", "aotProfile", "codeReadiness", "demandMark", "demandSince", "alive", "uiTree", "tap", "swipe", "type", "enter", "imeState", "back", "testFrame", "timeline"]);
 
@@ -120,8 +120,8 @@ export class ProcessHost {
     canvas.hidden = true;
     canvas.style.cssText = "position:absolute;inset:0;width:100%;height:100%;border-radius:16px;z-index:1;touch-action:none";
     (document.getElementById("screen")?.parentElement ?? document.body).appendChild(canvas);
-    const client = callProxy<WorkerControl>(this.controlPorts.port1, workerControlMethods, [], processError,
-      error => this.fail(error.message ?? "Process Worker control closed"));
+    const client = callProxy<WorkerControl>(this.controlPorts.port1, workerControlMethods,
+      { onClose: error => this.fail(error.message ?? "Process Worker control closed") });
     this.control = client.endpoint;
     this.ends.push(client.close);
     window.addEventListener("pagehide", this.pagehide, { once: true });
