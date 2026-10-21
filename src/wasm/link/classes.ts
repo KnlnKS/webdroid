@@ -23,6 +23,7 @@ import { fieldCookie } from "./unsafe.ts";
 import { Lookup, LOADER_OF_CLASS, emitClassAnswer } from "./loaders.ts";
 import { emitRestored } from "../compiler/hostcalls.ts";
 import { Info } from "../compiler/info.ts";
+import { FIELD_INDEX_MAX, emitFieldId, fieldClass, fieldIdOf, fieldIndex, splitFieldId } from "../compiler/fieldid.ts";
 
 const CLASS = "java/lang/Class", OBJ_ARRAY = "[Ljava/lang/Object;", FIELD = "java/lang/reflect/Field", FIELD_ARRAY = "[Ljava/lang/reflect/Field;";
 const CLONEABLE = ["java/lang/Cloneable", "java/io/Serializable"];
@@ -62,7 +63,9 @@ export function hostInfo(w: World, kind: number, a: number, b: number): number {
     case Info.Inner: return innerFlags(jc);
     // ObjectStreamClass.hasStaticInitializer: a <clinit> of the class, or with b set of a superclass
     case Info.HasClinit: { for (let k = jc; k; k = b && k.sup ? w.prog.get(k.sup) : undefined) if (k.byKey.has("<clinit>()V")) return 1; return 0; }
-    case Info.FieldOffset: return fieldCookie(w, a << 12 | b);
+    case Info.FieldOffset:
+      if (b > FIELD_INDEX_MAX) throw w.exception(w.helpers.makeThrowable("java/lang/InternalError", `${javaName(name)} declares field ${b}, past the ${FIELD_INDEX_MAX + 1} a field id can name`));
+      return fieldCookie(w, fieldIdOf(a, b));
     case Info.NameLen: return javaName(name).length;
     case Info.NameChar: return javaName(name).charCodeAt(b);
     case Info.NFields: return fields.length;
@@ -71,7 +74,7 @@ export function hostInfo(w: World, kind: number, a: number, b: number): number {
     case Info.FieldType: return w.idOf(typeName(fields[b].desc));
     case Info.FieldFlags: return fields[b].flags;
     case Info.FieldDesc: return fields[b].desc.charCodeAt(0);
-    case Info.CanAccess: { const decl = w.prog.get(w.nameOf(b >>> 12))!; return +canAccess(w.prog, w.nameOf(a), decl, decl.fields[b & 0xfff].flags); }
+    case Info.CanAccess: { const decl = w.prog.get(w.nameOf(fieldClass(b)))!; return +canAccess(w.prog, w.nameOf(a), decl, decl.fields[fieldIndex(b)].flags); }
     case Info.AllocSlot: return !jc || jc.isInterface || jc.flags & ACC.ABSTRACT || !jc.byKey.has("<init>()V") ? 0 : w.synthSlot("new:" + name);
     case Info.CloneSlot: return !jc || jc.isInterface || jc.flags & ACC.ABSTRACT ? 0 : w.synthSlot("clone:" + name);
     case Info.EnsureSlot: return jc ? w.ensureSlot(name) : 0;           // an array class has nothing to initialize
@@ -206,13 +209,13 @@ rt("initFail", ["L"], "V", (cx, c) => {
   c.lget(w).throw_(cx.tag);
 });
 
-// ---------- reflection on declared fields: Field objects carry the field id (class id << 12 | index) in artFieldIndex and offset
+// ---------- reflection on declared fields: Field objects carry the field id (compiler/fieldid.ts) in artFieldIndex and offset
 rt("mkField", ["I", "I"], "L", (cx, c) => {
   const fs = cx.structFor(FIELD), f = c.newLocal(cx.vtOf("L")), o = c.newLocal(refNull(fs)), id = c.newLocal(T.i32);
   const fi = (name: string, d: string) => cx.fieldIndex(FIELD, { owner: FIELD, name, desc: d });
   const info = (kind: number) => cx.info(c, kind, () => c.lget(0), () => c.lget(1));
   cx.emitNew(c, FIELD); c.lset(f).lget(f).refCast(fs).lset(o);
-  c.lget(0).i32(12).raw(OP.i32_shl).lget(1).raw(OP.i32_or).lset(id);
+  emitFieldId(c, 0, 1); c.lset(id);
   c.lget(o).lget(0); cx.callRt(c, "classOf"); c.structSet(fs, fi("declaringClass", "Ljava/lang/Class;"));
   c.lget(o); info(Info.FieldType); cx.callRt(c, "classOf"); c.structSet(fs, fi("type", "Ljava/lang/Class;"));
   c.lget(o); info(Info.FieldFlags); c.structSet(fs, fi("accessFlags", "I"));
@@ -388,7 +391,7 @@ export const fieldId = (cx: Compiler, c: Code) => { const fs = cx.structFor(FIEL
 def("java/lang/reflect/Field.getArtField()J", (cx, c) => { c.lget(0); fieldId(cx, c); c.raw(OP.i64_extend_i32_u); });
 def("java/lang/reflect/Field.getNameInternal()Ljava/lang/String;", (cx, c) => {
   const cid = c.newLocal(T.i32), k = c.newLocal(T.i32);
-  c.lget(0); fieldId(cx, c); c.ltee(k).i32(12).raw(OP.i32_shr_u).lset(cid).lget(k).i32(0xfff).raw(OP.i32_and).lset(k);
+  c.lget(0); fieldId(cx, c); c.lset(k); splitFieldId(c, k, cid, k);
   emitString(cx, c, () => cx.info(c, Info.FieldNameLen, () => c.lget(cid), () => c.lget(k)),
     (j) => cx.info(c, Info.FieldNameChar, () => c.lget(cid), () => c.lget(k).i32(16).raw(OP.i32_shl).lget(j).raw(OP.i32_or)));
 });

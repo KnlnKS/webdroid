@@ -15,6 +15,7 @@ import { PerWorld } from "./perworld.ts";
 import { type Strand } from "./sched.ts";
 import { HT, T } from "../compiler/wasmbin.ts";
 import { emitRestored, emitSettled } from "../compiler/hostcalls.ts";
+import { fieldClass, fieldIndex } from "../compiler/fieldid.ts";
 
 const FACTORY = "libcore/reflect/AnnotationFactory", MEMBER = "libcore/reflect/AnnotationMember";
 const ANNOTATION_DEFAULT = "dalvik/annotation/AnnotationDefault", SIGNATURE = "dalvik/annotation/Signature", PERMITTED = "dalvik/annotation/PermittedSubclasses";
@@ -42,8 +43,8 @@ function elementOf(w: World, kind: number, a: number): { set: EncAnnotation[]; p
   const element = ELEMENT[kind as Ann];
   if (element === Element.Class) { const jc = classOf(a); return { set: jc?.dex && jc.def ? w.prog.typesOf(jc.dex).classAnnotations(jc.def).cls : [] }; }
   if (element === Element.Field) {
-    const jc = classOf(a >>> 12)!, ids = jc.def ? [...jc.def.staticFields, ...jc.def.instanceFields] : [];
-    return { set: jc.def ? w.prog.typesOf(jc.dex!).classAnnotations(jc.def).fields.get(ids[a & 0xfff].fieldIdx) ?? [] : [] };
+    const jc = classOf(fieldClass(a))!, ids = jc.def ? [...jc.def.staticFields, ...jc.def.instanceFields] : [];
+    return { set: jc.def ? w.prog.typesOf(jc.dex!).classAnnotations(jc.def).fields.get(ids[fieldIndex(a)].fieldIdx) ?? [] : [] };
   }
   const m = methodAt(w, a), jc = w.prog.get(m.cls)!, all = jc.def ? w.prog.typesOf(jc.dex!).classAnnotations(jc.def) : undefined;
   return { set: all?.methods.get(m.methodIdx) ?? [], params: all?.params.get(m.methodIdx) };

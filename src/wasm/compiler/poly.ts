@@ -12,6 +12,7 @@ import type { MC } from "./method.ts";
 import { emitHandleCall } from "./handles.ts";
 import { Info, UInfo } from "./info.ts";
 import { valueKind, I as KI, F as KF, D as KD, R as KR } from "./infer.ts";
+import { FIELD_INDEX_MAX, fieldIdOf, splitFieldId } from "./fieldid.ts";
 
 const VH = "java/lang/invoke/VarHandle", FVH = "java/lang/invoke/FieldVarHandle", MAX_CANDIDATES = 64;
 type Op = "get" | "set" | "cas" | "cae" | "getAndSet" | "getAndAdd" | "getAndBitwiseOr" | "getAndBitwiseAnd" | "getAndBitwiseXor";
@@ -162,7 +163,7 @@ export function emitVarHandleAccess(cx: Compiler, c: Code, mode: string, params:
     for (const cn of stat ? [] : cx.prog.chain(R)) {
       const jc = cx.prog.get(cn);
       if (!jc?.def || jc.isInterface) continue;
-      jc.fields.forEach((f, i) => { if (!f.isStatic && valueKind(f.desc) === vf && i < 1 << 12) cands.push({ cn, fid: cx.idOf(cn) << 12 | i, f, fi: cx.fieldIndex(cn, f) }); });
+      jc.fields.forEach((f, i) => { if (!f.isStatic && valueKind(f.desc) === vf && i <= FIELD_INDEX_MAX) cands.push({ cn, fid: fieldIdOf(cx.idOf(cn), i), f, fi: cx.fieldIndex(cn, f) }); });
     }
     if (R === "java/lang/Void") { cx.callThrower(c, "npe"); c.unreachable(); }        // the receiver is the literal null
     else if (cands.length && cands.length <= MAX_CANDIDATES) {
@@ -186,7 +187,9 @@ export function emitVarHandleAccess(cx: Compiler, c: Code, mode: string, params:
       if (!stat) { nonNull(() => read("L", 0)); c.lset(recv); }
       const vals = readValues();
       fieldId(vh, fid);
-      const owner = () => c.lget(fid).i32(12).raw(OP.i32_shr_u), index = () => c.lget(fid).i32(0xfff).raw(OP.i32_and);
+      const ownerId = c.newLocal(T.i32), indexIn = c.newLocal(T.i32);
+      splitFieldId(c, fid, ownerId, indexIn);
+      const owner = () => c.lget(ownerId), index = () => c.lget(indexIn);
       if (stat) { cx.info(c, Info.EnsureSlot, owner); c.callIndirect(cx.sig([], "V")); }
       else {
         owner(); cx.callRt(c, "classOf"); c.lget(recv); cx.callNamed(c, "java/lang/Class", "isInstance", "(Ljava/lang/Object;)Z");

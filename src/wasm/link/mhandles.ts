@@ -22,6 +22,7 @@ import { invokeCustom } from "./callsites.ts";
 import { RInfo } from "../compiler/info.ts";
 import { MethodHandleType } from "../../jvm/dex.ts";
 import { chain } from "./maybe.ts";
+import { fieldClass, fieldIndex } from "../compiler/fieldid.ts";
 
 /** what a handle invocation answers: the boxed result, or the Promise of it when the call waited */
 type Answer = object | null | Promise<object | null>;
@@ -201,9 +202,9 @@ function invokeVarHandle(w: World, args: object, art: bigint, exact: boolean, pa
   });
 }
 
-/** the generated accessor of field `id` (class id << 12 | index) on boxed values: get(obj?) answers the boxed value, put(obj?, value) stores it */
+/** the generated accessor of field `id` on boxed values: get(obj?) answers the boxed value, put(obj?, value) stores it */
 function fieldAccess(w: World, id: number, put: boolean, stat: boolean, parent: Strand): (...a: (object | null)[]) => unknown {
-  const jc = w.prog.get(w.nameOf(id >>> 12))!, f = jc.fields[id & 0xfff];
+  const jc = w.prog.get(w.nameOf(fieldClass(id)))!, f = jc.fields[fieldIndex(id)];
   return handleThunk(w, `mh:${put ? "put" : "get"}:${id}`, [...stat ? [] : ["L" as const], ...put ? ["L" as const] : []], put ? "V" : "L", (cx, c, arg) => {
     const st = cx.structFor(jc.name), at = stat ? -1 : cx.fieldIndex(jc.name, f), value = stat ? 0 : 1;
     if (stat) cx.emitEnsure(c, jc.name);

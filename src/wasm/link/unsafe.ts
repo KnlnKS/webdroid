@@ -21,10 +21,11 @@ import { idOfClass } from "./classes.ts";
 import { rt } from "../compiler/rtfns.ts";
 import { nativeLeaf } from "./memory.ts";
 import { UInfo } from "../compiler/info.ts";
+import { fieldClass, fieldIndex } from "../compiler/fieldid.ts";
 
 /** the first array element's offset, above every field id */
 const ARRAY_BASE = 1 << 30;
-/** the offsets handed out for fields, small so that a library which keeps them in 20 bits finds them again: field id (class id << 12 | index) to offset and back */
+/** the offsets handed out for fields, small so that a library which keeps them in 20 bits finds them again: field id to offset and back */
 const cookies = new PerWorld(() => ({ ofField: new Map<number, number>(), fields: [] as number[] }));
 export function fieldCookie(w: World, id: number): number {
   const t = cookies.get(w);
@@ -43,18 +44,18 @@ const desc = (t: Ty) => (t === "L" ? "Ljava/lang/Object;" : t);
 export function hostUnsafe(w: World, kind: number, a: number, b: number): number {
   // the offset of an Unsafe access names its field by the number fieldCookie gave it; reflection passes the field's id itself
   if (kind >= UInfo.ObjGet && (a = cookies.peek(w)?.fields[a / 8 - 1] ?? -1) < 0) return 0;
-  const name = w.nameOf(kind === UInfo.AllocInstance || kind === UInfo.ComponentScale ? a : a >>> 12);
+  const name = w.nameOf(kind === UInfo.AllocInstance || kind === UInfo.ComponentScale ? a : fieldClass(a));
   if (kind === UInfo.ComponentScale) return name[0] === "#" ? PRIMS[name[1]]?.size ?? 0 : 4;
   if (kind === UInfo.AllocInstance) {
     const jc = w.prog.get(name);
     return !jc || jc.isInterface ? 0 : w.synthSlot("alloc:" + name, undefined, true);
   }
   const stat = kind === UInfo.StaticGet || kind === UInfo.StaticPut;
-  const f = w.prog.get(name)?.fields[a & 0xfff];
+  const f = w.prog.get(name)?.fields[fieldIndex(a)];
   if (!f || f.isStatic !== stat || f.kind !== (["I", "J", "L"] as const)[b]) return 0;
   const op = kind === UInfo.FieldGet || kind === UInfo.StaticGet || kind === UInfo.ObjGet ? "get" : kind === UInfo.FieldPut || kind === UInfo.StaticPut || kind === UInfo.ObjPut ? "put" : "cas";
   // Field accessor bodies are pure; they are installed before their slot is returned so linking cannot split a VarHandle update
-  return w.synthSlot(`uf:${stat ? "s" : ""}${op}:${name}:${a & 0xfff}`, undefined, true);
+  return w.synthSlot(`uf:${stat ? "s" : ""}${op}:${name}:${fieldIndex(a)}`, undefined, true);
 }
 synthFamily("alloc", (_w, name) => ({ params: [], ret: "L", body: (cx, c) => { cx.emitEnsure(c, name); cx.emitNew(c, name); } }), true);
 // uf:<op>:<class>:<field index>, op get, put or cas, or sget or sput for a static field

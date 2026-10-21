@@ -1,6 +1,6 @@
 // What a class's dex says about its members: java.lang.Class's simple name and nesting, the declared methods and constructors as Method and Constructor
 // arrays, and which annotations a class, method or field carries (art/runtime/native/java_lang_Class.cc, dex_file_annotations.cc). The members of a
-// class are named as reflect.ts names them: Executable.artMethod = class id << 16 | index in the class's methods, Field.artFieldIndex = class id << 12 | index in its fields.
+// class are named as reflect.ts names them: Executable.artMethod = class id << 16 | index in the class's methods, Field.artFieldIndex = its id (compiler/fieldid.ts).
 import { OP } from "../compiler/code.ts";
 import { T } from "../compiler/wasmbin.ts";
 import { ACC, javaName, type JClass, typeName } from "../compiler/program.ts";
@@ -14,6 +14,7 @@ import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
 import type { World } from "./world.ts";
 import { MInfo } from "../compiler/info.ts";
 import { PerWorld } from "./perworld.ts";
+import { fieldClass, fieldIndex } from "../compiler/fieldid.ts";
 
 const METHOD_ARRAY = "[Ljava/lang/reflect/Method;", CTOR_ARRAY = "[Ljava/lang/reflect/Constructor;";
 const INNER = "dalvik/annotation/InnerClass", ENCLOSING_CLASS = "dalvik/annotation/EnclosingClass", ENCLOSING_METHOD = "dalvik/annotation/EnclosingMethod";
@@ -49,8 +50,8 @@ export function hostMembers(w: World, kind: number, a: number, b: number): numbe
     case MInfo.ClassAnn: return +present(annotationsOf(w, cls(a))?.cls, w.nameOf(b));
     case MInfo.ExecAnn: { const m = methodAt(w, b); return +present(annotationsOf(w, w.prog.get(m.cls))?.methods.get(m.methodIdx), w.nameOf(a)); }
     case MInfo.FieldAnn: {
-      const jc = cls(b >>> 12)!, ids = [...jc.def!.staticFields, ...jc.def!.instanceFields];
-      return +present(annotationsOf(w, jc)?.fields.get(ids[b & 0xfff].fieldIdx), w.nameOf(a));
+      const jc = cls(fieldClass(b))!, ids = [...jc.def!.staticFields, ...jc.def!.instanceFields];
+      return +present(annotationsOf(w, jc)?.fields.get(ids[fieldIndex(b)].fieldIdx), w.nameOf(a));
     }
     case MInfo.CompareParams: {
       // the parameter lists of two methods (cookies a and b) by length, then by the class ids of their types: 0 when they agree

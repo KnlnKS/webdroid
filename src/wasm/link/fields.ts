@@ -1,5 +1,5 @@
 // java.lang.reflect.Field's get and set natives (art/runtime/native/java_lang_reflect_Field.cc). A field is named by the id in its artFieldIndex
-// (class id << 12 | index in the class's fields, classes.ts mkField); the host hands out a generated accessor slot per field and operation
+// (compiler/fieldid.ts); the host hands out a generated accessor slot per field and operation
 // (unsafe.ts), for static fields as well, so the natives only choose the accessor by the field's type letter. Primitive reads and writes widen
 // as the language does (a getLong of an int field, a setInt of a long field is not allowed), and a receiver, access or final check precedes them.
 import { OP } from "../compiler/code.ts";
@@ -12,6 +12,7 @@ import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
 import { Info, UInfo } from "../compiler/info.ts";
 import { BOX, WIDEN } from "../compiler/primitives.ts";
 import { PRIMS } from "../../jvm/abi.ts";
+import { splitFieldId } from "../compiler/fieldid.ts";
 
 const FIELD = "java/lang/reflect/Field", ACCESSIBLE = "java/lang/reflect/AccessibleObject";
 const LETTERS = Object.keys(PRIMS);
@@ -21,7 +22,7 @@ const code = (l: string) => l.charCodeAt(0);
 function describe(cx: Compiler, c: Code, given?: number, flagsOnly = false) {
   const id = given ?? c.newLocal(T.i32), cid = c.newLocal(T.i32), idx = c.newLocal(T.i32), flags = c.newLocal(T.i32), letter = flagsOnly ? -1 : c.newLocal(T.i32);
   if (given === undefined) c.lset(id);
-  c.lget(id).i32(12).raw(OP.i32_shr_u).lset(cid).lget(id).i32(0xfff).raw(OP.i32_and).lset(idx);
+  splitFieldId(c, id, cid, idx);
   cx.info(c, Info.FieldFlags, () => c.lget(cid), () => c.lget(idx)); c.lset(flags);
   if (!flagsOnly) { cx.info(c, Info.FieldDesc, () => c.lget(cid), () => c.lget(idx)); c.lset(letter); }
   return { id, cid, idx, flags, letter };
