@@ -12,10 +12,12 @@
 // finds only what that spec declares. android/view/View is a clean cut because its super is
 // java/lang/Object, which has no fields.
 
+import { switchValue } from "../switches.ts";
+
 /** `?bytecode=android/graphics/text/,android/graphics/fonts/` (headless: WEBDROID_BYTECODE) cuts
  *  those prefixes over too for one page load, so a further cut can be A/B'd against the same bundle
  *  — by the e2e driver, by a comparison script, or by hand — without an edit and a rebuild. */
-const fromUrl = typeof location !== "undefined" ? new URLSearchParams(location.search).get("bytecode")
+const fromUrl = typeof location !== "undefined" ? switchValue("bytecode") ?? null
   : typeof process !== "undefined" ? process.env.WEBDROID_BYTECODE ?? null : null;
 
 /** Stage D's coupled set: the application framework (ActivityThread, Activity, ContextImpl), the

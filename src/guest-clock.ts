@@ -1,5 +1,6 @@
 import { processExited } from "./process-exit.ts";
 import { connectClock, serveClock, type ClockBootstrap, type ClockClient } from "./shell/clock-port.ts";
+import { switchValue } from "./switches.ts";
 
 export type GuestTimer = ReturnType<typeof setTimeout> | number;
 
@@ -142,7 +143,7 @@ export class ControlledGuestClock {
 }
 
 const browser = typeof location !== "undefined" && typeof window !== "undefined";
-const controlledGuestTime = browser && new URLSearchParams(location.search).get("testClock") === "controlled";
+const controlledGuestTime = browser && switchValue("testClock") === "controlled";
 const clock = controlledGuestTime
   ? new ControlledGuestClock(performance.now())
   : null;

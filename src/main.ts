@@ -42,8 +42,7 @@ import { device } from "./shell/config.ts";
 import { bootSystemOwner, prepareWorkerInstall } from "./shell/system-boot.ts";
 import { hasFocusedWindow, hasTouchWindow } from "./android/server/wm.ts";
 import { systemInputLayer } from "./shell/system-input.ts";
-
-const params = new URLSearchParams(location.search);
+import { switchOn, switchValue } from "./switches.ts";
 
 const back = async () => {
   if (hasFocusedWindow()) { await pressBack(); return; }
@@ -70,7 +69,7 @@ if (process.env.NODE_ENV !== "production") {
   mountDiagnostics(document.querySelector<HTMLElement>("#side")!);
   void fetch("/apks").then((r) => r.json() as Promise<string[]>).catch(() => [] as string[]).then((files) => {
     for (const file of files) shell.addPackage(file);
-    const auto = params.get("apk");
+    const auto = switchValue("apk");
     if (auto && files.includes(auto)) void boot(auto);
   });
 }
@@ -132,7 +131,7 @@ async function boot(file: string, local?: File) {
     await Promise.all([launch(), bootSystemOwner()]);
     perf.bootMs = performance.now() - t0;
     // other packages' processes start once the app has shown its first frame
-    void broker.presented(started.pid).then(() => provisionServices({ attestationEnabled: params.get("attestation") === "1" }))
+    void broker.presented(started.pid).then(() => provisionServices({ attestationEnabled: switchOn("attestation", false) }))
       .then(() => broker.boot()).catch(error => console.error("[provision]", error));
   } catch (e) {
     rollbackAssets?.();
@@ -153,7 +152,7 @@ const control = (x?: number, y?: number): WorkerControl => {
 };
 
 // `?jit=0` runs the interpreter alone, to tell the tiers apart
-jitStats.on = params.get("jit") !== "0";
+jitStats.on = switchOn("jit", true);
 
 /** Dev-console and e2e-driver surface; tests/e2e/drivers/webdroid.ts fires these by name. A realm's own
  *  input, frames and reads are its WorkerControl: `page`, `control(x, y)`'s or `foreground()`'s. */
@@ -235,7 +234,7 @@ mountPlatformData();
 
 // system_server boots while the page waits for a package to open, as a device's does before any app launches. A page opened for
 // an app boots it once the app's process has its package: the page serves that process's code meanwhile.
-if (!params.has("apk")) {
+if (switchValue("apk") === undefined) {
   void startZygote(displayRate());
   void provisionPackages().then(bootSystemOwner).catch(() => {});
 }

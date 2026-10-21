@@ -3,6 +3,7 @@ import { attachWorkerBootstrap, serveWorkerEndpoint } from "./shell/worker-boots
 import { closeProcessBootstrap } from "./shell/process-bootstrap-data.ts";
 import type { ProcessWorkerMessage, ProcessWorkerStatus } from "./shell/process-host.ts";
 import type { WorkerPhase } from "./shell/worker-control.ts";
+import { switchOn, switchValue } from "./switches.ts";
 
 // The page spawns this Worker before it knows the package, as a zygote forks an unspecialized child: the
 // clock comes first, then the runtime loads while the page opens the package the bootstrap carries.
@@ -27,7 +28,7 @@ async function prepare({ clock, jars, tier: ports }: Extract<ProcessWorkerMessag
   const runtime = Promise.all([skia.loadSkia(), tier.loadTier()]);
   void runtime.catch(() => {});
   // the zygote this process is forked from runs before its package is known, of the bitness the page chose by the package
-  jvmruntime.setZygoteBitness(new URLSearchParams(location.search).get("abi") !== "32");
+  jvmruntime.setZygoteBitness(switchValue("abi") !== "32");
   void runtime.then(() => device.startZygote(rate.then((hz) => { config.device.refreshRate = hz; }))).catch(() => {});
   return { control, rpc, core, packages, device, config, runtime };
 }
@@ -45,7 +46,7 @@ globalThis.onmessage = async ({ data }: MessageEvent<ProcessWorkerMessage>) => {
     const { processPresentation } = await import("./shell/process-endpoint.ts");
     processPresentation.visible = false;
     closeControl = p.rpc.serveCalls(data.control, p.control.workerControl(logs, () => phase, p.control.countVsyncs()));
-    p.core.jitStats.on = new URLSearchParams(location.search).get("jit") !== "0";
+    p.core.jitStats.on = switchOn("jit", true);
     phase = "packages";
     const boot = await p.packages.loadProcessPackages(data.bootstrap);
     if (!boot) throw new Error("Process package unavailable");

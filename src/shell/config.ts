@@ -6,6 +6,7 @@
  */
 import { DEVICE_PROPERTIES } from "./device-properties.ts";
 import { storedText, storeText } from "./device-storage.ts";
+import { switchValue } from "../switches.ts";
 
 /** AOSP DisplayMetrics.DENSITY_DEFAULT: the dpi at which one dp is one px. */
 const DENSITY_DEFAULT = 160;
@@ -61,15 +62,14 @@ export const storeScreen = (s: Screen | null): void => { storeText(SCREEN_KEY, s
 
 /** A per-run pin beats a persisted preference, so an e2e run scores the geometry it asked for. */
 function resolveScreen(): Screen {
-  const url = typeof location !== "undefined" ? new URLSearchParams(location.search).get("screen") : null;
+  const url = switchValue("screen") ?? null;
   const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.WEBDROID_SCREEN;
   return parseScreen(url) ?? parseScreen(env) ?? parseScreen(storedText(SCREEN_KEY)) ?? DEFAULT;
 }
 
 const screen = resolveScreen();
-const query = typeof location === "undefined" ? null : new URLSearchParams(location.search);
-const statusBarDp = Number(query?.get("statusBarDp") ?? 0);
-const pinnedHz = Number(query?.get("hz"));
+const statusBarDp = Number(switchValue("statusBarDp") ?? 0);
+const pinnedHz = Number(switchValue("hz"));
 
 export const device = {
   width: screen.width,

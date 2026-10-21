@@ -20,6 +20,7 @@ import { inputMethods, receiveIme, type InputCalls } from "./input-port.ts";
 import { receiveMedia } from "./media-port.ts";
 import { receiveWebSurfaces } from "./web-surface-port.ts";
 import { WORKER_SCRIPTS } from "../worker-scripts.ts";
+import { switches } from "../switches.ts";
 
 /** what the page posts a process Worker: its prestart once spawned, the display's rate once
  *  measured, and its one start */
@@ -33,7 +34,7 @@ export const workerControlMethods = methodsOf<WorkerControl>()(["snapshot", "aot
 export type SpareWorker = { pid: number; url: string; worker: Worker; release(): void; error?: string };
 /** the URL of a process Worker; `wide` picks the bitness of the zygote it runs (process-worker.ts) */
 function workerUrl(pid: number, wide: boolean): string {
-  const params = new URLSearchParams(location.search);
+  const params = switches();
   params.set("pid", String(pid)); params.set("screen", formatScreen(device)); params.set("statusBarDp", String(device.statusBarDp));
   if (!wide) params.set("abi", "32");
   return new URL(WORKER_SCRIPTS.process.url + "?" + params, location.href).href;
