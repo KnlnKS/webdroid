@@ -124,7 +124,7 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
       (hostUi()[name] as (...args: never[]) => unknown)(...args)])) as unknown as HostUi,
     serviceConnected: (key, binder, dead) => broker.serviceConnected(pid, key, binder, dead),
     systemService: async name => {
-      if (!SYSTEM_SERVICES.includes(name)) throw rt.mkThrowable("java/lang/SecurityException", "Unsupported canonical service lookup");
+      if (!SYSTEM_SERVICES.has(name)) throw rt.mkThrowable("java/lang/SecurityException", "Unsupported canonical service lookup");
       const handle = await asSystem(() => ownedSystemService(name));
       broker.entry(pid);
       return handle;

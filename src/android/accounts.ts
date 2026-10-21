@@ -264,7 +264,7 @@ hostService("account", "webdroid/AccountManagerService", "android/accounts/IAcco
     const renamed = s && (yield* awaited(accountAccess.accountChange({ kind: "rename", key: s, name })));
     yield reply(response, yield* bundle(renamed ? { authAccount: name, accountType: s!.type } : {}));
   }),
-});
+}, { system: true });
 
 function* addExplicitly(account: JObj, password: string | null, extras: JObj | null, visibility: JObj | null): Gen<number> {
   if (yield* awaited(owned(account))) return 0;

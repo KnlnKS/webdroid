@@ -8,7 +8,7 @@ import { rt, JObj, noops, stubs, declaredField, driven, getDeclared, type Gen } 
 import { jarray } from "../jvm/abi.ts";
 import { newObj, scall, vcall } from "../jvm/natives/jentry.ts";
 import { newArrayList } from "../jvm/natives/jcoll.ts";
-import { callingIdentity, hostStub, onCallerDeath, oneway, type Caller } from "./binder.ts";
+import { callingIdentity, hostService, onCallerDeath, oneway, type Caller } from "./binder.ts";
 import { newAudioSessionId, outputSampleRate } from "./audio-output.ts";
 
 /** [min, max, index] by stream type, STREAM_VOICE_CALL..STREAM_ASSISTANT */
@@ -92,7 +92,7 @@ function died(pid: number) {
 }
 /** each uid's allowed capture policy, ALLOW_CAPTURE_BY_ALL until it sets one */
 const capturePolicies = new Map<number, number>();
-rt.register({ name: "webdroid/AudioService", ctor: class extends JObj {}, sup: "android/media/IAudioService$Stub", methods: {
+hostService("audio", "webdroid/AudioService", "android/media/IAudioService$Stub", {
   "getStreamVolume(I)I": streamVolume,
   "getStreamMaxVolume(I)I": streamMaxVolume,
   "getStreamMinVolume(I)I": (stream: number) => volumeOf(stream)[0],
@@ -162,8 +162,7 @@ rt.register({ name: "webdroid/AudioService", ctor: class extends JObj {}, sup: "
   "playerSessionId(II)V": () => {},
   // the mode stays MODE_NORMAL, so no mode change is ever dispatched
   ...noops("registerModeDispatcher(Landroid/media/IAudioModeDispatcher;)V", "unregisterModeDispatcher(Landroid/media/IAudioModeDispatcher;)V"),
-} });
-hostStub("audio", "webdroid/AudioService");
+}, { system: true });
 
 // AudioPortEventHandler's native half: the port and patch lists never change, so no event is posted
 rt.registerJnis("android/media/AudioPortEventHandler", { "native_setup(Ljava/lang/Object;)V": () => {}, "native_finalize()V": () => {} });
@@ -247,7 +246,7 @@ rt.registerJnis("android/media/audiopolicy/AudioProductStrategy", {
 // global state holds no routes (dumpsys media_router on the reference AVD: routes=[]) and an app
 // has only the default audio and video route MediaRouter makes itself
 const MRC = "Landroid/media/IMediaRouterClient;";
-rt.register({ name: "webdroid/MediaRouterService", ctor: class extends JObj {}, sup: "android/media/IMediaRouterService$Stub", methods: {
+hostService("media_router", "webdroid/MediaRouterService", "android/media/IMediaRouterService$Stub", {
   [`getState(${MRC})Landroid/media/MediaRouterClientState;`]: () => newObj("android/media/MediaRouterClientState"),
   // AudioPlayerStateMonitor's view of the client's uid: its own started players
   [`isPlaybackActive(${MRC})Z`]: () => {
@@ -256,5 +255,4 @@ rt.register({ name: "webdroid/MediaRouterService", ctor: class extends JObj {}, 
   },
   ...noops(`registerClientAsUser(${MRC}Ljava/lang/String;I)V`, `unregisterClient(${MRC})V`, `setDiscoveryRequest(${MRC}IZ)V`,
     `setSelectedRoute(${MRC}Ljava/lang/String;Z)V`),
-} });
-hostStub("media_router", "webdroid/MediaRouterService");
+}, { system: true });

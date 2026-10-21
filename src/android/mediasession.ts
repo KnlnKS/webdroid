@@ -152,4 +152,4 @@ hostService("media_session", "webdroid/MediaSessionService", MS + "ISessionManag
   "getSessions(Landroid/content/ComponentName;I)Ljava/util/List;": noMediaControl,
   [`addSessionsListener(L${MS}IActiveSessionsListener;Landroid/content/ComponentName;I)V`]: noMediaControl,
   ...noops(`removeSessionsListener(L${MS}IActiveSessionsListener;)V`),
-});
+}, { system: true });

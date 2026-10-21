@@ -521,19 +521,22 @@ rt.registerJnis("android/os/BinderProxy", {
 const binderServices = new Map<string, JObj | Promise<JObj> | (() => JObj | Promise<JObj>)>();
 /** a ParceledListSlice over `items`, as a service returns a list too long for one transaction */
 export const parceledList = (items: unknown[] = []): JObj | Promise<JObj> => after(newArrayList(items), list => newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", list));
-/** Host a registered subclass of a system service's AIDL Stub as `name`, made when first asked for. A
- *  Stub whose methods declare @EnforcePermission takes its enforcer at construction (its no-argument
- *  constructor asks the system context for one); none of the hosted methods calls it. */
 const scopedServices = new WeakSet<object>();
-export function hostStub(name: string, cls: string, scopedDescriptors = false): void {
+const systemServices = new Set<string>();
+/** the services an app process reaches in system_server, those hosted as `system` */
+export const SYSTEM_SERVICES: ReadonlySet<string> = systemServices;
+/** Register `cls`, the subclass of `sup` (an AIDL Stub) whose `methods` answer, and host it as `name`,
+ *  made when first asked for. A Stub whose methods declare @EnforcePermission takes its enforcer at
+ *  construction (its no-argument constructor asks the system context for one); none of the hosted
+ *  methods calls it. A `system` service is system_server's for every app process, its state the device's;
+ *  `scopedDescriptors` closes the descriptors a call's data parcel brings when the call ends. */
+export function hostService(name: string, cls: string, sup: string, methods?: NativeSpec["methods"],
+  { system = false, scopedDescriptors = false } = {}): void {
+  rt.register({ name: cls, ctor: class extends JObj {}, sup, methods });
+  if (system) systemServices.add(name);
   binderServices.set(name, () => after(newStub(cls), binder => { if (scopedDescriptors) scopedServices.add(binder); return binder; }));
 }
-/** register `cls`, the subclass of `sup` (an AIDL Stub) whose `methods` answer, and host it as `name` */
-export function hostService(name: string, cls: string, sup: string, methods?: NativeSpec["methods"], scopedDescriptors = false): void {
-  rt.register({ name: cls, ctor: class extends JObj {}, sup, methods });
-  hostStub(name, cls, scopedDescriptors);
-}
-/** a Stub subclass's instance, as hostStub makes one (also for binders a service hands out), on
+/** a Stub subclass's instance, as hostService makes one (also for binders a service hands out), on
  *  the asking thread: a class it initializes may be one that thread is already initializing */
 export const newStub = driven(function* newStub$(cls: string): Gen<JObj> {
   return linkClass(cls).has("<init>", "(Landroid/os/PermissionEnforcer;)V")
@@ -548,11 +551,9 @@ let remoteServices = new Set<string>();
 let serviceLookup: ((name: string) => Promise<BinderHandle | null>) | undefined;
 /** system_server's handle of each service asked for: it outlives every app process */
 let remoteHandles = new Map<string, BinderHandle | Promise<BinderHandle | null>>();
-/** the services an app process reaches in system_server: their state is the device's */
-export const SYSTEM_SERVICES: readonly string[] = ["notification", "mount", "audio", "media_session", "media_router", "clipboard", "alarm", "location", "account", "content", "jobscheduler", "shortcut"];
-export function useSystemServiceAccess(names: readonly string[], lookup?: (name: string) => Promise<BinderHandle | null>): void {
-  if (names.length && !lookup) throw new Error("System service lookup is required");
+export function useSystemServiceAccess(names: Iterable<string>, lookup?: (name: string) => Promise<BinderHandle | null>): void {
   remoteServices = new Set(names);
+  if (remoteServices.size && !lookup) throw new Error("System service lookup is required");
   serviceLookup = lookup;
   remoteHandles = new Map();
 }

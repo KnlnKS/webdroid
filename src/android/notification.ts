@@ -865,7 +865,7 @@ hostService("notification", "webdroid/NotificationManagerService", "android/app/
     checkCallerIsSameApp(pkg);
     return SYSTEM_UIDS.has(callingIdentity().uid) ? 0 : fail("java/lang/SecurityException", "Only available for notification listeners");
   },
-}, true);
+}, { system: true, scopedDescriptors: true });
 
 function areNotificationsEnabledForPackage(pkg: string, uid: number): number | Promise<number> {
   enforceSystemOrSystemUIOrSamePackage(pkg, "Caller not system or systemui or same package");

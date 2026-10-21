@@ -35,7 +35,7 @@ import { restoreRoots } from "./hostfs.ts";
 import { notePresent } from "../native/cpu.ts";
 import { noteInput } from "../jvm/yield.ts";
 import { appArchives } from "./packedarchive.ts";
-import { hostWindowManager, dispatchTouch, dispatchKey } from "../android/server/wm.ts";
+import { dispatchTouch, dispatchKey } from "../android/server/wm.ts";
 import { startActivityThread } from "../android/server/am.ts";
 import { configurationChanged, displayHooks, orientationRequest } from "../android/server/atm.ts";
 import { setDisplayTarget, scheduleComposite } from "../android/surfaceflinger.ts";
@@ -226,7 +226,6 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   setManifest(manifest);
   setTargetSdkVersion(target);
 
-  hostWindowManager();
   setDisplayTarget(frame, present);
   useDisplayRotation();
   mark("resourcesReady"); onStatus("Starting app…");

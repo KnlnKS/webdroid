@@ -82,6 +82,6 @@ hostService("mount", "webdroid/StorageManagerService", "android/os/storage/IStor
     for (let i = SHARED.length; i >= 0; i = dir.indexOf("/", i + 1)) vfs.mkdir(dir.slice(0, i));
     vfs.mkdir(dir);
   },
-});
+}, { system: true });
 // android_os_storage_StorageManager: the vfs keeps no project quotas, so FS_IOC_FSGETXATTR fails
 rt.registerJni("android/os/storage/StorageManager", "setQuotaProjectId(Ljava/lang/String;J)Z", () => 0);
