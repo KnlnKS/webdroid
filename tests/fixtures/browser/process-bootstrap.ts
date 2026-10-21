@@ -440,7 +440,7 @@ export async function workerDiagnosticOwnership() {
       const entry=broker.register(pkg,pkg+":"+i,pids[i]),channel=new MessageChannel();
       const client=callProxy<WorkerControl>(channel.port1,workerControlMethods);clients.push(client);
       // a host whose control the fixture Worker serves as `mode` says
-      entry.host={url:location.origin+"/process-worker.js?pid="+entry.pid,control:client.endpoint,ended:null,close:client.close} as Partial<ProcessHost> as ProcessHost;
+      entry.host={url:location.origin+"/process-worker.js?pid="+entry.pid,control:client.endpoint,close:client.close} as Partial<ProcessHost> as ProcessHost;
       await new Promise<void>(resolve=>{worker.onmessage=()=>resolve();worker.postMessage({port:channel.port2,mode,pid:entry.pid,pkg:entry.pkg,process:entry.process},[channel.port2]);});
     }
     const first=await workerSnapshots(broker.processes()),second=await workerSnapshots(broker.processes());

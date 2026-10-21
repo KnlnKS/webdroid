@@ -27,7 +27,7 @@ const live = <T extends object>(broker: ProcessBroker, pid: number, calls: T): T
 
 /** Process `pid`'s command port; every call fails once the process is dead. */
 export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: MessagePort; close(): void } {
-  const caller = broker.entry(pid), { callers } = caller.session, { port1, port2 } = new MessageChannel();
+  const caller = broker.entry(pid), { callers } = caller, { port1, port2 } = new MessageChannel();
   // root and system act for any uid, as checkComponentPermission grants them
   const privileged = caller.uid === 0 || caller.uid === 1000;
   const permissions = canonicalPermissionCommands(broker.permissions, pkg => {
@@ -174,7 +174,7 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
       broker.fail(pid, `Process has died: ${canonical.reason === REASON_EXIT_SELF ? "exit " : "status "}${canonical.status}`, deathOf(canonical), canonical);
     },
     displayOrientation: landscape => broker.activities.orientation(pid, landscape),
-    sqlite: request => (caller.session.sqlite ??= createSQLiteSession()).call(request),
+    sqlite: request => (caller.sqlite ??= createSQLiteSession()).call(request),
     transact: request => broker.transact(pid, request),
     service: (pkg, process, request) => broker.service(pid, pkg, process, request),
     contentProvider: (pkg, process, authority) => broker.contentProvider(pid, pkg, process, authority),

@@ -41,7 +41,7 @@ test("another process's provider is reached through the binder it publishes", as
 
 test("routed back awaits its process acknowledgment and preserves queue order after failure", async () => {
   const { ActivityStack } = await import("../src/shell/activitystack.ts");
-  const entry = {pid:1001} as import("../src/shell/processes.ts").Entry;
+  const entry = {pid:1001} as import("../src/shell/processes.ts").ProcessRecord;
   const first = Promise.withResolvers<void>(), entered = Promise.withResolvers<void>();
   let calls = 0, available = true;
   const stack = new ActivityStack({entry:()=>{if(!available)throw new Error("target died");return entry;},alive:()=>true,entries:()=>[entry],connect:()=>entry,rotate:async()=>{},
@@ -65,7 +65,7 @@ test("routed back awaits its process acknowledgment and preserves queue order af
 
 test("a physical rotation reaches the process whose activity fills the display, and the display follows its turn", async () => {
   const { ActivityStack } = await import("../src/shell/activitystack.ts");
-  const app = {pid:1001,landscape:false} as import("../src/shell/processes.ts").Entry;
+  const app = {pid:1001,landscape:false} as import("../src/shell/processes.ts").ProcessRecord;
   const followed: boolean[] = [], requests: unknown[] = [];
   const turned = Promise.withResolvers<void>();
   const stack: InstanceType<typeof ActivityStack> = new ActivityStack({entry:()=>app,alive:()=>true,entries:()=>[app],connect:()=>app,
@@ -87,7 +87,7 @@ test("a physical rotation reaches the process whose activity fills the display, 
 test("every process records a physical rotation, and the one that comes to fill the display resolves it", async () => {
   const { ActivityStack } = await import("../src/shell/activitystack.ts");
   const { rotationForRequest } = await import("../src/shell/config.ts");
-  type Entry = import("../src/shell/processes.ts").Entry;
+  type Entry = import("../src/shell/processes.ts").ProcessRecord;
   // a process: the orientation its activity requests, whether that is visible, and its rotation state
   type Process = { entry: Entry; request: number; visible: boolean; sensor: boolean; natural: boolean };
   const processes = new Map<number, Process>(), log: string[] = [], followed: [number,boolean][] = [];

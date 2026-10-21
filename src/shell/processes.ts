@@ -11,7 +11,7 @@ import { packages } from "../android/packages.ts";
 import { releaseRights, SYSTEM_CALLER, INTERFACE_TRANSACTION, exportParcel, type ParcelData, type Transaction, type TransactionReply, type BinderHandle } from "../android/binder.ts";
 import { NativeParcel, writeString } from "../android/parcel.ts";
 import { newIntent } from "../android/intent.ts";
-import { NOT_CRASHED, REASON_EXIT_SELF, REASON_USER_REQUESTED, copyExitRecord, type ExitRecord, type Death, type KillNote } from "../android/server/appexitinfo.ts";
+import { NOT_CRASHED, REASON_USER_REQUESTED, copyExitRecord, type ExitRecord, type Death, type KillNote } from "../android/server/appexitinfo.ts";
 import type { PackageDataChange } from "./packagedata.ts";
 import { logUncaught } from "../jvm/natives/jthrowable.ts";
 import { uptimeMillis } from "../guest-clock.ts";
@@ -48,34 +48,39 @@ async function someDenied(permissions: string[], pkg: string): Promise<boolean> 
   for (const permission of permissions) if (await permissionDenied(permission, pkg)) return true;
   return false;
 }
-export type Entry = { pkg: string; process: string; uid: number; pid: number;
+/** a process booting until it serves its endpoint, then serving it, until it ends */
+export type ProcessState = { kind: "starting"; ready: PromiseWithResolvers<ProcessEndpoint> }
+  | { kind: "ready"; endpoint: ProcessEndpoint; close: () => void }
+  | { kind: "dead"; death: Death; record: ExitRecord | null; message: string };
+/** ActivityManagerService's ProcessRecord: one process and what the broker holds for it, which its death releases */
+export class ProcessRecord {
+  readonly pkg: string; readonly process: string; readonly uid: number; readonly pid: number;
   /** the page's side of the Worker it runs in; the page's own process has none */
   host: ProcessHost | null;
-  translucent: boolean;
+  /** the home screen started it, so it starts its launcher activity as the user's app does */
+  readonly launcher: { assetKey: string } | null;
+  state: ProcessState;
+  /** its endpoint once it is served; rejected if it dies first */
+  readonly ready: Promise<ProcessEndpoint>;
+  translucent = false;
   /** a Worker's display orientation: the screen it started on, then each turn it reports; the
    *  page's process has none, as its display is the page's own */
   landscape?: boolean;
-  ready: Promise<ProcessEndpoint>; resolve: (endpoint: ProcessEndpoint) => void; reject: (error: unknown) => void; dead: boolean;
-  /** the home screen started it, so it starts its launcher activity as the user's app does */
-  launcher: { assetKey: string } | null;
   /** what hears how it ended */
-  watchers: Set<(death: Death) => void>; pending: Set<(error: unknown) => void>;
-  session: ProcessSession };
-/** what the broker holds for a live process, which its death releases */
-export class ProcessSession {
+  readonly watchers = new Set<(death: Death) => void>();
+  readonly pending = new Set<(error: unknown) => void>();
   /** what its bootstrap exported: its archives and broker port */
   readonly bootstrap: (() => void)[] = [];
-  /** the endpoint it serves, once it is ready */
-  endpoint: (() => void) | null = null;
   /** the command ports it holds */
   readonly callers = new Set<() => void>();
   sqlite: ReturnType<typeof createSQLiteSession> | null = null;
-  dispose(): void {
-    this.sqlite?.close(); this.endpoint?.();
-    for (const close of [...this.callers, ...this.bootstrap]) close();
-    this.sqlite = this.endpoint = null;
-    this.bootstrap.length = 0; this.callers.clear();
+  constructor(pkg: string, process: string, pid: number, host: ProcessHost | null, launcher: ProcessRecord["launcher"]) {
+    this.pkg = pkg; this.process = process; this.uid = installed(pkg).uid; this.pid = pid; this.host = host; this.launcher = launcher;
+    const ready = Promise.withResolvers<ProcessEndpoint>();
+    this.state = { kind: "starting", ready }; this.ready = ready.promise;
+    void this.ready.catch(() => {});
   }
+  get dead(): boolean { return this.state.kind === "dead"; }
 }
 export class ProcessBroker {
   readonly files = new PrivateFiles();
@@ -126,8 +131,8 @@ export class ProcessBroker {
   readonly databases = sqliteStore;
   readonly preferences = preferenceStore;
   readonly notifications = notificationStore;
-  private entries = new Map<number, Entry>();
-  private byName = new Map<string, Entry>();
+  private entries = new Map<number, ProcessRecord>();
+  private byName = new Map<string, ProcessRecord>();
   private booted = false;
   readonly hosts = new ProcessHosts({ bootstrap: pid => this.bootstrap(pid), ready: (pid, port) => this.readyPort(pid, port),
     failed: (pid, message) => this.fail(pid, message, NOT_CRASHED) });
@@ -166,26 +171,23 @@ export class ProcessBroker {
 
   /** the live process of `pkg` that runs `process`, or a new one in a Worker; `launcher`: the home
    *  screen starts it */
-  connect(pkg: string, process: string, launcher: Entry["launcher"] = null): Entry {
+  connect(pkg: string, process: string, launcher: ProcessRecord["launcher"] = null): ProcessRecord {
     const live = this.byName.get(pkg + "/" + process);
     if (live && !live.dead) return live;
     const host = this.hosts.create(installed(pkg));
     return this.register(pkg, process, host.pid, host, launcher);
   }
   /** a new process, which runs in `host`'s Worker, or is handed its endpoint by ready() or readyPort() */
-  register(pkg: string, process: string, pid: number, host: ProcessHost | null = null, launcher: Entry["launcher"] = null): Entry {
-    let resolve!: Entry["resolve"], reject!: Entry["reject"];
-    const entry: Entry = { pkg, process, uid: installed(pkg).uid, pid, host, translucent: false, dead: false, launcher, watchers: new Set(), pending: new Set(), session: new ProcessSession(),
-      ready: new Promise((yes, no) => { resolve = yes; reject = no; }), resolve, reject };
+  register(pkg: string, process: string, pid: number, host: ProcessHost | null = null, launcher: ProcessRecord["launcher"] = null): ProcessRecord {
+    const entry = new ProcessRecord(pkg, process, pid, host, launcher);
     if (host) entry.landscape = device.width > device.height;
-    void entry.ready.catch(() => {});
     this.entries.set(pid, entry); this.byName.set(pkg + "/" + process, entry);
     this.services.processStarted(pkg, process);
-    host?.start();
+    host?.start(entry);
     return entry;
   }
   /** the page's own process, which serves its endpoint once its Java has booted */
-  registerSystemServer(): Entry { return this.register("android", "system_server", PROCESS_PID); }
+  registerSystemServer(): ProcessRecord { return this.register("android", "system_server", PROCESS_PID); }
   /** the home screen opening `pkg` while no process of its runs: a new process, which starts the
    *  launcher activity and is shown, at the top app's priority while it starts */
   launch(pkg: string, assetKey: string): { pid: number; shown: Promise<void> } {
@@ -225,14 +227,14 @@ export class ProcessBroker {
         registry: snapshots, launcher: entry.launcher, broker: broker.port, ...entry.host!.surfaces(), storage: storageEntries(entry),
         rotation: this.activities.rotation };
       const data = structuredClone(payload, { transfer: bootstrapTransfers(payload) });
-      entry.session.bootstrap.push(...ports);
+      entry.bootstrap.push(...ports);
       return data;
     } catch (error) { for (const close of ports) close(); throw error; }
   }
   /** A process's reverse Binder/service channel. Only these serialized operations are exported. */
   brokerPort(pid: number): MessagePort { return serveBrokerPort(this, pid).port; }
   ready(pid: number, endpoint: ProcessEndpoint): void {
-    if (this.entry(pid).session.endpoint) return;
+    if (this.entry(pid).state.kind !== "starting") return;
     const { port1, port2 } = new MessageChannel();
     this.publishEndpoint(pid, port2, serveCalls(port1, endpoint));
   }
@@ -240,11 +242,11 @@ export class ProcessBroker {
   readyPort(pid: number, port: MessagePort): void { this.publishEndpoint(pid, port); }
   private publishEndpoint(pid: number, port: MessagePort, stop = () => {}): void {
     try {
-      const entry = this.entry(pid);
-      if (entry.session.endpoint) { closePort(port); stop(); return; }
+      const entry = this.entry(pid), { state } = entry;
+      if (state.kind !== "starting") { closePort(port); stop(); return; }
       const proxy = processProxy(port, { onClose: error => { if (!entry.dead) this.fail(pid, error.message ?? "Process endpoint closed", NOT_CRASHED); } });
-      entry.session.endpoint = () => { stop(); proxy.close(); };
-      entry.resolve(proxy.endpoint);
+      entry.state = { kind: "ready", endpoint: proxy.endpoint, close: () => { stop(); proxy.close(); } };
+      state.ready.resolve(proxy.endpoint);
     } catch (error) { closePort(port); stop(); throw error; }
   }
   /** a process ended, or its Worker failed: ActivityManagerService.appDiedLocked */
@@ -252,22 +254,28 @@ export class ProcessBroker {
     const entry = this.entries.get(pid);
     if (!entry || entry.dead) return;
     console.warn(`[process] ${entry.process} (pid ${pid}): ${message}`);
-    const error = rt.mkThrowable("android/os/DeadObjectException", message), host = entry.host;
-    if (host) host.ended = { error: message, terminal: { cause: message, record: record && copyExitRecord(record), expected: !!record && !death.crashed &&
-      (record.reason === REASON_EXIT_SELF && record.status === 0 || record.reason === REASON_USER_REQUESTED) } };
-    entry.dead = true; entry.reject(error);
-    entry.session.dispose();
-    this.fileDescriptors.close(pid);
-    for (const reject of entry.pending) reject(error);
-    entry.pending.clear();
-    this.services.clientDied(pid);
-    this.services.processDied(entry.pkg, entry.process, death);
-    for (const watcher of entry.watchers) { try { watcher(death); } catch (error) { console.error("[process death]", error); } }
-    entry.watchers.clear(); host?.close(); this.files.detach(pid);
-    this.activities.processDied(pid);
+    const error = rt.mkThrowable("android/os/DeadObjectException", message), { state, sqlite, host } = entry;
+    entry.state = { kind: "dead", death, record: record && copyExitRecord(record), message };
+    // each release runs whatever another throws, so that the Worker always ends
+    const releases = [
+      () => { if (state.kind === "starting") state.ready.reject(error); },
+      () => sqlite?.close(),
+      () => { if (state.kind === "ready") state.close(); },
+      ...entry.callers, ...entry.bootstrap,
+      () => this.fileDescriptors.close(pid),
+      ...[...entry.pending].map(reject => () => reject(error)),
+      () => this.services.clientDied(pid),
+      () => this.services.processDied(entry.pkg, entry.process, death),
+      ...[...entry.watchers].map(watcher => () => watcher(death)),
+      () => host?.close(),
+      () => this.files.detach(pid),
+      () => this.activities.processDied(pid),
+    ];
+    entry.sqlite = null; entry.callers.clear(); entry.bootstrap.length = 0; entry.pending.clear(); entry.watchers.clear();
+    for (const release of releases) try { release(); } catch (error) { console.error("[process death]", error); }
   }
   /** whether a process Worker is still booting: it serves its endpoint once it is ready */
-  starting(): boolean { return [...this.entries.values()].some(e => e.host && !e.dead && !e.session.endpoint); }
+  starting(): boolean { return [...this.entries.values()].some(e => e.host && e.state.kind === "starting"); }
   /** settles once the process has presented a frame, or has died */
   presented(pid: number): Promise<void> { return this.entries.get(pid)?.host?.presented.promise ?? Promise.resolve(); }
   /** the uid of the process on top, whose app has input focus */
@@ -278,7 +286,7 @@ export class ProcessBroker {
   }
   alive(pid: number): boolean { const entry = this.entries.get(pid); return !!entry && !entry.dead; }
   /** every process registered, dead ones included */
-  processes(): IterableIterator<Entry> { return this.entries.values(); }
+  processes(): IterableIterator<ProcessRecord> { return this.entries.values(); }
   /** kill(2) from a process: SIGKILL of a process of the caller's uid (Process.killProcess of
    *  its other processes); other signals are ART's to handle in the target and are not modelled */
   signal(callerPid: number, pid: number, signal: number): void {
@@ -299,10 +307,10 @@ export class ProcessBroker {
     await this.each(() => true, (endpoint) => endpoint.packageRemoved(pkg));
   }
   /** `f` on each live process `which` picks, once it is ready */
-  private each(which: (entry: Entry) => boolean, f: (endpoint: ProcessEndpoint, entry: Entry) => unknown): Promise<unknown> {
+  private each(which: (entry: ProcessRecord) => boolean, f: (endpoint: ProcessEndpoint, entry: ProcessRecord) => unknown): Promise<unknown> {
     return Promise.all([...this.entries.values()].filter((e) => !e.dead && which(e)).map((e) => e.ready.then(endpoint => f(endpoint, e), () => {})));
   }
-  private kill(entry: Entry, endpoint: ProcessEndpoint, signal: number, note?: KillNote): Promise<void> {
+  private kill(entry: ProcessRecord, endpoint: ProcessEndpoint, signal: number, note?: KillNote): Promise<void> {
     if (entry.dead) return Promise.resolve();
     return new Promise((resolve, reject) => {
       const died = () => resolve();
@@ -402,7 +410,7 @@ export class ProcessBroker {
   async broadcast(pid: number | null, data: ParcelData, manifest: Receiver[], permissions: string[], ordered: boolean,
     initial: BroadcastData = { code: 0, data: null, extras: null, aborted: false }): Promise<BroadcastData> {
     const caller = pid === null ? null : this.entry(pid), sender = caller && { uid: caller.uid, pkg: caller.pkg };
-    const targets: { entry: Entry; component: string | null; priority: number }[] = [...this.entries.values()].filter((e) => !e.dead).map((entry) => ({ entry, component: null, priority: 0 }));
+    const targets: { entry: ProcessRecord; component: string | null; priority: number }[] = [...this.entries.values()].filter((e) => !e.dead).map((entry) => ({ entry, component: null, priority: 0 }));
     for (const { pkg, cls, priority } of manifest) {
       const owner = packages.get(pkg), node = owner?.components.receiver.get(cls);
       // the platform package's receivers are system_server's, whose part the shell plays itself
@@ -423,20 +431,20 @@ export class ProcessBroker {
     return result;
   }
   /** the live process `pid`; a dead one's callers see DeadObjectException */
-  entry(pid: number): Entry {
+  entry(pid: number): ProcessRecord {
     const entry = this.entries.get(pid);
     if (!entry || entry.dead) throw rt.mkThrowable("android/os/DeadObjectException", "Process is dead: " + pid);
     return entry;
   }
   /** a request to `entry` once its endpoint is ready, which fails when it dies */
-  request<T>(entry: Entry, call: (endpoint: ProcessEndpoint) => Promise<T>): Promise<T> {
+  request<T>(entry: ProcessRecord, call: (endpoint: ProcessEndpoint) => Promise<T>): Promise<T> {
     return this.whileAlive(entry, () => entry.ready.then((endpoint) => {
       if (entry.dead) throw rt.mkThrowable("android/os/DeadObjectException", "Process is dead: " + entry.pid);
       return call(endpoint);
     }));
   }
   /** work of `entry`'s, which fails when the process dies */
-  private whileAlive<T>(entry: Entry, work: () => Promise<T>): Promise<T> {
+  private whileAlive<T>(entry: ProcessRecord, work: () => Promise<T>): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       entry.pending.add(reject);
       void work().then(resolve, reject).finally(() => entry.pending.delete(reject));

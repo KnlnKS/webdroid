@@ -5,7 +5,7 @@ import type { ParcelData } from "../android/binder.ts";
 import { guestSleep } from "../guest-clock.ts";
 import type { Rotation } from "./config.ts";
 import type { ActivityRequest } from "./broker-contract.ts";
-import type { Entry } from "./processes.ts";
+import type { ProcessRecord } from "./processes.ts";
 
 /** AOSP ActivityRecord: how long the previous activity may take to pause, then to stop */
 const PAUSE_TIMEOUT_MS = 500, STOP_TIMEOUT_MS = 11_000;
@@ -13,14 +13,14 @@ const PAUSE_TIMEOUT_MS = 500, STOP_TIMEOUT_MS = 11_000;
 type Activity = { id: number; pid: number; caller: number; previous: number; request: number };
 /** the broker's processes: `entry` throws for a dead one; `activity` sends one a request */
 export type StackPort = {
-  entry(pid: number): Entry;
+  entry(pid: number): ProcessRecord;
   alive(pid: number): boolean;
-  entries(): Iterable<Entry>;
-  connect(pkg: string, process: string): Entry;
-  activity(entry: Entry, request: ActivityRequest): Promise<void>;
+  entries(): Iterable<ProcessRecord>;
+  connect(pkg: string, process: string): ProcessRecord;
+  activity(entry: ProcessRecord, request: ActivityRequest): Promise<void>;
   /** turns the display to the orientation of the process whose activity sets it; the page's own
    *  process turns the display itself */
-  rotate(entry: Entry): Promise<void>;
+  rotate(entry: ProcessRecord): Promise<void>;
 };
 
 export class ActivityStack {
@@ -44,7 +44,7 @@ export class ActivityStack {
   get rotation(): Rotation { return { sensor: this.sensor, natural: this.natural }; }
 
   get foreground(): number { return this.top; }
-  shownEntries(): Entry[] { return this.layers.filter(pid => this.port.alive(pid)).map(pid => this.port.entry(pid)); }
+  shownEntries(): ProcessRecord[] { return this.layers.filter(pid => this.port.alive(pid)).map(pid => this.port.entry(pid)); }
   /** `pid` alone in front */
   setForeground(pid: number): void { this.top = pid; this.shownPids = new Set([pid]); this.layers = [pid]; }
   presentation(pid: number, translucent: boolean): void {
@@ -144,7 +144,7 @@ export class ActivityStack {
    * would otherwise hold the launch forever. Its late answer still lands, and a dead process
    * answers nothing.
    */
-  private visibility(entry: Entry, phase: "pause" | "stop" | "visible", timeoutMs: number): Promise<void> {
+  private visibility(entry: ProcessRecord, phase: "pause" | "stop" | "visible", timeoutMs: number): Promise<void> {
     return new Promise((resolve) => {
       const timer = setTimeout(resolve, timeoutMs);
       this.port.activity(entry, { kind: "visibility", phase })
@@ -203,7 +203,7 @@ export class ActivityStack {
     if (layers[0] !== owner) this.notify(entry, { kind: "rotate", landscape: this.sensor });
   }
   /** a request no activity change waits on */
-  private notify(entry: Entry, request: ActivityRequest): void {
+  private notify(entry: ProcessRecord, request: ActivityRequest): void {
     this.port.activity(entry, request).catch((error) => { if (!entry.dead) console.error("[activity process]", error); });
   }
 }

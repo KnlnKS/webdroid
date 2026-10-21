@@ -2,6 +2,7 @@ import { captureLogs } from "./shell/logs.ts";
 import { attachWorkerBootstrap, serveWorkerEndpoint } from "./shell/worker-bootstrap.ts";
 import { closeProcessBootstrap } from "./shell/process-bootstrap-data.ts";
 import type { ProcessWorkerMessage, ProcessWorkerStatus } from "./shell/process-host.ts";
+import type { WorkerPhase } from "./shell/worker-control.ts";
 
 // The page spawns this Worker before it knows the package, as a zygote forks an unspecialized child: the
 // clock comes first, then the runtime loads while the page opens the package the bootstrap carries.
@@ -35,7 +36,7 @@ let prepared: ReturnType<typeof prepare> | undefined, started = false;
 globalThis.onmessage = async ({ data }: MessageEvent<ProcessWorkerMessage>) => {
   if (data.kind === "prestart") { prepared ??= prepare(data); void prepared.catch(() => {}); return; }
   if (data.kind === "rate") { rateKnown(data.rate); return; }
-  let phase = "attaching", closeControl: (() => void) | undefined;
+  let phase: WorkerPhase = "attaching", closeControl: (() => void) | undefined;
   try {
     if (!prepared || started) throw new Error("Process Worker started without its prestart, or twice");
     started = true;
@@ -51,8 +52,7 @@ globalThis.onmessage = async ({ data }: MessageEvent<ProcessWorkerMessage>) => {
     phase = "platform";
     await p.runtime;
     phase = "application";
-    await p.device.bootApk(boot, status => { phase = status; }, data.bootstrap.launcher?.assetKey ?? "",
-      data.bootstrap.launcher ? null : data.bootstrap.process);
+    await p.device.bootApk(boot, data.bootstrap.launcher?.assetKey ?? "", data.bootstrap.launcher ? null : data.bootstrap.process);
     await serveWorkerEndpoint(data.endpoint);
     phase = "ready";
     post({ kind: "ready" });

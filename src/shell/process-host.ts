@@ -4,7 +4,7 @@
 import { bootstrapTransfers, closeProcessBootstrap, type ProcessBootstrap } from "./process-bootstrap-data.ts";
 import { callProxy, methodsOf, type CallFailure } from "./rpc.ts";
 import type { WorkerControl } from "./worker-control.ts";
-import type { WorkerTerminal } from "./worker-diagnostics.ts";
+import type { ProcessRecord } from "./processes.ts";
 import { attachPointerInput } from "./pointer-input.ts";
 import { createGuestClockPort } from "../guest-clock.ts";
 import { serveTierPorts, type TierPorts } from "../jvm/tier.ts";
@@ -100,16 +100,13 @@ export class ProcessHost {
   display: FrameReceiver | undefined;
   ime: ReturnType<typeof receiveIme> | undefined;
   private web: HTMLElement | undefined;
-  /** how the process ended, which diagnostics report once its Worker is gone */
-  ended: { error: string; terminal: WorkerTerminal } | null = null;
+  /** the process it runs, once started */
+  private record: ProcessRecord | undefined;
   private readonly spare: SpareWorker;
   private readonly hosts: ProcessHosts;
   private readonly endpoint = new MessageChannel();
   private readonly controlPorts = new MessageChannel();
   private readonly ends: (() => void)[] = [];
-  private closed = false;
-  private published = false;
-  private transferred = false;
   private focusTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly pagehide = () => this.fail("Process page closed");
 
@@ -128,9 +125,10 @@ export class ProcessHost {
     worker.onerror = event => this.fail(event.message);
     worker.onmessageerror = () => this.fail("Invalid process Worker message");
     worker.onmessage = ({ data }: MessageEvent<ProcessWorkerStatus>) => {
-      if (this.closed) return;
-      if (data.kind === "ready" && !this.published) {
-        try { hosts.owner.ready(this.pid, this.endpoint.port2); this.published = true; }
+      // the endpoint is the Worker's to publish once, while its process starts
+      if (this.record?.state.kind !== "starting") return;
+      if (data.kind === "ready") {
+        try { hosts.owner.ready(this.pid, this.endpoint.port2); }
         catch (error) { this.fail(String(error)); }
       } else if (data.kind === "failed") {
         for (const log of data.logs) console.error("[process Worker]", log);
@@ -139,16 +137,16 @@ export class ProcessHost {
     };
     hosts.live.add(this);
   }
-  /** sends the Worker its process's bootstrap, once the broker has registered the process */
-  start(): void {
+  /** sends the Worker the bootstrap of `record`, which the broker has registered */
+  start(record: ProcessRecord): void {
+    this.record = record;
     void (async () => {
       if (this.spare.error) throw new Error(this.spare.error);
       const data = await this.hosts.owner.bootstrap(this.pid);
-      if (this.closed) { closeProcessBootstrap(data); return; }
+      if (record.dead) { closeProcessBootstrap(data); return; }
       try {
         post(this.spare.worker, { kind: "start", bootstrap: data, endpoint: this.endpoint.port1, control: this.controlPorts.port2 },
           [...bootstrapTransfers(data), this.endpoint.port1, this.controlPorts.port2]);
-        this.transferred = true;
       } catch (error) { closeProcessBootstrap(data); throw error; }
     })().catch(error => this.fail(String(error)));
   }
@@ -161,7 +159,7 @@ export class ProcessHost {
     const calls = callProxy<InputCalls>(input.port1, inputMethods), text = this.ime = receiveIme(ime.port1, canvas, calls.endpoint);
     const pointers = attachPointerInput(canvas, () => device, calls.endpoint.pointer, () => {
       clearTimeout(this.focusTimer);
-      this.focusTimer = setTimeout(() => { this.focusTimer = undefined; if (!this.closed) text.focus(); }, 0);
+      this.focusTimer = setTimeout(() => { this.focusTimer = undefined; text.focus(); }, 0);
     });
     const surfaces = receiveWebSurfaces(web.port1, canvas, () => device);
     this.web = surfaces.layer;
@@ -174,15 +172,14 @@ export class ProcessHost {
     this.canvas.style.pointerEvents = interactive ? "auto" : "none";
     this.ime?.show(z !== null);
   }
-  private fail(message: string): void { if (!this.closed) this.hosts.owner.failed(this.pid, message); }
+  private fail(message: string): void { this.hosts.owner.failed(this.pid, message); }
+  /** its process's death ends the Worker and what the page holds of it: a port posted to the Worker is detached
+   *  here, and the broker closes the endpoint it took first, so closing either again does nothing */
   close(): void {
-    if (this.closed) return;
-    this.closed = true;
     clearTimeout(this.focusTimer); window.removeEventListener("pagehide", this.pagehide);
     for (const close of this.ends) close();
     this.spare.worker.terminate(); this.spare.release();
-    if (!this.published) this.endpoint.port2.close();
-    if (!this.transferred) { this.endpoint.port1.close(); this.controlPorts.port2.close(); }
+    this.endpoint.port1.close(); this.endpoint.port2.close(); this.controlPorts.port2.close();
     this.presented.resolve(); this.canvas.remove(); this.hosts.live.delete(this);
   }
 }

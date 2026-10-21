@@ -30,9 +30,11 @@ export function countVsyncs(frame?: () => void): () => number {
   return () => ticks;
 }
 
+/** how far a process Worker's start has come (process-worker.ts) */
+export type WorkerPhase = "attaching" | "packages" | "platform" | "application" | "ready" | "failed";
 /** What the harness drives and reads of one process realm: the page's own (main.ts's wd) and each Worker's
  *  through its control port. Copies only observable data; a page never receives this JVM's objects or callbacks. */
-export function workerControl(logs: string[], phase: () => string, ticks: () => number) {
+export function workerControl(logs: string[], phase: () => WorkerPhase, ticks: () => number) {
   return {
     aotProfile: async () => ({phase:phase(),dead:processExited(),
       identity:{pid:PROCESS_PID,uid:PROCESS_UID,process:PROCESS_NAME,pkg:appHost?.pkg ?? null},

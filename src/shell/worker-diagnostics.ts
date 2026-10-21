@@ -1,8 +1,8 @@
 // What the harness reads of the process Workers (main.ts's wd): each one's copied snapshot or how it
 // ended, its AOT profile, and whether its main queue still dispatches.
-import { copyExitRecord, type ExitRecord } from "../android/server/appexitinfo.ts";
+import { copyExitRecord, REASON_EXIT_SELF, REASON_USER_REQUESTED, type ExitRecord } from "../android/server/appexitinfo.ts";
 import type { ProcessHost } from "./process-host.ts";
-import type { Entry, ProcessBroker } from "./processes.ts";
+import type { ProcessRecord, ProcessBroker } from "./processes.ts";
 import type { WorkerControl } from "./worker-control.ts";
 
 export type WorkerTerminal = { expected: boolean; cause: string; record: ExitRecord | null };
@@ -31,12 +31,12 @@ function shared<T>(reads: WeakMap<ProcessHost, Promise<T>>, host: ProcessHost, s
 const snapshots = new WeakMap<ProcessHost, Promise<Snapshot>>(), liveness = new WeakMap<ProcessHost, Promise<boolean>>();
 const failure = (error: unknown) => error instanceof Error ? error.message : String(error);
 /** the processes of `entries` that run in Workers, with each one's identity */
-const hosted = (entries: Iterable<Entry>) => [...entries].flatMap(entry => {
+const hosted = (entries: Iterable<ProcessRecord>) => [...entries].flatMap(entry => {
   const host = entry.host;
   return host ? [{ entry, host, identity: { pid: entry.pid, pkg: entry.pkg, process: entry.process, url: host.url } }] : [];
 });
 
-export function workerAotProfiles(entries: Iterable<Entry>) {
+export function workerAotProfiles(entries: Iterable<ProcessRecord>) {
   return Promise.all(hosted(entries).map(async ({ entry, host, identity }) => {
     try {
       if (entry.dead) throw new Error("Worker has exited");
@@ -49,21 +49,25 @@ export function workerAotProfiles(entries: Iterable<Entry>) {
     } catch (error) { return { ...identity, error: failure(error) }; }
   }));
 }
-export function workerSnapshots(entries: Iterable<Entry>): Promise<WorkerDiagnosticRow[]> {
+export function workerSnapshots(entries: Iterable<ProcessRecord>): Promise<WorkerDiagnosticRow[]> {
   return Promise.all(hosted(entries).map(async ({ entry, host, identity }): Promise<WorkerDiagnosticRow> => {
-    if (entry.dead) return ended(host, identity);
-    const read = shared(snapshots, host, () => host.control.snapshot());
+    const before = ended(entry, identity);
+    if (before) return before;
     try {
-      const snapshot = await within(read, 5000, () => { throw new Error("Worker diagnostic timeout"); });
-      if (entry.dead) return ended(host, identity);
+      const snapshot = await within(shared(snapshots, host, () => host.control.snapshot()), 5000, () => { throw new Error("Worker diagnostic timeout"); });
+      const after = ended(entry, identity);
+      if (after) return after;
       if (snapshot.dead || snapshot.phase !== "ready") throw new Error(`Worker is ${snapshot.dead ? "dead" : "not ready: " + snapshot.phase}`);
       return { ...identity, snapshot };
-    } catch (error) { return entry.dead ? ended(host, identity) : { ...identity, error: failure(error) }; }
+    } catch (error) { return ended(entry, identity) ?? { ...identity, error: failure(error) }; }
   }));
 }
-function ended(host: ProcessHost, identity: WorkerIdentity): WorkerDiagnosticRow {
-  const owned = host.ended?.terminal, terminal = owned && { ...owned, record: owned.record && copyExitRecord(owned.record) };
-  return terminal?.expected ? { ...identity, terminal } : { ...identity, terminal, error: host.ended?.error ?? "Worker owner unavailable" };
+/** how the process ended, once it has: an exit of its own with status 0 or the user's stop is expected */
+function ended({ state }: ProcessRecord, identity: WorkerIdentity): WorkerDiagnosticRow | null {
+  if (state.kind !== "dead") return null;
+  const { death, record, message } = state, terminal = { cause: message, record: record && copyExitRecord(record),
+    expected: !!record && !death.crashed && (record.reason === REASON_EXIT_SELF && record.status === 0 || record.reason === REASON_USER_REQUESTED) };
+  return terminal.expected ? { ...identity, terminal } : { ...identity, terminal, error: message };
 }
 export async function foregroundWorkerSnapshot(broker: ProcessBroker): Promise<WorkerDiagnosticRow | null> {
   const pid = broker.activities.foreground;
@@ -72,7 +76,7 @@ export async function foregroundWorkerSnapshot(broker: ProcessBroker): Promise<W
 }
 
 /** A control reply is not evidence that the Java main queue can dispatch a job: alive() answers from it. */
-async function alive(entry: Entry, ms: number): Promise<boolean> {
+async function alive(entry: ProcessRecord, ms: number): Promise<boolean> {
   const host = entry.host;
   if (!host || entry.dead) return false;
   try { return await within(shared(liveness, host, () => host.control.alive()), ms, () => false) && !entry.dead; }
