@@ -86,7 +86,6 @@ export class SymbolicSites {
           if (this.symbolicOperations.size > 2048) this.symbolicOperations.delete(this.symbolicOperations.keys().next().value!);
         }
         this.symbolicTable.set(slot, operation);
-        if (initiated) this.w.tiers.resolved(`${method.cls}:${method.index}:${pc}`);
       };
       const ready = resolveInstruction(this.w, method, ins, owner);
       return chain(ready, install);

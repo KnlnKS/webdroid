@@ -371,7 +371,6 @@ export class World {
   entry(cls: string, name: string, desc: string): (...args: unknown[]) => unknown {
     const { slot, ensure, params, ret } = this.entryCall(cls, name, desc), call = this.helpers.invoker(params, ret);
     return (...args) => this.sched.synchronous(() => {
-      this.tiers.refreshHotUnits();
       // an exception leaves the frames it unwound counted
       const depth = this.rt.depth.value;
       try { return this.hostString(call(slot, ensure, ...args.map((a) => this.javaValue(a)))); } catch (e) { throw this.boundary(e); } finally { this.rt.depth.value = depth; }

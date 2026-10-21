@@ -118,7 +118,6 @@ export class HostFunctions {
       const caller = this.w.stacks.bridge(s), leave = caller.leave;
       const mine = token;
       let p: Promise<unknown>;
-      this.w.tiers.refreshHotUnits();
       try { p = enter(s, mine, ...args); } catch (error) { leave(); throw error; }
       const state = d.value as number;
       if (state !== mine && state !== -mine) {

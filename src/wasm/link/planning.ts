@@ -53,8 +53,8 @@ export class Planner {
   }
   /** `m` and the small methods it calls directly, up to MAX_GROUP: V8 can inline calls inside a module but not through the table. One that is
    *  compiled already is copied into the unit and used only by the unit's own calls (`copies`). */
-  group(m: MethodInfo, members: MethodInfo[] = [m]): { installed: MethodInfo[]; copies: MethodInfo[]; plan: CallPlan } {
-    const out = [...members], installed = [...members], copies: MethodInfo[] = [], ids = new Set(out.map(mid)), plan = new Map<string, MethodInfo[]>();
+  group(m: MethodInfo): { installed: MethodInfo[]; copies: MethodInfo[]; plan: CallPlan } {
+    const out = [m], installed = [m], copies: MethodInfo[] = [], ids = new Set(out.map(mid)), plan = new Map<string, MethodInfo[]>();
     if (!m.codeOff || this.w.intrinsic(m)) return { installed, copies, plan };
     this.noteAllocations(m);
     for (let i = 0; i < out.length && out.length < MAX_GROUP; i++) {
