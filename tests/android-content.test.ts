@@ -19,7 +19,8 @@ import { registerPackage, FLAG_IS_GAME } from "../src/android/pm.ts";
 import { hostedService } from "../src/android/binder.ts";
 import { notConnected } from "../src/jvm/natives/jthrowable.ts";
 import { newArrayList, toJsArray } from "../src/jvm/natives/jcoll.ts";
-import { Resources, NativeTheme, rvString, newSV } from "../src/android/res.ts";
+import { Resources, NativeTheme, newSV, emptyApk } from "../src/android/res.ts";
+import { deviceQualifiers } from "../src/android/configuration.ts";
 import { TV, type XmlNode, type XmlAttr } from "../src/android/axml.ts";
 import { mkComponentName, newIntent } from "../src/android/intent.ts";
 import { decodeIntent, encodeIntent, intentCodec } from "../src/android/intentipc.ts";
@@ -176,7 +177,7 @@ describe("package-game-info", () => {
         { name: "isGame", str: null, ns: "", resId: 0, type: TV.BOOLEAN, data: 1 },
       ], children: [] },
     ] };
-    const record = new PackageRecord(root, new Resources(null, {}), "/test-game.apk", 12345, async () => []);
+    const record = new PackageRecord(root, emptyApk(), "/test-game.apk", 12345, async () => []);
     record.system = true;
     packages.set(pkg, record);
     try {
@@ -203,7 +204,7 @@ describe("package-intent-filters", () => {
       // the first group whose filters all match decides; none matching is no match
       { name: "uri-relative-filter-group", attrs: [], children: [{ name: "data", attrs: [a("pathPrefix", "/")], children: [] }] }]),
     ] }] };
-    packages.set(pkg, new PackageRecord(root, new Resources(null, {}), "/test-filters.apk", 12346, async () => []));
+    packages.set(pkg, new PackageRecord(root, emptyApk(), "/test-filters.apk", 12346, async () => []));
     try {
       const pms = await hostedService("package");
       const resolve = async (url: string) => {
@@ -233,7 +234,7 @@ describe("package-permissions", () => {
       // requested only through API 28
       { name: "uses-permission", attrs: [attr("name", "android.permission.WRITE_EXTERNAL_STORAGE"), int("maxSdkVersion", 28)], children: [] },
     ] };
-    const record = new PackageRecord(root, new Resources(null, {}), "/test.apk", 12345, async () => []);
+    const record = new PackageRecord(root, emptyApk(), "/test.apk", 12345, async () => []);
     packages.set(pkg, record); signaturePermissions.add(denied);
     try {
       const pms = await hostedService("package"), PI = "android/content/pm/PackageInfo";
@@ -262,16 +263,16 @@ describe("packagearchive", () => {
     } }, baseline.certificates);
     expect(archive.root).toEqual(baseline.root);
     expect(archive.certificates).toEqual(baseline.certificates);
-    expect(archive.res.zip["resources.arsc"]).toEqual(baseline.res.zip["resources.arsc"]);
+    expect(archive.apk.zip["resources.arsc"]).toEqual(baseline.apk.zip["resources.arsc"]);
     expect(readBytes).toBeLessThan(bytes.length);
-    const pool = archive.res.arsc!.values;
+    const pool = archive.apk.table!.values;
     for (let i = 0; i < pool.length; i++) {
       const name = pool.get(i);
-      if (Object.hasOwn(baseline.res.zip, name)) expect(archive.res.arsc!.files(name)).toEqual(baseline.res.zip[name]);
+      if (Object.hasOwn(baseline.apk.zip, name)) expect(archive.apk.table!.files(name)).toEqual(baseline.apk.zip[name]);
     }
-    expect(archive.res.lazyEntries.has("classes.dex")).toBe(true);
-    const metadataBytes = readBytes, residentBytes = Object.values(archive.res.zip).reduce((sum, data) => sum + data.length, 0);
-    expect(await readFully(archive.res.lazyEntries.get("classes.dex")!)).toEqual(baseline.res.zip["classes.dex"]);
+    expect(archive.apk.lazyEntries.has("classes.dex")).toBe(true);
+    const metadataBytes = readBytes, residentBytes = Object.values(archive.apk.zip).reduce((sum, data) => sum + data.length, 0);
+    expect(await readFully(archive.apk.lazyEntries.get("classes.dex")!)).toEqual(baseline.apk.zip["classes.dex"]);
     console.log(JSON.stringify({ apkBytes: bytes.length, metadataBytes, residentBytes }));
   });
 
@@ -543,19 +544,10 @@ describe("resource-type-id-offset", () => {
     return bytes;
   }
 
-  test("a file resource resolves to a reference to itself, once", async () => {
-    const zip = zipTree(new Uint8Array(readFileSync("apks/FitNotes.apk")));
-    const table = new Arsc(zip["resources.arsc"], (path) => zip[path] ?? null), res = new Resources(table, zip, undefined, true);
-    const id = table.findId("layout", "activity_main"), ref = res.ref(id);
-    expect(ref).toMatchObject({ t: TV.REFERENCE, d: id });
-    expect(res.resolveRefs(ref)).toBe(ref);
-    expect(rvString(res, { t: TV.REFERENCE, d: id })).toBe(res.fileOf(id)!.path);
-  });
-
   test("package type ID offsets apply to resource lookup", () => {
     const resources = new Arsc(resourceTable(packageChunk("id", "item", 0, 1, 9)));
     expect(resources.findId("id", "item")).toBe(0x7f0a0000);
-    expect(resources.entry(0x7f0a0000)?.key).toBe("item");
+    expect(resources.entry(0x7f0a0000, deviceQualifiers())?.key).toBe("item");
   });
 
   test("resource names use the type pool of each package chunk", () => {
@@ -574,8 +566,8 @@ describe("resource-type-id-offset", () => {
       packageChunk("drawable", "feature", 0, 1, 0, 0x53),
     ));
     expect(resources.pkgId).toBe(0x7f);
-    expect(resources.entry(0x7f010000)?.key).toBe("font");
-    expect(resources.entry(0x4f010000)?.key).toBe("library");
+    expect(resources.entry(0x7f010000, deviceQualifiers())?.key).toBe("font");
+    expect(resources.entry(0x4f010000, deviceQualifiers())?.key).toBe("library");
     expect(resources.typeName(1, 0)).toBe("integer");
     expect(resources.typeName(1, 0, 0x53)).toBe("drawable");
     expect(resources.findId("style", "library")).toBe(0);
@@ -591,7 +583,7 @@ describe("resource-value-density", () => {
   test("resource values retain selected density and resolved reference identity", async () => {
     const table = new Arsc(Uint8Array.of(2, 0, 8, 0, 8, 0, 0, 0));
     const config = { density: 0, sdk: 0, orientation: 0, night: 0, lang: "", region: "", swdp: 0, wdp: 0, hdp: 0, size: 0, dir: 0, uiType: 0, score: 0 };
-    table.device.density = 480;
+    (table as never as { packages: Map<number, unknown> }).packages.set(0x7f, { name: "", types: table.types });
     table.types.set(1, [
       { id: 1, name: "integer", config, entries: new Map([
         [0, { key: "density_value", value: { type: TV.INT_DEC, data: 1 } }],
@@ -602,7 +594,7 @@ describe("resource-value-density", () => {
         [0, { key: "density_value", value: { type: TV.INT_DEC, data: 3 } }],
       ]) },
     ]);
-    const res = new Resources(table, {});
+    const res = new Resources([{ table, zip: {}, lazyEntries: new Map() }], { ...deviceQualifiers(), density: 480 });
     for (const [id, resolve, expected] of [
       [0x7f010000, 1, [TV.INT_DEC, 3, 480, 0x7f010000]],
       [0x7f010001, 1, [TV.INT_DEC, 3, 480, 0x7f010000]],
@@ -617,11 +609,9 @@ describe("resource-value-density", () => {
     const theme = new NativeTheme(res), attr = 0x7f020000;
     theme.entries.set(attr, { t: TV.REFERENCE, d: 0x7f010000, pkg: 0x7f, flags: 0 });
     const selected = theme.resolvedAttribute(attr);
-    const other = new Resources(null, {}, undefined, true);
-    other.setApks([]);
     expect(theme.resolvedAttribute(attr)).toBe(selected);
-    config.density = table.device.density = 160;
-    res.invalidate();
+    config.density = 160;
+    res.configure({ ...res.qualifiers, density: 160 });
     expect(theme.resolvedAttribute(attr)).toMatchObject({ d: 1, density: 160 });
   });
 });

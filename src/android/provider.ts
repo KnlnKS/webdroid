@@ -8,7 +8,7 @@ import { startActivityFor } from "./server/atm.ts";
 import { thisApp } from "./server/am.ts";
 import { registerSystemActivity, systemActivity, mkResultIntent, newIntent, intentQuery$, mkComponentName, type JIntent } from "./intent.ts";
 import { csText } from "../jvm/natives/jchars.ts";
-import { frameworkString } from "./res.ts";
+import { systemResource } from "./configuration.ts";
 import { mkUri } from "./net.ts";
 import { toJsArray } from "../jvm/natives/jcoll.ts";
 import { pickTree, pickDocument, pickDocuments } from "./documents.ts";
@@ -78,7 +78,7 @@ registerSystemActivity("android.intent.action.CHOOSER", driven(function* (intent
   const labels: string[] = [];
   for (const m of matches) labels.push(yield* awaited(csText(yield vcall(m, "loadLabel", "(Landroid/content/pm/PackageManager;)Ljava/lang/CharSequence;", pm))));
   const title = yield vcall(intent, "getCharSequenceExtra", `(${S})Ljava/lang/CharSequence;`, "android.intent.extra.TITLE");
-  const choice = yield* awaited((yield* awaited(share())).chooseActivity(title == null ? frameworkString("chooseActivity") ?? "" : yield* awaited(csText(title)), labels));
+  const choice = yield* awaited((yield* awaited(share())).chooseActivity(title == null ? yield systemResource("string", "chooseActivity", "getString", `(I)${S}`) : yield* awaited(csText(title)), labels));
   if (choice === null) return null;
   const chosen: JIntent = yield newObj("android/content/Intent", "(Landroid/content/Intent;)V", target);
   const activity = getDeclared<JObj>(matches[choice], "android/content/pm/ResolveInfo", "activityInfo");

@@ -11,7 +11,6 @@ import { DEVICE_OVERLAYS } from "./device-overlays.ts";
 import { centralDir, entryBytes } from "../zip.ts";
 import { rt } from "../jvm/runtime.ts";
 import { dexesIn, dexEntryNames, isDexEntry, type DexFile } from "../jvm/dex.ts";
-import { Resources, setFramework } from "./res.ts";
 import { PLATFORM_JARS } from "../jvm/provenance.ts";
 import { loadDex } from "../jvm/tier.ts";
 import { BOOT_JAR_PATHS } from "../jvm/bootclasspath.ts";
@@ -107,7 +106,7 @@ export function installFramework(apk: Uint8Array): Arsc {
     // every entry, inflated on its first read: asset lists and opens see the whole archive
     const entries = new Map<string, FileSource>();
     for (const [name, e] of dir) entries.set(name, { size: e.size, read: (at, n) => files(name)!.subarray(at, at + n) });
-    const platform = new PackageRecord(parseAXML(manifest), new Resources(arsc, {}, entries, true),
+    const platform = new PackageRecord(parseAXML(manifest), { table: arsc, zip: {}, lazyEntries: entries },
       "/system/framework/framework-res.apk", 1000, () => pendingCertificates ??= (async () => {
         const certificates = await apkCertificates(apk, signingZip);
         if (certificates.length) return certificates;
@@ -122,9 +121,8 @@ export function installFramework(apk: Uint8Array): Arsc {
 
   // the reference device's overlays (SystemUI's Monet palette, gestural navigation) replace these defaults
   for (const [key, [type, data]] of Object.entries(DEVICE_OVERLAYS)) {
-    const slash = key.indexOf("/"), id = arsc.names(key.slice(0, slash)).get(key.slice(slash + 1));
-    if (id !== undefined) arsc.overlay(id, { type, data: data | 0 });
+    const slash = key.indexOf("/"), name = key.slice(slash + 1), id = arsc.names(key.slice(0, slash)).get(name);
+    if (id !== undefined) arsc.overlay(id, name, { type, data: data | 0 });
   }
-  setFramework(arsc);
   return arsc;
 }

@@ -13,7 +13,7 @@ import { loadFramework, mountPlatformJars } from "../android/framework.ts";
 import { deviceNightMode } from "../android/settings.ts";
 import { qualify as componentClass } from "../jvm/roots.ts";
 import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml.ts";
-import { Resources, nativeRes } from "../android/res.ts";
+import { nativeRes } from "../android/res.ts";
 import { setDeviceNight, syncDeviceOrientation, applyApplicationLocales, localesFromTags, initDeviceLocales, loadResources, applyDeviceConfiguration, type Locales } from "../android/configuration.ts";
 import { appHost, setAppHost } from "../android/apphost.ts";
 import { registerApk, registerSplit } from "../android/assetmanager.ts";
@@ -203,7 +203,7 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   mark("dataReady"); onStatus("Loading resources…");
   const arsc = new Arsc(zip["resources.arsc"], (p) => zip[p] ?? null);
   for (const sp of install.splits) if (sp.resources) arsc.add(sp.resources);
-  registerApk(apkPath(), new Resources(arsc, zip, install.lazyEntries));
+  registerApk(apkPath(), { table: arsc, zip, lazyEntries: install.lazyEntries });
   for (const sp of install.splits) registerSplit(apkPath(sp.name));
   const { target } = usesSdk(manifest);
   const jres = await onMain(() => loadResources(apkPath()));

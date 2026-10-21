@@ -37,6 +37,7 @@ import { PLATFORM_JARS, PLATFORM_DATA, BOOT_JAR_PATHS, SHARED_LIBRARIES } from "
 import { loadPlatformJar } from "../src/android/framework.ts";
 import { SYSTEM_PACKAGES } from "../src/shell/system-packages.ts";
 import { Arsc } from "../src/android/arsc.ts";
+import { deviceQualifiers } from "../src/android/configuration.ts";
 import { postScriptName } from "../src/android/sfnt.ts";
 import { adb, asRoot, pull, runDex } from "./adb.ts";
 import { nodeCommand } from "./node.ts";
@@ -167,7 +168,7 @@ async function recordDeviceOverlays() {
   for (let i = 0; i < list.length; i += 100) {
     for (const line of adb("shell", `for k in ${list.slice(i, i + 100).join(" ")}; do echo "$k $(cmd overlay lookup android android:$k)"; done`).split("\n")) {
       const [key, text] = line.trim().split(" "), [type, name] = key.split("/");
-      const value = resValue(type, text), own = table.entry(table.names(type).get(name)!)?.value;
+      const value = resValue(type, text), own = table.entry(table.names(type).get(name)!, deviceQualifiers())?.value;
       // a color the table holds as RGB8 rather than ARGB8 is the same color when its data is
       if (!value || own && own.data === value[1] && (own.type === value[0] || type === "color")) continue;
       values.push([JSON.stringify(key), `[0x${value[0].toString(16)}, ${type === "color" ? "0x" + (value[1] >>> 0).toString(16) : value[1]}]`]);
@@ -346,7 +347,7 @@ const check = (a: Arsc) => {
   let hit = 0, wrong = 0, absent = 0;
   const examples: string[] = [];
   for (const [k, id] of ids) {
-    const e = a.entry(id);
+    const e = a.entry(id, deviceQualifiers());
     const want = k.slice(k.indexOf("/") + 1);
     // R.java spells an entry as a java identifier, so a dotted style name arrives underscored
     if (!e) absent++;

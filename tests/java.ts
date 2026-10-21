@@ -60,9 +60,9 @@ async function preloadTextPaint(): Promise<void> {
  *  TYPE_STRING's data indexing `strings`, which stand in for the package's value pool. */
 export async function fakeStyles(strings: string[], styles: Record<number, [number, number, number][]>) {
   const { Resources, Bag } = await import("../src/android/res.ts");
-  const res = new Resources(null, {});
-  const table = { pkgId: 0x7f, packageIds: () => [0x7f], device: {}, values: { get: (i: number) => strings[i] }, specFlags: () => 0 };
-  res.setApks([{ path: "", table: table as never, zip: {}, lazyEntries: new Map() }]);
+  const { deviceQualifiers } = await import("../src/android/configuration.ts");
+  const table = { pkgId: 0x7f, packageIds: () => [0x7f], values: { get: (i: number) => strings[i] }, specFlags: () => 0 };
+  const res = new Resources([{ table: table as never, zip: {}, lazyEntries: new Map() }], deviceQualifiers());
   for (const [id, entries] of Object.entries(styles)) {
     const sorted = entries.slice().sort((a, b) => a[0] - b[0]);
     res.bagCache.set(+id, new Bag(0, 0, Int32Array.from(sorted, (e) => e[0]), Uint8Array.from(sorted, (e) => e[1]),
@@ -83,12 +83,12 @@ export async function loadPlatform(): Promise<void> {
   if (!deviceConfiguration().locales.values.length) await initDeviceLocales();
 }
 
-/** AOSP's Resources over `res`, installed as an app at /data/app/`name`.apk beside framework-res */
-export async function appResources(res: import("../src/android/res.ts").Resources, name: string) {
+/** AOSP's Resources over `apk`, installed as an app at /data/app/`name`.apk beside framework-res */
+export async function appResources(apk: import("../src/android/res.ts").Apk, name: string) {
   const { loadResources } = await import("../src/android/configuration.ts");
   const { registerApk } = await import("../src/android/assetmanager.ts");
   await loadPlatform();
-  registerApk(`/data/app/${name}.apk`, res);
+  registerApk(`/data/app/${name}.apk`, apk);
   return loadResources(`/data/app/${name}.apk`);
 }
 
@@ -113,7 +113,7 @@ export async function bootApp(record: import("../src/android/packages.ts").Packa
   let entry = booted.get(record.pkg);
   if (!entry) {
     packages.set(record.pkg, record);
-    registerApk(record.path, record.res);
+    registerApk(record.path, record.apk);
     // installd's createAppData, as a page's boot does it
     for (const dir of ["", "/cache", "/code_cache"]) vfs.mkdir(`/data/data/${record.pkg}${dir}`);
   }
@@ -173,7 +173,7 @@ export async function bootApp(record: import("../src/android/packages.ts").Packa
  *  installed one; its archive is an empty table at /data/app/`pkg`.apk */
 export async function packageRecord(pkg: string, { target = 35, permissions = [] as string[], certificate = 1, application = [] as import("../src/android/axml.ts").XmlNode[] } = {}) {
   const { PackageRecord, packageUid } = await import("../src/android/packages.ts");
-  const { Resources } = await import("../src/android/res.ts");
+  const { emptyApk } = await import("../src/android/res.ts");
   const { TV } = await import("../src/android/axml.ts");
   const attr = (name: string, str: string | null, data = 0) => ({ name, str, ns: "", resId: 0, type: str === null ? TV.INT_DEC : TV.STRING, data });
   const manifest = { name: "manifest", attrs: [attr("package", pkg)], children: [
@@ -181,5 +181,5 @@ export async function packageRecord(pkg: string, { target = 35, permissions = []
     ...permissions.map((name) => ({ name: "uses-permission", attrs: [attr("name", name)], children: [] })),
     { name: "application", attrs: [], children: application },
   ] };
-  return new PackageRecord(manifest, new Resources(null, {}), `/data/app/${pkg}.apk`, packageUid(pkg), async () => [new Uint8Array([certificate])]);
+  return new PackageRecord(manifest, emptyApk(), `/data/app/${pkg}.apk`, packageUid(pkg), async () => [new Uint8Array([certificate])]);
 }

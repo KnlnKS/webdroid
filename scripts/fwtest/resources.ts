@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { rt, declaredField, JObj } from "../../src/jvm/runtime.ts";
 import { newObj, vcall, scall, iof } from "../../src/jvm/natives/jentry.ts";
 import { Arsc } from "../../src/android/arsc.ts";
-import { Resources } from "../../src/android/res.ts";
+import { deviceQualifiers } from "../../src/android/configuration.ts";
 import { PackageRecord, packages } from "../../src/android/packages.ts";
 import { parseAXML } from "../../src/android/axml.ts";
 import { installFramework } from "../../src/android/framework.ts";
@@ -39,7 +39,7 @@ if (existsSync("vendor/aosp/framework-res.apk") && existsSync("apks/FitNotes.apk
   const appTable = new Arsc(app.zip["resources.arsc"], (path: string) => app.zip[path] ?? null);
   const manifest = parseAXML(app.zip["AndroidManifest.xml"]);
   const pkg = manifest.attrs.find((a) => a.name === "package")!.str!;
-  packages.set(pkg, new PackageRecord(manifest, new Resources(appTable, app.zip, app.lazyEntries), "/data/app/base.apk", 10001, async () => []));
+  packages.set(pkg, new PackageRecord(manifest, { table: appTable, zip: app.zip, lazyEntries: app.lazyEntries }, "/data/app/base.apk", 10001, async () => []));
   const appTheme = manifest.children.find((n) => n.name === "application")!.attrs.find((a) => a.name === "theme")!.data;
 
   const S = "Ljava/lang/String;", T = "Landroid/content/res/Resources$Theme;";
@@ -63,8 +63,8 @@ if (existsSync("vendor/aosp/framework-res.apk") && existsSync("apks/FitNotes.apk
   });
   await exercise("Resources.getQuantityString (PluralRules over a bag)", async () => {
     const plural = appTable.findId("plurals", "exercise");
-    same("one", await vcall(res, "getQuantityString", `(II)${S}`, plural, 1), appTable.values.get(appTable.entry(plural)!.bag!.map.find((e) => e[0] === 0x01000006)![2]));
-    same("other", await vcall(res, "getQuantityString", `(II)${S}`, plural, 2), appTable.values.get(appTable.entry(plural)!.bag!.map.find((e) => e[0] === 0x01000004)![2]));
+    same("one", await vcall(res, "getQuantityString", `(II)${S}`, plural, 1), appTable.values.get(appTable.entry(plural, deviceQualifiers())!.bag!.map.find((e) => e[0] === 0x01000006)![2]));
+    same("other", await vcall(res, "getQuantityString", `(II)${S}`, plural, 2), appTable.values.get(appTable.entry(plural, deviceQualifiers())!.bag!.map.find((e) => e[0] === 0x01000004)![2]));
   });
   await exercise("Theme.obtainStyledAttributes (ApplyStyle over the theme)", async () => {
     const attrs = Int32Array.of(await id("colorBackground", "attr", "android"), await id("windowActionBar", "attr", "android"));

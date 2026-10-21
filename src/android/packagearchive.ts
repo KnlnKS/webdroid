@@ -3,13 +3,13 @@ import { zipTree, centralDirOfSource } from "../zip.ts";
 import { ZipEntryFile } from "../shell/install.ts";
 import { readFully, type FileSource } from "../shell/lazyfile.ts";
 import { Arsc } from "./arsc.ts";
-import { Resources } from "./res.ts";
+import type { Apk } from "./res.ts";
 import { apkSigningBlock, signingSequence as sequence } from "./apksignature.ts";
 
 export interface PackageArchive {
   root: XmlNode;
   pkg: string;
-  res: Resources;
+  apk: Apk;
   certificates: Uint8Array[];
 }
 
@@ -50,12 +50,13 @@ export async function parsePackageArchive(bytes: Uint8Array): Promise<PackageArc
   const zip = zipTree(bytes);
   return packageArchive(zip, await apkCertificates(bytes, zip));
 }
-export function packageArchive(zip: Record<string, Uint8Array>, certificates: Uint8Array[], lazyEntries?: Map<string, FileSource>): PackageArchive {
+export function packageArchive(zip: Record<string, Uint8Array>, certificates: Uint8Array[], lazyEntries = new Map<string, FileSource>()): PackageArchive {
   if (!zip["AndroidManifest.xml"]) throw new Error("APK has no AndroidManifest.xml");
   const root = parseAXML(zip["AndroidManifest.xml"]);
   const pkg = attrStr(root, "package");
   if (!pkg || !/^[\w]+(?:\.[\w]+)+$/.test(pkg)) throw new Error("invalid APK package name");
-  return { root, pkg, res: new Resources(zip["resources.arsc"] ? new Arsc(zip["resources.arsc"], (path) => zip[path] ?? null) : null, zip, lazyEntries, true), certificates };
+  const table = zip["resources.arsc"] ? new Arsc(zip["resources.arsc"], (path) => zip[path] ?? null) : null;
+  return { root, pkg, apk: { table, zip, lazyEntries }, certificates };
 }
 
 /** Certificates come from the installed record. Resource-table files stay synchronous for
@@ -68,7 +69,7 @@ export async function packageArchiveSource(source: FileSource, certificates: Uin
     const file = lazy.get(name);
     if (file) { zip[name] = await readFully(file); lazy.delete(name); }
   }
-  const archive = packageArchive(zip, certificates, lazy), pool = archive.res.arsc?.values;
+  const archive = packageArchive(zip, certificates, lazy), pool = archive.apk.table?.values;
   for (let i = 0; pool && i < pool.length; i++) {
     const name = pool.get(i), file = lazy.get(name);
     if (file) { zip[name] = await readFully(file); lazy.delete(name); }

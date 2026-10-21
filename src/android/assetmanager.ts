@@ -11,10 +11,11 @@ import { handle, deref, release, FINALIZER } from "./handles.ts";
 import { newObj, vcall } from "../jvm/natives/jentry.ts";
 import { i8, u8, jarray } from "../jvm/abi.ts";
 import {
-  Resources, NativeTheme, type Apk, type SV, newSV, resolveAttributes, STYLE_NUM_ENTRIES,
+  Resources, NativeTheme, type Apk, type SV, newSV, emptyApk, resolveAttributes, STYLE_NUM_ENTRIES,
 } from "./res.ts";
 import { TV, XE, parseAXMLDoc, StringPool, type XmlDoc, type XmlEvent, type XmlNode } from "./axml.ts";
-import { sizeClass, type Arsc } from "./arsc.ts";
+import { qualifiers } from "./arsc.ts";
+import { deviceQualifiers } from "./configuration.ts";
 import { packages } from "./packages.ts";
 import { mkPfd } from "./os.ts";
 import { BytesFile, readFully, type FileSource } from "../shell/lazyfile.ts";
@@ -23,39 +24,26 @@ const delegate = rt.registerJnis.bind(rt);
 
 // ── ApkAssets ───────────────────────────────────────────────────────────────────────────
 // An apk is one the package registry installed: the framework's at its device path, an app's at
-// the path PackageManager reports. The registry's Resources owns the table and the archive.
+// the path PackageManager reports. The registry's record owns the table and the archive.
 
 /** ApkAssets.PROPERTY_SYSTEM */
 const PROPERTY_SYSTEM = 1;
-interface ApkN extends Apk { system: boolean; strings: bigint }
+interface ApkN extends Apk { path: string; system: boolean; strings: bigint }
 const loaded = new Map<string, Apk>();
 /** the apk installed at `path`, as ApkAssets loads it */
-function apkAt(path: string): Apk | null {
-  let apk = loaded.get(path);
-  if (!apk) {
-    for (const record of packages.values()) {
-      if (record.path !== path) continue;
-      const r = record.res;
-      apk = { path, table: r.arsc ?? (r.tbl(0x01000000)?.pkgName === record.pkg ? r.tbl(0x01000000) : null), zip: r.zip, lazyEntries: r.lazyEntries };
-      loaded.set(path, apk);
-    }
-  }
-  return apk ?? null;
-}
+const apkAt = (path: string): Apk | null => loaded.get(path) ?? [...packages.values()].find((record) => record.path === path)?.apk ?? null;
 /** an apk the shell installed, before the package registry records it */
-export function registerApk(path: string, res: Resources): void {
-  if (!loaded.has(path)) loaded.set(path, { path, table: res.arsc, zip: res.zip, lazyEntries: res.lazyEntries });
+export function registerApk(path: string, apk: Apk): void {
+  if (!loaded.has(path)) loaded.set(path, apk);
 }
 /** a split installed with its base: its table and entries are merged into the base's (shell/install.ts),
  *  so the ApkAssets ResourcesManager loads for its path adds nothing of its own */
-export function registerSplit(path: string): void {
-  if (!loaded.has(path)) loaded.set(path, { path, table: null, zip: {}, lazyEntries: new Map() });
-}
+export const registerSplit = (path: string): void => registerApk(path, emptyApk());
 const apkN = (h: bigint) => deref<ApkN>(h);
 function loadApk(path: string, flags: number): bigint {
   const apk = apkAt(path);
   if (!apk) throw rt.mkThrowable("java/io/IOException", "Failed to load asset path " + path);
-  return handle({ ...apk, system: (flags & PROPERTY_SYSTEM) !== 0, strings: 0n } satisfies ApkN);
+  return handle({ ...apk, path, system: (flags & PROPERTY_SYSTEM) !== 0, strings: 0n } satisfies ApkN);
 }
 /** the apks behind an AssetManager */
 const apksOf = (res: Resources) => res.apks as ApkN[];
@@ -77,7 +65,7 @@ function findEntry(res: Resources, path: string, cookie = 0): { apk: Apk; source
 delegate("android/content/res/ApkAssets", {
   "nativeLoad(ILjava/lang/String;ILandroid/content/res/loader/AssetsProvider;)J": (_format: number, path: string, flags: number) => loadApk(path, flags),
   "nativeLoadEmpty(ILandroid/content/res/loader/AssetsProvider;)J": (flags: number) =>
-    handle({ path: "empty", table: null, zip: {}, lazyEntries: new Map(), system: (flags & PROPERTY_SYSTEM) !== 0, strings: 0n } satisfies ApkN),
+    handle({ ...emptyApk(), path: "empty", system: (flags & PROPERTY_SYSTEM) !== 0, strings: 0n } satisfies ApkN),
   // a descriptor is served by the path it was opened from; one with no installed apk behind it
   // fails as a device fails an unreadable one
   "nativeLoadFd(ILjava/io/FileDescriptor;Ljava/lang/String;ILandroid/content/res/loader/AssetsProvider;)J":
@@ -218,8 +206,8 @@ function bagValue(res: Resources, id: number, i: number): SV {
 }
 /** a resource's package, type and entry name, or null when it names nothing */
 function resourceName(res: Resources, id: number): [string, string, string] | null {
-  const table = res.tbl(id), entry = table?.entry(id);
-  return entry ? [table!.packageName(id >>> 24) ?? "", res.idType(id), entry.key] : null;
+  const table = res.tbl(id), entry = res.entry(id);
+  return entry ? [table!.packageName(id >>> 24) ?? "", table!.typeName((id >> 16) & 0xff, id & 0xffff, id >>> 24, res.qualifiers), entry.key] : null;
 }
 /** AssetManager2::GetResourceId over "[package:][type/]entry": packages in load order, the
  *  framework's first when no package is named */
@@ -238,7 +226,7 @@ function resourceId(res: Resources, name: string, defType: string | null, defPkg
     if (!table) continue;
     for (const id of table.packageIds()) {
       if (pkg && table.packageName(id) !== pkg) continue;
-      const found = table.findId(type, entry, id) || (type === "attr" ? table.findId("^attr-private", entry, id) : 0);
+      const found = table.findId(type, entry, id, res.qualifiers) || (type === "attr" ? table.findId("^attr-private", entry, id, res.qualifiers) : 0);
       if (found) return found;
     }
   }
@@ -250,19 +238,8 @@ function localesOf(res: Resources, excludeSystem: boolean): string[] {
   for (const apk of apksOf(res)) if (!(excludeSystem && apk.system)) for (const l of apk.table?.locales ?? []) out.add(l);
   return [...out];
 }
-/** the qualifiers selection reads, out of nativeSetConfiguration's arguments */
-function qualifiers(locale: string | null, orientation: number, density: number, swdp: number, wdp: number, hdp: number, screenLayout: number, uiMode: number, sdk: number) {
-  const [lang = "", ...rest] = (locale ?? "").split("-");
-  const region = rest.find((p) => /^[A-Z]{2}$|^\d{3}$/.test(p)) ?? "";
-  return {
-    lang: lang === "und" ? "" : lang, region, orientation: orientation as Arsc["device"]["orientation"], density, swdp, wdp, hdp,
-    size: (screenLayout & 0x0f) || sizeClass(swdp), dir: screenLayout & 0xc0,
-    uiType: uiMode & 0x0f, night: (uiMode & 0x30) === 0x20 ? 1 : 0, sdk,
-  };
-}
-
 delegate("android/content/res/AssetManager", {
-  "nativeCreate()J": () => { liveAssetManagers++; const res = new Resources(null, {}, undefined, true); res.setApks([]); return handle(res); },
+  "nativeCreate()J": () => { liveAssetManagers++; return handle(new Resources([], deviceQualifiers())); },
   "nativeDestroy(J)V": (h: bigint) => { liveAssetManagers--; release(h); },
   "getGlobalAssetManagerCount()I": () => liveAssetManagers,
   "getGlobalAssetCount()I": () => liveAssets,
@@ -325,7 +302,7 @@ delegate("android/content/res/AssetManager", {
     const res = assets(h), n = res.bag(id)?.keys.length ?? -1;
     if (n < 0) return null;
     const out: (string | null)[] = [];
-    for (let i = 0; i < n; i++) { const v = bagValue(res, id, i); out.push(v.t === TV.STRING ? res.tbl(v.pkg << 24)?.values.get(v.d) ?? null : null); }
+    for (let i = 0; i < n; i++) out.push(res.string(bagValue(res, id, i)));
     return jarray(out, "Ljava/lang/String;");
   },
   "nativeGetResourceStringArrayInfo(JI)[I": (h: bigint, id: number) => {
@@ -344,7 +321,7 @@ delegate("android/content/res/AssetManager", {
   "nativeGetResourcePackageName(JI)Ljava/lang/String;": (h: bigint, id: number) => resourceName(assets(h), id)?.[0] ?? null,
   "nativeGetResourceTypeName(JI)Ljava/lang/String;": (h: bigint, id: number) => resourceName(assets(h), id)?.[1] ?? null,
   "nativeGetResourceEntryName(JI)Ljava/lang/String;": (h: bigint, id: number) => resourceName(assets(h), id)?.[2] ?? null,
-  "nativeGetParentThemeIdentifier(JI)I": (h: bigint, id: number) => assets(h).tbl(id)?.entry(id)?.bag?.parent ?? 0,
+  "nativeGetParentThemeIdentifier(JI)I": (h: bigint, id: number) => assets(h).entry(id)?.bag?.parent ?? 0,
   "nativeGetSizeConfigurations(J)[Landroid/content/res/Configuration;": (h: bigint) => sizeConfigurations(assets(h), false),
   "nativeGetSizeAndUiModeConfigurations(J)[Landroid/content/res/Configuration;": (h: bigint) => sizeConfigurations(assets(h), true),
   "nativeGetOverlayableMap(JLjava/lang/String;)Ljava/util/Map;": driven(function* (h: bigint, pkg: string): Gen {
@@ -474,7 +451,7 @@ const openFd = driven(function* (res: Resources, path: string, cookie: number, o
 /** the chain of styles a bag inherits from, itself first (AssetManager2::GetBagResIdStack) */
 function styleStack(res: Resources, id: number): number[] {
   const out: number[] = [];
-  while (id && !out.includes(id) && res.tbl(id)?.entry(id)?.bag) { out.push(id); id = res.tbl(id)!.entry(id)!.bag!.parent; }
+  for (let bag = res.entry(id)?.bag; id && bag && !out.includes(id); bag = res.entry(id)?.bag) { out.push(id); id = bag.parent; }
   return out;
 }
 function overlayablesOf(res: Resources, pkg: string): Map<string, string> | null {

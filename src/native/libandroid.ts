@@ -313,7 +313,7 @@ export function ndkInit(): void {
     AAssetManager_fromJava: (cpu, a) => {
       a.p(); const am = deref(a.i(), cpu);
       if (!am) return 0;
-      zips.push(nativeAssets(am));
+      zips.push(nativeAssets(am).apks.findLast((apk) => apk.table && apk.table.pkgId !== 0x01) ?? zips[0]);
       return zips.length - 1;
     },
     AAssetManager_open: (_c, a) => {
