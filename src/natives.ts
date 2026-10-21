@@ -92,7 +92,7 @@ import "./android/locationmanager.ts";
 import "./android/job.ts";
 import "./android/documents.ts";
 import "./android/mediastore.ts";
-import "./android/provider.ts";
+import "./android/systemactivities.ts";
 import "./android/notification.ts";
 import "./android/services.ts";
 import "./android/connectivity.ts";
