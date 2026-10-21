@@ -1,6 +1,6 @@
 import java.util.*;
 
-/** Extra G1 workloads in the shape of scripts/jbench/Bench.java (a `case` per line of run), for the code the jbench set leaves out: strings, arithmetic
+/** Extra G1 workloads in the shape of Bench.java (a `case` per line of run), for the code the jbench set leaves out: strings, arithmetic
  *  loops, field and array access, direct, virtual and interface calls, and the `kt` shapes Kotlin compiles to. g1.ts cuts each case into its own static
  *  method; g1art.ts runs the same cases on the reference device. */
 public class G1 {

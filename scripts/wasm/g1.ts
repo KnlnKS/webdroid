@@ -1,5 +1,5 @@
 // G1 timing: all selected Bench and G1 workloads on the Wasm tier, first call and steady state, in node and in headless Chrome (so Liftoff and TurboFan
-// tiering are both represented). A workload is a `case` of scripts/jbench/Bench.java or java/G1.java; all selected workloads are attempted and failures
+// tiering are both represented). A workload is a `case` of java/Bench.java or java/G1.java; all selected workloads are attempted and failures
 // retained. Every measurement is a fresh process/context; every run of a workload must answer alike.
 //   pnpm wasm g1 [workload ...] [--reps 100] [--runs 5] [--engines node,chrome] [--json out.json] [--ref earlier.json] [--v8-flags="--flag ..."] [--installed DIR [--inline]] [--phases]
 // --ref compares with the numbers (and answers) of an earlier --json run and measures only its workloads, for A/B work on the compiler.
@@ -36,7 +36,7 @@ if (inlineTier && !installedDir) throw new Error("--inline requires --installed"
 if (![reps, runs].every(n => Number.isInteger(n) && n > 0) || engines.some(e => !["node", "chrome"].includes(e)) || new Set(engines).size !== engines.length) throw new Error("positive integer reps/runs and distinct node/chrome engines required");
 
 // ---- Bench.java and G1.java with each workload cut into its own static method (as jbench.ts does)
-const out = G1_DIR, sources = [["Bench", join(ROOT, "scripts/jbench/Bench.java")], ["G1", join(JAVA, "G1.java")]];
+const out = G1_DIR, sources = [["Bench", join(JAVA, "Bench.java")], ["G1", join(JAVA, "G1.java")]];
 mkdirSync(out, { recursive: true });
 const names: string[] = [], classOf = new Map<string, string>(), cut = sources.map(([cls, file]) => {
   const { names: own, source } = cutWorkloads(readFileSync(file, "utf8"));

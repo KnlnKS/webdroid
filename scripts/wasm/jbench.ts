@@ -1,17 +1,18 @@
-// Each scripts/jbench workload, cut out of Bench.java as its own static method, runs lazily compiled over the AOSP boot dex and must answer as
-// scripts/jbench/expected.json records: only the methods a workload executes are compiled, and the first construct the compiler has no translation for is reported.
-// Needs the Android SDK (android.jar, d8) and javac. Run from the repository root: pnpm wasm jbench [workload ...] [-v]
+// Each workload of java/Bench.java, cut out as its own static method, runs lazily compiled over the AOSP boot dex and must answer as ART does in
+// java/Bench.expected.json (`pnpm wasm g1art --record`): only the methods a workload executes are compiled, and the first construct the compiler has no
+// translation for is reported, and fails. Needs the Android SDK (android.jar, d8) and javac. Run from the repository root: pnpm wasm jbench [workload ...] [-v]
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { program, world } from "./lib.ts";
 import { mountPlatform, startProcess } from "./harness.ts";
-import { ROOT } from "./paths.ts";
+import { BENCH_EXPECTED, JAVA, ROOT } from "./paths.ts";
 import { PLATFORM_PATHS } from "../aosp.ts";
 import { cutWorkloads } from "./tools.ts";
 import { androidFixture, tempDir } from "../java.ts";
+import { cli } from "../args.ts";
 
-const text = readFileSync(join(ROOT, "scripts/jbench/Bench.java"), "utf8"), expected = JSON.parse(readFileSync(join(ROOT, "scripts/jbench/expected.json"), "utf8")) as Record<string, number>, out = tempDir();
-const verbose = process.argv.includes("-v"), only = process.argv.slice(2).filter((a) => !a.startsWith("-"));
+const text = readFileSync(join(JAVA, "Bench.java"), "utf8"), expected = JSON.parse(readFileSync(BENCH_EXPECTED, "utf8")) as Record<string, number>, out = tempDir();
+const { values: { verbose }, positionals: only } = cli("pnpm wasm jbench [workload ...] [-v]", { verbose: { type: "boolean", short: "v" } });
 
 const { names, source } = cutWorkloads(text);
 writeFileSync(join(out, "Bench.java"), source);
@@ -43,7 +44,7 @@ for (const name of todo) {
   const status = got === want ? "MATCH" : hit.length ? "BLOCKED" : "DIFF";
   tally[status]++;
   console.log(`${name.padEnd(15)} ${(status === "BLOCKED" ? "-" : got).padStart(10)} ${want.padStart(10)}  ${status.padEnd(7)} ${String(w.stats.methods).padStart(4)} methods ${ms.toFixed(0).padStart(5)} ms${status === "BLOCKED" ? `  first gap: ${hit[0]}` : ""}`);
-  if (status === "DIFF") process.exitCode = 1;
+  if (status !== "MATCH") process.exitCode = 1;
 }
 console.log(`${tally.MATCH} MATCH, ${tally.DIFF} DIFF, ${tally.BLOCKED} BLOCKED of ${todo.length}`);
 console.log(`total: ${total.methods} methods compiled in ${total.compileMs.toFixed(0)} ms (instantiate ${total.instantiateMs.toFixed(0)} ms), ${total.classes} class modules (${total.classMs.toFixed(0)} ms)`);

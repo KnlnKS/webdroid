@@ -14,5 +14,7 @@ export function platformJars(...names: string[]): string[] {
 export const CORE_PATHS = platformJars("core-oj", "core-libart", "core-icu4j");
 /** the Java sources the suites compile with javac and d8 */
 export const JAVA = join(ROOT, "tests/fixtures/wasm/java");
+/** what ART answers for each workload of Bench.java (g1art --record) */
+export const BENCH_EXPECTED = join(JAVA, "Bench.expected.json");
 /** where g1.ts and watdump.ts build and read the benchmark dex: per checkout, so worktrees running side by side do not share it */
 export const G1_DIR = process.env.G1_DIR ?? join(tmpdir(), `g1-${createHash("sha1").update(ROOT).digest("hex").slice(0, 8)}`);
