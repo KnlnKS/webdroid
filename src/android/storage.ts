@@ -5,7 +5,7 @@
 import { awaited, rt, JObj, declaredField, driven, type Gen } from "../jvm/runtime.ts";
 import { jarray } from "../jvm/abi.ts";
 import { newObj, scall, linkInit } from "../jvm/natives/jentry.ts";
-import { systemResource } from "./resnative.ts";
+import { systemResource } from "./configuration.ts";
 import { newFile } from "../jvm/natives/jio.ts";
 import { hostService } from "./binder.ts";
 import { vfs, storageEstimate } from "../shell/vfs.ts";

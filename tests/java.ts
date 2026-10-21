@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { rt, type JObj } from "../src/jvm/runtime.ts";
-import { classNameOf, scall } from "../src/jvm/natives/jentry.ts";
+import { classNameOf, newObj, scall } from "../src/jvm/natives/jentry.ts";
 import type { AppHost } from "../src/android/apphost.ts";
 import type { Resources } from "../src/android/res.ts";
 
@@ -9,6 +9,12 @@ export { scall } from "../src/jvm/natives/jentry.ts";
 /** the Java exception `call` throws, synchronously or as a rejection, as "class: message", or null */
 export const thrown = (call: () => unknown): Promise<string | null> => Promise.resolve().then(call)
   .then(() => null, (e: { msg?: string }) => `${classNameOf(e)}: ${e.msg}`);
+
+/** an AssetFileDescriptor over the whole of a ParcelFileDescriptor served over `bytes` */
+export async function assetFd(bytes: Uint8Array): Promise<JObj> {
+  const { mkPfd } = await import("../src/android/os.ts");
+  return newObj("android/content/res/AssetFileDescriptor", "(Landroid/os/ParcelFileDescriptor;JJ)V", await mkPfd(bytes), 0n, BigInt(bytes.length));
+}
 
 /** the JCA engine `cls` (a Cipher, a KeyPairGenerator, ...) for `algo` */
 export const getInstance = (cls: string, algo: string) => scall(cls, "getInstance", `(Ljava/lang/String;)L${cls};`, algo);
@@ -45,7 +51,7 @@ export function loadSystemFonts(): Promise<void> {
 /** the device's languages and the text paint classes, as the zygote sets them up: a TS TextView
  *  constructs its TextPaint synchronously */
 async function preloadTextPaint(): Promise<void> {
-  await (await import("../src/android/resnative.ts")).initDeviceLocales();
+  await (await import("../src/android/configuration.ts")).initDeviceLocales();
   await (await import("../src/android/paint.ts")).preloadPaint();
 }
 
@@ -73,18 +79,17 @@ export async function loadPlatform(): Promise<void> {
   globalThis.fetch = (async (url: string) => url === "/vendor/aosp/framework-res.apk"
     ? new Response(readFileSync(new URL("../vendor/aosp/framework-res.apk", import.meta.url))) : fetch(url)) as typeof fetch;
   try { await loadFramework(); } finally { globalThis.fetch = fetch; }
-  const { deviceConfiguration, initDeviceLocales } = await import("../src/android/resnative.ts");
+  const { deviceConfiguration, initDeviceLocales } = await import("../src/android/configuration.ts");
   if (!deviceConfiguration().locales.values.length) await initDeviceLocales();
 }
 
 /** AOSP's Resources over `res`, installed as an app at /data/app/`name`.apk beside framework-res */
 export async function appResources(res: import("../src/android/res.ts").Resources, name: string) {
-  const { loadResources, javaConfiguration } = await import("../src/android/resources.ts");
+  const { loadResources } = await import("../src/android/configuration.ts");
   const { registerApk } = await import("../src/android/assetmanager.ts");
-  const { deviceConfiguration } = await import("../src/android/resnative.ts");
   await loadPlatform();
   registerApk(`/data/app/${name}.apk`, res);
-  return loadResources(`/data/app/${name}.apk`, await javaConfiguration(deviceConfiguration()));
+  return loadResources(`/data/app/${name}.apk`);
 }
 
 type BootedApp = { app: JObj; info: JObj; loaded: JObj };

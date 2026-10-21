@@ -51,7 +51,7 @@ import "./android/fonts.ts";
 import "./android/path.ts";
 import "./android/region.ts";
 import "./android/text.ts";
-import "./android/resnative.ts";
+import "./android/configuration.ts";
 import "./android/motionevent.ts";
 import "./android/pm.ts";
 import "./android/permissions.ts";

@@ -9,7 +9,6 @@ import { newObj, vcall, vcallAsync, mainThread, iof, staticField } from "../src/
 import { getDeclared, type JObj } from "../src/jvm/runtime.ts";
 import { newFile, fdInt, setFdInt, mkFd } from "../src/jvm/natives/jio.ts";
 import { vfs } from "../src/shell/vfs.ts";
-import { mkAssetFd } from "../src/android/resnative.ts";
 import { E } from "../src/native/abi.ts";
 import { Cpu, setA64 } from "../src/native/cpu.ts";
 import { defineHost, lookupHost } from "../src/native/host.ts";
@@ -23,7 +22,7 @@ import { FdScope } from "../src/android/fd-scope.ts";
 import { settleRemoteMaps } from "../src/native/mappings.ts";
 import { kernelInit } from "../src/native/syscall.ts";
 import { BytesFile } from "../src/shell/lazyfile.ts";
-import { scall } from "./java.ts";
+import { assetFd, scall } from "./java.ts";
 import { FileDescriptors, type DescriptorCalls } from "../src/shell/file-descriptors.ts";
 import { callProxy, serveCalls } from "../src/shell/process-port.ts";
 import { isRemoteFd, processRights } from "../src/native/process-fd.ts";
@@ -523,7 +522,7 @@ describe("file-descriptor", () => {
     const input = await newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", "/data/data/test/fd/in.bin");
     const pfd = await scall("android/os/ParcelFileDescriptor", "dup", "(Ljava/io/FileDescriptor;)Landroid/os/ParcelFileDescriptor;", await vcall(input, "getFD", FD));
     expect(await vcall(pfd, "getFd", "()I")).toBeGreaterThanOrEqual(0);
-    const entry = await mkAssetFd(new Uint8Array([1, 2, 3, 4]));
+    const entry = await assetFd(new Uint8Array([1, 2, 3, 4]));
     const dup = await scall("android/os/ParcelFileDescriptor", "dup", "(Ljava/io/FileDescriptor;)Landroid/os/ParcelFileDescriptor;", await vcall(entry, "getFileDescriptor", FD));
     const end = await scall("android/system/Os", "lseek", "(Ljava/io/FileDescriptor;JI)J", await vcall(dup, "getFileDescriptor", FD), 0n, 2);
     expect(end).toBe(4n);

@@ -33,7 +33,7 @@ for (const jc of w.prog.all()) {
 console.log(`withheld ${BYTECODE.length} prefixes; ${[...w.prog.all()].length} platform classes\n\ncoverage ${have}/${total} declared natives bound`);
 
 // the device's languages and the main looper the exercises' Handlers attach to, as a booted page has them
-await (await import("../../src/android/resnative.ts")).initDeviceLocales();
+await (await import("../../src/android/configuration.ts")).initDeviceLocales();
 await (await import("../../src/android/mainloop.ts")).startMainLooper();
 
 (await import("../fwtest/harness.ts")).loader.loadDex = (dex) => { w.addDexes([dex]); };

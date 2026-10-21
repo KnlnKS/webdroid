@@ -4,7 +4,7 @@
 import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime.ts";
 import { newObj, scall, vcall, iof } from "../jvm/natives/jentry.ts";
 import { logUncaught, detached } from "../jvm/natives/jthrowable.ts";
-import { systemResource } from "./resnative.ts";
+import { systemResource } from "./configuration.ts";
 import { toJsArray } from "../jvm/natives/jcoll.ts";
 import { settingsAccess } from "./settings.ts";
 import { hostService } from "./binder.ts";

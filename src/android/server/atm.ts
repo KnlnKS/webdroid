@@ -16,7 +16,7 @@ import { componentParts$, intentQuery$, mkComponentName, systemActivity, withCom
 import { grantResultUris } from "../urigrants.ts";
 import { attached, thisApp, userLaunched, pms, runsHere } from "./am.ts";
 import { GET_META_DATA, MATCH_DEFAULT_ONLY } from "../packages.ts";
-import { deviceConfiguration } from "../resnative.ts";
+import { deviceConfiguration } from "../configuration.ts";
 import { GL_ES_VERSION } from "../pm.ts";
 
 const CT = "android/app/servertransaction/";

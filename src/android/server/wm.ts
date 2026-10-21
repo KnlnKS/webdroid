@@ -9,8 +9,7 @@ import { device } from "../../shell/config.ts";
 import { uptimeMillis } from "../../guest-clock.ts";
 import { type Layer, displayLayer, removeLayer, javaSurfaceControl, scheduleComposite } from "../surfaceflinger.ts";
 import { type Channel, channelOf, sendFocus, publish } from "../inputchannel.ts";
-import { javaConfiguration } from "../resources.ts";
-import { deviceConfiguration, systemResource } from "../resnative.ts";
+import { javaConfiguration, systemResource } from "../configuration.ts";
 import { edges } from "../graphics.ts";
 import { TOUCHSCREEN, TOUCH_SOURCE, VIRTUAL_KEYBOARD, touchPrecision } from "../inputdevices.ts";
 import { SOURCE_KEYBOARD } from "../keyevent.ts";
@@ -123,7 +122,7 @@ export const setImeShown = driven(function* (shown: boolean): Gen<void> {
 /** the device's configuration, and a full-screen task's override of it: what activities and
  *  windows are laid out against */
 export const configurations = driven(function* (): Gen<{ global: JObj; override: JObj }> {
-  const global = yield* awaited(javaConfiguration(deviceConfiguration()));
+  const global = yield* awaited(javaConfiguration());
   const override = yield newObj("android/content/res/Configuration", "(Landroid/content/res/Configuration;)V", global);
   const windowConfig = getDeclared<JObj>(override, "android/content/res/Configuration", "windowConfiguration");
   yield vcall(windowConfig, "setActivityType", "(I)V", ACTIVITY_TYPE_STANDARD);

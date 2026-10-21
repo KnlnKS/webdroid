@@ -2,8 +2,7 @@
 import { loadFramework, mountPlatformJars } from "../android/framework.ts";
 import { setProcessIdentity, setProcessName, PROCESS_PID } from "../android/os.ts";
 import { onMain } from "../android/mainloop.ts";
-import { applyDeviceConfiguration } from "../android/resources.ts";
-import { initDeviceLocales } from "../android/resnative.ts";
+import { applyDeviceConfiguration, initDeviceLocales } from "../android/configuration.ts";
 import { scall } from "../jvm/natives/jentry.ts";
 import { fixProcessBitness } from "../jvm/natives/jvmruntime.ts";
 import { loadAppCode, loadTier } from "../jvm/tier.ts";

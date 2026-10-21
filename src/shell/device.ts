@@ -14,9 +14,8 @@ import { deviceNightMode } from "../android/settings.ts";
 import { qualify as componentClass } from "../jvm/roots.ts";
 import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml.ts";
 import { Resources, nativeRes } from "../android/res.ts";
-import { setDeviceNight, syncDeviceOrientation, deviceConfiguration, applyApplicationLocales, localesFromTags, initDeviceLocales, type Locales } from "../android/resnative.ts";
+import { setDeviceNight, syncDeviceOrientation, applyApplicationLocales, localesFromTags, initDeviceLocales, loadResources, applyDeviceConfiguration, type Locales } from "../android/configuration.ts";
 import { appHost, setAppHost } from "../android/apphost.ts";
-import { loadResources, javaConfiguration, applyDeviceConfiguration } from "../android/resources.ts";
 import { registerApk, registerSplit } from "../android/assetmanager.ts";
 import { setManifest } from "../android/pm.ts";
 import { getPrefs } from "../android/sharedprefs.ts";
@@ -207,7 +206,7 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   registerApk(apkPath(), new Resources(arsc, zip, install.lazyEntries));
   for (const sp of install.splits) registerSplit(apkPath(sp.name));
   const { target } = usesSdk(manifest);
-  const jres = await onMain(() => after(javaConfiguration(deviceConfiguration()), (config) => loadResources(apkPath(), config)));
+  const jres = await onMain(() => loadResources(apkPath()));
   // ActivityThread.handleBindApplication: the system Resources take the device configuration and
   // display metrics too (Resources.getSystem() starts from setToDefaults: a 0x0 display)
   await onMain(applyDeviceConfiguration);

@@ -12,7 +12,7 @@ import { device } from "../shell/config.ts";
 import { appHost } from "./apphost.ts";
 import { intentSenderMethods, intentSenderTaskMethods } from "./pendingintent.ts";
 import { protectionLevel, isRuntimePermission, permissionGranted, checkUidPermission } from "./permissions.ts";
-import { systemResource } from "./resnative.ts";
+import { systemResource } from "./configuration.ts";
 import { absentService, callingIdentity, enforceCallingOrSelfPermission, hostService, parceledList } from "./binder.ts";
 import { packages, ownedBy } from "./packages.ts";
 import { broadcastQueueMethods } from "./server/broadcastqueue.ts";
