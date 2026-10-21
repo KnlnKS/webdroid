@@ -17,9 +17,8 @@ import { newObj, scall, vcall, after } from "../jvm/natives/jentry.ts";
 import { writeThrough } from "../jvm/natives/jio.ts";
 import { type JBuffer, readBufferBytes, writeRemainingBytes, position, elementShift } from "../jvm/natives/jnio.ts";
 import { u8 } from "../jvm/abi.ts";
-import { paintAt } from "./paint.ts";
+import type { NativePaint } from "./paint.ts";
 import { nativeParcel, createByteArray, outOfLine, readInt, writeByteArray, writeInt } from "./parcel.ts";
-import { extractBitmapAlpha } from "./maskfilter.ts";
 import { invert } from "./matrix.ts";
 
 export const ALPHA_8 = 1, RGB_565 = 3, ARGB_4444 = 4, ARGB_8888 = 5, RGBA_F16 = 6, HARDWARE = 7, RGBA_1010102 = 8;
@@ -378,6 +377,23 @@ function copyBitmap(src: NativeBitmap, config: number): NativeBitmap {
   dst.commit(0, 0, dst.w, dst.h);
   return dst;
 }
+/** SkBitmap::extractAlpha: an ALPHA_8 copy of the coverage, through the paint's mask filter, its
+ *  rows 4-byte aligned as SkMask lays them out */
+function extractBitmapAlpha(src: NativeBitmap, paint: NativePaint | null, offsets: Int32Array | null): NativeBitmap {
+  const filter = paint?.maskFilter ?? null, border = filter ? filter.border() : 0;
+  const w = src.w + 2 * border, h = src.h + 2 * border, b = new NativeBitmap(w, h, ALPHA_8, PREMUL, (w + 3) & ~3);
+  if (filter) {
+    const ctx = b.ctx;
+    filter.apply(ctx, src.image, border, border, 1);
+    ctx.globalCompositeOperation = "source-in"; ctx.fillStyle = "#000"; ctx.fillRect(0, 0, b.w, b.h);
+    ctx.globalCompositeOperation = "source-over";
+  } else {
+    const source = src.pixels(), target = b.pixels();
+    for (let i = 3; i < target.length; i += 4) target[i] = source[i];
+  }
+  if (offsets && offsets.length >= 2) { offsets[0] = -border; offsets[1] = -border; }
+  return b;
+}
 const wrap = (b: NativeBitmap, mutable: number | boolean) => { b.immutable = !mutable; return javaBitmap(b); };
 
 rt.registerJnis(BITMAP, {
@@ -462,7 +478,7 @@ rt.registerJnis(BITMAP, {
     return javaBitmap(b, density);
   },
   "nativeExtractAlpha(JJ[I)Landroid/graphics/Bitmap;": waits((h: bigint, paint: bigint, offsetXY: Int32Array | null) =>
-    wrap(extractBitmapAlpha(bitmapAt(h), paint ? paintAt(paint) : null, offsetXY), true)),
+    wrap(extractBitmapAlpha(bitmapAt(h), paint ? deref<NativePaint>(paint) : null, offsetXY), true)),
   // hwui uploads a texture ahead of drawing; the 2D path has none to prepare
   "nativePrepareToDraw(J)V": () => {},
   "nativeHasAlpha(J)Z": (h: bigint) => +bitmapAt(h).hasAlpha,

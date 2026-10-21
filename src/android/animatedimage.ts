@@ -6,7 +6,8 @@
 
 import { rt } from "../jvm/runtime.ts";
 import { handle, deref, FINALIZER } from "./handles.ts";
-import { type NativeColorFilter, edges } from "./graphics.ts";
+import { edges } from "./graphics.ts";
+import type { NativeColorFilter } from "./colorfilter.ts";
 import { type NativeCanvas, drawingCanvas } from "./canvas.ts";
 import { drawBitmap } from "./canvas-draw.ts";
 import { NativePaint } from "./paint.ts";

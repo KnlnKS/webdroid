@@ -1,6 +1,6 @@
 import "../../../src/natives.ts";
 import { newObj, vcall, scall, linkInit, iof } from "../../../src/jvm/natives/jentry.ts";
-import { tintedBmp } from "../../../src/android/graphics.ts";
+import { tintedBmp } from "../../../src/android/colorfilter.ts";
 import { newPaint } from "../../../src/android/paint.ts";
 import { canvasOver } from "../../../src/android/canvas.ts";
 import { NativeBitmap, bitmapOf } from "../../../src/android/bitmap.ts";

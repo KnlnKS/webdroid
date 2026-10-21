@@ -13,8 +13,10 @@ import { type NativeBitmap, bitmapAt } from "./bitmap.ts";
 import { BlurMask, cssBlur } from "./maskfilter.ts";
 import { strokeRec } from "./patheffect.ts";
 import { NativePaint, UNBOUNDED, copyPaint, beginPaintShadow, applyStroke } from "./paint.ts";
-import { setEdges, emptyBox, type Box, type NativeColorFilter, NativeBitmapShader, COMPOSITE, PLANE, canvasLocalBounds, fillWithShader, shaderIdentity, recolor } from "./graphics.ts";
-import { type Affine, setAffine, applyMatrix, matrixAt, deviceScale, deviceBounds, localBounds } from "./matrix.ts";
+import { setEdges, emptyBox, type Box, COMPOSITE } from "./graphics.ts";
+import { type NativeColorFilter, recolor } from "./colorfilter.ts";
+import { NativeBitmapShader, fillWithShader, shaderIdentity } from "./shader.ts";
+import { type Affine, PLANE, setAffine, applyMatrix, matrixAt, deviceScale, deviceBounds, localBounds, canvasLocalBounds } from "./matrix.ts";
 
 /** the Java canvases TS hands framework and app code: a Canvas or RecordingCanvas peer */
 export type JavaCanvas = JObj;

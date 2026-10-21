@@ -16,9 +16,11 @@ import { drawGlyphs, cssFont, shapeTextRun, hyphenEdited, graphemes } from "./sh
 import { fontNatives } from "./fonts.ts";
 import { paintAdvance } from "./minikin.ts";
 import { NativePaint, copyPaint, defaultPaint, underlinePosition, underlineThickness, strikeThruPosition, strikeThruThickness } from "./paint.ts";
-import { cssColor, canvasLocalBounds, tintedBmp, BLEND_MODES, COMPOSITE, NativeBitmapShader } from "./graphics.ts";
+import { cssColor, BLEND_MODES, COMPOSITE } from "./graphics.ts";
+import { tintedBmp } from "./colorfilter.ts";
+import { NativeBitmapShader } from "./shader.ts";
 import { type NinePatchChunk, drawNinePatch } from "./ninepatch.ts";
-import { applyMatrix, matrixAt } from "./matrix.ts";
+import { applyMatrix, canvasLocalBounds, matrixAt } from "./matrix.ts";
 import { type NativeCanvas, type DrawPlan, MASK, IMAGE, drawingCanvas, beginPaint, endPaint, saveLayer, unsupported } from "./canvas.ts";
 
 export function drawPath(nc: NativeCanvas, path: NativePath, p: NativePaint): void | Promise<void> {

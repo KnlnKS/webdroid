@@ -2,7 +2,9 @@
 // node's rasterised content. An input of 0 is that content.
 import { rt } from "../jvm/runtime.ts";
 import { handle, deref, FINALIZER } from "./handles.ts";
-import { COMPOSITE, BLEND_MODES, type NativeColorFilter, NativeShader, fillWithShader, recolor } from "./graphics.ts";
+import { COMPOSITE, BLEND_MODES } from "./graphics.ts";
+import { type NativeColorFilter, recolor } from "./colorfilter.ts";
+import { NativeShader, fillWithShader } from "./shader.ts";
 import type { NativeBitmap } from "./bitmap.ts";
 import { radiusToSigma } from "./maskfilter.ts";
 import type { RuntimeShaderBuilder } from "./runtime-shader.ts";

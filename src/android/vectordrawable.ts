@@ -5,7 +5,9 @@
 
 import { rt } from "../jvm/runtime.ts";
 import { deref, ownedHandle, weakHandle } from "./handles.ts";
-import { type NativeColorFilter, type NativeShader, edges } from "./graphics.ts";
+import { edges } from "./graphics.ts";
+import type { NativeColorFilter } from "./colorfilter.ts";
+import type { NativeShader } from "./shader.ts";
 import { NativeCanvas, drawingCanvas } from "./canvas.ts";
 import { drawBitmap, drawPath } from "./canvas-draw.ts";
 import { NativeBitmap } from "./bitmap.ts";

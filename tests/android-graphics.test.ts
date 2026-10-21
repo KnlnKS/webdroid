@@ -1,7 +1,8 @@
 import { expect, test, afterAll, beforeAll, describe } from "vite-plus/test";
 import { readFileSync } from "node:fs";
 import "../src/natives.ts";
-import { matrixColor, edges } from "../src/android/graphics.ts";
+import { edges } from "../src/android/graphics.ts";
+import { matrixColor } from "../src/android/colorfilter.ts";
 import { NativePaint, newPaint, paintOf } from "../src/android/paint.ts";
 import { typefaceOf } from "../src/android/fonts.ts";
 import { declaredField } from "../src/jvm/runtime.ts";

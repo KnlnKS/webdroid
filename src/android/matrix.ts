@@ -7,7 +7,7 @@
 import { rt, peerField, setDeclared, type JObj } from "../jvm/runtime.ts";
 import { handle, deref, ownedHandle, release, FINALIZER } from "./handles.ts";
 import type { NativeCanvas } from "./canvas.ts";
-import { type Ctx2D, type Mat2D, isInvertible } from "./recording.ts";
+import { type Ctx2D, type Mat2D, isInvertible, isRecording, transformOf } from "./recording.ts";
 import { edges, setEdges } from "./graphics.ts";
 
 export type Mat = Float64Array;
@@ -124,6 +124,13 @@ export function localBounds(m: Mat2D, w: number, h: number, x = 0, y = 0, out = 
   inverse.e = (m.c * m.f - m.d * m.e) / det; inverse.f = (m.b * m.e - m.a * m.f) / det;
   deviceBounds(inverse, x, y, x + w, y + h, out);
   return out.every(Number.isFinite) ? out : null;
+}
+/** how far a recording's drawing reaches: replay may place a display list anywhere on its target */
+export const PLANE = 1e5;
+/** the target's whole area in the context's local coordinates (a recording's, whose mirror is one pixel, is the plane),
+ *  null under a singular transform */
+export function canvasLocalBounds(ctx: Ctx2D): Float64Array | null {
+  return isRecording(ctx) ? localBounds(transformOf(ctx), 2 * PLANE, 2 * PLANE, -PLANE, -PLANE) : localBounds(transformOf(ctx), ctx.canvas.width, ctx.canvas.height);
 }
 /** concatenate (or with `set`, replace) a 2D context's transform; a perspective row cannot be carried */
 export function applyMatrix(ctx: Ctx2D, m: ArrayLike<number>, set = false): void {

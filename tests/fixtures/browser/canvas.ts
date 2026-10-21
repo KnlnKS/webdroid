@@ -3,7 +3,7 @@ import { rt } from "../../../src/jvm/runtime.ts";
 import { newObj, vcall, scall, linkInit } from "../../../src/jvm/natives/jentry.ts";
 import { bootWithFonts } from "./boot.ts";
 import { deref } from "../../../src/android/handles.ts";
-import { type NativeShader, NativeGradient, NativeBitmapShader, type NativeComposeShader } from "../../../src/android/graphics.ts";
+import { type NativeShader, NativeGradient, NativeBitmapShader, type NativeComposeShader } from "../../../src/android/shader.ts";
 
 /** AOSP's Canvas over our natives: clip bounds, quick rejects, save flags, layers and bitmap
  *  densities, for comparison with values recorded on the reference AVD */
