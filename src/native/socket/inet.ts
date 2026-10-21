@@ -277,10 +277,24 @@ class TcpSocket extends InetSocket {
     for (const pending of this.backlog?.splice(0) ?? []) pending.stream?.close();
     this.wake();
   }
-  /** the TLS relay replaces a plain connection a TLS socket wraps: the plain one's relay goes, and
-   *  it reads the end of the stream */
-  abandon(): void { if (this.stream instanceof Relay) { this.stream.close(); this.wake(); } }
+  /** TLS on this connection: the relay terminates it (a page cannot handshake), so it dials
+   *  `host:port` again with TLS, and that connection takes the place of the plain one, which has
+   *  carried nothing yet. A failed one leaves the stream at its end. */
+  startTls(host: string, port: number, alpn: string[]): TlsResult | Promise<TlsResult> {
+    if (!this.connected) return { errno: E.NOTCONN, reason: "" };
+    if (!(this.stream instanceof Relay)) return { errno: 0, reason: "no TLS to a listener in this process" };
+    this.stream.close();
+    const relay = this.stream = new Relay(host, port, true, alpn);
+    record(`starttls ${host}:${port}`);
+    return relay.ready.then(() => { this.wake(); return relay.applicationProtocol ?? ""; }, () => {
+      record(`starttls failed ${host}:${port} ${relay.failure}`);
+      this.wake();
+      return { errno: relay.failureCode === 4001 ? 0 : connectErrno(relay.failure), reason: relay.failure };
+    });
+  }
 }
+/** the negotiated application protocol ("" for none), or why TLS failed: errno 0 is the handshake */
+export type TlsResult = string | { errno: number; reason: string };
 
 /** the errno a relay's failure reason stands for; no reason at all is no relay to reach */
 function connectErrno(reason: string): number {
@@ -450,5 +464,8 @@ export function loopbackConnection(ep: Endpoint): { stream: Stream; close(): voi
   return { stream: client, close: () => { client.close(); TcpSocket.bound.delete(socket); } };
 }
 
-/** The TLS relay replaces a plain connection a TLS socket wraps: the plain one's relay goes. */
-export function abandonConnection(fd: number): void { const s = socketOf(fd); if (s instanceof TcpSocket) s.abandon(); }
+/** TLS on stream socket `fd` (TcpSocket.startTls) */
+export function startTls(fd: number, host: string, port: number, alpn: string[]): TlsResult | Promise<TlsResult> {
+  const s = socketOf(fd);
+  return s instanceof TcpSocket ? s.startTls(host, port, alpn) : { errno: typeof s === "number" ? -s : E.NOTSOCK, reason: "" };
+}

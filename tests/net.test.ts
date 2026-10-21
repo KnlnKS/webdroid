@@ -231,17 +231,23 @@ describe("inet", () => {
     expect(await vcall(literal, "getHostAddress", "()Ljava/lang/String;")).toBe("127.0.0.1");
   });
 
-  test("SSL wrapping keeps the underlying socket open until the wrapper closes", async () => {
-    const plain = await newObj("java/net/Socket");
+  test("SSL wrapping shares the plain socket's descriptor and closes it only with autoClose", async () => {
+    const server = await newObj("java/net/ServerSocket", "(I)V", 0);
+    const connect = async () => newObj("java/net/Socket", "(Ljava/lang/String;I)V", "127.0.0.1", await vcall(server, "getLocalPort", "()I"));
     const factory = await scall("javax/net/ssl/SSLSocketFactory", "getDefault", "()Ljavax/net/SocketFactory;");
-    const secure = await vcall(factory, "createSocket", "(Ljava/net/Socket;Ljava/lang/String;IZ)Ljava/net/Socket;", plain, "example.com", 443, 1);
-    expect(await vcall(plain, "isClosed", "()Z")).toBe(0);
+    const wrap = (plain: unknown, autoClose: number) => vcall(factory, "createSocket", "(Ljava/net/Socket;Ljava/lang/String;IZ)Ljava/net/Socket;", plain, "example.com", 443, autoClose);
+    expect(await thrown(async () => wrap(await newObj("java/net/Socket"), 1))).toMatch(/^java\/net\/SocketException:/);
+    const plain = await connect(), secure = await wrap(plain, 1);
+    expect(await vcall(secure, "isConnected", "()Z")).toBe(1);
+    // the relay terminates TLS, which a connection within this process has none of
+    expect(await thrown(() => vcall(secure, "startHandshake", "()V"))).toMatch(/^javax\/net\/ssl\/SSLHandshakeException:/);
     await vcall(secure, "close", "()V");
     expect(await vcall(plain, "isClosed", "()Z")).toBe(1);
-    const retained = await newObj("java/net/Socket");
-    const independent = await vcall(factory, "createSocket", "(Ljava/net/Socket;Ljava/lang/String;IZ)Ljava/net/Socket;", retained, "example.com", 443, 0);
-    await vcall(independent, "close", "()V");
+    const retained = await connect();
+    await vcall(await wrap(retained, 0), "close", "()V");
     expect(await vcall(retained, "isClosed", "()Z")).toBe(0);
+    await vcall(retained, "close", "()V");
+    await vcall(server, "close", "()V");
   });
 });
 

@@ -1,5 +1,5 @@
-// The boundaries java.net keeps in TS: TLS sockets (javax.net.ssl) and HttpURLConnection over the
-// dev server's fetch proxy. libcore's plain sockets run over src/native/net.ts.
+// The boundaries java.net keeps in TS: TLS on libcore's sockets (javax.net.ssl) and
+// HttpURLConnection over the dev server's fetch proxy. libcore's sockets run over src/native/socket/.
 //
 // A page cannot open a socket, so one WebSocket carries one TCP connection (server.ts's /tcp
 // route) and TLS is terminated at the relay -- the page has no certificate store and could not
@@ -7,53 +7,37 @@
 // peer's. It carries the requested host as its only SAN, which is exactly what a hostname
 // verifier needs and nothing more, so an app that PINS a certificate will correctly fail rather
 // than be told a comforting lie.
-import { awaited, rt, JObj, type NativeSpec, driven, declaredField, getDeclared, waits, type Gen } from "../runtime.ts";
+import { awaited, rt, JObj, type NativeSpec, driven, declaredField, getDeclared, setDeclared, waits, type Gen } from "../runtime.ts";
 import { newArrayList, toJsArray } from "./jcoll.ts";
 import { newObj, vcall, scall, after, linkClass, classNameOf } from "./jentry.ts";
 import { checkFromIndexSize } from "./jlang.ts";
-import { strArray, u8 } from "../abi.ts";
+import { strArray } from "../abi.ts";
 import { baosBytes, fdInt } from "./jio.ts";
 import { relayChain } from "./jrelaycert.ts";
-import { Relay } from "../../shell/relay.ts";
-import { abandonConnection } from "../../native/socket/inet.ts";
+import { startTls, type TlsResult } from "../../native/socket/inet.ts";
+import { E, strerror } from "../../native/abi.ts";
 import { deviceFetch } from "../../shell/devicefetch.ts";
 import { nextHop, proxyStatus, type ProxyRequest } from "../../shell/webpage/redirect.ts";
 
-/** a connected TLS socket; rt.make skips <init> */
-async function dial(host: string, port: number): Promise<JSSLSocket> {
-  const s = rt.make("javax/net/ssl/SSLSocket") as JSSLSocket;
-  s.host = host ?? ""; s.port = port;
-  await s.open();
-  return s;
-}
-/** a libcore Socket's descriptor, -1 before it has one */
-const socketFd = (socket: JObj): number => {
-  const impl = getDeclared<JObj | null>(socket, "java/net/Socket", "impl");
-  return impl ? fdInt(getDeclared<JObj | null>(impl, "java/net/SocketImpl", "fd")) : -1;
-};
+const SOCKET = "java/net/Socket", SSL_SOCKET = "javax/net/ssl/SSLSocket";
 class JSSLSocketFactory extends JObj {}
 const sslSocketFactory = new JSSLSocketFactory();
 rt.register({
   name: "javax/net/ssl/SSLSocketFactory", ctor: JSSLSocketFactory, sup: "javax/net/SocketFactory",
   methods: {
     "static getDefault()Ljavax/net/SocketFactory;": () => sslSocketFactory,
-    // The OkHttp shape: connect a plain socket, then hand it here to be wrapped for TLS. Our
-    // TLS lives at the relay, so the wrapper dials the target again with TLS; the plain
-    // connection is dropped (its descriptor stays open and reads end of stream), which is
-    // invisible because nothing has been written to it yet.
-    "createSocket(Ljava/net/Socket;Ljava/lang/String;IZ)Ljava/net/Socket;":
-      function (plain: JObj | null, host: string, port: number, autoClose: number) {
-        const s = rt.make("javax/net/ssl/SSLSocket") as JSSLSocket;
-        s.host = host ?? ""; s.port = port || 443;
-        if (plain && autoClose) {
-          if (!(plain instanceof JSSLSocket)) { const fd = socketFd(plain); if (fd >= 0) abandonConnection(fd); }
-          s.underlying = plain;
-        }
-        return s;
-      },
-    "createSocket()Ljava/net/Socket;": () => newObj("javax/net/ssl/SSLSocket"),
-    "createSocket(Ljava/lang/String;I)Ljava/net/Socket;": (h: string, p: number) => dial(h, p),
-    "createSocket(Ljava/net/InetAddress;I)Ljava/net/Socket;": (address: JObj | null, port: number) => after(hostAddress(address), (h) => dial(h, port)),
+    // The OkHttp shape: connect a plain socket, then hand it here to carry TLS on its descriptor
+    "createSocket(Ljava/net/Socket;Ljava/lang/String;IZ)Ljava/net/Socket;": driven(function* (plain: JObj | null, host: string | null, port: number, autoClose: number): Gen {
+      if (plain === null) return rt.npe();
+      if (!(yield vcall(plain, "isConnected", "()Z"))) throw rt.mkThrowable("java/net/SocketException", "Socket is not connected.");
+      const s: JSSLSocket = yield newObj(SSL_SOCKET);
+      setDeclared(s, SOCKET, Object.fromEntries(["impl", "created", "bound", "connected"].map((f) => [f, getDeclared(plain, SOCKET, f)])));
+      return Object.assign(s, { host: host ?? "", port, plain, autoClose: !!autoClose });
+    }),
+    "createSocket()Ljava/net/Socket;": () => newObj(SSL_SOCKET),
+    "createSocket(Ljava/lang/String;I)Ljava/net/Socket;": (host: string | null, port: number) =>
+      after(newObj(SSL_SOCKET, "(Ljava/lang/String;I)V", host, port), (s: JSSLSocket) => Object.assign(s, { host: host ?? "" })),
+    "createSocket(Ljava/net/InetAddress;I)Ljava/net/Socket;": (address: JObj | null, port: number) => newObj(SSL_SOCKET, "(Ljava/net/InetAddress;I)V", address, port),
     "getDefaultCipherSuites()[Ljava/lang/String;": () => strArray(CIPHERS),
     "getSupportedCipherSuites()[Ljava/lang/String;": () => strArray(CIPHERS),
   },
@@ -97,154 +81,58 @@ rt.register({
   },
 });
 
-// Addresses are libcore's: a name's address is the synthetic one the resolver hands out, which
-// dials the name again (relay.ts dialName).
-const byName = (host: string) => scall("java/net/InetAddress", "getByName", "(Ljava/lang/String;)Ljava/net/InetAddress;", host);
-const hostAddress = (a: JObj | null): string | Promise<string> => a === null ? "localhost" : vcall(a, "getHostAddress", "()Ljava/lang/String;");
-const socketPort = (a: JObj | null): number | Promise<number> => a === null ? 0 : vcall(a, "getPort", "()I");
-
-/** SSLSocket is a Socket that dials with TLS at the relay; the handshake happens there, so
- *  startHandshake just makes sure the connection is up before anyone reads. Opening is deferred
- *  until first use, so a socket made to wrap a plain one takes its target over. */
-class JSSLSocket extends JObj {
-  host = ""; port = 0; alpn: string[] = []; relay: Relay | null = null; closed = 0; soTimeout = 0;
-  underlying: JObj | null = null;
-  /** socket options the relay's TCP connection does not take, kept for their getters */
-  options = new Map<string, number>();
-  private opening: Promise<void> | null = null;
-  open(): Promise<void> {
-    if (this.closed) throw rt.mkThrowable("java/net/SocketException", "Socket is closed");
-    if (this.opening) return this.opening;
-    if (this.relay) return Promise.resolve();
-    const r = this.relay = new Relay(this.host, this.port, true, this.alpn);
-    return this.opening = r.ready.catch(() => {
-      r.close();
-      if (this.relay === r) this.relay = null;
-      throw rt.mkThrowable("java/net/ConnectException", `Failed to connect to ${this.host}:${this.port}`);
-    }).finally(() => { this.opening = null; });
-  }
-  close(): unknown {
-    if (this.closed) return;
-    this.closed = 1;
-    this.relay?.close(); this.relay = null;
-    return this.underlying && vcall(this.underlying, "close", "()V");
-  }
-}
-class JSocketIn extends JObj { s!: JSSLSocket; }
-/** A read under SO_TIMEOUT waits only that long, then throws and leaves the stream usable —
- *  which is how a caller probes whether a pooled connection is still alive. */
-async function socketRead(s: JSSLSocket, out: Uint8Array, off: number, len: number): Promise<number> {
-  if (!s.relay?.connected) await s.open();
-  const relay = s.relay;
-  if (!relay || s.closed) throw rt.mkThrowable("java/net/SocketException", "Socket is closed");
-  if (s.soTimeout && !await relay.waitReadable(s.soTimeout)) {
-    throw rt.mkThrowable("java/net/SocketTimeoutException", "Read timed out");
-  }
-  return relay.read(out, off, len);
-}
-class JSocketOut extends JObj { s!: JSSLSocket; }
-function socketWrite(s: JSSLSocket, bytes: Uint8Array): void | Promise<void> {
-  if (s.closed) throw rt.mkThrowable("java/net/SocketException", "Socket is closed");
-  if (!s.relay?.connected) return s.open().then(() => socketWrite(s, bytes));
-  if (!s.relay.write(bytes)) throw rt.mkThrowable("java/net/SocketException", "Socket write failed");
-}
-const option = (name: string, fallback: number) => function (this: JSSLSocket) { return this.options.get(name) ?? fallback; };
-const setOption = (name: string) => function (this: JSSLSocket, v: number) { this.options.set(name, v); };
-
-rt.register({
-  name: "webdroid/SocketInputStream", ctor: JSocketIn, sup: "java/io/InputStream",
-  methods: {
-    "<init>()V": function () {},
-    "read()I": driven(function* (this: JSocketIn): Gen {
-      const b = new Uint8Array(1);
-      const n = yield* awaited(socketRead(this.s, b, 0, 1));
-      return n < 0 ? -1 : b[0];
-    }),
-    "read([B)I": waits(function (this: JSocketIn, out: Int8Array) {
-      return socketRead(this.s, u8(out), 0, out.length);
-    }),
-    "read([BII)I": waits(function (this: JSocketIn, out: Int8Array, off: number, len: number) {
-      return socketRead(this.s, u8(out), off, len);
-    }),
-    "available()I": function (this: JSocketIn) { return this.s.relay?.available() ?? 0; },
-    "close()V": function (this: JSocketIn) { this.s.relay?.close(); },
-  },
-});
-rt.register({
-  name: "webdroid/SocketOutputStream", ctor: JSocketOut, sup: "java/io/OutputStream",
-  methods: {
-    "<init>()V": function () {},
-    "write(I)V": function (this: JSocketOut, b: number) { return socketWrite(this.s, new Uint8Array([b & 0xff])); },
-    "write([B)V": waits(function (this: JSocketOut, b: Int8Array) {
-      return socketWrite(this.s, u8(b));
-    }),
-    "write([BII)V": waits(function (this: JSocketOut, b: Int8Array, off: number, len: number) {
-      return socketWrite(this.s, u8(b, off, len));
-    }),
-    "flush()V": () => {},
-    "close()V": function (this: JSocketOut) { this.s.relay?.close(); },
-  },
-});
-
 const CIPHERS = ["TLS_AES_128_GCM_SHA256", "TLS_AES_256_GCM_SHA384", "TLS_CHACHA20_POLY1305_SHA256",
   "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256", "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"];
 const PROTOCOLS = ["TLSv1.2", "TLSv1.3"];
 
+/** a libcore Socket's descriptor, -1 once closed */
+const socketFd = (socket: JObj): number => {
+  const impl = getDeclared<JObj | null>(socket, SOCKET, "impl");
+  return impl ? fdInt(getDeclared<JObj | null>(impl, "java/net/SocketImpl", "fd")) : -1;
+};
+const inherited = (name: string, desc: string) => linkClass(SOCKET).special(name, desc);
+/** startTls's failure as the exception libcore's connect or Conscrypt's handshake throws */
+function tlsFailure({ errno, reason }: Exclude<TlsResult, string>, host: string, port: number): Error {
+  const cls = !errno ? "javax/net/ssl/SSLHandshakeException" : errno === E.TIMEDOUT ? "java/net/SocketTimeoutException"
+    : errno === E.HOSTUNREACH ? "java/net/NoRouteToHostException" : errno === E.NOTCONN ? "java/net/SocketException" : "java/net/ConnectException";
+  return rt.mkThrowable(cls, `${host}:${port}: ${reason || strerror(errno)}`);
+}
+const tlsHandshake = driven(function* (this: JSSLSocket): Gen {
+  const fd = socketFd(this);
+  if (fd < 0) throw rt.mkThrowable("java/net/SocketException", "Socket is closed");
+  if (!getDeclared(this, SOCKET, "connected")) throw rt.mkThrowable("java/net/SocketException", "Socket is not connected");
+  this.host ||= yield vcall(yield vcall(this, "getInetAddress", "()Ljava/net/InetAddress;"), "getHostName", "()Ljava/lang/String;");
+  this.port ||= yield vcall(this, "getPort", "()I");
+  const r: TlsResult = yield startTls(fd, this.host, this.port, this.alpn);
+  if (typeof r !== "string") throw tlsFailure(r, this.host, this.port);
+  this.protocol = r;
+});
+
+/** An SSLSocket is a libcore Socket whose descriptor carries TLS from its first handshake, which
+ *  an explicit startHandshake or the first stream asked for starts. One made to wrap a connected
+ *  socket shares its descriptor, and closes it with autoClose. */
+class JSSLSocket extends JObj {
+  host = ""; port = 0; alpn: string[] = []; protocol: string | null = null;
+  plain: JObj | null = null; autoClose = false;
+  private handshaking: unknown = null;
+  handshake(): unknown { return this.handshaking ??= tlsHandshake.call(this); }
+}
+const stream = (name: string, desc: string) => driven(function* (this: JSSLSocket): Gen {
+  yield this.handshake();
+  return yield inherited(name, desc)(this);
+});
+
 rt.register({
-  name: "javax/net/ssl/SSLSocket", ctor: JSSLSocket, sup: "java/net/Socket",
+  name: SSL_SOCKET, ctor: JSSLSocket, sup: SOCKET,
   methods: {
-    "<init>()V": function () {},
-    "<init>(Ljava/lang/String;I)V": driven(function* (this: JSSLSocket, h: string, p: number): Gen {
-      this.host = h ?? ""; this.port = p; yield this.open();
+    "getInputStream()Ljava/io/InputStream;": stream("getInputStream", "()Ljava/io/InputStream;"),
+    "getOutputStream()Ljava/io/OutputStream;": stream("getOutputStream", "()Ljava/io/OutputStream;"),
+    "close()V": driven(function* (this: JSSLSocket): Gen {
+      if (this.plain && !this.autoClose) return void setDeclared(this, SOCKET, { closed: true });
+      yield inherited("close", "()V")(this);
+      if (this.plain) yield vcall(this.plain, "close", "()V");
     }),
-    "connect(Ljava/net/SocketAddress;)V": function (this: JSSLSocket, a: unknown) { return vcall(this, "connect", "(Ljava/net/SocketAddress;I)V", a, 0); },
-    "connect(Ljava/net/SocketAddress;I)V": driven(function* (this: JSSLSocket, a: JObj | null): Gen {
-      this.host = a === null ? "" : yield vcall(a, "getHostString", "()Ljava/lang/String;"); this.port = yield* awaited(socketPort(a));
-      yield this.open();
-    }),
-    "getInputStream()Ljava/io/InputStream;": function (this: JSSLSocket) {
-      const o = rt.make("webdroid/SocketInputStream") as JSocketIn; o.s = this; return o;
-    },
-    "getOutputStream()Ljava/io/OutputStream;": function (this: JSSLSocket) {
-      const o = rt.make("webdroid/SocketOutputStream") as JSocketOut; o.s = this; return o;
-    },
-    "close()V": function (this: JSSLSocket) { return this.close(); },
-    "isClosed()Z": function (this: JSSLSocket) { return this.closed; },
-    "isConnected()Z": function (this: JSSLSocket) { return this.relay?.connected ? 1 : 0; },
-    "isBound()Z": function (this: JSSLSocket) { return this.relay?.connected ? 1 : 0; },
-    "isInputShutdown()Z": function (this: JSSLSocket) { return this.relay ? 0 : 1; },
-    "isOutputShutdown()Z": function (this: JSSLSocket) { return this.relay ? 0 : 1; },
-    "shutdownInput()V": () => {},
-    "shutdownOutput()V": () => {},
-    "getPort()I": function (this: JSSLSocket) { return this.port; },
-    "getLocalPort()I": function (this: JSSLSocket) { return this.relay?.localEndpoint?.port ?? -1; },
-    "getLocalSocketAddress()Ljava/net/SocketAddress;": function (this: JSSLSocket) {
-      const local = this.relay?.localEndpoint; return local ? newObj("java/net/InetSocketAddress", "(Ljava/lang/String;I)V", local.address, local.port) : null;
-    },
-    "getLocalAddress()Ljava/net/InetAddress;": function (this: JSSLSocket) { return byName(this.relay?.localEndpoint?.address ?? "0.0.0.0"); },
-    "getInetAddress()Ljava/net/InetAddress;": function (this: JSSLSocket) { return byName(this.host); },
-    // the connection-state checks around these are left out: opening is deferred (see JSSLSocket)
-    "getRemoteSocketAddress()Ljava/net/SocketAddress;": driven(function* (this: JSSLSocket): Gen {
-      const addr: JObj | null = yield vcall(this, "getInetAddress", "()Ljava/net/InetAddress;");
-      const port: number = yield vcall(this, "getPort", "()I");
-      return addr === null ? null : newObj("java/net/InetSocketAddress", "(Ljava/net/InetAddress;I)V", addr, port);
-    }),
-    "toString()Ljava/lang/String;": function (this: JSSLSocket) { return `SSLSocket[${this.host}:${this.port}]`; },
-    "setSoTimeout(I)V": function (this: JSSLSocket, ms: number) {
-      if (ms < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "timeout can't be negative");
-      this.soTimeout = ms;
-    },
-    "getSoTimeout()I": function (this: JSSLSocket) { return this.soTimeout; },
-    "setTcpNoDelay(Z)V": setOption("nodelay"), "getTcpNoDelay()Z": option("nodelay", 0),
-    "setKeepAlive(Z)V": setOption("keepalive"), "getKeepAlive()Z": option("keepalive", 0),
-    "setReuseAddress(Z)V": setOption("reuse"), "getReuseAddress()Z": option("reuse", 0),
-    "setOOBInline(Z)V": setOption("oob"), "getOOBInline()Z": option("oob", 0),
-    "setTrafficClass(I)V": setOption("tc"), "getTrafficClass()I": option("tc", 0),
-    "setSendBufferSize(I)V": setOption("sndbuf"), "getSendBufferSize()I": option("sndbuf", 1_048_576),
-    "setReceiveBufferSize(I)V": setOption("rcvbuf"), "getReceiveBufferSize()I": option("rcvbuf", 1_048_576),
-    "setSoLinger(ZI)V": function (this: JSSLSocket, on: number, secs: number) { this.options.set("linger", on ? secs : -1); },
-    "getSoLinger()I": option("linger", -1),
-    "startHandshake()V": driven(function* (this: JSSLSocket): Gen { yield this.open(); }),
+    "startHandshake()V": driven(function* (this: JSSLSocket): Gen { yield this.handshake(); }),
     "getSession()Ljavax/net/ssl/SSLSession;": function (this: JSSLSocket) {
       const s = rt.make("webdroid/SSLSessionImpl") as JSSLSession;
       s.host = this.host; s.port = this.port;
@@ -257,7 +145,6 @@ rt.register({
     "setEnabledCipherSuites([Ljava/lang/String;)V": () => {},
     "getEnabledCipherSuites()[Ljava/lang/String;": () => strArray(CIPHERS),
     "getSupportedCipherSuites()[Ljava/lang/String;": () => strArray(CIPHERS),
-    "setHandshakeTimeout(I)V": () => {},
     "addHandshakeCompletedListener(Ljavax/net/ssl/HandshakeCompletedListener;)V": () => {},
     "getSSLParameters()Ljavax/net/ssl/SSLParameters;": function (this: JSSLSocket) {
       linkClass("javax/net/ssl/SSLParameters"); return Object.assign(new JSSLParameters(), { protocols: [...this.alpn] });
@@ -266,7 +153,7 @@ rt.register({
       if (!p) throw rt.mkThrowable("java/lang/IllegalArgumentException", "parameters == null");
       this.alpn = [...p.protocols];
     },
-    "getApplicationProtocol()Ljava/lang/String;": function (this: JSSLSocket) { return this.relay?.applicationProtocol ?? null; },
+    "getApplicationProtocol()Ljava/lang/String;": function (this: JSSLSocket) { return this.protocol; },
     "getHandshakeApplicationProtocol()Ljava/lang/String;": () => null,
   },
 });
