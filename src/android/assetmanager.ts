@@ -6,7 +6,7 @@
 // getX() reads back, strings included: a string is (TYPE_STRING, pool index, cookie), read from
 // the XML block's pool for cookie -1 and from ApkAssets[cookie - 1]'s table pool otherwise.
 
-import { awaited, rt, driven, declaredField, getDeclared, setDeclared, type Gen } from "../jvm/runtime.ts";
+import { awaited, rt, driven, declaredField, getDeclared, setDeclared, type Gen, type JObj } from "../jvm/runtime.ts";
 import { handle, deref, release, FINALIZER } from "./handles.ts";
 import { newObj, vcall } from "../jvm/natives/jentry.ts";
 import { i8, u8, jarray } from "../jvm/abi.ts";
@@ -18,7 +18,8 @@ import { qualifiers } from "./arsc.ts";
 import { deviceQualifiers } from "./configuration.ts";
 import { packages } from "./packages.ts";
 import { appHost } from "./apphost.ts";
-import { mkPfd } from "./os.ts";
+import { fdContents, mkPfd } from "./os.ts";
+import { fdInt } from "../jvm/natives/jio.ts";
 import { BytesFile, readFully, type FileSource } from "../shell/lazyfile.ts";
 import { apkPath } from "../shell/vfs.ts";
 
@@ -404,7 +405,16 @@ delegate("android/content/res/AssetManager", {
     if (!hit) throw rt.mkThrowable("java/io/FileNotFoundException", path);
     return handle(mkBlock(yield* awaited(readFully(hit.source)), res));
   }),
-  "nativeOpenXmlAssetFd(JILjava/io/FileDescriptor;)J": () => { throw rt.mkThrowable("java/io/FileNotFoundException", "Corrupt XML binary file"); },
+  // the descriptor's whole file, as Asset::createFromFd reads it
+  "nativeOpenXmlAssetFd(JILjava/io/FileDescriptor;)J": driven(function* (h: bigint, _cookie: number, descriptor: JObj | null): Gen {
+    const fd = fdInt(descriptor);
+    if (fd < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Bad FileDescriptor");
+    const bytes = yield* awaited(fdContents(fd));
+    let block: Block | null = null;
+    try { if (bytes) block = mkBlock(bytes, assets(h)); } catch { /* ResXMLTree::setTo refuses it */ }
+    if (!block) throw rt.mkThrowable("java/io/FileNotFoundException", "Corrupt XML binary file");
+    return handle(block);
+  }),
   "nativeOpenAssetFd(JLjava/lang/String;[J)Landroid/os/ParcelFileDescriptor;": (h: bigint, path: string, offsets: BigInt64Array) => openFd(assets(h), "assets/" + path, 0, offsets),
   "nativeOpenNonAssetFd(JILjava/lang/String;[J)Landroid/os/ParcelFileDescriptor;": (h: bigint, cookie: number, path: string, offsets: BigInt64Array) => openFd(assets(h), path, cookie, offsets),
   "nativeAssetDestroy(J)V": (a: bigint) => { liveAssets--; release(a); },
