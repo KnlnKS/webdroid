@@ -2,6 +2,7 @@
 // announces itself to the app's window, which hands it its task and a port: load the page (fetched
 // through this origin's proxy worker, or written by the app), or work on the origin's storage.
 import { holdFrames } from "./frames.ts";
+import { readAnswer } from "./proxywire.ts";
 import { withPageScript, type AppMessage, type LoadMessage, type PageConfig, type PageMessage, type RendererContext, type RendererReady, type RendererTask,
   type StorageOp } from "./protocol.ts";
 
@@ -83,12 +84,12 @@ function start() {
         method: doc.init?.method || "GET", body: doc.init?.body,
         headers: { "x-wd-user-agent": task.userAgent, ...(doc.init?.contentType ? { "content-type": doc.init.contentType } : {}) },
       }) : null;
-      const final = response?.headers.get("x-wd-final-url") ?? ("html" in doc ? doc.final : undefined);
+      const answer = response && readAnswer(response), final = answer?.finalUrl ?? ("html" in doc ? doc.final : undefined);
       // A download commits no document: the app's DownloadListener takes it. Chromium keeps the frame's
       // previous page, which this frame has left; it shows an empty one, whose load ends the app's.
       if (response && isDownload(response)) {
         void response.body?.cancel();
-        const url = final ?? context.page, length = Number(response.headers.get("x-wd-content-length") ?? response.headers.get("content-length") ?? -1);
+        const url = final ?? context.page, length = Number(answer!.length ?? -1);
         send({ kind: "download", url, disposition: response.headers.get("content-disposition") ?? "", mime: mimeOf(response),
           length: Number.isSafeInteger(length) && length >= 0 ? length : -1 });
         send({ kind: "loaded", url, title: "", error: null, width: 0, height: 0 });

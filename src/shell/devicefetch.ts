@@ -5,6 +5,7 @@ import { concat, utf8 } from "../jvm/abi.ts";
 import { guestEndpoint } from "../native/net-address.ts";
 import type { Stream } from "../native/socket/core.ts";
 import { loopbackConnection } from "../native/socket/inet.ts";
+import { fromProxyHeaders, proxyPath, writeAnswer } from "./webpage/proxywire.ts";
 
 type Init = { method?: string; headers?: Headers; body?: ArrayBuffer | Uint8Array; signal?: AbortSignal };
 
@@ -98,8 +99,7 @@ export async function loopbackFetch(url: string, init: Init = {}): Promise<Respo
     if (/^set-cookie$/i.test(name)) cookies.push(value);
     else if (!/^(connection|keep-alive|transfer-encoding)$/i.test(name)) out.append(name, value);
   }
-  if (cookies.length) out.set("x-wd-set-cookie", JSON.stringify(cookies));
-  out.set("x-wd-final-url", url);
+  writeAnswer(out, { finalUrl: url, setCookie: cookies });
   const chunked = headers.some(([name, value]) => /^transfer-encoding$/i.test(name) && /chunked/i.test(value));
   const length = Number(out.get("content-length") ?? Infinity);
   let left = method === "HEAD" || status === 204 || status === 304 ? 0 : chunked ? Infinity : length;
@@ -118,10 +118,8 @@ export async function loopbackFetch(url: string, init: Init = {}): Promise<Respo
  *  the URL, else through the dev server's proxy (headers prefixed x-wd-, as it takes them) */
 export async function deviceFetch(url: string, init: Init & { headers: Headers }): Promise<Response> {
   if (guestEndpoint(url)) {
-    const headers = new Headers();
-    init.headers.forEach((value, name) => { if (name.startsWith("x-wd-")) headers.set(name.slice(5), value); });
-    const own = await loopbackFetch(url, { ...init, headers });
+    const own = await loopbackFetch(url, { ...init, headers: fromProxyHeaders(init.headers) });
     if (own) return own;
   }
-  return fetch("/proxy?manual=1&url=" + encodeURIComponent(url), init as RequestInit);
+  return fetch(proxyPath({ url, manual: true }), init as RequestInit);
 }

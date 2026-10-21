@@ -9,7 +9,7 @@ import { startMainLooper } from "../src/android/mainloop.ts";
 import { vfs } from "../src/shell/vfs.ts";
 import { jarray } from "../src/jvm/abi.ts";
 import { serve } from "../scripts/serve.ts";
-import { nextHop, type ProxyRequest } from "../src/shell/webpage/redirect.ts";
+import { nextHop, type ProxyRequest } from "../src/shell/webpage/proxywire.ts";
 
 // framework.jar and a running main looper, as a booted page has them
 beforeAll(startMainLooper);

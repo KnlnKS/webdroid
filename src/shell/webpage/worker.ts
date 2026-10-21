@@ -3,7 +3,7 @@
 // apk assets and device fonts come from the app.
 import { webViewBrands } from "./clienthints.ts";
 import { request as ask, type Answers, type RendererContext } from "./protocol.ts";
-import { nextHop, type ProxyRequest } from "./redirect.ts";
+import { nextHop, parseProxyQuery, proxyPath, readAnswer, writeAnswer, type ProxyRequest } from "./proxywire.ts";
 
 type Client = { id: string; url: string; type: string; postMessage(data: unknown, transfer: Transferable[]): void };
 type FetchEvent = Event & { request: Request; clientId: string; respondWith(response: Promise<Response>): void };
@@ -49,7 +49,9 @@ worker.addEventListener("fetch", (event) => {
     return;
   }
   const localProxy = original.origin === worker.location.origin && original.pathname === "/proxy";
-  if (original.origin === worker.location.origin && ["/webview", "/webview-worker.js"].includes(original.pathname)) return;
+  const query = localProxy ? parseProxyQuery(original.searchParams) : null;
+  // a malformed proxy request is the proxy's to refuse
+  if (original.origin === worker.location.origin && ["/webview", "/webview-worker.js"].includes(original.pathname) || localProxy && !query) return;
   event.respondWith((async () => {
     const client = await worker.clients.get(event.clientId);
     if (!client) return fetch(request);
@@ -64,10 +66,10 @@ worker.addEventListener("fetch", (event) => {
     request.headers.forEach((value, name) => { if (!name.startsWith("sec-ch-")) headers.set(name.startsWith("x-wd-") ? name : "x-wd-" + name, value); });
     if (agent) headers.set("x-wd-user-agent", agent);
     // fetch metadata the browser adds past the worker; the frame's fetch of its document is its navigation
-    const frame = localProxy && original.searchParams.get("frame") === "1";
+    const frame = !!query?.frame;
     headers.set("x-wd-sec-fetch-mode", frame ? "navigate" : request.mode);
     headers.set("x-wd-sec-fetch-dest", frame ? "document" : request.destination || "empty");
-    let target = (localProxy ? original.searchParams.get("url") : request.url)!;
+    let target = query?.url ?? request.url;
     // A script cached on the renderer can resolve resources against its own URL.
     // Those paths still belong to the document's upstream site, not the DOM owner.
     if (original.origin === worker.location.origin && !localProxy) {
@@ -94,14 +96,17 @@ worker.addEventListener("fetch", (event) => {
       if (isolated && (frame || request.destination === "script") && !request.integrity) {
         headers.delete("x-wd-if-none-match"); headers.delete("x-wd-if-modified-since");
       }
-      const response = await fetch("/proxy?manual=1&url=" + encodeURIComponent(url) + (frame ? "&frame=1" + (sub ? "&sub=1" : "") : "") + (isolated ? "&bridge=" + encodeURIComponent(id) + (intercept && !redirects ? "&intercept=1" : "") : "") + (isolated && !request.integrity && /^https?:/.test(page) ? "&webview=1" : ""), { method: hop.method, headers, body: hop.body, credentials: "omit" });
-      const values = response.headers.get("x-wd-set-cookie");
-      if (include && values) await message(client, { kind: "webcookies", url, values: JSON.parse(values) });
+      const response = await fetch(proxyPath({ url, manual: true, frame: frame ? sub ? "sub" : "main" : undefined, bridge: isolated ? id : undefined,
+        intercept: isolated && intercept && !redirects, webview: isolated && !request.integrity && /^https?:/.test(page) }),
+        { method: hop.method, headers, body: hop.body, credentials: "omit" });
+      const answer = readAnswer(response);
+      if (include && answer.setCookie.length) await message(client, { kind: "webcookies", url, values: answer.setCookie });
       const next = nextHop(response, hop);
       if (!next) {
-        const clean = new Headers(response.headers);
-        clean.delete("x-wd-set-cookie"); clean.delete("x-wd-status");
-        return new Response(response.body, { status: response.status, statusText: response.statusText, headers: clean });
+        // the page sees the upstream response; the renderer learns where its document landed
+        const out = new Headers(answer.headers.filter(([name]) => name !== "set-cookie"));
+        if (frame && answer.finalUrl) writeAnswer(out, { finalUrl: answer.finalUrl });
+        return new Response(response.body, { status: answer.status, statusText: answer.statusText, headers: out });
       }
       await response.body?.cancel();
       hop = next;

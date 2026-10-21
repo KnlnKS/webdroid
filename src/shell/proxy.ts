@@ -2,6 +2,7 @@ import { htmlAttribute, webDocument } from "./webhtml.ts";
 import { webScript } from "./webscript.ts";
 import { isGuestHost } from "../native/net-address.ts";
 import type { BridgeCall } from "./webpage/protocol.ts";
+import { failedAnswer, fromProxyHeaders, parseProxyQuery, writeAnswer } from "./webpage/proxywire.ts";
 
 const DROP = /^(content-encoding|transfer-encoding|set-cookie)$/i;
 const DROP_FRAME = /^(x-frame-options|content-security-policy(-report-only)?|cross-origin-(opener|embedder)-policy)$/i;
@@ -43,21 +44,19 @@ export async function proxyRequest(request: Request, options: ProxyOptions): Pro
 
 async function proxied(request: Request, options: ProxyOptions): Promise<Response> {
   if (request.headers.get("service-worker") === "script") return new Response("invalid worker", { status: 403 });
-  const query = new URL(request.url).searchParams;
-  const requested = query.get("url"), frame = query.get("frame") === "1";
-  const manual = query.get("manual") === "1", isolated = query.get("webview") === "1";
-  if (!requested || !/^https?:\/\//.test(requested)) return new Response("bad url", { status: 400 });
+  const query = parseProxyQuery(new URL(request.url).searchParams);
+  if (!query) return new Response("bad url", { status: 400 });
+  const { url: requested, manual, bridge, webview: isolated } = query, frame = !!query.frame;
   const url = options.target?.(requested) ?? requested;
   try {
-    const headers = new Headers();
-    request.headers.forEach((value, name) => { if (name.startsWith("x-wd-")) headers.set(name.slice(5), value); });
+    const headers = fromProxyHeaders(request.headers);
     // a media element sets no headers of its own: the device's travel in `headers`, and its Range is the element's
-    for (const [name, value] of JSON.parse(query.get("headers") ?? "[]") as [string, string][]) headers.set(name, value);
+    for (const [name, value] of query.headers ?? []) headers.set(name, value);
     const range = request.headers.get("range");
     if (range && !headers.has("range")) headers.set("range", range);
     // only a manual answer names the encoding (a media element decodes none), so its redirects are the device's to follow
     const encoded = manual && !!options.fetchEncoded && !frame && !isolated && headers.has("accept-encoding");
-    const bridge = query.get("bridge"), body = request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer();
+    const body = request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer();
     /** the WebView's process answering `call`: its WebResourceResponse, or null for none */
     const bridged = async (call: BridgeCall): Promise<Response | null> => {
       const response = await options.bridgeCall(new Request(new URL(`/webview-call?id=${encodeURIComponent(bridge!)}`, request.url), {
@@ -70,8 +69,8 @@ async function proxied(request: Request, options: ProxyOptions): Promise<Respons
       const value = reply.value, empty = request.method === "HEAD" || [204, 205, 304].includes(value.status);
       return new Response(empty ? null : Uint8Array.fromBase64(value.body), { status: value.status, statusText: value.reason, headers: value.headers });
     };
-    let intercepted = bridge && query.get("intercept") === "1"
-      ? await bridged({ kind: "request", url, method: request.method, main: frame && query.get("sub") !== "1", headers: Object.fromEntries(headers) }) : null;
+    let intercepted = bridge && query.intercept
+      ? await bridged({ kind: "request", url, method: request.method, main: query.frame === "main", headers: Object.fromEntries(headers) }) : null;
     // the device's own address: the WebView's process serves it, and nothing else unless a remap
     // (adb reverse's role) names a host server
     if (!intercepted && url === requested && isGuestHost(new URL(url).hostname)) {
@@ -95,22 +94,12 @@ async function proxied(request: Request, options: ProxyOptions): Promise<Respons
       if (name === "content-length" && (upstream.headers.has("content-encoding") || html || script)) return;
       if (!DROP.test(name) && !(frame && DROP_FRAME.test(name))) out.set(name, value);
     });
-    // A server may drop Content-Length from a streamed response; URLConnection restores this value.
-    if (out.has("content-length")) out.set("x-wd-content-length", out.get("content-length")!);
-    out.set("x-wd-final-url", upstream.url || url);
-    // a browser hides Set-Cookie from fetch, so the values travel under our own name
-    const cookies = upstream.headers.getSetCookie();
-    if (cookies.length) out.set("x-wd-set-cookie", JSON.stringify(cookies));
-    if (manual) {
-      out.set("x-wd-status", String(upstream.status));
-      if ([301, 302, 303, 307, 308].includes(upstream.status)) {
-        out.set("x-wd-status-text", upstream.statusText);
-        out.delete("content-length");
-        out.delete("x-wd-content-length");
-        return new Response(null, { headers: out });
-      }
-    }
-    if (encoded && upstream.headers.has("content-encoding")) out.set("x-wd-content-encoding", upstream.headers.get("content-encoding")!);
+    // the client's fetch would follow a redirect itself (or, told not to, see an opaque one): a manual one is an empty answer
+    const redirect = manual && [301, 302, 303, 307, 308].includes(upstream.status);
+    if (redirect) out.delete("content-length");
+    writeAnswer(out, { finalUrl: upstream.url || url, setCookie: upstream.headers.getSetCookie(), status: manual ? upstream.status : undefined,
+      statusText: redirect ? upstream.statusText : undefined, length: out.get("content-length"), encoding: encoded ? upstream.headers.get("content-encoding") : null });
+    if (redirect) return new Response(null, { headers: out });
     if (html) {
       out.set("content-type", "text/html; charset=utf-8");
       if (isolated) { out.delete("etag"); out.delete("last-modified"); }
@@ -125,7 +114,7 @@ async function proxied(request: Request, options: ProxyOptions): Promise<Respons
   } catch (error) {
     if (frame) return new Response(`<!doctype html><meta name="wd-proxy-error" content="${htmlAttribute(String(error))}">`,
       { status: 502, headers: { "content-type": "text/html; charset=utf-8" } });
-    return new Response(`proxy error: ${error}`, { status: 502, headers: { "x-wd-error": failureKind(error) } });
+    return failedAnswer(failureKind(error), String(error));
   }
 }
 
