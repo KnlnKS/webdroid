@@ -30,6 +30,8 @@ interface CompiledPattern {
   shape: Shape;
   /** hitEnd/requireEnd patterns per sentinel, compiled on first use; null when they do not compile */
   derived?: Map<string, [Derived, Derived] | null>;
+  /** the form String's regex methods use, made on first use */
+  string?: StringPattern;
 }
 const Op = { None: 0, LookingAt: 1, Matches: 2 } as const;
 type Op = (typeof Op)[keyof typeof Op];
@@ -638,19 +640,13 @@ function* syntaxError(e: unknown, source: string): Gen<never> {
 
 // String's regex methods, which libcore's String answers through Pattern and Matcher
 interface StringPattern { all: RegExp; first?: RegExp; whole: RegExp; groups: number[]; names: Map<string, number> }
-const stringPatterns = new Map<string, StringPattern>();
-/** Pattern.compile(source), cached per source, without the match indices only Matcher reads */
+/** Pattern.compile(source) without the match indices only Matcher reads */
 function stringPattern(source: string): StringPattern | Promise<never> {
-  let p = stringPatterns.get(source);
-  if (p === undefined) {
-    let c: CompiledPattern;
-    try { c = compilePattern(source, 0); } catch (e) { return rt.drive(syntaxError(e, source)) as Promise<never>; }
-    const flags = c.re.flags.replace(/[dgy]/g, "");
-    p = { all: new RegExp(c.re.source, flags + (c.shape.sticky ? "gy" : "g")), whole: new RegExp(c.whole.source, flags + "y"), groups: c.groups, names: c.names };
-    if (stringPatterns.size >= 1024) stringPatterns.clear();
-    stringPatterns.set(source, p);
-  }
-  return p;
+  let c: CompiledPattern;
+  try { c = compilePattern(source, 0); } catch (e) { return rt.drive(syntaxError(e, source)) as Promise<never>; }
+  if (c.string) return c.string;
+  const flags = c.re.flags.replace(/[dgy]/g, "");
+  return c.string = { all: new RegExp(c.re.source, flags + (c.shape.sticky ? "gy" : "g")), whole: new RegExp(c.whole.source, flags + "y"), groups: c.groups, names: c.names };
 }
 export function stringMatches(s: string, source: string): number | Promise<never> {
   const p = stringPattern(source);
