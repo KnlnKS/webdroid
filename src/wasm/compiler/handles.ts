@@ -13,6 +13,7 @@ import { failed, resolveFieldRef, resolveInvoke, typeFailure, type LinkFailure, 
 import { MethodHandleType, type DexFile } from "../../jvm/dex.ts";
 import { Invoke } from "../../jvm/opcodes.ts";
 import { emitRestored, emitSettled } from "./hostcalls.ts";
+import { FIELD_INDEX_MAX, fieldIdOf } from "./fieldid.ts";
 
 export const MH = "java/lang/invoke/MethodHandle", MT = "java/lang/invoke/MethodType", CLASS = "java/lang/Class", OBJECTS = "[Ljava/lang/Object;";
 /** what host.mhInvoke dispatches: a handle with the site's type, an EmulatedStackFrame, an invoke-custom site, a VarHandle accessor */
@@ -97,7 +98,9 @@ export function emitHandleValue(cx: Compiler, c: Code, referrer: MethodInfo, ind
   if ("field" in member) {
     const stat = h.type <= MethodHandleType.StaticGet, put = h.type === MethodHandleType.StaticPut || h.type === MethodHandleType.InstancePut, f = member.field;
     kind = stat ? put ? K.SPUT : K.SGET : put ? K.IPUT : K.IGET;
-    art = BigInt(cx.idOf(f.owner) * 4096 + prog.require(f.owner).fields.indexOf(f));
+    const at = prog.require(f.owner).fields.indexOf(f);
+    if (at > FIELD_INDEX_MAX) { cx.gap(c, `${f.owner}.${f.name}: field ${at}, past the ${FIELD_INDEX_MAX + 1} a field id can name`); return false; }
+    art = BigInt(fieldIdOf(cx.idOf(f.owner), at));
     ret = put ? "V" : f.desc; params = [...stat ? [] : [`L${f.owner};`], ...put ? [f.desc] : []];
   } else {
     const { method: m, cls, invoke } = member, desc = prog.typesOf(dex).methodDesc(h.idx);
