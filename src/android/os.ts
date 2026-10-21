@@ -23,7 +23,7 @@ import { OS_CONSTANTS } from "./os-constants.ts";
 import { pathOf, fdInt, setFdInt, mkFd } from "../jvm/natives/jio.ts";
 import { vfs, storageEstimate, type FileAttributes } from "../shell/vfs.ts";
 import { filePaths, type AttributeChange } from "../shell/file-path.ts";
-import { processOpenFd, processAshmemCreate, processAshmemSize, processAshmemProtect } from "../native/process-fd.ts";
+import { processOpenFd, processAshmemCreate, processAshmemSize, processAshmemProtect, remoteOf } from "../native/process-fd.ts";
 import { javaOpenFd, javaBytesFd, fdFile } from "../native/fs.ts";
 import { openFd, javaOnLastClose, javaCloseFd, javaDupFd, javaFdSource, javaFdStat, localFdStat, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd,
   javaLseekFd, javaTruncateFd, javaSyncFd, javaFcntlFd, javaIoctlIntFd, javaChangeFdAttributes, fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag,
@@ -396,7 +396,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
         throw errno("mmap", E.INVAL);
       if (flags & 0x10) throw errno("mmap", E.NOTSUP);
       const anonymous = !!(flags & 0x20), fd = anonymous ? -1 : fdInt(d);
-      const remote = anonymous ? undefined : openFd(fd)?.remote;
+      const remote = anonymous ? undefined : remoteOf(fd);
       if (remote) {
         if (!(flags & 1)) throw errno("mmap",E.NOTSUP);
         const address = yield* awaited(mapRemote(remote,Number(offset),size,prot));

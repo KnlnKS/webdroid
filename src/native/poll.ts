@@ -4,7 +4,7 @@
 import { mem, anchor } from "./mem.ts";
 import { PTR, complete, type HostFn } from "./host.ts";
 import { E, O_CLOEXEC, O_RDWR, POLLIN, POLLPRI, POLLOUT, POLLERR, POLLHUP, POLLNVAL } from "./abi.ts";
-import { ANON, openFd, installFile, newFile, pollEvents, watchFd, type FileOps } from "./fd.ts";
+import { ANON, openFd, installFile, isKind, newFile, pollEvents, watchFd, type FileOps } from "./fd.ts";
 import { readTimeout } from "./kernel.ts";
 import { clearGuestTimeout, guestNow, setGuestTimeout, type GuestTimer } from "../guest-clock.ts";
 import { parkTimeout, unparkTimeout } from "../jvm/yield.ts";
@@ -134,16 +134,13 @@ export function nativeSelect(count: number, readSet: number, writeSet: number, e
 const EPOLLET = 0x80000000, EPOLLONESHOT = 0x40000000;
 interface EpollEntry { events: number; data: bigint; pending: number; disabled: boolean; cancel: () => void }
 export interface Epoll { entries: Map<number, EpollEntry>; wake: Set<() => void> }
-const EPOLL: FileOps = {
+const EPOLL: FileOps<Epoll> = {
   ...ANON,
   poll: () => 0,
-  close(f) { const ep = f.epoll!; for (const e of ep.entries.values()) e.cancel(); for (const wake of ep.wake) wake(); },
+  close(f) { const ep = f.state; for (const e of ep.entries.values()) e.cancel(); for (const wake of ep.wake) wake(); },
 };
-export function epollCreate(cloexec: boolean): number {
-  const f = newFile(EPOLL, "epoll", O_RDWR);
-  f.epoll = { entries: new Map(), wake: new Set() };
-  return installFile(f, cloexec);
-}
+export const epollCreate = (cloexec: boolean): number => installFile(newFile(EPOLL, "epoll", O_RDWR, { entries: new Map(), wake: new Set() }), cloexec);
+const epollOf = (fd: number): Epoll | undefined => { const f = openFd(fd); return isKind(f, EPOLL) ? f.state : undefined; };
 function epollWatch(ep: Epoll, fd: number, events: number, data: bigint): EpollEntry {
   const entry: EpollEntry = { events, data, pending: pollEvents(fd, events), disabled: false, cancel: () => {} };
   let active = true, remove = () => {};
@@ -162,7 +159,7 @@ function epollWatch(ep: Epoll, fd: number, events: number, data: bigint): EpollE
   return entry;
 }
 async function epollWait(epfd: number, events: bigint, max: number, timeout: number): Promise<number> {
-  const ep = openFd(epfd)?.epoll, deadline = guestNow() + timeout;
+  const ep = epollOf(epfd), deadline = guestNow() + timeout;
   if (!ep) return -E.BADF;
   if (max <= 0) return -E.INVAL;
   const subscribe = (wake: () => void) => { ep.wake.add(wake); return () => { ep.wake.delete(wake); }; };
@@ -180,7 +177,7 @@ async function epollWait(epfd: number, events: bigint, max: number, timeout: num
     }
     if (n || timeout === 0 || !woken) return n;
     woken = await waitUntil(subscribe, msLeft(timeout, deadline));
-    if (openFd(epfd)?.epoll !== ep) return -E.BADF;
+    if (epollOf(epfd) !== ep) return -E.BADF;
   }
 }
 
@@ -191,7 +188,7 @@ export const POLL_SYSCALLS: Record<string, HostFn> = {
     return epollCreate(!!flags);
   },
   epoll_ctl: (_c, a) => {
-    const epfd = a.i(), ep = openFd(epfd)?.epoll, op = a.i(), fd = a.i(), ev = a.p();
+    const epfd = a.i(), ep = epollOf(epfd), op = a.i(), fd = a.i(), ev = a.p();
     if (fd === epfd) return -E.INVAL;
     if (!ep || !openFd(fd)) return -E.BADF;
     const old = ep.entries.get(fd);

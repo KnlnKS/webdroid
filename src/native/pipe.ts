@@ -17,14 +17,20 @@ export function waitIn(waiters: (() => void)[], wake: () => void): () => void {
   waiters.push(wake);
   return () => { const index = waiters.indexOf(wake); if (index >= 0) waiters.splice(index, 1); };
 }
-const queued = (pipe: Pipe): number => pipe.q.reduce((n, b) => n + b.length, 0);
+export const queued = (pipe: Pipe): number => pipe.q.reduce((n, b) => n + b.length, 0);
+/** poll(2) on a pipe's read end */
+export function readable(pipe: Pipe, events: number): number {
+  return (events & POLLIN && (pipe.q.length || pipe.closed) ? POLLIN : 0) | (pipe.closed ? POLLHUP : 0);
+}
+/** the ends of a pipe an open file holds, as its access mode says */
+type Ends = { read: Pipe | null; write: Pipe | null };
 
 /** a pipe's ends: its read end reads (an empty pipe waits until its writers are gone), its write end writes */
-export const PIPE: FileOps = {
+const PIPE: FileOps<Ends> = {
   ...ANON,
   mode: S_IFIFO | 0o600,
   read(f, target, at, n) {
-    const pipe = f.rpipe!, q = pipe.q;
+    const pipe = f.state.read!, q = pipe.q;
     if (!q.length) return pipe.closed ? 0 : -E.AGAIN;
     let k = 0;
     while (k < n && q.length) {
@@ -36,39 +42,31 @@ export const PIPE: FileOps = {
     return k;
   },
   write(f, bytes) {
-    const pipe = f.wpipe!;
+    const pipe = f.state.write!;
     if (pipe.closed) return -E.PIPE;
     pipe.q.push(bytes.slice());
     wakeAll(pipe);
     return bytes.length;
   },
   poll(f, events) {
-    let revents = 0;
-    const read = f.rpipe, write = f.wpipe;
-    if (read) {
-      if (events & POLLIN && (read.q.length || read.closed)) revents |= POLLIN;
-      if (read.closed) revents |= POLLHUP;
-    }
-    if (write) revents |= write.closed ? POLLERR : events & POLLOUT;
-    return revents;
+    const { read, write } = f.state;
+    return (read ? readable(read, events) : 0) | (write ? write.closed ? POLLERR : events & POLLOUT : 0);
   },
-  watch: (f, wake) => f.rpipe ? waitIn(f.rpipe.wake, wake) : ANON.watch(f, wake),
-  available: (f) => queued(f.rpipe ?? f.wpipe!),
+  watch: (f, wake) => f.state.read ? waitIn(f.state.read.wake, wake) : ANON.watch(f, wake),
+  available: (f) => queued(f.state.read ?? f.state.write!),
   stat: (f) => openFileStat(f.content.path, S_IFIFO | 0o600, f.content.len, f.content.attributes),
   change: (f, change, uid) => changeOpenFile(f.content.path, change, uid),
   close(f) {
-    const write = f.wpipe;
+    const { read, write } = f.state;
     if (write && !--write.writers) { write.closed = true; wakeAll(write); }
     // a pipe nobody reads: its writers meet EPIPE (a fifo's outlives its descriptors)
-    if (f.rpipe && !f.rpipe.named) f.rpipe.closed = true;
+    if (read && !read.named) read.closed = true;
   },
 };
 /** an open file on `pipe` with `statusFlags`, reading or writing it as its access mode says */
-function pipeFile(path: string, pipe: Pipe, statusFlags: number, content?: VfsFile): OpenFile {
-  const f = newFile(PIPE, path, statusFlags, content), access = statusFlags & O_ACCMODE;
-  f.rpipe = access !== O_WRONLY ? pipe : undefined;
-  f.wpipe = access !== O_RDONLY ? pipe : undefined;
-  return f;
+function pipeFile(path: string, pipe: Pipe, statusFlags: number, content?: VfsFile): OpenFile<Ends> {
+  const access = statusFlags & O_ACCMODE;
+  return newFile(PIPE, path, statusFlags, { read: access !== O_WRONLY ? pipe : null, write: access !== O_RDONLY ? pipe : null }, content);
 }
 /** pipe2(2): the read end, then the write end */
 export function javaPipeFds(flags: number): [number, number] {

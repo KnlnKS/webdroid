@@ -1,7 +1,7 @@
 // The open files another realm owns: a process Worker's descriptors on the page's mutable files,
 // whose position, flags and bytes live with their owner, so every operation is a request to it.
 import { E, O_CLOEXEC, S_IFMT, S_IFDIR, S_IFREG } from "./abi.ts";
-import { ANON, installFile, newFile, openFd, javaCloseFd, javaFdBytes, type FdStat, type FileOps } from "./fd.ts";
+import { ANON, installFile, isKind, newFile, openFd, javaCloseFd, javaFdBytes, type FdStat, type FileOps } from "./fd.ts";
 import { javaOpenFd, listProcess } from "./fs.ts";
 import { openRemoteFifo } from "./pipe.ts";
 import type { FileSource } from "../shell/lazyfile.ts";
@@ -58,49 +58,52 @@ function remoteRead(remote: RemoteDescriptor, length: number, off: number): Prom
     return reply;
   });
 }
-const REMOTE: FileOps = {
+/** the open file's owner in another realm, which answers every operation on it, and a directory's
+ *  entries, listed when reading starts */
+type Remote = { remote: RemoteDescriptor; entries: string[] | null };
+const REMOTE: FileOps<Remote> = {
   ...ANON,
   positional: true,
-  read: (f, _target, _at, n, off) => remoteRead(f.remote!, n, off),
-  write: (f, bytes, off) => f.remote!.request("write", {bytes:bytes.slice(),offset:offsetOf(off)}),
+  read: (f, _target, _at, n, off) => remoteRead(f.state.remote, n, off),
+  write: (f, bytes, off) => f.state.remote.request("write", {bytes:bytes.slice(),offset:offsetOf(off)}),
   // a directory's position indexes the entries listed here
-  seek: (f, offset, whence) => !f.dir ? f.remote!.request("seek", {offset,whence}) : whence === 0 && offset >= 0 ? f.pos = offset : -E.INVAL,
-  stat: (f) => f.remote!.stat(),
-  sync: (f) => f.remote!.request("sync", {}),
-  available: (f) => Promise.all([f.remote!.stat(), f.remote!.request("seek", {offset:0,whence:1})])
+  seek: (f, offset, whence) => !f.dir ? f.state.remote.request("seek", {offset,whence}) : whence === 0 && offset >= 0 ? f.pos = offset : -E.INVAL,
+  stat: (f) => f.state.remote.stat(),
+  sync: (f) => f.state.remote.request("sync", {}),
+  available: (f) => Promise.all([f.state.remote.stat(), f.state.remote.request("seek", {offset:0,whence:1})])
     .then(([stat, position]) => !stat || position < 0 ? -E.BADF : Math.max(0, stat.size - position)),
-  truncate: (f, length) => f.remote!.request("truncate", {length}),
-  allocate: (f, offset, length) => f.remote!.request("allocate", {offset,length}),
-  status: (f, command, arg) => f.remote!.request("fcntl", {command,arg}),
-  change: (f, change) => f.remote!.request("changeAttributes", {change}),
+  truncate: (f, length) => f.state.remote.request("truncate", {length}),
+  allocate: (f, offset, length) => f.state.remote.request("allocate", {offset,length}),
+  status: (f, command, arg) => f.state.remote.request("fcntl", {command,arg}),
+  change: (f, change) => f.state.remote.request("changeAttributes", {change}),
   /** a regular file as a source of its size now, read through its owner */
   source(f) {
-    const remote = f.remote!;
+    const remote = f.state.remote;
     return remote.stat().then((stat): FileSource | null => stat && (stat.mode & S_IFMT) === S_IFREG ? { size: stat.size, read: (offset, length) =>
       remoteRead(remote, length, offset).then(bytes => { if (typeof bytes === "number") throw new Error("Bad file descriptor"); return bytes; }) } : null);
   },
   entries(f) {
     if (!f.dir) return -E.NOTDIR;
-    if (f.pos && f.entries) return f.entries;
-    return Promise.resolve(listProcess(f.path)).then(entries => typeof entries === "number" ? entries : f.entries = entries);
+    if (f.pos && f.state.entries) return f.state.entries;
+    return Promise.resolve(listProcess(f.path)).then(entries => typeof entries === "number" ? entries : f.state.entries = entries);
   },
   close(f) {
-    const closing = f.remote!.request("close", {});
+    const closing = f.state.remote.request("close", {});
     void closing.catch(() => {});
     return closing;
   },
 };
-export const isRemoteFd = (fd: number): boolean => openFd(fd)?.ops === REMOTE;
+/** the owner of the open file `fd` names in another realm, if another realm owns it */
+export const remoteOf = (fd: number): RemoteDescriptor | undefined => { const f = openFd(fd); return isKind(f, REMOTE) ? f.state.remote : undefined; };
+export const isRemoteFd = (fd: number): boolean => !!remoteOf(fd);
 
 function installRemote(token: number, calls: DescriptorCalls, path: string, flags: number, dir = false, cloexec = !!(flags & O_CLOEXEC)): number {
-  const f = newFile(REMOTE, path, flags, undefined, dir);
-  f.remote = new RemoteDescriptor(token, calls);
-  return installFile(f, cloexec);
+  return installFile(newFile(REMOTE, path, flags, { remote: new RemoteDescriptor(token, calls), entries: null }, undefined, dir), cloexec);
 }
 /** this realm's descriptor rights, which the page's kernel holds: the page's own locally, a process's through requests */
 export const processRights: DescriptorRights = {
   stage(fd) {
-    const remote = openFd(fd)?.remote;
+    const remote = remoteOf(fd);
     if (!remote) return descriptorTransport.local?.stage(fd) ?? null;
     // the receiver reads the file from its owner, which has only the stores of this process's mappings that reached it
     const settled = settleRemoteMaps(), stage = () => remote.request("stage", {});
@@ -146,10 +149,10 @@ export function processAshmemCreate(size: number): Promise<number> | null {
   return calls ? calls.fileDescriptor({kind:"ashmemCreate",size}).then(token => token < 0 ? token : installRemote(token,calls,"",2,false,true)) : null;
 }
 export function processAshmemProtect(fd: number, prot: number): Promise<number> | null {
-  const remote = openFd(fd)?.remote;
+  const remote = remoteOf(fd);
   return remote ? remote.request("ashmemProtect", {prot}) : null;
 }
 export function processAshmemSize(fd: number): Promise<number> | null {
-  const remote = openFd(fd)?.remote;
+  const remote = remoteOf(fd);
   return remote ? remote.request("stat", {}).then(stat => typeof stat === "number" || stat.ashmemProt === undefined ? -1 : stat.size) : null;
 }

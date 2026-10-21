@@ -4,20 +4,13 @@
 // (eventfd.ts), inotify (inotify.ts), epoll (poll.ts), sockets (socket/core.ts) and the open files
 // another realm owns (process-fd.ts). The java* calls are libcore's; each answers -errno on failure.
 
-import { E, O_ACCMODE, O_APPEND, O_NONBLOCK, O_RDONLY, O_WRONLY, POLLIN, POLLNVAL, POLLOUT } from "./abi.ts";
+import { E, O_ACCMODE, O_APPEND, O_NONBLOCK, O_RDONLY, O_WRONLY, POLLIN, POLLNVAL, POLLOUT, S_IFMT, S_IFSOCK } from "./abi.ts";
 import { logLine } from "./kernel.ts";
 import { procIdentity } from "../shell/procfs.ts";
 import { concat } from "../jvm/abi.ts";
 import type { VfsFile } from "../shell/vfs.ts";
 import type { FileSource } from "../shell/lazyfile.ts";
 import type { AttributeChange } from "../shell/file-path.ts";
-import type { Pipe } from "./pipe.ts";
-import type { Counter } from "./eventfd.ts";
-import type { ClockTimer } from "./timers.ts";
-import type { Epoll } from "./poll.ts";
-import type { Inotify } from "./inotify.ts";
-import type { Socket } from "./socket/core.ts";
-import type { RemoteDescriptor } from "./process-fd.ts";
 
 /** stat(2)'s answer: st_mode with the file type, st_size, st_mtime in milliseconds and the owner */
 export type FileStat = { mode: number; size: number; mtime: number; uid: number; gid: number };
@@ -25,23 +18,16 @@ export type FileStat = { mode: number; size: number; mtime: number; uid: number;
 export type FdStat = FileStat & { path: string | null };
 
 /** an open file: what descriptors dup(2) and SCM_RIGHTS share, with its kind's state */
-export interface OpenFile {
-  ops: FileOps; path: string; content: VfsFile; pos: number; dir: boolean; statusFlags: number; references: number;
+export interface OpenFile<S = unknown> {
+  ops: FileOps<S>; state: S; path: string; content: VfsFile; pos: number; dir: boolean; statusFlags: number; references: number;
   /** a read whose file answers later, which the next read at the position waits behind */
   readQueue?: Promise<void>;
-  rpipe?: Pipe; wpipe?: Pipe; event?: Counter; timer?: ClockTimer; epoll?: Epoll; inotify?: Inotify; socket?: Socket;
-  /** the open file's owner in another realm, which answers every operation on it */
-  remote?: RemoteDescriptor;
-  /** a remote directory's entries, listed when reading starts */
-  entries?: string[];
-  /** a log stream's priority, and its unfinished line */
-  log?: number; line?: string;
   /** run when the last descriptor sharing this open file closes it */
   onLastClose?: () => void;
 }
 
-/** What an open file's kind does with each call. A result is -errno on failure. */
-export interface FileOps {
+/** What an open file's kind does with each call, over its `state`. A result is -errno on failure. */
+export interface FileOps<S = unknown> {
   /** st_mode of an open file without a name */
   readonly mode: number;
   /** whether pread and pwrite reach it: a stream has no offsets */
@@ -49,28 +35,33 @@ export interface FileOps {
   /** Up to `n` bytes at `off`, or at the position (off < 0), which moves past them, into `target` from
    *  `at` (guest memory itself for a guest read). A stream that would wait answers -EAGAIN, and is waited
    *  on (watch) unless O_NONBLOCK. A Promise leaves `target` alone and settles to the bytes read, or -errno. */
-  read(f: OpenFile, target: Uint8Array, at: number, n: number, off: number, fd: number): number | Promise<Uint8Array | number>;
+  read(f: OpenFile<S>, target: Uint8Array, at: number, n: number, off: number, fd: number): number | Promise<Uint8Array | number>;
   /** `bytes` at `off`, or at the position (off < 0); the kind copies what it keeps */
-  write(f: OpenFile, bytes: Uint8Array, off: number): number | Promise<number>;
-  poll(f: OpenFile, events: number): number;
+  write(f: OpenFile<S>, bytes: Uint8Array, off: number): number | Promise<number>;
+  /** whether each write is one message, which writev gathers its vectors into and whose EPIPE
+   *  raises no SIGPIPE */
+  messages(f: OpenFile<S>): boolean;
+  poll(f: OpenFile<S>, events: number): number;
   /** call `wake` once the readiness may have changed; answers how to stop */
-  watch(f: OpenFile, wake: () => void): () => void;
-  seek(f: OpenFile, off: number, whence: number): number | Promise<number>;
-  stat(f: OpenFile): FdStat | Promise<FdStat | null>;
-  sync(f: OpenFile): number | Promise<number>;
+  watch(f: OpenFile<S>, wake: () => void): () => void;
+  seek(f: OpenFile<S>, off: number, whence: number): number | Promise<number>;
+  stat(f: OpenFile<S>): FdStat | Promise<FdStat | null>;
+  sync(f: OpenFile<S>): number | Promise<number>;
   /** FIONREAD: what a read could take now */
-  available(f: OpenFile): number | Promise<number>;
-  truncate(f: OpenFile, length: number): number | Promise<number>;
-  allocate(f: OpenFile, off: number, length: number): number | Promise<number>;
+  available(f: OpenFile<S>): number | Promise<number>;
+  truncate(f: OpenFile<S>, length: number): number | Promise<number>;
+  allocate(f: OpenFile<S>, off: number, length: number): number | Promise<number>;
   /** F_GETFL and F_SETFL */
-  status(f: OpenFile, cmd: number, arg: number): number | Promise<number>;
-  change(f: OpenFile, change: AttributeChange, uid?: number): number | Promise<number>;
+  status(f: OpenFile<S>, cmd: number, arg: number): number | Promise<number>;
+  change(f: OpenFile<S>, change: AttributeChange, uid?: number): number | Promise<number>;
   /** a regular file's bytes, read as a lazy source while descriptor `fd` names it */
-  source(f: OpenFile, fd: number): FileSource | null | Promise<FileSource | null>;
+  source(f: OpenFile<S>, fd: number): FileSource | null | Promise<FileSource | null>;
   /** a directory's entries as readdir lists them */
-  entries(f: OpenFile): string[] | number | Promise<string[] | number>;
+  entries(f: OpenFile<S>): string[] | number | Promise<string[] | number>;
+  /** a descriptor naming it closed: the calls waiting on that descriptor end */
+  unnamed(f: OpenFile<S>): void;
   /** the last descriptor sharing the open file closed it; a remote one answers once its owner has */
-  close(f: OpenFile): void | Promise<number>;
+  close(f: OpenFile<S>): void | Promise<number>;
 }
 const F_DUPFD = 0, F_GETFD = 1, F_SETFD = 2, F_GETFL = 3, F_SETFL = 4;
 const F_DUPFD_CLOEXEC = 0x406;
@@ -83,6 +74,7 @@ export const ANON: FileOps = {
   positional: false,
   read: () => -E.INVAL,
   write: () => -E.INVAL,
+  messages: () => false,
   poll(f, events) {
     const access = f.statusFlags & O_ACCMODE;
     return (access !== O_WRONLY ? events & POLLIN : 0) | (access !== O_RDONLY ? events & POLLOUT : 0);
@@ -102,11 +94,14 @@ export const ANON: FileOps = {
   change: () => -E.NOTSUP,
   source: () => null,
   entries: () => -E.NOTDIR,
+  unnamed: NOOP,
   close: NOOP,
 };
-/** an open file of kind `ops`, opened as `path` with `statusFlags`, reading `content` */
-export const newFile = (ops: FileOps, path: string, statusFlags: number, content: VfsFile = { path: null, data: new Uint8Array(0), len: 0 }, dir = false): OpenFile =>
-  ({ ops, path, content, pos: 0, dir, statusFlags, references: 1 });
+/** an open file of kind `ops` with its `state`, opened as `path` with `statusFlags`, reading `content` */
+export const newFile = <S>(ops: FileOps<S>, path: string, statusFlags: number, state: S, content: VfsFile = { path: null, data: new Uint8Array(0), len: 0 }, dir = false): OpenFile<S> =>
+  ({ ops, state, path, content, pos: 0, dir, statusFlags, references: 1 });
+/** whether `f` is an open file of kind `ops` */
+export const isKind = <S>(f: OpenFile | undefined, ops: FileOps<S>): f is OpenFile<S> => f?.ops === (ops as FileOps);
 
 const fds = new Map<number, OpenFile>();
 const closeOnExec = new Set<number>();
@@ -146,8 +141,7 @@ export function javaCloseFd(fd: number): number | Promise<number> {
   if (fd < lowest) lowest = fd;
   fdEvents.closed?.(fd);
   const closing = dropFile(f);
-  // a socket call waiting on this descriptor ends with EBADF
-  f.socket?.wake();
+  f.ops.unnamed(f);
   return closing ?? 0;
 }
 /** dup(2) and F_DUPFD: the lowest free descriptor at or above `min`, sharing fd's open file */
@@ -266,7 +260,7 @@ export function javaChangeFdAttributes(fd: number, change: AttributeChange, uid?
   const f = fds.get(fd);
   return f ? f.ops.change(f, change, uid) : -E.BADF;
 }
-export const javaIsSocketFd = (fd: number): boolean => !!fds.get(fd)?.socket;
+export const javaIsSocketFd = (fd: number): boolean => ((fds.get(fd)?.ops.mode ?? 0) & S_IFMT) === S_IFSOCK;
 /** poll(2)'s answer for one descriptor: which of `events` it is ready for, with POLLERR and POLLHUP */
 export function pollEvents(fd: number, events: number): number {
   const f = fds.get(fd);

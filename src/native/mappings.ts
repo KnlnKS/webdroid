@@ -11,8 +11,7 @@
 import { guestAt, mem } from "./mem.ts";
 import { vfs, type VfsFile } from "../shell/vfs.ts";
 import { E } from "./abi.ts";
-import type { ProcessMapping } from "./process-fd.ts";
-import { openFd } from "./fd.ts";
+import { remoteOf, type ProcessMapping } from "./process-fd.ts";
 
 /** an owner's lease on another process's file, which covers the file from offset `start` */
 type Lease = { lease: ProcessMapping; start: number };
@@ -115,7 +114,7 @@ export async function mapLease(va: bigint, lease: ProcessMapping, start: number,
 /** a shared mapping at va of [off, off + n) of the file `fd` reaches in another process; an errno, or 0. File bytes past
  *  EOF are not the file's, so the lease covers what the file holds and the rest of the mapping stays zero. */
 export async function mapRemoteShared(va: bigint, n: number, off: number, fd: number, prot: number): Promise<number> {
-  const remote = openFd(fd)?.remote, stat = await remote?.stat();
+  const remote = remoteOf(fd), stat = await remote?.stat();
   if (!remote || !stat) return E.BADF;
   const length = Math.max(0, Math.min(n, stat.size - off));
   if (!length) return 0;

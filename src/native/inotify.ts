@@ -1,7 +1,7 @@
 // inotify(7): the VFS's changes, as events queued whole for each inotify descriptor watching them.
 import { E, O_CLOEXEC } from "./abi.ts";
-import { ANON, installFile, newFile, openFd, type FileOps } from "./fd.ts";
-import { PIPE, newPipe, wakeAll, type Pipe } from "./pipe.ts";
+import { ANON, installFile, isKind, newFile, openFd, type FileOps } from "./fd.ts";
+import { newPipe, queued, readable, waitIn, wakeAll, type Pipe } from "./pipe.ts";
 import { vfs } from "../shell/vfs.ts";
 import { utf8 } from "../jvm/abi.ts";
 import type { HostFn } from "./host.ts";
@@ -47,10 +47,10 @@ export function hookInotify(): void {
 }
 
 /** an inotify descriptor reads whole events, as many as fit */
-const INOTIFY: FileOps = {
+const INOTIFY: FileOps<Inotify> = {
   ...ANON,
   read(f, target, at, n) {
-    const pipe = f.rpipe!, q = pipe.q;
+    const pipe = f.state.pipe, q = pipe.q;
     if (!q.length) return pipe.closed ? 0 : -E.AGAIN;
     if (n < q[0].length) return -E.INVAL;
     let done = 0;
@@ -61,23 +61,25 @@ const INOTIFY: FileOps = {
     }
     return done;
   },
-  poll: PIPE.poll,
-  watch: PIPE.watch,
-  available: PIPE.available,
-  close(f) { inotifies.delete(f.inotify!); f.rpipe!.closed = true; wakeAll(f.rpipe!); },
+  poll: (f, events) => readable(f.state.pipe, events),
+  watch: (f, wake) => waitIn(f.state.pipe.wake, wake),
+  available: (f) => queued(f.state.pipe),
+  close(f) { inotifies.delete(f.state); f.state.pipe.closed = true; wakeAll(f.state.pipe); },
 };
+/** the inotify instance `fd` names, or EBADF, or EINVAL for another open file */
+function inotifyOf(fd: number): Inotify | number {
+  const f = openFd(fd);
+  return isKind(f, INOTIFY) ? f.state : f ? -E.INVAL : -E.BADF;
+}
 function makeInotify(flags: number): number {
   if (flags & ~(IN_NONBLOCK | IN_CLOEXEC)) return -E.INVAL;
   const pipe = newPipe(0), state: Inotify = { watches: new Map(), nextWd: 1, pipe };
   inotifies.add(state);
-  const f = newFile(INOTIFY, "inotify", flags & IN_NONBLOCK);
-  f.rpipe = pipe;
-  f.inotify = state;
-  return installFile(f, !!(flags & O_CLOEXEC));
+  return installFile(newFile(INOTIFY, "inotify", flags & IN_NONBLOCK, state), !!(flags & O_CLOEXEC));
 }
 export function javaInotifyAddWatch(fd: number, name: string, mask: number): number {
-  const path = vfs.norm(name), state = openFd(fd)?.inotify;
-  if (!state) return -E.BADF;
+  const path = vfs.norm(name), state = inotifyOf(fd);
+  if (typeof state === "number") return state;
   if (!vfs.exists(path)) return -E.NOENT;
   const dir = vfs.isDir(path);
   if (mask & IN_ONLYDIR && !dir) return -E.NOTDIR;
@@ -91,8 +93,8 @@ export function javaInotifyAddWatch(fd: number, name: string, mask: number): num
   return wd;
 }
 export function javaInotifyRmWatch(fd: number, wd: number): number {
-  const state = openFd(fd)?.inotify;
-  if (!state) return -E.BADF;
+  const state = inotifyOf(fd);
+  if (typeof state === "number") return state;
   if (!state.watches.delete(wd)) return -E.INVAL;
   inotifyEvent(state, wd, IN_IGNORED);
   return 0;
