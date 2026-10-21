@@ -2,8 +2,15 @@ import { bridgeSocket, gzipHeaders, ownPage, sharedRoute, type ServeHost } from 
 import { WebBridgeSession } from "./bridge.ts";
 import { tcpRelay } from "./tcp.ts";
 import { isPublicHost } from "../src/native/net-address.ts";
+import { branchOrigin } from "./preview.ts";
 
 export { WebBridgeSession };
+
+export function serveHost(env: Env): ServeHost {
+  return { bridge: (call, id) => env.WEB_BRIDGES.getByName(id).fetch(call), nameExists,
+    webviewOrigin: () => env.WEBVIEW_ORIGIN && (env.PREVIEW_BRANCH ? branchOrigin(env.WEBVIEW_ORIGIN, env.PREVIEW_BRANCH) : env.WEBVIEW_ORIGIN),
+    proxy: { reachable: isPublicHost } };
+}
 
 /** whether `name` has an IPv4 or else an IPv6 address, as getaddrinfo finds one; null when the resolver cannot say */
 async function nameExists(name: string): Promise<boolean | null> {
@@ -66,8 +73,7 @@ async function largeAsset(request: Request, env: Env): Promise<Response> {
 export default {
   async fetch(request: Request, env: Env, context: ExecutionContext): Promise<Response> {
     const url = new URL(request.url), path = url.pathname;
-    const host: ServeHost = { bridge: (call, id) => env.WEB_BRIDGES.getByName(id).fetch(call), nameExists, webviewOrigin: () => env.WEBVIEW_ORIGIN || null,
-      proxy: { reachable: isPublicHost } };
+    const host = serveHost(env);
     const shared = sharedRoute(url, host), header = (name: string) => request.headers.get(name);
     if (shared) return shared(request);
     if (path === "/tcp") return ownPage(url, header) ? tcpRelay(request, context) : new Response("forbidden", { status: 403 });

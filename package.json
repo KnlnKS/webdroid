@@ -8,6 +8,7 @@
     "build:renderer": "node scripts/generated.ts --pages",
     "worker:dev": "vp build --configLoader native && wrangler dev",
     "worker:check": "vp build --configLoader native && wrangler deploy --env=\"\" --dry-run",
+    "worker:preview": "node scripts/deploy-preview.ts",
     "generate": "node scripts/generated.ts --force",
     "typecheck": "node scripts/generated.ts && wrangler types && tsrs -p tsconfig.json && tsrs -p tsconfig.worker.json",
     "test": "vp test run --configLoader native",

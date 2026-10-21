@@ -48,7 +48,7 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
   search, map and business page work, Walmart's flows and cart work, McDonald's reaches home, menu and the store
   locator, and Tubi plays non-DRM titles.
 - **Deployment:** Cloudflare Workers Builds deploys the main app and Pages the isolated WebView renderer from
-  `main`; Pages also builds renderer previews for other branches. See [deployment.md](docs/deployment.md).
+  `main`; both build paired previews for other branches. See [deployment.md](docs/deployment.md).
 
 ## Gate state
 
