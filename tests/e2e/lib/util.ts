@@ -6,15 +6,6 @@ export const E2E_DIR = new URL("..", import.meta.url).pathname;
 export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 export const readJson = async (path: string | URL) => JSON.parse(await readFile(path, "utf8"));
 
-/** `run` over items, `jobs` at a time and heaviest first; results keep the items' order. */
-export async function runQueue<T, R>(items: T[], jobs: number, weight: (item: T) => number, run: (item: T) => Promise<R>): Promise<R[]> {
-  const queue = items.map((item, index) => ({ item, index })).sort((a, b) => weight(b.item) - weight(a.item));
-  const results: R[] = new Array(items.length);
-  await Promise.all(Array.from({ length: Math.min(jobs, queue.length) }, async () => {
-    for (let next = queue.shift(); next; next = queue.shift()) results[next.index] = await run(next.item);
-  }));
-  return results;
-}
 export const sha1 = (buf: Uint8Array) => createHash("sha1").update(buf).digest("hex");
 
 

@@ -4,7 +4,7 @@ import { newObj, vcall, scall } from "../../src/jvm/natives/jentry.ts";
 import { deref } from "../../src/android/handles.ts";
 import { presentSurface, surfaceTextureOf } from "../../src/android/glsurface.ts";
 import { loadSystemFonts } from "../../tests/java.ts";
-import { exercise, same, near, thrown, statics, listener, fontMetrics, vectorProbeLines, ltrb } from "./harness.ts";
+import { exercise, same, near, tokens, outcome, statics, listener, fontMetrics, vectorProbeLines, ltrb } from "./harness.ts";
 
 await exercise("Matrix (compose, map, invert, fit, poly, values)", async () => {
   const M = () => newObj("android/graphics/Matrix", "()V");
@@ -73,41 +73,35 @@ await exercise("Paint, TextPaint, PathEffects, MaskFilters (device values)", asy
   const [Style, Align, Dir, PDStyle, Blur, TF] = await Promise.all(["Paint$Style", "Paint$Align", "Path$Direction", "PathDashPathEffect$Style",
     "BlurMaskFilter$Blur", "Typeface"].map((c) => statics("android/graphics/" + c)));
   const paint = (...copy: unknown[]) => (copy.length ? newObj(P, `(${PL})V`, copy[0]) : newObj(P, "()V"));
-  /** `got` against the device's `want`, token by token, numbers within float precision */
-  const same = (what: string, got: string, want: string) => {
-    const split = (t: string) => t.split(/[\s,[\]]+|(?<=[MLQKCZ])/).filter(Boolean), g = split(got), w = split(want);
-    const ok = g.length === w.length && g.every((t, i) => t === w[i] || Math.abs(+t - +w[i]) <= 1e-4 * Math.max(1, Math.abs(+w[i])));
-    if (!ok) throw new Error(`${what}: ${got}, not ${want}`);
-  };
 
-  same("flags of new Paint(), Paint(0), TextPaint()", `${await vcall(await paint(), "getFlags", "()I")} ${await vcall(await newObj(P, "(I)V", 0), "getFlags", "()I")} ${await vcall(await newObj("android/text/TextPaint", "()V"), "getFlags", "()I")}`, "1283 1282 1283");
+  tokens("flags of new Paint(), Paint(0), TextPaint()", `${await vcall(await paint(), "getFlags", "()I")} ${await vcall(await newObj(P, "(I)V", 0), "getFlags", "()I")} ${await vcall(await newObj("android/text/TextPaint", "()V"), "getFlags", "()I")}`, "1283 1282 1283");
   const d = await paint();
-  same("defaults", [await vcall(d, "getColorLong", "()J"), await vcall(d, "getTextSize", "()F"), await vcall(d, "getStrokeMiter", "()F"), await vcall(d, "getHinting", "()I"),
+  tokens("defaults", [await vcall(d, "getColorLong", "()J"), await vcall(d, "getTextSize", "()F"), await vcall(d, "getStrokeMiter", "()F"), await vcall(d, "getHinting", "()I"),
     await vcall(d, "getTextScaleX", "()F"), await vcall(d, "getWordSpacing", "()F"), await vcall(d, "getEndHyphenEdit", "()I"), await vcall(d, "hasShadowLayer", "()Z"),
     await vcall(d, "isDither", "()Z"), await vcall(d, "isFilterBitmap", "()Z"), await vcall(d, "isElegantTextHeight", "()Z")].join(" "), "-72057594037927936 12 4 1 1 0 0 0 0 1 1");
   const f = await paint(), flags = async (v: number) => { await vcall(f, "setFlags", "(I)V", v); return vcall(f, "getFlags", "()I"); };
-  same("setFlags round trips", `${await flags(-1)} ${await flags(0x7ff)} ${await flags(0x10000)}`, "28159 1535 0");
+  tokens("setFlags round trips", `${await flags(-1)} ${await flags(0x7ff)} ${await flags(0x10000)}`, "28159 1535 0");
   await vcall(f, "setHinting", "(I)V", 0);
-  same("hinting off", `${await vcall(f, "getHinting", "()I")} ${await vcall(f, "getFlags", "()I")}`, "0 0");
+  tokens("hinting off", `${await vcall(f, "getHinting", "()I")} ${await vcall(f, "getFlags", "()I")}`, "0 0");
   await vcall(f, "setHinting", "(I)V", 5);
-  same("hinting 5", `${await vcall(f, "getHinting", "()I")}`, "1");
+  tokens("hinting 5", `${await vcall(f, "getHinting", "()I")}`, "1");
   const a = await paint(), getF = async (name: string) => vcall(a, "get" + name, "()F");
   for (const [set, v] of [["StrokeMiter", -1], ["StrokeWidth", -3], ["TextSize", -5]] as const) await vcall(a, "set" + set, "(F)V", v);
-  same("negative miter, width and size ignored", `${await getF("StrokeMiter")} ${await getF("StrokeWidth")} ${await getF("TextSize")}`, "4 0 12");
+  tokens("negative miter, width and size ignored", `${await getF("StrokeMiter")} ${await getF("StrokeWidth")} ${await getF("TextSize")}`, "4 0 12");
   const shadow = async (r: number, c: number) => { await vcall(a, "setShadowLayer", "(FFFI)V", r, 1, 1, c); return vcall(a, "hasShadowLayer", "()Z"); };
-  same("hasShadowLayer: radius 0, colour 0, both", `${await shadow(0, -16777216)} ${await shadow(2, 0)} ${await shadow(2, -16777216)}`, "0 1 1");
+  tokens("hasShadowLayer: radius 0, colour 0, both", `${await shadow(0, -16777216)} ${await shadow(2, 0)} ${await shadow(2, -16777216)}`, "0 1 1");
   await vcall(a, "setWordSpacing", "(F)V", 3); await vcall(a, "setTextAlign", "(Landroid/graphics/Paint$Align;)V", Align.s$RIGHT);
   await vcall(a, "setStartHyphenEdit", "(I)V", 1); await vcall(a, "setTextSize", "(F)V", 30);
   const copy = await paint(a);
-  same("copy", `${await vcall(copy, "getTextSize", "()F")} ${await vcall(copy, "getWordSpacing", "()F")} ${await vcall(copy, "hasShadowLayer", "()Z")}`, "30 3 1");
+  tokens("copy", `${await vcall(copy, "getTextSize", "()F")} ${await vcall(copy, "getWordSpacing", "()F")} ${await vcall(copy, "hasShadowLayer", "()Z")}`, "30 3 1");
   await vcall(a, "reset", "()V");
   // Paint::reset leaves the text layout state (spacing, alignment, hyphen edits, typeface) alone
-  same("reset", `${await vcall(a, "getFlags", "()I")} ${await getF("TextSize")} ${await getF("WordSpacing")} ${await vcall(a, "hasShadowLayer", "()Z")} ${await vcall(a, "getStartHyphenEdit", "()I")}`
+  tokens("reset", `${await vcall(a, "getFlags", "()I")} ${await getF("TextSize")} ${await getF("WordSpacing")} ${await vcall(a, "hasShadowLayer", "()Z")} ${await vcall(a, "getStartHyphenEdit", "()I")}`
     + ` ${await vcall(await vcall(a, "getTextAlign", "()Landroid/graphics/Paint$Align;"), "name", "()Ljava/lang/String;")}`, "1283 12 3 0 1 RIGHT");
   const tpa = await newObj("android/text/TextPaint", "()V"), tpb = await newObj("android/text/TextPaint", "()V");
   await vcall(tpa, "setTextSize", "(F)V", 20);
   await vcall(tpb, "set", "(Landroid/text/TextPaint;)V", tpa);
-  same("TextPaint.set", `${await vcall(tpb, "getTextSize", "()F")}`, "20");
+  tokens("TextPaint.set", `${await vcall(tpb, "getTextSize", "()F")}`, "20");
 
   // metrics: Roboto's hhea and head, post's underline, hwui's strike-through constants, elegant height
   const metrics = async (m: unknown) => {
@@ -126,21 +120,21 @@ await exercise("Paint, TextPaint, PathEffects, MaskFilters (device values)", asy
   for (const [size, [plain, elegant]] of Object.entries(DEVICE)) {
     const m = await paint();
     await vcall(m, "setTextSize", "(F)V", +size);
-    same(`metrics ${size}`, await metrics(m), plain);
+    tokens(`metrics ${size}`, await metrics(m), plain);
     await vcall(m, "setTypeface", "(Landroid/graphics/Typeface;)Landroid/graphics/Typeface;", TF.s$DEFAULT_BOLD);
-    same(`metrics bold ${size}`, await metrics(m), plain);
+    tokens(`metrics bold ${size}`, await metrics(m), plain);
     await vcall(m, "setTypeface", "(Landroid/graphics/Typeface;)Landroid/graphics/Typeface;", null);
     await vcall(m, "setFakeBoldText", "(Z)V", 1); await vcall(m, "setTextScaleX", "(F)V", 2); await vcall(m, "setTextSkewX", "(F)V", -0.25);
-    same(`metrics fake bold, scaled and skewed ${size}`, await metrics(m), plain);
+    tokens(`metrics fake bold, scaled and skewed ${size}`, await metrics(m), plain);
     await vcall(m, "setElegantTextHeight", "(Z)V", 1);
-    same(`metrics elegant ${size}`, await metrics(m), elegant);
+    tokens(`metrics elegant ${size}`, await metrics(m), elegant);
   }
 
   // hasGlyph: well-formed text, variation sequences, one glyph for several characters
   const g = await paint(), glyphs: string[] = [];
   for (const s of ["A", "", "AB", "fi", "\u{1F600}", "☺️", "A️", "\uD83D", "é", "￿", " ", "é", "\u{1F1FA}\u{1F1F8}", "\uDE00"])
     glyphs.push(String(await vcall(g, "hasGlyph", "(Ljava/lang/String;)Z", s)));
-  same("hasGlyph", glyphs.join(" "), "1 0 0 1 1 1 0 0 1 0 1 1 1 0");
+  tokens("hasGlyph", glyphs.join(" "), "1 0 0 1 1 1 0 0 1 0 1 1 1 0");
 
   // equalsForTextMeasurement: what MinikinPaint compares
   const base = await paint();
@@ -155,7 +149,7 @@ await exercise("Paint, TextPaint, PathEffects, MaskFilters (device values)", asy
     await vcall(o, name, desc, v);
     eq.push(String(await vcall(base, "equalsForTextMeasurement", `(${PL})Z`, o)));
   }
-  same("equalsForTextMeasurement", eq.join(" "), "1 0 0 0 0 0 0 0 1 1 0 0 0 0 1 1 1 0 1");
+  tokens("equalsForTextMeasurement", eq.join(" "), "1 0 0 0 0 0 0 0 1 1 0 0 0 0 1 1 1 0 1");
 
   // path effects, through getFillPath: SkDashPathEffect, SkCornerPathEffect, SkDiscretePathEffect
   // (its seeded LCG), SkPath1DPathEffect's three styles, compose and sum
@@ -185,22 +179,22 @@ await exercise("Paint, TextPaint, PathEffects, MaskFilters (device values)", asy
   const dash = (iv: number[], phase: number) => newObj("android/graphics/DashPathEffect", "([FF)V", Float32Array.from(iv), phase);
   const corner = (r: number) => newObj("android/graphics/CornerPathEffect", "(F)V", r);
   await effect(e, "DashPathEffect", "([FF)V", Float32Array.of(10, 5), 3);
-  same("dash line", await fill(e, line), "0 M0,0 L7,0 M12,0 L22,0 M27.000002,0 L37,0 M42,0 L52,0 M57,0 L67,0 M72,0 L82,0 M87,0 L97,0 M100,2 L100,12 M100,17 L100,27.000002 M100,32 L100,42 M100,47 L100,50");
-  same("dash rect, the last dash joining the first", await fill(e, rect), "0 M12,0 L22,0 M27,0 L37,0 M42,0 L52,0 M57,0 L60,0 L60,7 M60,12 L60,22 M60,27 L60,37 M58,40 L48,40 M43,40 L33,40 M28,40 L18,40 M13,40 L3,40 M0,38 L0,28 M0,23 L0,13 M0,8 L0,0 L7,0");
+  tokens("dash line", await fill(e, line), "0 M0,0 L7,0 M12,0 L22,0 M27.000002,0 L37,0 M42,0 L52,0 M57,0 L67,0 M72,0 L82,0 M87,0 L97,0 M100,2 L100,12 M100,17 L100,27.000002 M100,32 L100,42 M100,47 L100,50");
+  tokens("dash rect, the last dash joining the first", await fill(e, rect), "0 M12,0 L22,0 M27,0 L37,0 M42,0 L52,0 M57,0 L60,0 L60,7 M60,12 L60,22 M60,27 L60,37 M58,40 L48,40 M43,40 L33,40 M28,40 L18,40 M13,40 L3,40 M0,38 L0,28 M0,23 L0,13 M0,8 L0,0 L7,0");
   await effect(e, "DashPathEffect", "([FF)V", Float32Array.of(10, 5, 2, 5), -4);
-  same("dash of four, negative phase", await fill(e, rect), "0 M4,0 L14,0 M19,0 L21,0 M26,0 L36,0 M41,0 L43,0 M48,0 L58,0 M60,3 L60,5 M60,10 L60,20 M60,25 L60,27 M60,32 L60,40 L58,40 M53,40 L51,40 M46,40 L36,40 M31,40 L29,40 M24,40 L14,40 M9,40 L7,40 M2,40 L0,40 L0,32 M0,27 L0,25 M0,20 L0,10 M0,5 L0,3");
+  tokens("dash of four, negative phase", await fill(e, rect), "0 M4,0 L14,0 M19,0 L21,0 M26,0 L36,0 M41,0 L43,0 M48,0 L58,0 M60,3 L60,5 M60,10 L60,20 M60,25 L60,27 M60,32 L60,40 L58,40 M53,40 L51,40 M46,40 L36,40 M31,40 L29,40 M24,40 L14,40 M9,40 L7,40 M2,40 L0,40 L0,32 M0,27 L0,25 M0,20 L0,10 M0,5 L0,3");
   await effect(e, "DashPathEffect", "([FF)V", Float32Array.of(-1, 5), 0);
-  same("invalid dash", await fill(e, line), "0 M0,0 L100,0 L100,50");
+  tokens("invalid dash", await fill(e, line), "0 M0,0 L100,0 L100,50");
   await vcall(fp, "setPathEffect", `(${PE})${PE}`, await dash([10, 5], 3));
-  same("dash on a fill", await fill(fp, line), "1 M0,0 L100,0 L100,50");
+  tokens("dash on a fill", await fill(fp, line), "1 M0,0 L100,0 L100,50");
   await effect(e, "CornerPathEffect", "(F)V", 10);
-  same("corner line", await fill(e, line), "0 M0,0 Q0,0,10,0 L90,0 Q100,0,100,10 L100,40 L100,50");
-  same("corner rect", await fill(e, rect), "0 M10,0 L50,0 Q60,0,60,10 L60,30 Q60,40,50,40 L10,40 Q0,40,0,30 L0,10 Q0,0,10,0 Z");
+  tokens("corner line", await fill(e, line), "0 M0,0 Q0,0,10,0 L90,0 Q100,0,100,10 L100,40 L100,50");
+  tokens("corner rect", await fill(e, rect), "0 M10,0 L50,0 Q60,0,60,10 L60,30 Q60,40,50,40 L10,40 Q0,40,0,30 L0,10 Q0,0,10,0 Z");
   await effect(e, "CornerPathEffect", "(F)V", 30);
-  same("corner past half the sides", await fill(e, rect), "0 M30,0 Q60,0,60,20 Q60,40,30,40 Q0,40,0,20 Q0,0,30,0 Z");
+  tokens("corner past half the sides", await fill(e, rect), "0 M30,0 Q60,0,60,20 Q60,40,30,40 Q0,40,0,20 Q0,0,30,0 Z");
   await effect(e, "DiscretePathEffect", "(FF)V", 10, 3);
-  same("discrete line", await fill(e, line), "0 M0,-0.5374603 L10,-1.0631104 L20,1.6429138 L30.000002,0.5774231 L40,-1.5262299 L50,1.8825531 L60.000004,-2.6483002 L70,-0.83102417 L80,-0.375412 L90,0.7796631 L100,-2.8143768 L100.07768,10 L99.12938,20 L97.692184,30.000002 L99.071884,40 L99.52933,50");
-  same("discrete rect", await fill(e, rect), "0 M5,-0.24449158 L15,1.1396027 L25,-0.17037964 L35,0.105651855 L45,-1.2668152 L55,-0.24632263 L60.84366,5 L59.827972,15 L61.48503,25 L59.79689,35 L55,42.15909 L45,38.62845 L35,37.611526 L25,41.152695 L15,40.74904 L5,40.342957 L-1.37883,35 L0.7482605,25 L-0.56781006,15 L-2.1443024,5 Z");
+  tokens("discrete line", await fill(e, line), "0 M0,-0.5374603 L10,-1.0631104 L20,1.6429138 L30.000002,0.5774231 L40,-1.5262299 L50,1.8825531 L60.000004,-2.6483002 L70,-0.83102417 L80,-0.375412 L90,0.7796631 L100,-2.8143768 L100.07768,10 L99.12938,20 L97.692184,30.000002 L99.071884,40 L99.52933,50");
+  tokens("discrete rect", await fill(e, rect), "0 M5,-0.24449158 L15,1.1396027 L25,-0.17037964 L35,0.105651855 L45,-1.2668152 L55,-0.24632263 L60.84366,5 L59.827972,15 L61.48503,25 L59.79689,35 L55,42.15909 L45,38.62845 L35,37.611526 L25,41.152695 L15,40.74904 L5,40.342957 L-1.37883,35 L0.7482605,25 L-0.56781006,15 L-2.1443024,5 Z");
   const stamp = await path(["addRect", "(FFFFLandroid/graphics/Path$Direction;)V", -2, -1, 2, 1, Dir.s$CW]);
   const stamps = (xs: number[][]) => xs.map(([l, t, r, b]) => `M${l},${t} L${r},${t} L${r},${b} L${l},${b} Z`).join(" ");
   for (const [style, want] of [
@@ -210,16 +204,16 @@ await exercise("Paint, TextPaint, PathEffects, MaskFilters (device values)", asy
       + " " + [13, 33].map((y) => `M101,${y} Q101,${y + 2},101,${y + 4} Q100,${y + 4},99,${y + 4} Q99,${y + 2},99,${y} Q100,${y},101,${y} Z`).join(" ")],
   ] as const) {
     await effect(e, "PathDashPathEffect", "(Landroid/graphics/Path;FFLandroid/graphics/PathDashPathEffect$Style;)V", stamp, 20, 5, PDStyle["s$" + style]);
-    same(`path dash ${style}`, await fill(e, line), "1 " + want);
+    tokens(`path dash ${style}`, await fill(e, line), "1 " + want);
   }
   await effect(e, "ComposePathEffect", `(${PE}${PE})V`, await dash([10, 5], 0), await corner(10));
-  same("compose", await fill(e, rect), "0 M25,0 L35,0 M40,0 L50,0 M54.95655,0.8400003 Q59.547035,2.7134168,59.959316,8.765032 M60,13.872475 L60,23.872475 M60,28.872475 L60,30 Q60,35.554768,56.914455,38.02399 M52.388577,39.837273 Q51.275654,40,50,40 L42.25506,40 M37.25506,40 L27.255062,40 M22.255062,40 L12.255066,40 M7.1355715,39.758892 Q1.6163669,38.74435,0.36614323,33.46083 M0,28.382599 L0,18.382599 M0,13.382599 L0,10 Q0,5.9921975,1.6062481,3.590643 M5.5320435,0.65650177 Q7.437771,0,10,0 L20,0");
+  tokens("compose", await fill(e, rect), "0 M25,0 L35,0 M40,0 L50,0 M54.95655,0.8400003 Q59.547035,2.7134168,59.959316,8.765032 M60,13.872475 L60,23.872475 M60,28.872475 L60,30 Q60,35.554768,56.914455,38.02399 M52.388577,39.837273 Q51.275654,40,50,40 L42.25506,40 M37.25506,40 L27.255062,40 M22.255062,40 L12.255066,40 M7.1355715,39.758892 Q1.6163669,38.74435,0.36614323,33.46083 M0,28.382599 L0,18.382599 M0,13.382599 L0,10 Q0,5.9921975,1.6062481,3.590643 M5.5320435,0.65650177 Q7.437771,0,10,0 L20,0");
   await effect(e, "SumPathEffect", `(${PE}${PE})V`, await dash([10, 5], 0), await corner(10));
-  same("sum", await fill(e, rect), "0 M15,0 L25,0 M30,0 L40,0 M45,0 L55,0 M60,0 L60,0 L60,10 M60,15 L60,25 M60,30 L60,40 M55,40 L45,40 M40,40 L30,40 M25,40 L15,40 M10,40 L0,40 M0,35 L0,25 M0,20 L0,10 M0,5 L0,0 L10,0 M10,0 L50,0 Q60,0,60,10 L60,30 Q60,40,50,40 L10,40 Q0,40,0,30 L0,10 Q0,0,10,0 Z");
+  tokens("sum", await fill(e, rect), "0 M15,0 L25,0 M30,0 L40,0 M45,0 L55,0 M60,0 L60,0 L60,10 M60,15 L60,25 M60,30 L60,40 M55,40 L45,40 M40,40 L30,40 M25,40 L15,40 M10,40 L0,40 M0,35 L0,25 M0,20 L0,10 M0,5 L0,0 L10,0 M10,0 L50,0 Q60,0,60,10 L60,30 Q60,40,50,40 L10,40 Q0,40,0,30 L0,10 Q0,0,10,0 Z");
   // stroking to a fill: SkStroke, through CanvasKit
   const s = await paint();
   await vcall(s, "setStyle", "(Landroid/graphics/Paint$Style;)V", Style.s$STROKE); await vcall(s, "setStrokeWidth", "(F)V", 4);
-  same("stroke to fill", `${await fill(s, line)} | ${await fill(s, rect)}`,
+  tokens("stroke to fill", `${await fill(s, line)} | ${await fill(s, rect)}`,
     "1 M0,-2 L102,-2 L102,50 L98,50 L98,0 L100,0 L100,2 L0,2 L0,-2 Z | 1 M-2,-2 L62,-2 L62,42 L-2,42 Z M2,2 L2,38 L58,38 L58,2 Z");
 
   // text outlines, as minikin lays the run out and aligns it
@@ -230,21 +224,21 @@ await exercise("Paint, TextPaint, PathEffects, MaskFilters (device values)", asy
     await vcall(tpath, "computeBounds", "(Landroid/graphics/RectF;Z)V", box, 1);
     return String(await vcall(box, "toShortString", "()Ljava/lang/String;"));
   };
-  same("text path", await outline("Hi", 10, 30), "[11.650391,15.5859375][27.52539,30.0]");
+  tokens("text path", await outline("Hi", 10, 30), "[11.650391,15.5859375][27.52539,30.0]");
   await vcall(tp, "setTextSkewX", "(F)V", -0.25); await vcall(tp, "setTextScaleX", "(F)V", 1.5);
   await outline("l", 0, 0);
-  same("text path, scaled and skewed", await dump(tpath), "M8.759766,-15 L5.0097656,0 L2.2851562,0 L6.0351562,-15 L8.759766,-15 Z");
+  tokens("text path, scaled and skewed", await dump(tpath), "M8.759766,-15 L5.0097656,0 L2.2851562,0 L6.0351562,-15 L8.759766,-15 Z");
   await vcall(tp, "setTextSkewX", "(F)V", 0); await vcall(tp, "setTextScaleX", "(F)V", 1); await vcall(tp, "setTextAlign", "(Landroid/graphics/Paint$Align;)V", Align.s$CENTER);
-  same("text path, centred", await outline("Hi", 10, 30), "[2.1503906,15.5859375][18.02539,30.0]");
+  tokens("text path, centred", await outline("Hi", 10, 30), "[2.1503906,15.5859375][18.02539,30.0]");
   await vcall(tp, "setTextAlign", "(Landroid/graphics/Paint$Align;)V", Align.s$LEFT); await vcall(tp, "setLetterSpacing", "(F)V", 0.5);
-  same("text path, letter-spaced", await outline("ll", 0, 0), "[6.5234375,-15.0][23.339844,0.0]");
+  tokens("text path, letter-spaced", await outline("ll", 0, 0), "[6.5234375,-15.0][23.339844,0.0]");
 
-  const mask = (cls: string, desc: string, ...args: unknown[]) => thrown(() => newObj("android/graphics/" + cls, desc, ...args));
-  same("mask filters refused", [await mask("BlurMaskFilter", "(FLandroid/graphics/BlurMaskFilter$Blur;)V", 0, Blur.s$NORMAL),
+  const mask = (cls: string, desc: string, ...args: unknown[]) => outcome(() => newObj("android/graphics/" + cls, desc, ...args));
+  tokens("mask filters refused", [await mask("BlurMaskFilter", "(FLandroid/graphics/BlurMaskFilter$Blur;)V", 0, Blur.s$NORMAL),
     await mask("EmbossMaskFilter", "([FFFF)V", Float32Array.of(1, 1), 0.5, 8, 3), await mask("EmbossMaskFilter", "([FFFF)V", Float32Array.of(1, 1, 1), 0.5, 8, 0),
     await mask("EmbossMaskFilter", "([FFFF)V", Float32Array.of(1, 1, 1), 0.5, 8, 3), await mask("TableMaskFilter", "([B)V", new Int8Array(256)),
-    await thrown(() => scall("android/graphics/TableMaskFilter", "CreateClipTable", "(II)Landroid/graphics/TableMaskFilter;", 10, 200)),
-    await thrown(() => scall("android/graphics/TableMaskFilter", "CreateGammaTable", "(F)Landroid/graphics/TableMaskFilter;", 2))].join(" "),
+    await outcome(() => scall("android/graphics/TableMaskFilter", "CreateClipTable", "(II)Landroid/graphics/TableMaskFilter;", 10, 200)),
+    await outcome(() => scall("android/graphics/TableMaskFilter", "CreateGammaTable", "(F)Landroid/graphics/TableMaskFilter;", 2))].join(" "),
     "java.lang.IllegalArgumentException java.lang.ArrayIndexOutOfBoundsException java.lang.IllegalArgumentException ok ok ok ok");
 });
 
@@ -258,10 +252,6 @@ await exercise("Path, PathMeasure, PathIterator (device values)", async () => {
     const p = await newObj("android/graphics/Path", "()V");
     for (const [name, desc, ...args] of ops) await vcall(p, name, desc, ...args);
     return p;
-  };
-  const close = (a: number, b: number, tol = 1e-3) => Math.abs(a - b) <= tol * Math.max(1, Math.abs(b));
-  const near = (what: string, got: number[], want: number[], tol = 1e-3) => {
-    if (got.length !== want.length || got.some((g, i) => !close(g, want[i], tol))) throw new Error(`${what}: [${got.map((v) => +v.toFixed(4))}], not [${want}]`);
   };
   /** the path through PathIterator, as "M0,0 L0,0,10,0 Z" */
   const dump = async (p: unknown) => {
@@ -278,8 +268,8 @@ await exercise("Path, PathMeasure, PathIterator (device values)", async () => {
     if (got.length !== exp.length) throw new Error(`${what}: ${got.join(" ")}, not ${want}`);
     got.forEach((g, i) => {
       const e = exp[i], gv = g.slice(1).split(",").filter(Boolean).map(Number), ev = e.slice(1).split(",").filter(Boolean).map(Number);
-      if (e[0] === "K" && g[0] === "C") near(`${what} [${i}]`, [...gv.slice(0, 2), ...gv.slice(-2)], [...ev.slice(0, 2), ...ev.slice(-2)]);
-      else { same(`${what} [${i}] verb`, g[0], e[0]); near(`${what} [${i}]`, gv, ev); }
+      if (e[0] === "K" && g[0] === "C") near(`${what} [${i}]`, [...gv.slice(0, 2), ...gv.slice(-2)], [...ev.slice(0, 2), ...ev.slice(-2)], 1e-3);
+      else { same(`${what} [${i}] verb`, g[0], e[0]); near(`${what} [${i}]`, gv, ev, 1e-3); }
     });
   };
   const rectOf = (r: object) => ltrb(r, "RectF");
@@ -298,11 +288,11 @@ await exercise("Path, PathMeasure, PathIterator (device values)", async () => {
   const len0 = await vcall(measure, "getLength", "()F") as number;
   near("contour 0 length", [len0], [335.81967], 1e-5);
   near("contour 0 pos/tan", [...await posTan(len0 * 0.3), ...await posTan(len0 * 0.5), ...await posTan(len0 * 0.77), ...await posTan(len0 * 2)],
-    [1, 100.791, 0.003, 1, 0.008, 1, 148.999, 36.851, 0.163, 0.987, 1, 118.639, 118.861, -0.708, 0.706, 1, 50, 150, -1, 0]);
+    [1, 100.791, 0.003, 1, 0.008, 1, 148.999, 36.851, 0.163, 0.987, 1, 118.639, 118.861, -0.708, 0.706, 1, 50, 150, -1, 0], 1e-3);
   const m = await newObj("android/graphics/Matrix", "()V"), values = new Float32Array(9);
   same("getMatrix", await vcall(measure, "getMatrix", "(FLandroid/graphics/Matrix;I)Z", len0 * 0.5, m, 3), 1);
   await vcall(m, "getValues", "([F)V", values);
-  near("its values", [...values], [0.16263475, -0.98668635, 148.99881, 0.98668635, 0.16263475, 36.850677, 0, 0, 1]);
+  near("its values", [...values], [0.16263475, -0.98668635, 148.99881, 0.98668635, 0.16263475, 36.850677, 0, 0, 1], 1e-3);
   const seg = await newObj("android/graphics/Path", "()V");
   same("getSegment", await vcall(measure, "getSegment", `(FF${P}Z)Z`, len0 * 0.2, len0 * 0.7, seg, 1), 1);
   await verbs("segment", seg, "M67.164,0 L67.164,0,100,0 Q100,0,150,0,150,50 C150,50,150,67.628,143.785,85.255,133.547,100.692");
@@ -312,7 +302,7 @@ await exercise("Path, PathMeasure, PathIterator (device values)", async () => {
   same("closed/next", [await vcall(measure, "isClosed", "()Z"), await vcall(measure, "nextContour", "()Z")], [0, 1]);
   const len1 = await vcall(measure, "getLength", "()F") as number;
   near("contour 1 length", [len1], [341.42136], 1e-5);
-  near("contour 1 pos/tan", await posTan(len1 * 0.77), [1, 255.527, 255.527, -0.707, -0.707]);
+  near("contour 1 pos/tan", await posTan(len1 * 0.77), [1, 255.527, 255.527, -0.707, -0.707], 1e-3);
   same("closed/next", [await vcall(measure, "isClosed", "()Z"), await vcall(measure, "nextContour", "()Z")], [1, 0]);
   await vcall(measure, "setPath", `(${P}Z)V`, mixed, 1);
   near("forced closed", [await vcall(measure, "getLength", "()F") as number], [493.93353], 1e-5);
@@ -373,10 +363,10 @@ await exercise("Path, PathMeasure, PathIterator (device values)", async () => {
   const rf = await newObj("android/graphics/RectF", "()V");
   const isRect = async (p: unknown) => [await vcall(p, "isRect", "(Landroid/graphics/RectF;)Z", rf), ...rectOf(rf)];
   const open4 = await path(["moveTo", "(FF)V", 0, 0], ["lineTo", "(FF)V", 10, 0], ["lineTo", "(FF)V", 10, 20], ["lineTo", "(FF)V", 0, 20]);
-  near("isRect open", await isRect(open4), [1, 0, 0, 10, 20]);
-  near("isRect 3 points", [await vcall(await path(["moveTo", "(FF)V", 0, 0], ["lineTo", "(FF)V", 10, 0], ["lineTo", "(FF)V", 10, 20]), "isRect", "(Landroid/graphics/RectF;)Z", rf) as number], [0]);
-  near("isRect addRect", await isRect(await path(["addRect", `(FFFF${DIR})V`, 1, 2, 3, 4, CCW])), [1, 1, 2, 3, 4]);
-  near("isRect oval", [await vcall(await path(["addOval", `(FFFF${DIR})V`, 1, 2, 3, 4, CCW]), "isRect", "(Landroid/graphics/RectF;)Z", rf) as number], [0]);
+  near("isRect open", await isRect(open4), [1, 0, 0, 10, 20], 1e-3);
+  near("isRect 3 points", [await vcall(await path(["moveTo", "(FF)V", 0, 0], ["lineTo", "(FF)V", 10, 0], ["lineTo", "(FF)V", 10, 20]), "isRect", "(Landroid/graphics/RectF;)Z", rf) as number], [0], 1e-3);
+  near("isRect addRect", await isRect(await path(["addRect", `(FFFF${DIR})V`, 1, 2, 3, 4, CCW])), [1, 1, 2, 3, 4], 1e-3);
+  near("isRect oval", [await vcall(await path(["addOval", `(FFFF${DIR})V`, 1, 2, 3, 4, CCW]), "isRect", "(Landroid/graphics/RectF;)Z", rf) as number], [0], 1e-3);
 
   const ia = await path(["moveTo", "(FF)V", 0, 0], ["lineTo", "(FF)V", 10, 0]), ib = await path(["moveTo", "(FF)V", 0, 0], ["lineTo", "(FF)V", 20, 10]);
   const io = await newObj("android/graphics/Path", "()V");
@@ -389,11 +379,11 @@ await exercise("Path, PathMeasure, PathIterator (device values)", async () => {
     [0, 0, 0, 0.3086089, 25, 37.5, 0.5, 50, 50, 0.6913911, 75, 37.5, 1, 100, 0], 1e-6);
   near("approximate closed", await approx(await path(["moveTo", "(FF)V", 0, 0], ["lineTo", "(FF)V", 10, 0], ["lineTo", "(FF)V", 10, 10], ["close", "()V"]), 0.5),
     [0, 0, 0, 0.29289323, 10, 0, 0.58578646, 10, 10, 1, 0, 0], 1e-6);
-  near("approximate empty", await approx(await path(), 0.5), [0, 0, 0, 1, 0, 0]);
-  near("approximate moveTo", await approx(await path(["moveTo", "(FF)V", 3, 4]), 0.5), [0, 3, 4, 1, 3, 4]);
+  near("approximate empty", await approx(await path(), 0.5), [0, 0, 0, 1, 0, 0], 1e-3);
+  near("approximate moveTo", await approx(await path(["moveTo", "(FF)V", 3, 4]), 0.5), [0, 3, 4, 1, 3, 4], 1e-3);
 
   await vcall(await path(["addArc", "(FFFFFF)V", 0, 0, 100, 100, 0, 45]), "computeBounds", "(Landroid/graphics/RectF;Z)V", rf, 1);
-  near("arc bounds", rectOf(rf), [85.35534, 50, 100, 85.35534]);
+  near("arc bounds", rectOf(rf), [85.35534, 50, 100, 85.35534], 1e-3);
 
   // Path.op: SkPathOps' contours, curves and fill type (an inverse operand included). The device's
   // Skia keeps the disc's quarter as its conic (K5,5,10,5); CanvasKit 0.38 returns it as two quads.
@@ -669,12 +659,12 @@ await exercise("PathParser: parsing, errors, SkPath resolution (device values)",
   }
   const bad = ["M1 2 x3 4", "   ", "M1 2 L3 4e99", "M1 2 L3"];
   for (const [i, data] of bad.entries()) {
-    const got = await thrown(() => scall(P, "createPathFromPathData", `(${S})Landroid/graphics/Path;`, data));
+    const got = await outcome(() => scall(P, "createPathFromPathData", `(${S})Landroid/graphics/Path;`, data));
     if (got !== errors[i]) throw new Error(`${JSON.stringify(data)}: ${got}, not ${errors[i]}`);
   }
   // VectorDrawable's own path-string JNI raises the same failure
   const vpath = await vcall(await newObj("android/graphics/drawable/VectorDrawable$VFullPath", "()V"), "getNativePtr", "()J");
-  same("VectorDrawable.nSetPathString", await thrown(() => scall("android/graphics/drawable/VectorDrawable", "nSetPathString", `(J${S}I)V`, vpath, bad[0], bad[0].length)), errors[0]);
+  same("VectorDrawable.nSetPathString", await outcome(() => scall("android/graphics/drawable/VectorDrawable", "nSetPathString", `(J${S}I)V`, vpath, bad[0], bad[0].length)), errors[0]);
   const data = (s: string) => newObj("android/util/PathParser$PathData", `(${S})V`, s);
   const [a, b, c] = [await data("M0 0 L10 10"), await data("M4 4 L20 0"), await data("M0 0 C1 1 2 2 3 3")];
   if (!await scall(P, "canMorph", "(Landroid/util/PathParser$PathData;Landroid/util/PathParser$PathData;)Z", a, b)) throw new Error("canMorph(same verbs)");
@@ -694,14 +684,14 @@ await exercise("SurfaceTexture: states, errors and frame delivery without a cont
   const st = await newObj(ST, "(I)V", 5);
   same("fresh", [await matrix(st), await vcall(st, "getTimestamp", "()J"), await vcall(st, "getDataSpace", "()I"), await vcall(st, "isReleased", "()Z")],
     ["1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1", 0n, 0, 0]);
-  same("update", await thrown(() => vcall(st, "updateTexImage", "()V")), "java.lang.IllegalStateException: Unable to update texture contents (see logcat for details)");
-  same("releaseTexImage", await thrown(() => vcall(st, "releaseTexImage", "()V")), "java.lang.IllegalStateException: Unable to release texture contents (see logcat for details)");
-  same("detach", await thrown(() => vcall(st, "detachFromGLContext", "()V")), "ok");
-  same("attach", await thrown(() => vcall(st, "attachToGLContext", "(I)V", 3)), "java.lang.RuntimeException: Error during attachToGLContext (see logcat for details)");
-  same("empty buffer size", await thrown(() => vcall(st, "setDefaultBufferSize", "(II)V", 0, 0)), "ok");
+  same("update", await outcome(() => vcall(st, "updateTexImage", "()V")), "java.lang.IllegalStateException: Unable to update texture contents (see logcat for details)");
+  same("releaseTexImage", await outcome(() => vcall(st, "releaseTexImage", "()V")), "java.lang.IllegalStateException: Unable to release texture contents (see logcat for details)");
+  same("detach", await outcome(() => vcall(st, "detachFromGLContext", "()V")), "ok");
+  same("attach", await outcome(() => vcall(st, "attachToGLContext", "(I)V", 3)), "java.lang.RuntimeException: Error during attachToGLContext (see logcat for details)");
+  same("empty buffer size", await outcome(() => vcall(st, "setDefaultBufferSize", "(II)V", 0, 0)), "ok");
   const detached = await newObj(ST, "(Z)V", 0);
-  same("detached detach", await thrown(() => vcall(detached, "detachFromGLContext", "()V")), "java.lang.RuntimeException: Error during detachFromGLContext (see logcat for details)");
-  same("detached releaseTexImage", await thrown(() => vcall(detached, "releaseTexImage", "()V")), "ok");
+  same("detached detach", await outcome(() => vcall(detached, "detachFromGLContext", "()V")), "java.lang.RuntimeException: Error during detachFromGLContext (see logcat for details)");
+  same("detached releaseTexImage", await outcome(() => vcall(detached, "releaseTexImage", "()V")), "ok");
   // a queued frame reaches the listener through postEventFromNative and the listener's Handler
   let heard: unknown = null;
   await vcall(detached, "setOnFrameAvailableListener", `(L${ST}$OnFrameAvailableListener;)V`, listener(`${ST}$OnFrameAvailableListener`, "onFrameAvailable", `(L${ST};)V`, (s: unknown) => { heard = s; }));
@@ -709,8 +699,8 @@ await exercise("SurfaceTexture: states, errors and frame delivery without a cont
   for (let i = 0; i < 50 && !heard; i++) await new Promise((r) => setTimeout(r, 10));
   same("onFrameAvailable", heard === detached, true);
   await vcall(detached, "release", "()V");
-  same("released", [await vcall(detached, "isReleased", "()Z"), await thrown(() => vcall(detached, "updateTexImage", "()V")),
-    await thrown(() => vcall(detached, "releaseTexImage", "()V")), await thrown(() => vcall(detached, "attachToGLContext", "(I)V", 1))],
+  same("released", [await vcall(detached, "isReleased", "()Z"), await outcome(() => vcall(detached, "updateTexImage", "()V")),
+    await outcome(() => vcall(detached, "releaseTexImage", "()V")), await outcome(() => vcall(detached, "attachToGLContext", "(I)V", 1))],
   [1, "java.lang.RuntimeException: Error during updateTexImage (see logcat for details)", "java.lang.RuntimeException: Error during updateTexImage (see logcat for details)",
     "java.lang.RuntimeException: Error during attachToGLContext (see logcat for details)"]);
   await vcall(detached, "finalize", "()V");

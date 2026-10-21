@@ -1,11 +1,11 @@
 // Boot every apk in the tree headlessly and rank the gaps by how many apks they block.
 //   pnpm corpus [apk ...] [--json out.json] [--wait ms] [--observe ms]
 import { writeFileSync } from "node:fs";
-import type { Page } from "playwright";
 import { cli } from "./args.ts";
+import type { Page } from "playwright";
 import { corpusApks } from "./apk-corpus.ts";
-import { CONTEXT_OPTS, launchBrowser, webdroidUrl } from "./browser.ts";
-import { readProcesses, type ProcessSnapshot } from "../tests/e2e/lib/processes.ts";
+import { CONTEXT_OPTS, bootApp, launchBrowser, openWebdroid, pageErrors, readProcesses } from "./page.ts";
+import { diagnosed, diagnosticErrors, type ProcessSnapshot } from "../tests/e2e/lib/processes.ts";
 
 const { values: { wait, observe, json: out }, positionals } = cli("pnpm corpus [apk ...] [--wait ms] [--observe ms] [--json out.json]",
   { wait: { type: "string", default: "12000" }, observe: { type: "string", default: "1500" }, json: { type: "string" } });
@@ -14,9 +14,9 @@ const apks = positionals.length ? positionals : corpusApks();
 
 interface Row {
   apk: string;
+  /** the app drew a frame */
   ok: boolean;
   ticks: number;
-  drew: boolean;
   bootMs: number;
   classes: number;
   missing: string[];
@@ -32,45 +32,28 @@ const browser = await launchBrowser();
 const rows: Row[] = [];
 
 async function boot(page: Page, apk: string): Promise<Row> {
-  const row: Row = { apk, ok: false, ticks: 0, drew: false, bootMs: 0, classes: 0, missing: [], nativeRequired: [], errors: [], diagnostics: "unavailable", note: "" };
-  const errors: string[] = [];
-  page.on("pageerror", (e) => errors.push(String(e)));
-  page.on("console", (message) => { if (message.type() === "error") errors.push(`${message.location().url}: ${message.text()}`); });
+  const row: Row = { apk, ok: false, ticks: 0, bootMs: 0, classes: 0, missing: [], nativeRequired: [], errors: [], diagnostics: "unavailable", note: "" };
+  const errors = pageErrors(page);
   try {
-    const url = webdroidUrl(); url.searchParams.set("apk", apk);
-    await page.goto(url.href, { waitUntil: "load", timeout: 60000 });
-    await page.waitForFunction(() => !!globalThis.wd, null, { timeout: waitMs });
-    await page.evaluate(file => { void globalThis.wd!.boot(file); }, apk);
-    const readRender = () => page.evaluate(async () => {
-      const w = globalThis.wd!, foreground = (await w.foregroundWorkerSnapshot?.())?.snapshot, perf = foreground?.perf ?? w.perf;
-      return { ticks: foreground?.ticks ?? w.ticks, draws: perf.draws, bootMs: w.perf.bootMs, classes: perf.wasmClasses,
+    await openWebdroid(page);
+    row.ok = await bootApp(page, apk, { ms: waitMs }).then(() => true, (e: Error) => { row.note = e.message.slice(0, 160); return false; });
+    await page.waitForTimeout(observeMs);
+    const s = await page.evaluate(async () => {
+      const w = globalThis.wd, foreground = (await w.foregroundWorkerSnapshot())?.snapshot;
+      return { ticks: foreground?.ticks ?? w.ticks, bootMs: w.perf.bootMs, classes: (foreground?.perf ?? w.perf).wasmClasses,
         missing: [...w.rt.missing], logs: (w.logs || []).filter((line: string) => /error/i.test(line)).slice(-6) };
     });
-    const deadline = Date.now() + waitMs;
-    let s = await readRender();
-    while (!s.draws && Date.now() < deadline) {
-      await page.waitForTimeout(100);
-      s = await readRender();
-    }
-    if (!s.draws) row.note = `no rendered frame within ${waitMs}ms`;
-    await page.waitForTimeout(observeMs);
-    s = await readRender();
-    row.ticks = s.ticks; row.drew = s.draws > 0; row.bootMs = s.bootMs; row.classes = s.classes;
+    row.ticks = s.ticks; row.bootMs = s.bootMs; row.classes = s.classes;
     row.missing = s.missing; row.errors = s.logs;
-    row.ok = row.drew;
   } catch (e) {
     row.note = String(e).split("\n")[0].slice(0, 160);
   }
   const relevant = row.processes = await readProcesses(page);
   const available = relevant.flatMap((process) => process.diagnostics.status === "ok" ? [process.diagnostics] : []);
-  row.diagnostics = relevant.length > 0 && relevant.every(process => ["ok", "exited"].includes(process.diagnostics.status)) ? "ok" : "unavailable";
+  row.diagnostics = relevant.length > 0 && relevant.every((process) => diagnosed(process.diagnostics)) ? "ok" : "unavailable";
   row.missing = [...new Set([...row.missing, ...available.flatMap((diagnostics) => diagnostics.missing)])];
   row.nativeRequired = [...new Set(available.flatMap((diagnostics) => diagnostics.native))];
-  const diagnosticErrors = relevant.flatMap((process) => process.diagnostics.status === "ok"
-    ? process.diagnostics.errors ?? []
-    : process.diagnostics.status === "exited" ? []
-    : [process.diagnostics.status === "failure" ? process.diagnostics.message : "diagnostics unavailable"]);
-  row.errors = [...new Set([...row.errors, ...errors, ...diagnosticErrors])];
+  row.errors = [...new Set([...row.errors, ...errors, ...diagnosticErrors(relevant)])];
   row.browserErrors = errors;
   return row;
 }

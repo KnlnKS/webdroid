@@ -1,64 +1,26 @@
 // Does webdroid's StaticLayout break lines where the reference device's does? AOSP's own
 // StaticLayout runs over our minikin natives in a page (text measurement needs Canvas2D) and lays
-// out the paragraphs below under every break strategy, without and with letter spacing; the
-// device's layouts of the same paragraphs are tests/fixtures/textlayout-device.txt, which
-// `pnpm textcmp --record` rewrites with the reference AVD booted (with getTextWidths across
-// weights for fwtest, tests/fixtures/textwidths-device.txt). Line ends and hyphen edits must match,
-// and a hyphenated line's glyphs; widths and line extents are reported.
-import { readFileSync, writeFileSync } from "node:fs";
-import { setTimeout } from "node:timers/promises";
-import { BASE_URL, CONTEXT_OPTS, launchBrowser } from "./browser.ts";
-import { adb, runDex } from "./adb.ts";
-import { tempDir } from "./java.ts";
+// out the paragraphs of tests/fixtures/textlayout-device.txt under every break strategy, without and
+// with letter spacing, and compares the device's layouts recorded there (`pnpm gen-framework --only
+// textLayout` with the reference AVD booted). Line ends and hyphen edits must match, and a hyphenated
+// line's glyphs; widths and line extents are reported.
+import { readFileSync } from "node:fs";
+import { cli } from "./args.ts";
+import { CONTEXT_OPTS, bootApp, launchBrowser, openWebdroid } from "./page.ts";
 
-const FIXTURE = "tests/fixtures/textlayout-device.txt", WIDTHS = "tests/fixtures/textwidths-device.txt";
-/** text, width px, text size px, and for hyphenated layouts the locale and hyphenation frequency */
-const PARAGRAPHS: [string, number, number, string?, number?][] = [
-  ["The quick brown fox jumps over the lazy dog", 200, 24],
-  ["The quick brown fox jumps over the lazy dog", 720, 24],
-  ["Supercalifragilisticexpialidocious antidisestablishmentarianism", 180, 24],
-  ["https://example.com/a/very/long/path/that/cannot/be/broken/on/a/space", 200, 24],
-  ["one\ntwo three four five six seven eight nine ten\n\neleven", 160, 28],
-  ["a b c d e f g h i j k l m n o p q r s t u v w x y z", 100, 20],
-  ["A well-known state-of-the-art hyphenated compound", 150, 24],
-  ["Write to someone.name@example.com for details", 180, 24],
-  ["Tabs\tand\tmore\ttabs\there to see how they wrap", 200, 24],
-  ["日本語のテキストを改行するテストです。", 150, 24],
-  ["Emoji 👍🏽 family 👨‍👩‍👧 flags 🇨🇦🇯🇵 end", 160, 24],
-  ["Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.", 300, 20],
-  ...([["en-US", "Hyphenation breaks extraordinarily long words like internationalization and responsibilities"],
-    ["de", "Die Donaudampfschifffahrtsgesellschaft sucht Rechtsschutzversicherungsgesellschaften"]] as const).flatMap(([locale, text]) =>
-    [[text, 160, 24, locale, 1], [text, 160, 24, locale, 2], [text, 100, 20, locale, 2]] as [string, number, number, string, number][]),
-];
-/** weight and size of the getTextWidths cases fwtest compares (fonts.ts) */
-const WIDTH_CASES = [100, 300, 400, 500, 700, 900].flatMap((w) => [10, 12, 13.5, 14, 16, 18, 20, 24, 32, 40].map((s) => `${w} ${s}`));
-
-if (process.argv.includes("--record")) {
-  const dir = tempDir(), cases = PARAGRAPHS.map(([t, ...rest]) => [t.replace(/\n/g, "\\n").replace(/\t/g, "\\t"), ...rest].join("\t")).join("\n") + "\n";
-  writeFileSync(`${dir}/cases.txt`, cases);
-  writeFileSync(`${dir}/widths.txt`, WIDTH_CASES.join("\n") + "\n");
-  adb("push", `${dir}/cases.txt`, "/data/local/tmp/webdroid-textlayout.txt");
-  adb("push", `${dir}/widths.txt`, "/data/local/tmp/webdroid-textwidths.txt");
-  const out = runDex("scripts/TextLayoutProbe.java", { android: true, args: ["/data/local/tmp/webdroid-textlayout.txt", "/data/local/tmp/webdroid-textwidths.txt"] }).split("\n");
-  const layouts = out.filter((l) => !l.startsWith("widths "));
-  writeFileSync(FIXTURE, `${cases.trimEnd().split("\n").map((c, i) => `case ${i}\t${c}`).join("\n")}\n${layouts.join("\n")}\n`);
-  writeFileSync(WIDTHS, out.filter((l) => l.startsWith("widths ")).join("\n") + "\n");
-  console.log(`${FIXTURE}: ${layouts.length} rows; ${WIDTHS}`);
-  process.exit(0);
-}
-
-const apk = process.argv.slice(2).find((a) => !a.startsWith("--")) ?? "FitNotes.apk";
+const FIXTURE = "tests/fixtures/textlayout-device.txt";
+const { positionals: [apk = "FitNotes.apk"] } = cli("pnpm textcmp [apk]", {});
+const recorded = readFileSync(FIXTURE, "utf8").trim().split("\n");
+/** the recorded paragraphs: text, width px, text size px, and for hyphenated layouts the locale and hyphenation frequency */
+const paragraphs = recorded.filter((l) => l.startsWith("case ")).map((l) => {
+  const [, text, width, size, locale, frequency] = l.split("\t");
+  return [text.replace(/\\n/g, "\n").replace(/\\t/g, "\t"), +width, +size, locale, frequency === undefined ? undefined : +frequency] as const;
+});
 const browser = await launchBrowser();
 const page = await browser.newPage(CONTEXT_OPTS);
-const resp = await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
-if (!resp?.ok()) throw new Error(`dev server not reachable at ${BASE_URL}`);
-await page.waitForFunction(() => !!globalThis.wd, null, { timeout: 60_000 });
-await page.evaluate(() => document.fonts.ready);
-await page.evaluate((a) => void globalThis.wd.boot(a), apk);
-await page.waitForFunction(() => globalThis.wd.perf.bootMs > 0, null, { timeout: 120_000 });
-// LineBreakConfig reads the application's target SDK: wait for bindApplication, which follows boot
-while (!await page.evaluate(async () => await globalThis.wd.scall("android/app/ActivityThread", "currentApplication", "()Landroid/app/Application;") !== null))
-  await setTimeout(250);
+await openWebdroid(page);
+// the layouts run in the page's realm, system_server's, whose Application ActivityThread.systemMain made before the app's process started
+await bootApp(page, apk, { ms: 120_000 });
 const ours: string[] = await page.evaluate(async (paras) => {
   const wd = globalThis.wd, out: string[] = [], P = "Landroid/graphics/Paint;", B = "Landroid/text/StaticLayout$Builder;";
   const config = await wd.vcall(await wd.vcall(await wd.vcall(await wd.newObj("android/graphics/text/LineBreakConfig$Builder", "()V"),
@@ -98,16 +60,15 @@ const ours: string[] = await page.evaluate(async (paras) => {
     }
   }
   return out;
-}, PARAGRAPHS);
+}, paragraphs);
 const missing: string[] = await page.evaluate(() => [...globalThis.wd.rt.missing]);
 await browser.close();
 
-const recorded = readFileSync(FIXTURE, "utf8").trim().split("\n");
 const device = recorded.filter((l) => /^\d/.test(l)), layouts = ours.filter((l) => /^\d/.test(l));
 const lines = (row: string) => row.split(" ").slice(3).map((l) => l.split(":").map(Number));
 let same = 0, worstWidth = 0, metrics = 0;
 for (const [k, row] of layouts.entries()) {
-  const want = lines(device[k]), got = lines(row), label = `${row.split(" ", 3).join(" ")} ${JSON.stringify(PARAGRAPHS[+row.split(" ")[0]][0].slice(0, 30))}`;
+  const want = lines(device[k]), got = lines(row), label = `${row.split(" ", 3).join(" ")} ${JSON.stringify(paragraphs[+row.split(" ")[0]][0].slice(0, 30))}`;
   // a line ends where the device's does, with the same hyphen edits
   const agree = !row.includes("ERROR") && got.length === want.length && got.every((l, j) => l[0] === want[j][0] && l[4] === want[j][4] && l[5] === want[j][5]);
   if (agree) {

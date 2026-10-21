@@ -1,6 +1,6 @@
-// Rebuild in a temporary directory with javac --release 17, then d8 --release --min-api 26
-// --lib "$ANDROID_HOME/platforms/android-35/android.jar" --output <dir> <dir>/FloatHandlerProbe*.class,
-// and copy classes.dex to FloatHandlerProbe.dex.
+// FloatHandlerProbe.dex is this class built by `pnpm ts scripts/probes.ts FloatHandlerProbe`, committed so
+// that the tests need neither Java nor the Android SDK.
+
 public final class FloatHandlerProbe {
     static final class P {
         int x;

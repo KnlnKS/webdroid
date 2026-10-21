@@ -6,7 +6,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { world } from "./lib.ts";
 import { caseLine, compare, genCases } from "./cases.ts";
-import { mountPlatform, natives } from "./harness.ts";
+import { mountPlatform } from "./harness.ts";
 import { ACC } from "../../src/wasm/compiler/program.ts";
 import { irreducibleClass } from "./irfuzz.ts";
 import { Irreducible, Flow } from "../../src/wasm/compiler/structure.ts";
@@ -139,7 +139,7 @@ fixture({ out, sources: [...irreducible ? [] : [join(out, "F.java")], join(JAVA,
 
 const dex = join(out, "classes.dex"), hit: string[] = [];
 await mountPlatform(ROOT);
-const w = world([dex, ...platformJars("core-oj", "core-libart")], { natives });
+const w = world([dex, ...platformJars("core-oj", "core-libart")]);
 w.onGap = (gap) => hit.push(gap);
 const methods = w.prog.require("F").methods.filter((m) => m.isStatic && m.codeOff && m.flags & ACC.PUBLIC || m.isStatic && m.name.startsWith("m") && m.codeOff);
 const cyclic = irreducible ? methods.filter((m) => {

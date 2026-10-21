@@ -2,19 +2,21 @@
 // drives it through the entry seam. Run: pnpm fwtest [prefix ...]
 import { DEFAULT_CUTS } from "../fwtest/cuts.ts";
 import { BYTECODE, isBytecode } from "../../src/jvm/provenance.ts";
+import { cli } from "../args.ts";
 
-const CUTS = process.argv.slice(2).filter((a) => !a.startsWith("--"));
+const { positionals: CUTS } = cli("pnpm fwtest [prefix ...]", {});
 BYTECODE.push(...(CUTS.length ? CUTS : DEFAULT_CUTS));
 
 // imported after the policy is set: rt.register consults it, so the specs never land
 const { world } = await import("./lib.ts");
-const { attachHostClasses, mountPlatform, natives, startProcess } = await import("./harness.ts");
+const { mountPlatform, startProcess } = await import("./harness.ts");
+const { natives } = await import("../../src/wasm/host/nativesource.ts");
 const { ROOT } = await import("./paths.ts");
 const { PLATFORM_PATHS } = await import("../aosp.ts");
 
 await mountPlatform(ROOT);
 // the exercises' modules register more host classes as they load
-const w = attachHostClasses(world(PLATFORM_PATHS, { natives }));
+const w = world(PLATFORM_PATHS);
 const gaps = new Set<string>();
 w.onGap = (gap) => gaps.add(gap);
 await startProcess(w);

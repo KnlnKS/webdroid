@@ -6,13 +6,13 @@
 //
 //   pnpm ts scripts/simd-oracle.ts
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { INSTRUCTIONS, CASES, INPUT_BYTES, inputs } from "../src/native/a64simd.oracle.cases.ts";
+import { tempDir } from "./java.ts";
 
 if (process.arch !== "arm64") { console.error("the oracle is this machine's arm64 core; this is " + process.arch); process.exit(1); }
-const dir = "scripts/simd-oracle/build";
-mkdirSync(dir, { recursive: true });
+const dir = tempDir("simd-oracle-");
 const run = (cmd: string, args: string[], input?: Uint8Array) => execFileSync(cmd, args, { input, maxBuffer: 1 << 30 });
 
 // assemble every instruction: one word each, in order

@@ -1,6 +1,7 @@
 // Roll up the per-step perf counters an e2e run already writes, so two runs can be compared
 // on cost as well as on pixels.  pnpm ts scripts/perfsum.ts [dir=tests/e2e/actual] [baseline.json]
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cli } from "./args.ts";
 
 const KEYS = ["bootMs", "wasmCompileMs", "wasmClasses", "drawMs", "draws", "frameMs", "frames", "presentLagMs", "inputMs", "measureText", "nativeInstr", "nativeMs", "nativeHostCalls", "jitRegions", "jitMs"] as const;
 
@@ -26,9 +27,9 @@ function rollup(dir: string) {
   return out;
 }
 
-const dir = process.argv[2] ?? "tests/e2e/actual";
+const { positionals: [dir = "tests/e2e/actual", baseline] } = cli("pnpm ts scripts/perfsum.ts [dir] [baseline.json]", {});
 const now = rollup(dir);
-const base = process.argv[3] ? JSON.parse(readFileSync(process.argv[3], "utf8")) : null;
+const base = baseline ? JSON.parse(readFileSync(baseline, "utf8")) : null;
 
 const cols = ["ms", ...KEYS];
 console.log("flow".padEnd(18) + cols.map((c) => c.padStart(13)).join(""));

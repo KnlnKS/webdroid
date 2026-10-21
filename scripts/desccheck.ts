@@ -14,6 +14,7 @@ import type { HostFn } from "../src/wasm/link/hostapi.ts";
 import type { ClassDef, DexFile } from "../src/jvm/dex.ts";
 import { jarDexes } from "../src/android/framework.ts";
 import { PLATFORM_JARS, tsSpecViolation } from "../src/jvm/provenance.ts";
+import { cli } from "./args.ts";
 import { stringMethods } from "../src/jvm/natives/jstring.ts";
 import "../src/natives.ts";
 
@@ -131,9 +132,10 @@ export const BASELINE = resolve(import.meta.dirname, "../tests/fixtures/descchec
 export const withoutHint = (msg: string) => msg.replace(/ \(AOSP: .*/, "");
 
 if (import.meta.main) {
+  const { values: opts } = cli("pnpm ts scripts/desccheck.ts [--write-baseline]", { "write-baseline": { type: "boolean" } });
   if (!hasPlatformJars()) throw new Error("no vendor/aosp platform jars — run: pnpm gen-framework");
   const found = descriptorMismatches();
-  if (process.argv.includes("--write-baseline")) {
+  if (opts["write-baseline"]) {
     const sorted = [...found.keys()].sort().map((cls) => [cls, found.get(cls)!.map(withoutHint).sort()]);
     writeFileSync(BASELINE, JSON.stringify(Object.fromEntries(sorted), null, 1) + "\n");
   }

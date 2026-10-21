@@ -1,14 +1,57 @@
-const modes = ["--full", "--record", "--diff"] as const;
-const args = process.argv.slice(2);
-const selected = modes.filter((mode) => args.includes(mode));
-if (selected.length > 1) throw new Error(`choose one E2E mode: ${modes.join(", ")}`);
+// pnpm e2e: the one command line of every lane (README.md), the quick gate by default.
+import { cpus } from "node:os";
+import { cli } from "../../scripts/args.ts";
+import { FLOWS } from "./flows/index.ts";
+import type { Flow } from "./types.ts";
 
-const mode = selected[0];
-if (mode !== "--full" && args.some((arg) => arg === "--shots" || arg.startsWith("--shots=")))
-  throw new Error("--shots requires --full");
-if (mode === "--record" && args.some((arg) => arg === "--jobs" || arg === "-j" || arg.startsWith("--jobs=")))
-  throw new Error("Android recording is sequential; --jobs is unavailable with --record");
-// the harness reads its arguments as though started itself
-process.argv.splice(2, Infinity, ...args.filter((arg) => arg !== "--full" && arg !== "--record" && arg !== "--diff"));
-if (mode === "--diff") await (await import("./score.ts")).main();
-else await import(mode === "--full" ? "./run-full.ts" : mode === "--record" ? "./capture-emulator.ts" : "./run-fast.ts");
+const USAGE = `pnpm e2e [--full | --diff | --record] [--test <flow>]... [flow ...] [options]
+
+  --test, -t <flow>   run only this flow. Repeatable, accepts a comma-separated list, and
+                      matches on prefix (--test mihon selects both mihon flows); bare names work too
+  --jobs, -j N        flows driven at once, each in its own browser (not with --record)
+  --live              quick gate only: also run the flows that depend on live network content
+  --shots             --full only: save every distinct webdroid frame of each step to ./webdroid-shots
+  --shots-dir <dir>   --shots into <dir>. Wiped at the start of every run, and gitignored
+  --startup           --record only: record the launch of one live flow
+  --json              --diff only: score one flow and print its report as JSON (what --full runs per flow)
+  --list              list the known flows
+  --help, -h          show this`;
+const { values: o, positionals } = cli(USAGE, {
+  full: { type: "boolean" }, diff: { type: "boolean" }, record: { type: "boolean" },
+  test: { type: "string", short: "t", multiple: true }, jobs: { type: "string", short: "j" }, live: { type: "boolean" },
+  shots: { type: "boolean" }, "shots-dir": { type: "string" }, startup: { type: "boolean" }, json: { type: "boolean" },
+  list: { type: "boolean" }, help: { type: "boolean", short: "h" },
+});
+const known = `known flows: ${FLOWS.map((f) => f.app).join(", ")}`;
+const usage = (message: string): never => { console.error(`${message}\n\nusage: ${USAGE}\n${known}`); process.exit(2); };
+if (o.help) { console.log(`usage: ${USAGE}\n${known}`); process.exit(0); }
+if (o.list) { console.log(FLOWS.map((f) => f.app).join("\n")); process.exit(0); }
+
+const modes = (["full", "diff", "record"] as const).filter((mode) => o[mode]);
+if (modes.length > 1) usage("choose one E2E mode: --full, --diff or --record");
+const mode = modes.length ? modes[0] : "fast";
+const shots = o.shots || o["shots-dir"] ? o["shots-dir"] ?? "webdroid-shots" : undefined;
+if (shots && mode !== "full") usage("--shots requires --full");
+if (o.jobs && mode === "record") usage("Android recording is sequential; --jobs is unavailable with --record");
+if (o.live && mode !== "fast") usage("--live selects flows for the quick gate");
+if (o.startup && mode !== "record") usage("--startup requires --record");
+if (o.json && mode !== "diff") usage("--json requires --diff");
+// Full live flows can saturate the renderer and native worker threads before CPU count does
+const jobs = o.jobs === undefined ? Math.max(1, Math.min(mode === "fast" ? 5 : 4, Math.floor(cpus().length / (mode === "fast" ? 2 : 3)))) : Math.floor(Number(o.jobs));
+if (!(jobs >= 1)) usage("--jobs needs a positive number");
+
+/** the flows a name selects: the one it names exactly, else those it is a prefix of */
+function resolve(name: string): Flow[] {
+  const exact = FLOWS.find((f) => f.app === name), prefixed = FLOWS.filter((f) => name && f.app.startsWith(name));
+  return exact ? [exact] : prefixed.length ? prefixed : usage(name ? `unknown flow "${name}"` : "empty flow name");
+}
+// live flows depend on upstream content and networks, so the quick gate runs them only when named or with --live
+const named = [...o.test ?? [], ...positionals].flatMap((names) => names.split(",")).flatMap((name) => resolve(name.trim()));
+const seen = new Set<string>();
+const flows = (named.length ? named : mode === "fast" && !o.live ? FLOWS.filter((flow) => flow.clock !== "live") : FLOWS)
+  .filter((flow) => !seen.has(flow.app) && seen.add(flow.app));
+
+if (mode === "fast") await (await import("./run-fast.ts")).runFast(flows, jobs);
+else if (mode === "full") await (await import("./run-full.ts")).runFull(flows, jobs, shots);
+else if (mode === "diff") await (await import("./score.ts")).score(flows, jobs, !!o.json);
+else await (await import("./capture-emulator.ts")).record(flows, !!o.startup);

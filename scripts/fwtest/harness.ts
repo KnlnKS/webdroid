@@ -41,8 +41,14 @@ export function same(what: string, got: unknown, want: unknown) {
 export function near(what: string, got: number[], want: number[], tol = 1e-5) {
   if (got.length !== want.length || got.some((g, i) => Math.abs(g - want[i]) > tol * Math.max(1, Math.abs(want[i])))) throw new Error(`${what}: [${got}], not [${want}]`);
 }
-/** "ok", or the Java throwable `f` threw as its toString(); a JS error is the exercise's own failure */
-export async function thrown(f: () => unknown): Promise<string> {
+/** `got` against `want` token by token (split at spaces, commas, brackets, | and @, and after a path verb), a number within `rel` of the wanted one
+ *  and at least `abs` */
+export function tokens(what: string, got: string, want: string, { rel = 1e-4, abs = rel }: { rel?: number; abs?: number } = {}) {
+  const split = (t: string) => t.split(/[\s,[\]|@]+|(?<=[MLQKCZ])/).filter(Boolean), g = split(got), w = split(want);
+  if (g.length !== w.length || g.some((t, i) => t !== w[i] && !(Math.abs(+t - +w[i]) <= Math.max(abs, rel * Math.abs(+w[i]))))) throw new Error(`${what}: ${got}, not ${want}`);
+}
+/** "ok", or the Java throwable `f` threw as the device prints it (its toString()); a JS error is the exercise's own failure */
+export async function outcome(f: () => unknown): Promise<string> {
   try { await f(); return "ok"; } catch (e) {
     if (e instanceof Error) throw e;
     return String(await vcall(e, "toString", "()Ljava/lang/String;"));
@@ -68,7 +74,7 @@ export const fontMetrics = (fm: object, cls = "FontMetrics") =>
   ["top", "ascent", "descent", "bottom", "leading"].map((k) => (fm as Record<string, number>)[declaredField(`android/graphics/Paint$${cls}`, k)]);
 
 const vectorProbe = readFileSync("tests/fixtures/vector-drawable.txt", "utf8").trim().split("\n");
-/** VectorDrawableProbe's lines with `tag` (scripts/vector-probe.ts), the tag removed */
+/** VectorDrawableProbe's lines with `tag` (pnpm gen-framework --only vector), the tag removed */
 export const vectorProbeLines = (tag: string) => vectorProbe.filter((l) => l.startsWith(tag + " ")).map((l) => l.slice(tag.length + 1));
 /** a Java Rect's (or RectF's) left, top, right and bottom: instance fields are mangled properties */
 export const ltrb = (r: object, cls: "Rect" | "RectF" = "Rect") =>

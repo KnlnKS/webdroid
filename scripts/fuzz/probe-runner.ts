@@ -1,10 +1,9 @@
-import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { setTimeout } from "node:timers/promises";
-import { promisify } from "node:util";
-import { androidTool } from "../android-sdk.ts";
+import { adbOn, oracleIdentity } from "../adb.ts";
 import { device, formatScreen } from "../../src/shell/config.ts";
-import { diagnosed, readProcesses } from "../../tests/e2e/lib/processes.ts";
+import { diagnosed } from "../../tests/e2e/lib/processes.ts";
+import { readProcesses } from "../page.ts";
 import { serveCases } from "./case-server.ts";
 import type { ProbeCase, ProbeResult } from "./model.ts";
 import { startWebdroid } from "./webdroid-session.ts";
@@ -27,15 +26,10 @@ function requireProbe(): void {
 
 export async function runAndroid(cases: readonly ProbeCase[], serial: string): Promise<PlatformRun> {
   requireProbe();
-  const adb = androidTool("adb");
-  const at = async (...args: string[]) => (await promisify(execFile)(adb, ["-s", serial, ...args])).stdout.trim();
+  const adb = adbOn(serial), at = async (...args: string[]) => (await adb(...args)).toString().trim();
   let environment = preparedOracles.get(serial);
   if (!environment) {
-    const [sdk, fingerprint, size, density] = await Promise.all([
-      at("shell", "getprop", "ro.build.version.sdk"), at("shell", "getprop", "ro.build.fingerprint"),
-      at("shell", "wm", "size"), at("shell", "wm", "density"),
-    ]);
-    if (sdk !== "35") throw new Error(`oracle ${serial} is API ${sdk}, expected API 35`);
+    const [{ sdk, fingerprint }, size, density] = await Promise.all([oracleIdentity(adb, serial), at("shell", "wm", "size"), at("shell", "wm", "density")]);
     const screen = `${size.match(/(\d+x\d+)\s*$/)?.[1]}@${density.match(/(\d+)\s*$/)?.[1]}`;
     const expected = formatScreen(device);
     if (screen !== expected) throw new Error(`oracle ${serial} screen is ${screen}, expected ${expected}; run scripts/fuzz/setup-oracle.sh`);

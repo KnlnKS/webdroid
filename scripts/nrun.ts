@@ -6,12 +6,11 @@
 // An ABI the tier can execute runs. One it cannot is loaded and relocated only, and the report
 // says so — that is how a loader is proved before its emitter exists. --link forces it.
 import { openApk } from "./lib.ts";
+import { cli } from "./args.ts";
 import { dexesOfZip } from "../src/jvm/dex.ts";
-import { localPlatformData, platformJarBytes } from "./aosp.ts";
-import { mountPlatformData } from "../src/shell/apex.ts";
+import { bootTier } from "./tier.ts";
 import { rt } from "../src/jvm/runtime.ts";
-import { loadDex, loadTier } from "../src/jvm/tier.ts";
-import { loadPlatformJar } from "../src/android/framework.ts";
+import { loadDex } from "../src/jvm/tier.ts";
 import "../src/natives.ts";
 import { loadNativeLib, linkNativeLib } from "../src/native/loader.ts";
 import { calledMissing, unresolved, hostTrace } from "../src/native/host.ts";
@@ -20,15 +19,12 @@ import { codeStats, lastFault } from "../src/native/cpu.ts";
 import { NativeFault } from "../src/native/core.ts";
 import { perf } from "../src/perf.ts";
 
-const args = process.argv.slice(2);
-const [apk, lib] = args.filter((a) => !a.startsWith("--"));
+const { values: { link: linkOnly }, positionals: [apk, lib] } = cli("pnpm ts scripts/nrun.ts <apk> <libname.so> [--link]", { link: { type: "boolean" } }, { min: 2 });
 const zip = openApk(apk);
-await loadTier();
-platformJarBytes().forEach((bytes, i) => bytes && loadPlatformJar(bytes, i));
+await bootTier();
 for (const dex of dexesOfZip(zip)) loadDex(dex);
 rt.classpath = zip;
 hostTrace.on = !!process.env.TRACE;
-mountPlatformData(localPlatformData());
 
 // the ABIs this apk actually ships this library for, in the order the tree lists them
 const abis = Object.keys(rt.classpath).flatMap((k) => {
@@ -37,7 +33,7 @@ const abis = Object.keys(rt.classpath).flatMap((k) => {
 });
 if (!abis.length) { console.error(`no lib/*/${lib} in ${apk}`); process.exit(1); }
 const abi = abis.find((a) => rt.nativeAbis.includes(a)) ?? abis[0];
-const link = args.includes("--link") || !rt.nativeAbis.includes(abi);
+const link = linkOnly || !rt.nativeAbis.includes(abi);
 
 const t0 = performance.now();
 try {

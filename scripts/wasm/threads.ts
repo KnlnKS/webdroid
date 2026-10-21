@@ -6,6 +6,7 @@
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { world } from "./lib.ts";
+import { cli } from "../args.ts";
 import { mountPlatform, startProcess } from "./harness.ts";
 import { nativeSource } from "../../src/wasm/host/nativesource.ts";
 import { Natives } from "../../src/wasm/host/natives.ts";
@@ -16,6 +17,7 @@ import { fnRunnable } from "../../src/android/mainloop.ts";
 import type { HostFn, NativeSource } from "../../src/wasm/link/hostapi.ts";
 import { emitRestored } from "../../src/wasm/compiler/hostcalls.ts";
 import { hostLoop } from "../../src/wasm/host/boot.ts";
+import type { HostLoop } from "../../src/wasm/link/sched.ts";
 import { onNestedStrand, wasmEntry } from "../../src/wasm/host/entry.ts";
 import { resumeAs } from "../../src/jvm/natives/jentry.ts";
 import { javaFrames } from "../../src/wasm/compiler/exc.ts";
@@ -27,29 +29,32 @@ import { CORE_PATHS, JAVA, ROOT } from "./paths.ts";
 import { checker } from "./tools.ts";
 import { fixture, jdkTool } from "../java.ts";
 import { ALLOC_WINDOW } from "../../src/wasm/compiler/consts.ts";
+import { deadline } from "../util.ts";
 
 const out = fixture({ sources: [join(JAVA, "Th.java"), join(JAVA, "Ref.java")], release: 11, minApi: 34, classes: /^Th.*\.class$/ });
 
 const dex = join(out, "classes.dex");
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-let arithmeticProbe = false, turns = 0, admissionProbe = false, admissionTurns = 0, rejectAdmission = false, idleBeforeResume = false;
+/** the host loop as a case makes it while it is `probe`: a yield always due, each counted, and answered by its `yield` rather than the host's */
+type LoopProbe = { turns: number; yield?: HostLoop["yield"] };
+let probe: LoopProbe | undefined;
 const w = world([dex, ...CORE_PATHS], { natives: new Natives({
   ...nativeSource,
   find: (cls, key, isStatic, hasBody) => cls === "Th" ? TH[key] : nativeSource.find(cls, key, isStatic, hasBody),
-} satisfies NativeSource), loop: { ...hostLoop, due: () => admissionProbe || arithmeticProbe || hostLoop.due(), yield: (soon) => {
-  if (rejectAdmission) return Promise.reject(new Error("admission timer rejected"));
-  if (admissionProbe) admissionTurns++;
-  if (arithmeticProbe) { turns++; return Promise.resolve(); }
-  const pending = hostLoop.yield(soon);
-  if (idleBeforeResume) {
-    // Model another entry completing between the admission reaction and the engine's resume.
-    const then = pending.then.bind(pending);
-    pending.then = ((done: (value: void) => unknown, failed?: (error: unknown) => unknown) => then(value => {
-      const result = done(value); queueMicrotask(() => w.sched.idle()); return result;
-    }, failed)) as typeof pending.then;
-  }
-  return pending;
+} satisfies NativeSource), loop: { ...hostLoop, due: () => !!probe || hostLoop.due(), yield: (soon) => {
+  if (probe) probe.turns++;
+  return (probe?.yield ?? hostLoop.yield)(soon);
 } } });
+const admission: LoopProbe = { turns: 0 }, arithmetic: LoopProbe = { turns: 0, yield: () => Promise.resolve() };
+const rejecting: LoopProbe = { turns: 0, yield: () => Promise.reject(new Error("admission timer rejected")) };
+/** admission where another entry completes between the admission reaction and the engine's resume */
+const idling: LoopProbe = { turns: 0, yield: (soon) => {
+  const pending = hostLoop.yield(soon), then = pending.then.bind(pending);
+  pending.then = ((done: (value: void) => unknown, failed?: (error: unknown) => unknown) => then(value => {
+    const result = done(value); queueMicrotask(() => w.sched.idle()); return result;
+  }, failed)) as typeof pending.then;
+  return pending;
+} };
 /** host imports only this suite's generated code calls */
 const extra = w.host as Record<string, Function>;
 // the natives that wait together are resumed from one Promise, so their continuations run one after another before any of the stacks does
@@ -87,12 +92,11 @@ await startProcess(w);
 const callbackEntry = wasmEntry(w);
 
 const suite = checker("threads");
-const timed = <T,>(p: Promise<T>, ms = Number(process.env.J2W_TIMEOUT ?? 60000)): Promise<T> => Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`timed out after ${ms} ms`)), ms).unref())]);
-const show = async (f: () => unknown) => { try { return String(await timed(Promise.resolve(f()))); } catch (e) { const t = w.throwable(e); return t ? "java " + w.classNameOf(t) : "throw " + String(e).slice(0, 100); } };
+const show = async (f: () => unknown) => { try { return String(await deadline(Promise.resolve(f()), Number(process.env.J2W_TIMEOUT ?? 60000))); } catch (e) { const t = w.throwable(e); return t ? "java " + w.classNameOf(t) : "throw " + String(e).slice(0, 100); } };
 const expect = (what: string, got: unknown, want: unknown) => suite.check(what, String(got), String(want));
 
 // ---------- the Java cases against the JDK
-const only = process.argv[2]?.split(","), substrate = !only || only.includes("substrate");
+const only = cli("pnpm wasm threads [case,case,... | substrate]", {}).positionals[0]?.split(","), substrate = !only || only.includes("substrate");
 if (substrate || only?.includes("nativeCallback")) {
   expect("native callback after a wait reenters its caller's monitor", await show(() => callbackEntry.scall("Th", "callbackOwner", "(I)I", 41)), "42");
   expect("settled native callback releases its strand", w.sched.strands.filter(Boolean).length, 1);
@@ -146,7 +150,7 @@ for (const [i, [name, arg]] of CASES.entries()) {
 if (substrate) {
   for (const mode of ["bridge", "full", "recovered"] as const) {
     let full = false, turns = 0, bridge = 0;
-    const heap = world(w.prog, { heapUsed: () => full ? HEAP_LIMIT + 1 : 0, collect: () => {}, loop: {
+    const heap = world(w.prog, { bare: true, heapUsed: () => full ? HEAP_LIMIT + 1 : 0, collect: () => {}, loop: {
       ...hostLoop, after: (ms, run) => hostLoop.after(ms, () => { turns++; if (mode === "recovered") full = false; run(); }),
     } });
     heap.bridge.toJava(new Int8Array(1), "[B");
@@ -255,11 +259,11 @@ if (substrate) {
   }
   // the cases' common-pool workers stay parked across the probe
   const parked = w.sched.strands.filter(Boolean).length;
-  admissionProbe = true;
+  probe = admission;
   try {
-    idleBeforeResume = true;
+    probe = idling;
     try { expect("admitted Wasm restores ownership after another completion idles", await show(() => w.entryAsync("Th", "linkAdmissionIdentity", "(I)I")(0)), 1); }
-    finally { idleBeforeResume = false; }
+    finally { probe = admission; }
     w.addHostClass(nativeSource.hostSpecs().find(spec => spec.name === "webdroid/FnRunnable")!);
     let runnableResult = 0;
     const runnable = fnRunnable(() => Promise.resolve(callbackEntry.scall("Th", "inner", "(I)I", 5)).then(value => { runnableResult = value as number; }));
@@ -269,35 +273,35 @@ if (substrate) {
     expect("host Runnable also accepts an immediate callback", await show(() => callbackEntry.vcall(inlineRunnable, "run", "()V")), "undefined");
     expect("immediate Runnable callback completes once", runnableResult, 13);
     expect("lazy admission preserves initializer, thread and callback monitor", await show(() => w.entryAsync("Th", "linkAdmission", "(I)I")(0)), 49);
-    expect("lazy links admit event-loop turns", admissionTurns > 0, true);
+    expect("lazy links admit event-loop turns", admission.turns > 0, true);
     const methods = w.stats.methods;
     const sameSlot = w.entryAsync("Th", "linkAdmissionWinner", "(I)I");
     expect("two admitted callers observe the winning link", (await Promise.all([sameSlot(3), sameSlot(7)])).join(), "4,8");
     expect("the admitted slot is compiled only once", w.stats.methods - methods, 1);
-    const before = admissionTurns;
+    const before = admission.turns;
     const helper = w.helpers.hostFn("admission:plain", ["I"], "I", (cx, c) => {
       c.lget(0); cx.callMethod(c, w.prog.resolve("Th", "linkAdmissionPlain", "(I)I")!);
     });
     expect("fresh plain helper links synchronously with an exhausted budget", helper(0), 11);
     expect("plain host entry remains synchronous with an exhausted budget", w.entry("Th", "linkAdmissionPlain", "(I)I")(0), 11);
-    expect("plain host entry does not admit a turn", admissionTurns, before);
+    expect("plain host entry does not admit a turn", admission.turns, before);
     const rejected = w.sched.strand(), globals = w.rtImports();
     globals.sid.value = rejected.id; globals.thr.value = rejected.thread.obj; globals.depth.value = 17;
     try {
-      rejectAdmission = true;
+      probe = rejecting;
       try { await w.sched.admitLink(() => { throw new Error("rejected admission ran link"); }); }
       catch (error) { expect("admission timer failure is retained", (error as Error).message, "admission timer rejected"); }
       expect("timer rejection restores its strand", w.sched.current(), rejected);
       expect("timer rejection restores frame depth", globals.depth.value, 17);
-      rejectAdmission = false;
+      probe = admission;
       try { await w.sched.admitLink(() => { throw new Error("link failed"); }); }
       catch (error) { expect("admitted link failure is retained", (error as Error).message, "link failed"); }
       expect("throwing link retains its strand", w.sched.current(), rejected);
       expect("throwing link retains frame depth", globals.depth.value, 17);
-    } finally { rejectAdmission = false; rejected.end(); w.sched.idle(); }
+    } finally { probe = admission; rejected.end(); w.sched.idle(); }
     const readyStrand = w.sched.strand();
     globals.sid.value = readyStrand.id; globals.thr.value = readyStrand.thread.obj; globals.depth.value = 19;
-    admissionProbe = false;
+    probe = undefined;
     try {
       let prepared = 0;
       await w.sched.admitLink(() => {
@@ -314,9 +318,9 @@ if (substrate) {
       w.sched.idle();
       w.sched.admitLink(() => {}, () => { prepared++; return Promise.resolve(); });
       expect("root host does not prepare delivery", prepared, 1);
-    } finally { readyStrand.end(); w.sched.idle(); admissionProbe = true; }
+    } finally { readyStrand.end(); w.sched.idle(); probe = admission; }
     expect("admission releases its strands", w.sched.strands.filter(Boolean).length, parked);
-  } finally { admissionProbe = false; }
+  } finally { probe = undefined; }
   const cold = world([dex, ...CORE_PATHS], { natives: new Natives(nativeSource) });
   expect("lazy linking near the stack limit", await cold.entryAsync("Th", "linkDeep", "(I)I")(0), 0);
   // natives that wait: async, a generator, one that enters Java through a promising entry that waits again
@@ -328,10 +332,10 @@ if (substrate) {
   // arrays given to and answered by natives that wait at the same time stay each strand's own
   expect("array arguments and results across a wait", await show(() => w.entryAsync("Th", "arrayGap", "(I)I")(300)), 0);
   expect("array alias and exceptional copy-back", await show(() => w.entryAsync("Th", "arrayAlias", "(I)I")(0)), 0);
-  arithmeticProbe = true;
+  probe = arithmetic;
   try { expect("arithmetic loop answer", await show(() => w.entryAsync("Th", "fuelArithmetic", "(I)I")(100000)), 704982704); }
-  finally { arithmeticProbe = false; }
-  expect("arithmetic loop yields", turns > 0, true);
+  finally { probe = undefined; }
+  expect("arithmetic loop yields", arithmetic.turns > 0, true);
   // 1,000 stacks suspended in the same native at once
   { const t0 = performance.now(), r = await Promise.all(Array.from({ length: 1000 }, (_, i) => w.entryAsync("Th", "trap", "(I)I")(i))); const ms = performance.now() - t0;
     expect("1,000 suspended stacks", r.reduce((a: number, b) => a + (b as number), 0), 1000 * 999 / 2 + 1000);

@@ -2,8 +2,9 @@
 // pnpm layout <apk> <0xid|layoutName>
 import { openApk, dumpXml } from "./lib.ts";
 import { parseAXML, type XmlNode } from "../src/android/axml.ts";
+import { cli } from "./args.ts";
 
-const [apk, target] = process.argv.slice(2);
+const { positionals: [apk, target] } = cli("pnpm layout <apk> <0xid|layoutName>", {}, { min: 2 });
 const zip = openApk(apk);
 const wantId = target.startsWith("0x") ? parseInt(target, 16) : 0;
 

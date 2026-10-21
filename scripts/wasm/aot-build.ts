@@ -8,34 +8,32 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PLATFORM_JARS } from "../../src/jvm/provenance.ts";
-import { world } from "./lib.ts";
-import { loadDexes } from "../dexes.ts";
-import { Program } from "../../src/wasm/compiler/program.ts";
-import { externs } from "../../src/wasm/link/intrinsics.ts";
-import { natives } from "./harness.ts";
+import { platform, platformDexes, world } from "./lib.ts";
+import { cli } from "../args.ts";
 import { rt } from "../../src/jvm/runtime.ts";
 import { aotFile } from "../../src/wasm/link/aot.ts";
 import { AotBuilder, codeBytes, codeFile, dataBytes, dataModule, invalidFunction, packModule, synthModules, validation } from "../../src/wasm/link/aotbuild.ts";
 import type { MethodInfo } from "../../src/wasm/compiler/program.ts";
 import { AOT_ROOT, buildKey, sourceKey } from "../aot-key.ts";
-import { PLATFORM_PATHS } from "../aosp.ts";
 
-const flag = (k: string, d: string) => { const i = process.argv.indexOf(k); return i < 0 ? d : process.argv[i + 1]; };
+const { values: opts } = cli("pnpm aot [--out dir] [--jars N | --only jar,jar] [--d mode] [--c mode] [--max-module KiB] [--max-hot KiB] [--no-validate] [--app app.dex] [--force]", {
+  out: { type: "string", default: "" }, jars: { type: "string", default: "" }, only: { type: "string" }, d: { type: "string", default: "pkg" }, c: { type: "string", default: "pkg" },
+  "max-module": { type: "string", default: "3072" }, "max-hot": { type: "string", default: "1024" }, "no-validate": { type: "boolean" }, app: { type: "string", default: "" }, force: { type: "boolean" } });
 const PLATFORM = ["core-oj", "core-libart", "okhttp", "bouncycastle", "apache-xml", "conscrypt", "core-icu4j", "framework"];
-const nJars = flag("--jars", ""), dMode = flag("--d", "pkg"), cMode = flag("--c", "pkg"), maxModule = +flag("--max-module", "3072") * 1024, maxHot = +flag("--max-hot", "1024") * 1024;
-const jarNames = flag("--only", nJars ? "" : PLATFORM.join(",")).split(",").filter(Boolean);
+const nJars = opts.jars, dMode = opts.d, cMode = opts.c, maxModule = +opts["max-module"] * 1024, maxHot = +opts["max-hot"] * 1024;
+const jarNames = (opts.only ?? (nJars ? "" : PLATFORM.join(","))).split(",").filter(Boolean);
 const jars = PLATFORM_JARS.filter((j, i) => (jarNames.length ? jarNames.some((n) => j.endsWith("/" + n + ".jar") || j === n + ".jar") : i < +nJars));
 const hot = existsSync(join(AOT_ROOT, "hot.json")) ? JSON.parse(readFileSync(join(AOT_ROOT, "hot.json"), "utf8")) as { linked: string[]; called: string[] } : { linked: [], called: [] };
 
 // ---- where it goes
-let out = flag("--out", "");
+let out = opts.out;
 if (!out) {
   const nativeKeys = [...rt.jni.keys(), ...[...rt.natives].flatMap(([cls, spec]) => Object.keys(spec.methods ?? {}).map((k) => `${cls}|${k}`))].sort();
   const source = sourceKey(), key = buildKey(source, nativeKeys, JSON.stringify([jars, dMode, cMode, maxModule, maxHot, hot]));
   out = join(AOT_ROOT, key);
   mkdirSync(AOT_ROOT, { recursive: true });
   writeFileSync(join(AOT_ROOT, "latest.json"), JSON.stringify({ key, source }));
-  if (existsSync(join(out, "startup.json")) && !process.argv.includes("--force")) { console.log(`build ${key} is up to date`); process.exit(); }
+  if (existsSync(join(out, "startup.json")) && !opts.force) { console.log(`build ${key} is up to date`); process.exit(); }
 }
 
 /** whether the build compiles `m`: it has bytecode or an implementation of its own (the rest stay abstract, or become a gap on demand) */
@@ -90,16 +88,16 @@ function withSupers(names: string[]): string[] {
   names.forEach(add);
   return out;
 }
-const dexes = PLATFORM_PATHS.map(loadDexes);
-const prog = new Program(dexes.flat()); prog.addExterns(externs);
+const prog = platform();
 rmSync(out, { recursive: true, force: true }); mkdirSync(out, { recursive: true });
-const w = world(prog, { natives, build: true });
-const aot = new AotBuilder(w, { dGroup: hotChunked(withSupers(hot.linked.length ? hot.linked : hot.called), classSize("d"), maxHot, "hotD", chunked(dMode, classSize("d"), maxModule)), cGroup: hotChunked(hot.called.filter((n) => prog.get(n)?.dex), classSize("c"), maxHot, "hotC", chunked(cMode, classSize("c"), maxModule)), dexes: new Set(dexes.filter((_, i) => jars.includes(PLATFORM_JARS[i])).flat()) });
+// the build is numbered without the host's classes, which a page's World adds after the build's (boot.ts createWorld)
+const w = world(prog, { hostClasses: false, build: true });
+const aot = new AotBuilder(w, { dGroup: hotChunked(withSupers(hot.linked.length ? hot.linked : hot.called), classSize("d"), maxHot, "hotD", chunked(dMode, classSize("d"), maxModule)), cGroup: hotChunked(hot.called.filter((n) => prog.get(n)?.dex), classSize("c"), maxHot, "hotC", chunked(cMode, classSize("c"), maxModule)), dexes: new Set(platformDexes(jars)) });
 const t0 = performance.now();
 let cBytes = 0, dBytes = 0, nMethods = 0, mapBytes = 0, largest = 0;
 /** a module the estimate let grow past what Chrome compiles on the main thread (8 MiB) is a build error: the estimates (link/aotbuild.ts) need re-measuring */
 const sized = (file: string, n: number) => { largest = Math.max(largest, n); if (n > HARD_LIMIT) throw new Error(`${file} is ${n} bytes, over ${HARD_LIMIT}; lower --max-module`); };
-const validate = !process.argv.includes("--no-validate");
+const validate = !opts["no-validate"];
 /** V8 rejects `bytes`, when the build validates */
 const rejects = (bytes: Uint8Array) => validate && invalidFunction(bytes);
 const classesOf = (keys: number[], k: number) => keys.flatMap((g, i) => (g === k ? [i] : []));

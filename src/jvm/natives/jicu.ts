@@ -18,7 +18,12 @@ function versionString(parts: number[]): string {
   while (parts.length > 2 && parts[parts.length - 1] === 0) parts.pop();
   return parts.join(".");
 }
-const icuVersion = waits(() => after(staticField("android/icu/util/VersionInfo", "ICU_VERSION"), driven(function* (version: unknown): Gen<string> {
+/** a version the build fixes, which waits to be read: read once, then answered at once (a synchronous entry after a process's start finds it) */
+function constant(read: () => unknown): () => unknown {
+  let known: { value: unknown } | undefined;
+  return waits(() => known ? known.value : after(read(), (value) => (known = { value }).value));
+}
+const icuVersion = constant(() => after(staticField("android/icu/util/VersionInfo", "ICU_VERSION"), driven(function* (version: unknown): Gen<string> {
   const parts: number[] = [];
   for (const part of ["getMajor", "getMinor", "getMilli", "getMicro"]) parts.push(yield vcall(version, part, "()I"));
   return versionString(parts);
@@ -44,12 +49,13 @@ async function icuRootString(item: string, key: string): Promise<string> {
   throw new Error(`no string ${key} in ${item}`);
 }
 /** uprops.icu's UDataInfo.dataVersion is the Unicode version */
-const unicodeVersion = async () => {
+const unicodeVersion = constant(async () => {
   const info = await icuRead(await icuItem("uprops.icu") + 20, 4);
   return versionString([0, 1, 2, 3].map((k) => info.getUint8(k)));
-};
+});
 /** ulocdata_getCLDRVersion: supplementalData's cldrVersion */
-const cldrVersion = async () => versionString(Object.assign([0, 0, 0, 0], (await icuRootString("supplementalData.res", "cldrVersion")).split(".").map(Number)));
+const cldrVersion = constant(async () => versionString(Object.assign([0, 0, 0, 0], (await icuRootString("supplementalData.res", "cldrVersion")).split(".").map(Number))));
+const tzdbVersion = constant(() => scall("android/icu/util/TimeZone", "getTZDataVersion", `()${STRING}`));
 
 const names = (cls: string, name: string) => after(scall(cls, name, `()[${STRING}`), (a: string[]) => jarray([...a], STRING));
 const ofLocale = (method: string) => (name: string) => after(ulocale(name), (l) => vcall(l, method, `()${STRING}`));
@@ -88,7 +94,7 @@ const natives: Record<string, Record<string, (...args: never[]) => unknown>> = {
   "com/android/icu/util/Icu4cMetadata": {
     [`getCldrVersion()${STRING}`]: cldrVersion,
     [`getIcuVersion()${STRING}`]: icuVersion,
-    [`getTzdbVersion()${STRING}`]: () => scall("android/icu/util/TimeZone", "getTZDataVersion", `()${STRING}`),
+    [`getTzdbVersion()${STRING}`]: tzdbVersion,
     [`getUnicodeVersion()${STRING}`]: unicodeVersion,
   },
   "com/android/icu/util/LocaleNative": {

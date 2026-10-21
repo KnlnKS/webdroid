@@ -1,7 +1,4 @@
-// Rebuild in a temporary directory with javac --release 17 -XDstringConcat=inline, then d8
-// --no-desugaring --min-api 35 --lib "$ANDROID_HOME/platforms/android-35/android.jar" --output
-// <dir> <dir>/*.class, and copy classes.dex to InvokeProbe.dex. Without desugaring, VarHandle and
-// MethodHandle calls stay invoke-polymorphic and record methods invoke-custom, as in AOSP's jars.
+// InvokeProbe.dex is this class built by `pnpm ts scripts/probes.ts InvokeProbe`.
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;

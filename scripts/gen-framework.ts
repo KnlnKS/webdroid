@@ -1,16 +1,10 @@
 // Pull the real android: framework off the reference device and prove the two halves match.
 //
-//   pnpm gen-framework            # pull from a connected device/emulator, then verify
-//   pnpm gen-framework --verify   # verify what is already in vendor/aosp
-//   pnpm gen-framework --charsets # record only the device's single-byte charsets
-//   pnpm gen-framework --input    # record only the device's key character maps and key sets
-//   pnpm gen-framework --settings # record only the device's settings tables
-//   pnpm gen-framework --properties # record only the device's platform properties
-//   pnpm gen-framework --overlays # record only the framework values the device's overlays replace
-//   pnpm gen-framework --compat   # record only the device's target-SDK-gated and disabled compat changes
-//   pnpm gen-framework --fonts    # record only the device's updated system fonts
-//   pnpm gen-framework --identity [url] # record the identity properties and uname of a phone's
-//                                 factory image, by default the Pixel 9's (no device needed)
+//   pnpm gen-framework                 # pull from a connected device/emulator, run its recorders, then verify
+//   pnpm gen-framework --verify        # verify what is already in vendor/aosp
+//   pnpm gen-framework --only a,b      # run only the RECORDERS named (fonts and identity run only so)
+//   pnpm gen-framework --only identity [--image url]  # the identity properties and uname of a phone's
+//                                      factory image, by default the Pixel 9's (no device needed)
 //
 // framework.jar carries android.* and com.android.internal.* as bytecode; framework-res.apk
 // carries the resource table those classes' R ids were compiled against. Neither is usable
@@ -23,18 +17,17 @@
 // bytecode we run and the screenshots we score against come from the same platform build.
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { cli } from "./args.ts";
+import { tempDir } from "./java.ts";
 import { setTimeout } from "node:timers/promises";
 import { unzipSync } from "fflate";
 import { constObject, writeGenerated } from "./lib.ts";
 import { loadDexes } from "./dexes.ts";
-import { localPlatformData, platformJarBytes } from "./aosp.ts";
-import { mountPlatformData } from "../src/shell/apex.ts";
+import { bootTier } from "./tier.ts";
 import "../src/natives.ts";
-import { loadTier } from "../src/jvm/tier.ts";
 import { descToName } from "../src/jvm/abi.ts";
 import { insnLen } from "../src/jvm/opcodes.ts";
 import { PLATFORM_JARS, PLATFORM_DATA, BOOT_JAR_PATHS, SHARED_LIBRARIES } from "../src/jvm/bootclasspath.ts";
-import { loadPlatformJar } from "../src/android/framework.ts";
 import { SYSTEM_PACKAGES } from "../src/shell/system-packages.ts";
 import { Arsc } from "../src/android/arsc.ts";
 import { deviceQualifiers } from "../src/android/configuration.ts";
@@ -61,23 +54,41 @@ const writeBootClasspath = (jars: string[], bootJars: string[], data: Record<str
   `export const SHARED_LIBRARIES: Record<string, { path: string; dependencies: string[] }> = ${JSON.stringify(libraries)};\n`,
   `${jars.length} jars, ${Object.keys(data).length} files`);
 
-if (process.argv.includes("--charsets")) { await recordCharsets(); process.exit(0); }
-if (process.argv.includes("--input")) { await recordInputDevices(); process.exit(0); }
-if (process.argv.includes("--settings")) { await recordSettings(); process.exit(0); }
-if (process.argv.includes("--properties")) { await recordProperties(); process.exit(0); }
-if (process.argv.includes("--overlays")) { await recordDeviceOverlays(); process.exit(0); }
-if (process.argv.includes("--compat")) { await recordCompatChanges(); process.exit(0); }
-if (process.argv.includes("--fonts")) {
-  const data = { ...Object.fromEntries(Object.entries(PLATFORM_DATA).filter(([path]) => !path.startsWith(UPDATED_FONTS))), ...await recordFontUpdates() };
-  writeBootClasspath(PLATFORM_JARS, BOOT_JAR_PATHS, data, SHARED_LIBRARIES);
+/** the device's runDex probe `java`, whose output is the fixture `fixture` (and whose dex `keep` keeps) */
+const probe = (java: string, fixture: string, keep?: string) => async () => {
+  const out = runDex(`scripts/${java}.java`, { android: true, keep });
+  writeFileSync(fixture, out + "\n");
+  console.log(`${fixture}: ${out.split("\n").length} lines`);
+};
+/** What the reference device records besides the pull, by the name --only takes, each writing its generated source or fixture. `boots` boots the class
+ *  path, which a pull rewrites, so after one it runs in a process of its own; `named` runs only when named (a pull records the fonts, and identity
+ *  reads a factory image rather than the device). */
+const RECORDERS: Record<string, { record: () => Promise<unknown>; boots?: true; named?: true }> = {
+  overlays: { record: recordDeviceOverlays },
+  compat: { record: recordCompatChanges },
+  osConstants: { record: recordOsConstants },
+  charsets: { record: recordCharsets },
+  input: { record: recordInputDevices },
+  properties: { record: recordProperties },
+  // VectorDrawableProbe's cases, which fwtest and the browser test compare against
+  vector: { record: probe("VectorDrawableProbe", "tests/fixtures/vector-drawable.txt") },
+  // InputProbe's lines, which fwtest compares its dex's run against our input natives with
+  inputProbe: { record: probe("InputProbe", "tests/fixtures/input-probe.txt", "tests/fixtures/InputProbe.dex") },
+  textLayout: { record: recordTextLayouts },
+  settings: { record: recordSettings, boots: true },
+  fonts: { record: recordFonts, named: true },
+  identity: { record: () => recordIdentity(opts.image, /^sdk (\d+)$/m.exec(readFileSync(`${OUT}/build.txt`, "utf8"))![1]), named: true },
+};
+const usage = "pnpm gen-framework [--verify | --only name,...] [--image url]";
+const { values: opts } = cli(usage, { verify: { type: "boolean" }, only: { type: "string" },
+  image: { type: "string", default: "https://dl.google.com/dl/android/aosp/tokay-ap3a.241005.015-factory-88013873.zip" } });
+if (opts.only) {
+  const names = opts.only.split(",");
+  for (const name of names) if (!RECORDERS[name]) { console.error(`no recorder ${name}: ${Object.keys(RECORDERS).join(", ")}\nusage: ${usage}`); process.exit(2); }
+  for (const name of names) await RECORDERS[name].record();
   process.exit(0);
 }
-if (process.argv.includes("--identity")) {
-  await recordIdentity(process.argv[process.argv.indexOf("--identity") + 1] ?? "https://dl.google.com/dl/android/aosp/tokay-ap3a.241005.015-factory-88013873.zip",
-    /^sdk (\d+)$/m.exec(readFileSync(`${OUT}/build.txt`, "utf8"))![1]);
-  process.exit(0);
-}
-if (!process.argv.includes("--verify")) {
+if (!opts.verify) {
   adb("wait-for-device");
   for (let i = 0; adb("shell", "getprop", "sys.boot_completed") !== "1"; i++) {
     if (i > 90) throw new Error("device never reported sys.boot_completed — boot it with `pnpm e2e:boot`");
@@ -118,18 +129,20 @@ if (!process.argv.includes("--verify")) {
     libraries[name] = { path, dependencies: at("dependency")?.split(":") ?? [] };
   }
   writeFileSync(`${OUT}/build.txt`, `${fingerprint}\nsdk ${adb("shell", "getprop", "ro.build.version.sdk")}\n`);
-  await recordDeviceOverlays();
-  await recordCompatChanges();
-  await recordOsConstants();
-  await recordCharsets();
-  await recordInputDevices();
-  await recordProperties();
+  const recorders = Object.entries(RECORDERS).filter(([, { named }]) => !named);
+  for (const [, { record, boots }] of recorders) if (!boots) await record();
   writeBootClasspath(jars, bootJars, data, libraries);
-  // its own process: it boots the class path just written, which the verification below loads apart
-  if (spawnSync(...nodeCommand(import.meta.filename, "--settings"), { stdio: "inherit" }).status) throw new Error("recording settings failed");
+  // the class path just written is loaded apart from the one this process imported
+  for (const [name, { boots }] of recorders) if (boots && spawnSync(...nodeCommand(import.meta.filename, "--only", name), { stdio: "inherit" }).status) throw new Error(`recording ${name} failed`);
 }
 
 for (const f of [JAR, RES]) if (!existsSync(f)) throw new Error(`missing ${f} — run \`pnpm gen-framework\` with the reference AVD booted`);
+
+/** the font updates alone: PLATFORM_DATA with the device's updated fonts in place of those recorded */
+async function recordFonts() {
+  const data = { ...Object.fromEntries(Object.entries(PLATFORM_DATA).filter(([path]) => !path.startsWith(UPDATED_FONTS))), ...await recordFontUpdates() };
+  writeBootClasspath(PLATFORM_JARS, BOOT_JAR_PATHS, data, SHARED_LIBRARIES);
+}
 
 /** The fonts the reference device's FontManagerService serves in place of the image's, which GMS's
  *  font updater installed (src/android/font-updates.ts): the files its UpdatableFontDir holds, by
@@ -238,9 +251,7 @@ async function recordCharsets() {
  *  Device config keeps the flags a class on the boot class path that reads DeviceConfig or
  *  Settings.Config names, which is what an app process can ask for. */
 async function recordSettings() {
-  await loadTier();
-  platformJarBytes(OUT).forEach((bytes, i) => loadPlatformJar(bytes!, i));
-  mountPlatformData(localPlatformData());
+  await bootTier();
   const { publicSettings } = await import("../src/android/settings.ts");
   const parse = (text: string) => text.split("\n").map((line) => line.replace(/\r$/, "")).filter((line) => line.includes("="))
     .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)] as const);
@@ -314,6 +325,44 @@ async function recordInputDevices() {
     "for its touchscreen and its virtual keyboard, whose negative id asks every device of the AVD.",
     constObject("KEY_CHARACTER_MAPS", "Record<string, string>", ["Virtual.kcm", "Generic.kcm"].map((f) => [JSON.stringify(f), JSON.stringify(kcm(f))])) +
     constObject("DEVICE_KEYS", "Record<string, number[]>", Object.entries(keys).map(([n, c]) => [JSON.stringify(n), `[${c.join(", ")}]`])), `${Object.keys(keys).length} devices`);
+}
+
+/** StaticLayout's breaks, line extents and hyphenated glyphs of the paragraphs textcmp lays out (which it reads back from the fixture's case
+ *  lines), and getTextWidths across weights and sizes for fwtest (fonts.ts) */
+async function recordTextLayouts() {
+  const FIXTURE = "tests/fixtures/textlayout-device.txt", WIDTHS = "tests/fixtures/textwidths-device.txt";
+  /** text, width px, text size px, and for hyphenated layouts the locale and hyphenation frequency */
+  const PARAGRAPHS: [string, number, number, string?, number?][] = [
+    ["The quick brown fox jumps over the lazy dog", 200, 24],
+    ["The quick brown fox jumps over the lazy dog", 720, 24],
+    ["Supercalifragilisticexpialidocious antidisestablishmentarianism", 180, 24],
+    ["https://example.com/a/very/long/path/that/cannot/be/broken/on/a/space", 200, 24],
+    ["one\ntwo three four five six seven eight nine ten\n\neleven", 160, 28],
+    ["a b c d e f g h i j k l m n o p q r s t u v w x y z", 100, 20],
+    ["A well-known state-of-the-art hyphenated compound", 150, 24],
+    ["Write to someone.name@example.com for details", 180, 24],
+    ["Tabs\tand\tmore\ttabs\there to see how they wrap", 200, 24],
+    ["日本語のテキストを改行するテストです。", 150, 24],
+    ["Emoji 👍🏽 family 👨‍👩‍👧 flags 🇨🇦🇯🇵 end", 160, 24],
+    ["Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.", 300, 20],
+    ...([["en-US", "Hyphenation breaks extraordinarily long words like internationalization and responsibilities"],
+      ["de", "Die Donaudampfschifffahrtsgesellschaft sucht Rechtsschutzversicherungsgesellschaften"]] as const).flatMap(([locale, text]) =>
+      [[text, 160, 24, locale, 1], [text, 160, 24, locale, 2], [text, 100, 20, locale, 2]] as [string, number, number, string, number][]),
+  ];
+  /** weight and size of the getTextWidths cases fwtest compares (fonts.ts) */
+  const WIDTH_CASES = [100, 300, 400, 500, 700, 900].flatMap((w) => [10, 12, 13.5, 14, 16, 18, 20, 24, 32, 40].map((s) => `${w} ${s}`));
+  // SystemFonts reads /system/etc/font_fallback.xml, which the shell user may not
+  await asRoot();
+  const dir = tempDir(), cases = PARAGRAPHS.map(([t, ...rest]) => [t.replace(/\n/g, "\\n").replace(/\t/g, "\\t"), ...rest].join("\t"));
+  writeFileSync(`${dir}/cases.txt`, cases.join("\n") + "\n");
+  writeFileSync(`${dir}/widths.txt`, WIDTH_CASES.join("\n") + "\n");
+  adb("push", `${dir}/cases.txt`, "/data/local/tmp/webdroid-textlayout.txt");
+  adb("push", `${dir}/widths.txt`, "/data/local/tmp/webdroid-textwidths.txt");
+  const out = runDex("scripts/TextLayoutProbe.java", { android: true, args: ["/data/local/tmp/webdroid-textlayout.txt", "/data/local/tmp/webdroid-textwidths.txt"] }).split("\n");
+  const layouts = out.filter((l) => !l.startsWith("widths "));
+  writeFileSync(FIXTURE, [...cases.map((c, i) => `case ${i}\t${c}`), ...layouts].join("\n") + "\n");
+  writeFileSync(WIDTHS, out.filter((l) => l.startsWith("widths ")).join("\n") + "\n");
+  console.log(`${FIXTURE}: ${layouts.length} rows; ${WIDTHS}`);
 }
 
 // --- verify: every id the framework's own R classes name must resolve in the paired table ---

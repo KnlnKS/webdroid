@@ -6,13 +6,12 @@
 // and interface sites. With --framework the AOSP dex joins the program and the report becomes
 // the native methods this apk would need if those classes ran as AOSP bytecode.
 import { globSync, readFileSync, writeFileSync } from "node:fs";
-import { openApk } from "./lib.ts";
+import { apkRoots, openApk } from "./lib.ts";
 import { loadDexes } from "./dexes.ts";
 import { AOSP } from "./aosp.ts";
 import { dexesOfZip, type DexFile } from "../src/jvm/dex.ts";
 import { cli } from "./args.ts";
 import { Program, reach } from "../src/jvm/reach.ts";
-import { rootsOf, reflectiveRoots } from "../src/jvm/roots.ts";
 import { rt } from "../src/jvm/runtime.ts";
 import "../src/natives.ts";
 import { FRAMEWORK_RE, nativeClassSupport, nativeFieldSupport, nativeMethodSupport, rankCalls } from "./native-surface.ts";
@@ -36,11 +35,6 @@ if (framework) {
   for (const d of fwDexes) p.add(d);
 }
 
-const services: Record<string, string> = {};
-for (const name of Object.keys(zip)) {
-  if (name.startsWith("META-INF/services/")) services[name] = new TextDecoder().decode(zip[name]);
-}
-
 // --from <class> asks the same question of a framework subtree instead of an apk: what
 // would running THIS as bytecode need? Same closure, different roots.
 const roots = from.length
@@ -53,15 +47,14 @@ const roots = from.length
         .map((m) => [dex.method(m.methodIdx).name, dex.methodDesc(m.methodIdx)] as const)
         .filter(([n]) => !want || want.has(n))
         .map(([n, d]) => c + "." + n + d);
-    }) }
-  : rootsOf(zip["AndroidManifest.xml"], p, services);
-const refl = from.length ? [] : reflectiveRoots(p, appDexes);
+    }), named: [] }
+  : apkRoots(zip, p, appDexes);
 const t1 = performance.now();
-const r = reach(p, roots.methods, [...roots.classes, ...refl]);
+const r = reach(p, roots.methods, [...roots.classes, ...roots.named]);
 const t2 = performance.now();
 
 console.log(`${apk}: ${appClasses} app classes${fwDexes.length ? ` + ${p.size - appClasses} framework` : ""}, ` +
-  `${roots.classes.length} manifest/service roots, ${refl.length} named by a string constant`);
+  `${roots.classes.length} manifest/service roots, ${roots.named.length} named by a string constant`);
 console.log(`reachable: ${r.methods.size} method bodies, ${r.instantiated.size} instantiated types, ${r.classes.size} classes touched ` +
   `(load ${(t1 - t0).toFixed(0)}ms, closure ${(t2 - t1).toFixed(0)}ms)`);
 
@@ -136,7 +129,7 @@ if (cut.length) {
 if (out) {
   writeFileSync(out, JSON.stringify({
     apk, appClasses, frameworkClasses: p.size - appClasses,
-    roots: [...roots.why], reflective: refl.length,
+    roots: [...roots.why], reflective: roots.named.length,
     reachableMethods: r.methods.size, instantiated: r.instantiated.size, classesTouched: r.classes.size,
     absentClasses: rank(r.absentClasses, isFramework),
     nativeMethods: rank(r.nativeMethods, () => true),

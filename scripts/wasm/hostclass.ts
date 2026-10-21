@@ -1,7 +1,6 @@
 // Classes the host implements (B2): a Java object of a registered spec's class and its host object are one object to both sides. The cases of hostcases.ts run on a
-// World with the registered classes added to it and must answer as java/hc/expected.txt records; then the Wasm tier's own rules: what dies together, and what the tables keep.
+// World with the registered classes added to it and must answer as they state; then the Wasm tier's own rules: what dies together, and what the tables keep.
 // Run: pnpm wasm hostclass
-import { join } from "node:path";
 import { rt } from "../../src/jvm/runtime.ts";
 import { resumeAs, scall } from "../../src/jvm/natives/jentry.ts";
 import { onNestedStrand, wasmEntry } from "../../src/wasm/host/entry.ts";
@@ -12,23 +11,22 @@ import { Block, emitBlock, St } from "../../src/wasm/compiler/hostcalls.ts";
 import { compileModule } from "../../src/wasm/link/module.ts";
 import { program, world } from "./lib.ts";
 import { loadDexes } from "../dexes.ts";
-import { attachHostClasses, mountPlatform, natives, startProcess } from "./harness.ts";
-import { JAVA, ROOT, platformJars } from "./paths.ts";
+import { mountPlatform, startProcess } from "./harness.ts";
+import { ROOT, platformJars } from "./paths.ts";
 import { deref, handle, ownedHandle, release } from "../../src/android/handles.ts";
-import { enter, hostCases, hostDex, JCounter } from "./hostcases.ts";
-import { checker, recorded, unlike } from "./tools.ts";
+import { enter, HC_ANSWERS, hostCases, hostDex, JCounter } from "./hostcases.ts";
+import { checker } from "./tools.ts";
 
 const dex = hostDex(), jars = platformJars("core-oj", "core-libart", "okhttp", "core-icu4j");
 await mountPlatform(ROOT);
-const expected = recorded(join(JAVA, "hc/expected.txt"));
 
-const w = attachHostClasses(world([dex, ...jars], { natives })), gaps: string[] = [];
+const w = world([dex, ...jars]), gaps: string[] = [];
 w.onGap = (gap) => gaps.push(gap);
 enter.call = async (cls, name, desc) => w.entryAsync(cls, name, desc)();
-const wasm = await hostCases(enter.call);
+const failures = await hostCases(enter.call);
 
 const suite = checker("hostclass"), { fail } = suite;
-for (const failure of unlike(expected, wasm)) fail(failure);
+for (const failure of failures) fail(failure);
 if (gaps.length) fail(`gaps hit: ${[...new Set(gaps)].join("; ")}`);
 
 {
@@ -44,8 +42,7 @@ if (gaps.length) fail(`gaps hit: ${[...new Set(gaps)].join("; ")}`);
 }
 
 {
-  const worker = world([dex, ...jars], { natives, compileOnly: true }), instances = worker.stats.instances;
-  attachHostClasses(worker);
+  const worker = world([dex, ...jars], { compileOnly: true }), instances = worker.stats.instances;
   worker.link("java/net/HttpURLConnection");
   worker.classModules.repairLinked();
   const method = worker.prog.get("Hc")!.byKey.get("http()Ljava/lang/String;")!;
@@ -55,7 +52,7 @@ if (gaps.length) fail(`gaps hit: ${[...new Set(gaps)].join("; ")}`);
 
 // Worlds over one platform Program, as the process frames of a tab are: the host classes are each World's own, the platform's classes are not changed, and every World behaves alike
 {
-  const platform = program(jars), mk = () => attachHostClasses(world(new Program(loadDexes(dex), platform), { natives }));
+  const platform = program(jars), mk = () => world(new Program(loadDexes(dex), platform));
   const worlds = [mk(), mk()], name = (x: typeof w) => x.hostClassNames().join();
   if (!name(worlds[0]) || name(worlds[0]) !== name(worlds[1])) fail("Worlds over one platform Program have different host classes");
   for (const cls of ["java/lang/StringBuilder", "java/util/concurrent/ThreadPoolExecutor", "java/util/concurrent/ScheduledThreadPoolExecutor"]) {
@@ -66,7 +63,7 @@ if (gaps.length) fail(`gaps hit: ${[...new Set(gaps)].join("; ")}`);
     useWorld(x);
     await startProcess(x);
     for (const m of ["runnable", "list", "http"]) {
-      const got = String(await x.entryAsync("Hc", m, "()Ljava/lang/String;")()), want = expected.find((l) => l.startsWith("Hc." + m + ":"))!.slice(m.length + 8);
+      const got = String(await x.entryAsync("Hc", m, "()Ljava/lang/String;")()), want = HC_ANSWERS[m];
       if (got !== want) fail(`a World over a shared platform Program answers Hc.${m} ${got}, not ${want}`);
     }
   }
@@ -156,7 +153,7 @@ if (!await handleAfter("plain")) fail("a handle stored in a field of a class tha
 }
 
 {
-  const fresh = attachHostClasses(world([dex, ...jars], { natives }));
+  const fresh = world([dex, ...jars]);
   fresh.sched.turnDue = () => true;
   const entry = wasmEntry(fresh);
   for (const name of ["Hc$Boot", "javax/net/ssl/HttpsURLConnection"]) {
@@ -168,4 +165,4 @@ if (!await handleAfter("plain")) fail("a handle stored in a field of a class tha
   }
 }
 
-suite.done(`${expected.length} cases answer as recorded on a World with host classes`);
+suite.done("the cases answer as stated on a World with host classes");

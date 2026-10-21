@@ -1,24 +1,13 @@
-// What the harnesses run Java with: the registered natives, over the World lib.world makes, and the platform's jars and data mounted as a page mounts them.
+// What the harnesses run Java in besides the World lib.world makes: the platform's jars and data mounted as a page mounts them, and the state a process starts in.
 // It is bundled for pages too (g1run.ts, boot-probe-page.ts), where node:fs is the files the page preloaded.
-import "../../src/natives.ts";
-import { jarDexes, mountPlatformJar } from "../../src/android/framework.ts";
-import { Program } from "../../src/wasm/compiler/program.ts";
-import { externs } from "../../src/wasm/link/intrinsics.ts";
+import { mountPlatformJar } from "../../src/android/framework.ts";
 import { mountPlatformData } from "../../src/shell/apex.ts";
 import { PLATFORM_DATA } from "../../src/jvm/bootclasspath.ts";
-import { PLATFORM_JARS } from "../../src/jvm/provenance.ts";
 import { isResident, mapExternal, pagesIn, unmapExternal } from "../../src/jvm/natives/jmemory.ts";
-import { attachHostClasses, natives, nativeSource } from "../../src/wasm/host/nativesource.ts";
-import { rt } from "../../src/jvm/runtime.ts";
 import type { World } from "../../src/wasm/link/world.ts";
-import { world } from "./lib.ts";
 import { vfs } from "../../src/shell/vfs.ts";
 import { localPlatformData, platformJarBytes } from "../aosp.ts";
-export { attachHostClasses, natives, nativeSource };
 
-/** the ICU metadata natives, which read Java and the ICU data and so wait: answered once for harnesses that use synchronous entries */
-const ICU_VERSIONS = ["libcore/icu/ICU", "com/android/icu/util/Icu4cMetadata"].flatMap((cls) =>
-  ["getUnicodeVersion", "getCldrVersion", "getIcuVersion", "getTzdbVersion"].map((name) => [cls, `${name}()Ljava/lang/String;`] as const));
 const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer), f64 = new Float64Array(1), u64 = new BigUint64Array(f64.buffer);
 /** float/double results and arguments cross harnesses as raw bits */
 export const fb = (x: number) => (f32[0] = x, BigInt(u32[0] | 0)), db = (x: number) => (f64[0] = x, BigInt.asIntN(64, u64[0]));
@@ -45,14 +34,6 @@ export async function mountPlatform(from: string | Uint8Array[]): Promise<(Uint8
     await pagesIn(at, file.size);
     if (!isResident(at, file.size)) throw new Error(`${path} is not resident`);
     unmapExternal(at);
-  }
-  const icu = new Program(["boot/core-oj.jar", "boot/core-libart.jar", "boot/core-icu4j.jar"].flatMap((jar) => jarDexes(jars[PLATFORM_JARS.indexOf(jar)]!, jar)));
-  icu.addExterns(externs);
-  // the natives are called as host code, on a World of the ICU jars: none of a harness's Worlds sees them run
-  world(icu, { natives, aot: undefined });
-  for (const [cls, key] of ICU_VERSIONS) {
-    const f = rt.jniFn(cls, key);
-    if (f) { const value = await f.call(null); rt.registerJni(cls, key, () => value, true); }
   }
   return jars;
 }

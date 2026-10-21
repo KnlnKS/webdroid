@@ -3,18 +3,16 @@ import { readdirSync, readFileSync } from "node:fs";
 import type { AotStore } from "../../src/wasm/link/aot.ts";
 import { FetchStore } from "../../src/wasm/host/aotstore.ts";
 import { compileBytes } from "../../src/wasm/link/module.ts";
-import { fakeAot, world } from "./lib.ts";
+import { fakeAot, platform, world } from "./lib.ts";
 import { loadDexes } from "../dexes.ts";
 import { Program } from "../../src/wasm/compiler/program.ts";
-import { externs } from "../../src/wasm/link/intrinsics.ts";
 import { prepareApp } from "../../src/wasm/host/appcode.ts";
 import { spawnCompileWorker } from "../../src/wasm/host/compiler.ts";
 import { Persist, appKey, memoryBackend } from "../../src/wasm/host/persist.ts";
 import type { World } from "../../src/wasm/link/world.ts";
-import { attachHostClasses, mountPlatform, natives, startProcess } from "./harness.ts";
+import { mountPlatform, startProcess } from "./harness.ts";
 import { HEAP_LIMIT } from "../../src/jvm/abi.ts";
 import { heapUsed } from "../../src/wasm/host/stats.ts";
-import { PLATFORM_JARS } from "../../src/jvm/provenance.ts";
 import { WORKER_SCRIPTS } from "../../src/worker-scripts.ts";
 
 /** the build is opened the way the app opens it: the index and the modules a start loads are compiled before the World runs. A page fetches them (and a module it lacks is a miss);
@@ -31,23 +29,25 @@ if (appDir) {
   appReadMs = performance.now() - t0;
 }
 const startupList = async (read: (f: string) => Uint8Array | Promise<Uint8Array>): Promise<string[]> => JSON.parse(new TextDecoder().decode(appFiles?.get("startup.json") ?? await read("startup.json"))) as string[];
+let aot: AotStore | undefined, ahead: number | undefined;
 if (aotDir) {
   const t0 = performance.now();
   if (inPage) {
     const store = new FetchStore(`/aot/${aotDir.split("/").pop()}/`);
     await store.fetchBytes("index.json");
     await store.prefetch(await startupList((f) => store.fetchBytes(f)));
-    (globalThis as { G1_STORE?: AotStore }).G1_STORE = store;
+    aot = store;
   } else {
-    const ahead = new Map<string, WebAssembly.Module>(), file = (f: string) => new Uint8Array(readFileSync(`${aotDir}/${f}`));
-    await Promise.all((await startupList(file)).map(async (f) => ahead.set(f, await compileBytes(file(f)))));
-    (globalThis as { G1_STORE?: AotStore }).G1_STORE = { get: (f) => ahead.get(f) ?? file(f) };
+    const modules = new Map<string, WebAssembly.Module>(), file = (f: string) => new Uint8Array(readFileSync(`${aotDir}/${f}`));
+    await Promise.all((await startupList(file)).map(async (f) => modules.set(f, await compileBytes(file(f)))));
+    aot = { get: (f) => modules.get(f) ?? file(f) };
   }
-  (globalThis as { G1_AHEAD?: number }).G1_AHEAD = performance.now() - t0;
+  ahead = performance.now() - t0;
 }
 
 export interface G1Config { cls: string; workload: string; reps: number; dex: string; root: string }
-export interface G1Result { bootMs?: number; ahead?: number; appReadMs?: number; worldSetupMs?: number; workerStartMs?: number; prestartedWorker?: boolean; workload: string; result: string; times: number[]; compileMs?: number; units?: number; boot?: Record<string, unknown>; setup?: Record<string, unknown>; first?: Record<string, unknown>; stats?: Record<string, unknown>; error?: string }
+export interface G1Result { bootMs?: number; ahead?: number; appReadMs?: number; worldSetupMs?: number; workerStartMs?: number; prestartedWorker?: boolean; workload: string; result: string; times: number[]; compileMs?: number; units?: number; boot?: Stats; setup?: Stats; first?: Stats; stats?: Stats; error?: string }
+export type Stats = World["stats"];
 
 /** the heap in use, after a collection once it looks over the limit: reps of one workload in one World leave garbage the engine has not yet collected */
 let heapBase = 0;
@@ -60,9 +60,8 @@ const collectedHeap = () => {
 };
 
 function workloadProgram(cfg: G1Config) {
-  const platform = new Program(PLATFORM_JARS.flatMap((j) => loadDexes(`${cfg.root}/vendor/aosp/${j}`))); platform.addExterns(externs);
   const dexes = loadDexes(cfg.dex);
-  return { dexes, prog: new Program(dexes, platform) };
+  return { dexes, prog: new Program(dexes, platform(`${cfg.root}/vendor/aosp`)) };
 }
 
 /** a launch of the installed app as the page makes one (host/boot.ts, host/appcode.ts): the app's Program over the platform's, the saved build found and its modules compiled
@@ -75,9 +74,8 @@ async function installed(cfg: G1Config): Promise<{ world: World; startWorker?: (
   if (!code.hit) throw new Error("the installed app's build was not found");
   heapBase = heapUsed();
   const worker = inPage && !(globalThis as { G1_INLINE?: boolean }).G1_INLINE;
-  const w = world(prog, { natives, heapUsed: collectedHeap, app: code.saved, ...(worker && { compiler: code.compiler }) });
+  const w = world(prog, { aot, heapUsed: collectedHeap, app: code.saved, ...(worker && { compiler: code.compiler }) });
   if (!w.appAttached) throw new Error("the installed app's build does not attach");
-  attachHostClasses(w);
   let startWorker: (() => Promise<void>) | undefined;
   if (worker) {
     code.start(w);
@@ -92,7 +90,7 @@ async function installed(cfg: G1Config): Promise<{ world: World; startWorker?: (
 }
 
 export async function g1run(cfg: G1Config): Promise<G1Result> {
-  const out: G1Result = { workload: cfg.workload, result: "", times: [], ahead: (globalThis as { G1_AHEAD?: number }).G1_AHEAD, appReadMs };
+  const out: G1Result = { workload: cfg.workload, result: "", times: [], ahead, appReadMs };
   await mountPlatform(cfg.root);
   console.warn = () => {};
   let w: World, startWorker: (() => Promise<void>) | undefined;
@@ -102,13 +100,13 @@ export async function g1run(cfg: G1Config): Promise<G1Result> {
     const { prog } = workloadProgram(cfg);
     // the World takes the heap at its construction as the base of its limit, so the program model it is built over is on that side
     heapBase = heapUsed();
-    w = world(prog, { natives, heapUsed: collectedHeap });
+    w = world(prog, { aot, heapUsed: collectedHeap });
   }
   out.worldSetupMs = performance.now() - setupAt;
   const gaps: string[] = [], b0 = performance.now();
   w.onGap = gap => gaps.push(gap);
   try { await startProcess(w); } catch (e) { const t = w.throwable(e); const cause = t ? w.helpers.fieldReader("java/lang/Throwable", "cause", "Ljava/lang/Throwable;")(t) as object | null : null; throw new Error("boot: " + (t ? w.classNameOf(t) : String(e)) + (cause ? " <- " + w.classNameOf(cause) : "") + " " + w.lastMessage); }
-  out.bootMs = performance.now() - b0; out.ahead = (globalThis as { G1_AHEAD?: number }).G1_AHEAD; out.boot = structuredClone(w.stats);
+  out.bootMs = performance.now() - b0; out.boot = structuredClone(w.stats);
   out.prestartedWorker = !!startWorker;
   if (startWorker) { const t = performance.now(); await startWorker(); out.workerStartMs = performance.now() - t; }
   out.setup = structuredClone(w.stats);
