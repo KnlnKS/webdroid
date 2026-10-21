@@ -133,13 +133,13 @@ export function nativeSelect(count: number, readSet: number, writeSet: number, e
 // ── epoll: an open file of watched descriptors, each entry woken through the descriptor's watch
 const EPOLLET = 0x80000000, EPOLLONESHOT = 0x40000000;
 interface EpollEntry { events: number; data: bigint; pending: number; disabled: boolean; cancel: () => void }
-export interface Epoll { entries: Map<number, EpollEntry>; wake: Set<() => void> }
+export interface Epoll { entries: Map<number, EpollEntry>; wake: WaitQueue }
 const EPOLL: FileOps<Epoll> = {
   ...ANON,
   poll: () => 0,
-  close(f) { const ep = f.state; for (const e of ep.entries.values()) e.cancel(); for (const wake of ep.wake) wake(); },
+  close(f) { const ep = f.state; for (const e of ep.entries.values()) e.cancel(); ep.wake.wakeAll(); },
 };
-export const epollCreate = (cloexec: boolean): number => installFile(newFile(EPOLL, "epoll", O_RDWR, { entries: new Map(), wake: new Set() }), cloexec);
+export const epollCreate = (cloexec: boolean): number => installFile(newFile(EPOLL, "epoll", O_RDWR, { entries: new Map(), wake: new WaitQueue() }), cloexec);
 const epollOf = (fd: number): Epoll | undefined => { const f = openFd(fd); return isKind(f, EPOLL) ? f.state : undefined; };
 function epollWatch(ep: Epoll, fd: number, events: number, data: bigint): EpollEntry {
   const entry: EpollEntry = { events, data, pending: pollEvents(fd, events), disabled: false, cancel: () => {} };
@@ -149,7 +149,7 @@ function epollWatch(ep: Epoll, fd: number, events: number, data: bigint): EpollE
     remove = watchFd(fd, () => {
       remove();
       entry.pending |= pollEvents(fd, entry.events);
-      for (const wake of ep.wake) wake();
+      ep.wake.wakeAll();
       // at once: a change before a deferred re-arm would find no watcher, and its edge would be lost
       watch();
     });
@@ -162,7 +162,6 @@ async function epollWait(epfd: number, events: bigint, max: number, timeout: num
   const ep = epollOf(epfd), deadline = guestNow() + timeout;
   if (!ep) return -E.BADF;
   if (max <= 0) return -E.INVAL;
-  const subscribe = (wake: () => void) => { ep.wake.add(wake); return () => { ep.wake.delete(wake); }; };
   for (let woken = true; ;) {
     let n = 0;
     for (const [fd, e] of ep.entries) {
@@ -176,7 +175,7 @@ async function epollWait(epfd: number, events: bigint, max: number, timeout: num
       if (e.events & EPOLLONESHOT) e.disabled = true;
     }
     if (n || timeout === 0 || !woken) return n;
-    woken = await waitUntil(subscribe, msLeft(timeout, deadline));
+    woken = await waitUntil((wake) => ep.wake.add(wake), msLeft(timeout, deadline));
     if (epollOf(epfd) !== ep) return -E.BADF;
   }
 }
@@ -197,7 +196,7 @@ export const POLL_SYSCALLS: Record<string, HostFn> = {
     if (op < 1 || op > 3) return -E.INVAL;
     old?.cancel();
     if (op === 2) ep.entries.delete(fd); else ep.entries.set(fd, epollWatch(ep, fd, mem.ld32(ev), mem.ld64(ev + 8)));
-    for (const wake of ep.wake) wake();
+    ep.wake.wakeAll();
     return 0;
   },
   // their sigmasks are left as they are

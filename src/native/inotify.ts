@@ -1,7 +1,7 @@
 // inotify(7): the VFS's changes, as events queued whole for each inotify descriptor watching them.
 import { E, O_CLOEXEC } from "./abi.ts";
 import { ANON, installFile, isKind, newFile, openFd, type FileOps } from "./fd.ts";
-import { newPipe, queued, readable, waitIn, wakeAll, type Pipe } from "./pipe.ts";
+import { newPipe, queued, readable, type Pipe } from "./pipe.ts";
 import { vfs } from "../shell/vfs.ts";
 import { utf8 } from "../jvm/abi.ts";
 import type { HostFn } from "./host.ts";
@@ -19,7 +19,7 @@ function inotifyEvent(state: Inotify, wd: number, mask: number, name = ""): void
   view.setInt32(0, wd, true); view.setUint32(4, mask, true); view.setUint32(12, len, true);
   event.set(bytes, 16);
   state.pipe.q.push(event);
-  wakeAll(state.pipe);
+  state.pipe.wake.wakeAll();
 }
 function notifyInotify(path: string, mask: number, parentMask = mask): void {
   const parent = path.slice(0, path.lastIndexOf("/")) || "/", name = path.slice(path.lastIndexOf("/") + 1);
@@ -62,9 +62,9 @@ const INOTIFY: FileOps<Inotify> = {
     return done;
   },
   poll: (f, events) => readable(f.state.pipe, events),
-  watch: (f, wake) => waitIn(f.state.pipe.wake, wake),
+  watch: (f, wake) => f.state.pipe.wake.add(wake),
   available: (f) => queued(f.state.pipe),
-  close(f) { inotifies.delete(f.state); f.state.pipe.closed = true; wakeAll(f.state.pipe); },
+  close(f) { inotifies.delete(f.state); f.state.pipe.closed = true; f.state.pipe.wake.wakeAll(); },
 };
 /** the inotify instance `fd` names, or EBADF, or EINVAL for another open file */
 function inotifyOf(fd: number): Inotify | number {

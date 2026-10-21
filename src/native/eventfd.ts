@@ -2,12 +2,12 @@
 // and a read takes whole.
 import { E, O_CLOEXEC, O_NONBLOCK, O_RDWR, POLLIN, POLLOUT } from "./abi.ts";
 import { ANON, installFile, isKind, newFile, openFd, type FileOps } from "./fd.ts";
-import { waitIn, wakeAll } from "./pipe.ts";
+import { WaitQueue } from "./poll.ts";
 import { armClockTimer, disarmClockTimer, setClockTimer, timerState, type ClockTimer } from "./timers.ts";
 import type { HostFn } from "./host.ts";
 
 /** a counter, and whoever waits for it to rise */
-export interface Counter { count: number; wake: (() => void)[] }
+export interface Counter { count: number; wake: WaitQueue }
 const u32At = (b: Uint8Array, i: number): number => (b[i] | b[i + 1] << 8 | b[i + 2] << 16 | b[i + 3] << 24) >>> 0;
 
 const EVENTFD: FileOps<Counter> = {
@@ -25,11 +25,11 @@ const EVENTFD: FileOps<Counter> = {
   write(f, bytes) {
     if (bytes.length < 8) return -E.INVAL;
     f.state.count += u32At(bytes, 0) + u32At(bytes, 4) * 0x1_0000_0000;
-    wakeAll(f.state);
+    f.state.wake.wakeAll();
     return 8;
   },
   poll: (f, events) => (events & POLLIN && f.state.count > 0 ? POLLIN : 0) | (events & POLLOUT),
-  watch: (f, wake) => waitIn(f.state.wake, wake),
+  watch: (f, wake) => f.state.wake.add(wake),
 };
 /** a timerfd's counter, which its timer's expirations add to */
 type TimerCounter = Counter & { timer: ClockTimer };
@@ -47,18 +47,18 @@ function timerfdOf(fd: number): TimerCounter | number {
 }
 
 export const EVENTFD_SYSCALLS: Record<string, HostFn> = {
-  eventfd: (_c, a) => { const init = a.u(), flags = a.i(); return installFile(newFile(EVENTFD, "eventfd", flagsOf(flags), { count: init, wake: [] }), !!(flags & O_CLOEXEC)); },
+  eventfd: (_c, a) => { const init = a.u(), flags = a.i(); return installFile(newFile(EVENTFD, "eventfd", flagsOf(flags), { count: init, wake: new WaitQueue() }), !!(flags & O_CLOEXEC)); },
   timerfd_create: (_c, a) => {
     const clock = a.i(), flags = a.i();
     if (![0, 1, 7].includes(clock) || flags & ~(O_NONBLOCK | O_CLOEXEC)) return -E.INVAL;
-    return installFile(newFile(TIMERFD, "timerfd", flagsOf(flags), { count: 0, wake: [], timer: { clock, next: 0, interval: 0 } }), !!(flags & O_CLOEXEC));
+    return installFile(newFile(TIMERFD, "timerfd", flagsOf(flags), { count: 0, wake: new WaitQueue(), timer: { clock, next: 0, interval: 0 } }), !!(flags & O_CLOEXEC));
   },
   timerfd_settime: (_c, a) => {
     const counter = timerfdOf(a.i()), flags = a.i(), value = a.p(), old = a.p();
     if (typeof counter === "number") return counter;
     if (flags & ~1 || !setClockTimer(counter.timer, flags, value, old)) return -E.INVAL;
     counter.count = 0;
-    armClockTimer(counter.timer, (count) => { counter.count += count; wakeAll(counter); });
+    armClockTimer(counter.timer, (count) => { counter.count += count; counter.wake.wakeAll(); });
     return 0;
   },
   timerfd_gettime: (_c, a) => {
