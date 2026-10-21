@@ -44,6 +44,8 @@ export class NativeLooper {
   /** run `fn` on this looper's thread at its next poll, between messages */
   post(fn: () => unknown): void { this.callbacks.push(fn); this.signal(); }
   private signal(): void { const w = this.waiter; this.waiter = null; w?.(); }
+  /** debug: the wait state looperDump reports */
+  dump() { return { polling: this.polling, woken: this.woken, waiting: this.waiter !== null, callbacks: this.callbacks.length }; }
   /** MessageQueue.nativePollOnce: synchronous on the main looper when nothing is due to wait for.
    *  Another looper yields between messages, so a busy background thread does not hold off the
    *  main thread (a device runs them on other cores); the main looper's own yield goes ahead of
@@ -174,7 +176,6 @@ export const looperDump = (): unknown => callOn(mainThread, () => rt.drive(funct
     const cls = (o: JObj | null) => o ? classNameOf(o) ?? "?" : "null";
     messages.push(`when=${f(M, m, "when")} what=${f(M, m, "what")} flags=${f(M, m, "flags")} target=${cls(target)} callback=${cls(callback)}`);
   }
-  const native = mainLooper as unknown as Record<string, unknown>;
   return { now: uptimeMillis(), blocked: f("android/os/MessageQueue", queue, "mBlocked"), barrierToken: f("android/os/MessageQueue", queue, "mNextBarrierToken"),
-    polling: native.polling, woken: native.woken, waiting: native.waiter !== null, callbacks: (native.callbacks as unknown[]).length, depth: mainDbg.depth, messages };
+    ...mainLooper?.dump(), depth: mainDbg.depth, messages };
 }()));
