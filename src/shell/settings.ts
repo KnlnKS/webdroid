@@ -3,7 +3,7 @@
 // with an app's install. One store serves every process through the broker; system_server watches
 // it and notifies every process's content observers of a write.
 import { DEVICE_SETTINGS } from "../android/device-settings.ts";
-import { storedText, storeText } from "./device-storage.ts";
+import { persisted, storedText, storeText } from "./device-storage.ts";
 
 export type SettingsTable = "system" | "secure" | "global" | "config";
 export type SettingsAccess = {
@@ -14,24 +14,23 @@ export type SettingsAccess = {
 };
 type Written = Partial<Record<SettingsTable, Record<string, string | null>>>;
 const KEY = "wd:settings";
+/** the writes by table, a deletion as null; what no table or value reads as is dropped, leaving the device's values */
+const saved = persisted<Written>(KEY, (value) => {
+  if (!value || typeof value !== "object") return null;
+  const written: Written = {};
+  for (const [table, values] of Object.entries(value)) {
+    if (!(table in DEVICE_SETTINGS) || !values || typeof values !== "object") continue;
+    const kept: Record<string, string | null> = Object.create(null);
+    for (const [name, v] of Object.entries(values)) if (v === null || typeof v === "string") kept[name] = v;
+    written[table as SettingsTable] = kept;
+  }
+  return written;
+});
 
 export class SettingsStore {
   private written: Written | null = null;
   private listeners = new Set<(table: SettingsTable, name: string) => void>();
-  private load(): Written {
-    if (this.written) return this.written;
-    this.written = {};
-    try {
-      const saved: unknown = JSON.parse(storedText(KEY) ?? "{}");
-      if (saved && typeof saved === "object") for (const [table, values] of Object.entries(saved)) {
-        if (!(table in DEVICE_SETTINGS) || !values || typeof values !== "object") continue;
-        const kept: Record<string, string | null> = Object.create(null);
-        for (const [name, value] of Object.entries(values)) if (value === null || typeof value === "string") kept[name] = value;
-        this.written[table as SettingsTable] = kept;
-      }
-    } catch { /* unreadable writes leave the device's values */ }
-    return this.written;
-  }
+  private load(): Written { return this.written ??= saved.get("") ?? {}; }
   get(table: SettingsTable, name: string): string | null {
     const written = this.load()[table];
     if (written && name in written) return written[name];
@@ -48,7 +47,7 @@ export class SettingsStore {
     if (this.get(table, name) === value) return false;
     const written = this.load();
     (written[table] ??= Object.create(null) as Record<string, string | null>)[name] = value;
-    storeText(KEY, JSON.stringify(written)); // where it cannot be stored, the write lives in memory
+    saved.set("", written); // where it cannot be stored, the write lives in memory
     this.changed(table, name);
     return true;
   }
