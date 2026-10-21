@@ -37,6 +37,7 @@ test("buffer geometry sizes EGL buffers while the window keeps its default size"
   try {
     expect(await call("ANativeWindow_setBuffersGeometry", "libandroid.so", [window, 900, 450, 1])).toBe(0);
     expect(await call("ANativeWindow_getWidth", "libandroid.so", [window])).toBe(2160);
+    await call("eglInitialize", "libEGL.so", [1, 0, 0]);
     const egl = await call("eglCreateWindowSurface", "libEGL.so", [1, 1, window, 0]);
     await call("eglQuerySurface", "libEGL.so", [1, egl, 0x3057, out]);
     await call("eglQuerySurface", "libEGL.so", [1, egl, 0x3056, out + 4]);
