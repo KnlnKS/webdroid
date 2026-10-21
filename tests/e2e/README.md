@@ -29,7 +29,7 @@ pnpm e2e --test fitnotes  # or -t; an exact name, else a prefix (mihon selects b
 pnpm e2e --test fitnotes,mihon-app  # a comma list; --test repeats
 pnpm e2e --live  # the quick gate plus the live flows
 pnpm e2e --list  # flow names (--help for usage)
-pnpm e2e --full --shots [dir]  # --full only; default ./webdroid-shots
+pnpm e2e --full --shots [--shots-dir dir]  # --full only; default ./webdroid-shots
 ```
 
 Named flows run even if live; unknown flags error. `--shots` keeps each distinct frame presented
