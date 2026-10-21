@@ -4,7 +4,6 @@ import type { Program } from "../compiler/program.ts";
 import { OP } from "../compiler/code.ts";
 import { f32bits, f64bits } from "../compiler/consts.ts";
 import { T } from "../compiler/wasmbin.ts";
-import { methodOf } from "../compiler/ids.ts";
 import { typeFailure } from "../compiler/linkage.ts";
 import { handleThunk, methodTypeSignatureTypes, mhInvoke } from "./mhandles.ts";
 import { caught, chain, each } from "./maybe.ts";
@@ -16,7 +15,7 @@ import type { World } from "./world.ts";
 import { PerWorld } from "./perworld.ts";
 import type { Strand } from "./sched.ts";
 import { resolveHandleReference, resolveSignatureTypes } from "./resolution.ts";
-import { typeName } from "../compiler/program.ts";
+import { typeName, methodOf } from "../compiler/program.ts";
 import { InvokeMode, emitHandleValue, emitTypeValue, emitInvokeImport, resolveHandleMember } from "../compiler/handles.ts";
 
 const MH = "java/lang/invoke/MethodHandle", MT = "java/lang/invoke/MethodType", CS = "java/lang/invoke/CallSite", LOOKUP = "java/lang/invoke/MethodHandles$Lookup";

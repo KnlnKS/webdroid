@@ -1,7 +1,7 @@
 // An app compiled ahead on top of the platform build (aot.ts `extend`): the code of the methods it is likely to run, in code modules a<k>.wasm of the classes' groups, and the
 // numbering that code relies on. A World at the platform build's state that has the app's dexes takes it as it takes the platform's own modules, and compiles the rest on demand.
 // The build may be made by shards, Worlds that each number the same seed (seedApp) and then compile their share of the modules with their numbering frozen.
-import { mid } from "../compiler/ids.ts";
+import { mid } from "../compiler/program.ts";
 import { codeBytes, codeModule, dataBytes, dataModule, invalidFunction, packModule, synthModules } from "./aotbuild.ts";
 import { synthOf } from "./synths.ts";
 import { APP_VERSION, type AotRuntime, type AppIndex, type CHeader, type Demand } from "./aot.ts";

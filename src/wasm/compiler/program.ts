@@ -82,6 +82,10 @@ export class PlainClass implements JClass {
   declaresStaticOf(): boolean { return true; }
 }
 export const mkey = (name: string, desc: string) => name + desc;
+/** a method's identity across the program, the key of intrinsics and native bindings: "cls.name+descriptor" */
+export const mid = (m: MethodInfo) => m.cls + "." + m.key;
+/** the method `id` names (class names have no dots) */
+export const methodOf = (prog: Program, id: string): MethodInfo | undefined => { const dot = id.indexOf("."); return prog.get(id.slice(0, dot))?.method(id.slice(dot + 1)); };
 
 /** the name Java code sees for a class key (and for the key of an array class) */
 export const javaName = (key: string): string => (key.includes("@") ? key.replace(/@\d+(?=;|$)/g, "") : key);

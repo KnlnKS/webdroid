@@ -3,7 +3,7 @@
 // are not such methods (a slow path, a recursion); else for the whole frame, which a handler must restore.
 import { isInvoke } from "../../jvm/opcodes.ts";
 import { MAX_UNCOUNTED } from "./exc.ts";
-import { mid } from "./ids.ts";
+import { mid } from "./program.ts";
 import type { MethodInfo } from "./program.ts";
 import type { MC } from "./method.ts";
 

@@ -2,8 +2,7 @@
 import { parseMethodDesc } from "../../jvm/abi.ts";
 import { HT, ModuleBuilder, T, ref, refNull, type VT, type FunctionType } from "./wasmbin.ts";
 import { Code, OP, type InlineFrame } from "./code.ts";
-import { ACC, type FieldInfo, type Program, kindOf, type Kind, type MethodInfo } from "./program.ts";
-import { mid } from "./ids.ts";
+import { ACC, kindOf, mid, type FieldInfo, type Program, type Kind, type MethodInfo } from "./program.ts";
 import { H, ELEM, MATH_ARITY, elemKindOf, type ElemKind } from "./consts.ts";
 import { declareSymbolicSites, type SymbolicSite } from "./sites.ts";
 import { prepareMethod, type PreparedMethod } from "../../jvm/prepared.ts";

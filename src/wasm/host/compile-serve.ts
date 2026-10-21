@@ -1,7 +1,7 @@
 // The compile worker's side of the protocol (compile-worker.ts runs it in a page, the persist suite over a MessageChannel): a World over a copy of the app's dex files that compiles
 // for the World on the page, which sends it jobs. It does two kinds of work with the code the page's compiler would make: the second-tier units of hot methods (link/unit.ts), and, once
 // per app and platform build, the app build the page persists (link/apps.ts), which compiles the methods the app is likely to run.
-import { Program, type MethodInfo, type LoaderId, type LoaderSnapshot } from "../compiler/program.ts";
+import { Program, methodOf, type MethodInfo, type LoaderId, type LoaderSnapshot } from "../compiler/program.ts";
 import { defineProxy, type ProxyDefinition } from "../link/proxy.ts";
 import { World } from "../link/world.ts";
 import { buildPart, type AppPart } from "../link/apps.ts";
@@ -14,7 +14,6 @@ import { parseBaselineProfile } from "../../jvm/baselineprof.ts";
 import { rootClasses } from "../../jvm/roots.ts";
 import { walkRefs } from "../../jvm/opcodes.ts";
 import { dexesIn, type DexFile } from "../../jvm/dex.ts";
-import { methodOf } from "../compiler/ids.ts";
 import type { AppRoots } from "../../jvm/tier.ts";
 
 /** what the worker's realm provides: the platform's dex files, the registered natives and the intrinsics, which must be the page's for the code to be the page's */

@@ -17,7 +17,7 @@ import type { SymbolicSite } from "../compiler/sites.ts";
 import type { DexFile } from "../../jvm/dex.ts";
 import type { Loader, MethodInfo } from "../compiler/program.ts";
 import type { FnTrace } from "../compiler/j2w.ts";
-import { methodOf } from "../compiler/ids.ts";
+import { methodOf } from "../compiler/program.ts";
 import { hostTakeover } from "./hostclass.ts";
 import { LebReader } from "./module.ts";
 

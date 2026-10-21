@@ -2,7 +2,7 @@
 // its header (aot.ts UnitHeader); one compiled here, in its Compiler.
 import type { FunctionType } from "../compiler/wasmbin.ts";
 import { Compiler } from "../compiler/j2w.ts";
-import { methodOf } from "../compiler/ids.ts";
+import { methodOf } from "../compiler/program.ts";
 import type { HostContext } from "./hostapi.ts";
 import { VERSION, type UnitHeader } from "./aot.ts";
 import type { Built, Clock, World } from "./world.ts";
