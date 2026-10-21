@@ -15,13 +15,13 @@ import { onMain } from "./mainloop.ts";
 import { cookieTransport, watchCookies } from "./cookies.ts";
 import { WebBridge, type WebInterfaces } from "../shell/webbridge.ts";
 import { rendererPattern, rendererUrl } from "../shell/webrenderer.ts";
-import { parsePageMessage, request, respond, type Answers, type AppMessage, type DocumentCookie, type LoadMessage, type PageMessage, type WebRequest,
+import { parsePageMessage, request, respond, type Answers, type AppMessage, type LoadMessage, type PageMessage, type WebRequest,
   type WebResponse } from "../shell/webpage/protocol.ts";
 import { webRenderer } from "./webstorage.ts";
 import { webPrintAdapter } from "./printing.ts";
 import { canvasOf, type JavaCanvas } from "./canvas.ts";
 import { cssColor } from "./graphics.ts";
-import { drawFunctor, type Rect } from "./webfunctor.ts";
+import { createFunctor, drawFunctor, type Rect } from "./webfunctor.ts";
 import { factory } from "./webfactory.ts";
 import type { WebSettingsAdapter } from "./websettings.ts";
 import { clientHints } from "./webuseragent.ts";
@@ -29,7 +29,7 @@ import { webAsset, webFonts } from "./webfonts.ts";
 import { javaInterface, weakIfaces } from "./webjavabridge.ts";
 import { WebHistory, documentFor, srcEntry, srcFor, srcdoc, webOrigin, type Entry } from "./webnavigation.ts";
 import { interceptRequest, mkError, mkRequest } from "./webrequests.ts";
-import { RendererFrame, Subframes, dropFrame, unbridge, viewFrame, type FrameHold, type FrameLoad } from "./webframes.ts";
+import { PageHost, RendererFrame, Subframes, dropFrame, viewFrame, type FrameLoad } from "./webframes.ts";
 
 import type { FrameAnnouncement } from "../shell/web-surface.ts";
 import { domKeyOf } from "./keycodes.ts";
@@ -71,9 +71,9 @@ export class WebViewChromium extends JObj {
   bridgeThread = Object.assign(new JThread(), { jname: "JavaBridge" });
   private requestThread = Object.assign(new JThread(), { jname: "Chrome_IOThread" });
   private readonly ref = new WeakRef(this);
-  readonly hold: FrameHold = { el: null, remote: null, frames: new Map(), functor: 0, ends: [] };
   /** the view's size, which its draw functor covers */
   readonly size = weakPlacement(this.ref);
+  readonly host = new PageHost(createFunctor(this.size));
   background: string | null = null;
   /** the page's content size, in CSS pixels */
   remoteWidth = 0;
@@ -106,10 +106,13 @@ export class WebViewChromium extends JObj {
     };
   }
 
+  /** the WebView whose provider this is, its View access and its settings, which WebViewFactoryProvider gives it */
+  attach(view: JObj, access: JObj, settings: WebSettingsAdapter) { this.view = view; this.access = access; this.settings = settings; }
+
   /** a renderer document announced itself: the main frame's, or a subframe's within it */
   private rendererReady(event: FrameAnnouncement) {
-    const surface = this.hold.el, remote = this.hold.remote, token = event.data.sub, win = event.frame;
-    if (!surface || !remote) return;
+    const { surface, bridge } = this.host, token = event.data.sub, win = event.frame;
+    if (!surface || !bridge) return;
     const load = token === null ? event.main ? this.loading : null : this.subframes.get(token);
     if (!load || event.origin !== load.origin || token !== null && event.main) return;
     if (token === null) this.loading = null;
@@ -117,10 +120,9 @@ export class WebViewChromium extends JObj {
     channel.port1.onmessage = WebViewChromium.frameReceiver(ref, frame);
     void this.loadMessage(frame, load).then((task) => {
       if (this.gen !== g) { channel.port1.close(); return; }
-      this.hold.frames.get(win)?.port.close();
-      this.hold.frames.set(win, frame);
-      frame.cookies.sent = JSON.stringify(task.cookies);
-      surface.open(win, load.origin, remote.id, task, channel.port2);
+      this.host.adopt(frame);
+      frame.loadedCookies(task.cookies);
+      surface.open(win, load.origin, bridge.id, task, channel.port2);
     });
   }
   /** what a frame loads: its document, the interfaces (and which methods return a value), as
@@ -136,60 +138,50 @@ export class WebViewChromium extends JObj {
       document: documentFor(entry, prefetched) };
   }
   /** what a frame's page tells the app. Chromium reports a subframe's console and cookies as the
-   *  main frame's; a subframe's navigations stay in it, through the renderer of their origin. */
+   *  main frame's; a subframe's navigations stay in it (Subframes.message). */
   private frameMessage(frame: RendererFrame, m: PageMessage, answer: MessagePort | undefined) {
-    const sub = frame.sub;
     switch (m.kind) {
       case "webasset":
         if (answer) void webAsset(m.path).catch(() => ({ status: 500 })).then((asset) => respond(m, answer, asset as Answers["webasset"]));
-        break;
+        return;
       case "webcookies":
         if (answer) void cookieTransport.calls().cookieNetwork(m.url, this.url ?? "", m.values, this.settings.thirdPartyCookies)
           .then((header) => respond(m, answer, header), () => respond(m, answer, ""));
-        break;
+        return;
       case "subframe":
         if (answer) void this.subframes.src(srcEntry(m.url, m.init)).then((src) => respond(m, answer, src), () => respond(m, answer, null));
-        break;
-      case "console": this.consoleMessage(m); break;
+        return;
+      case "console": this.consoleMessage(m); return;
       case "cookie":
-        void this.frameCookies(frame, this.urlOf(frame), m.value).then((list) => {
-          if (this.hold.frames.get(frame.win) !== frame) return;
-          frame.cookies.ack = m.seq;
-          this.pushCookies(frame, list, true);
-        }, () => {});
-        break;
-      case "invoke": this.hold.remote?.post(m); break;
-      case "thread": sharedRenderer = m.shared; break;
-      case "script-ready": if (!sub) this.page.script.resolve(frame.port); break;
-      case "loaded":
-        if (sub) { if (m.url !== null) frame.url = m.url; break; }
-        this.remoteWidth = m.width; this.remoteHeight = m.height;
-        this.finishLoad(m.url, m.title, m.error);
-        break;
-      case "size": if (!sub) this.contentSized(m.width, m.height); break;
-      case "fragment": if (!sub) this.fragmentNavigated(m.url); break;
-      case "navigate":
-        if (!sub) this.navigate(m.url, m.replace);
-        else if (!/^javascript:/i.test(m.url)) this.subframes.navigate(frame, srcEntry(m.url));
-        break;
-      case "submit": {
-        const entry = srcEntry(m.url, m.init);
-        if (sub) this.subframes.navigate(frame, entry); else this.go(entry);
-        break;
-      }
-      case "redirect": {
-        // the document is another origin's: it renders in that origin's partition
-        const entry = srcEntry(m.url);
-        if (sub) { this.subframes.navigate(frame, entry, m.html); break; }
-        this.history.replace(entry);
-        this.go(entry, false, m.html);
-        break;
-      }
+        void this.frameCookies(frame, this.urlOf(frame), m.value).then((list) => { if (this.host.holds(frame)) frame.pushCookies(list, m.seq); }, () => {});
+        return;
+      case "invoke": this.host.bridge?.post(m); return;
+      case "thread": sharedRenderer = m.shared; return;
       case "download": {
         // Chromium's download delegate hands the app any frame's download, with the user agent its request sent
         const listener = this.dl, agent = this.settings.userAgent;
         if (listener) void onMain(() => vcall(listener, "onDownloadStart", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;J)V",
           m.url, agent, m.disposition, m.mime, BigInt(m.length)));
+        return;
+      }
+    }
+    if (frame.sub) { this.subframes.message(frame, m); return; }
+    switch (m.kind) {
+      case "script-ready": this.page.script.resolve(frame.port); break;
+      case "loaded":
+        this.remoteWidth = m.width; this.remoteHeight = m.height;
+        this.finishLoad(m.url, m.title, m.error);
+        break;
+      case "size": this.contentSized(m.width, m.height); break;
+      case "fragment": this.fragmentNavigated(m.url); break;
+      case "navigate": this.navigate(m.url, m.replace); break;
+      case "submit": this.go(srcEntry(m.url, m.init)); break;
+      case "redirect": {
+        // the document is another origin's: it renders in that origin's partition
+        const entry = srcEntry(m.url);
+        this.history.replace(entry);
+        this.go(entry, false, m.html);
+        break;
       }
     }
   }
@@ -202,16 +194,9 @@ export class WebViewChromium extends JObj {
   }
   /** each frame's document.cookie, once the jar changed */
   private refreshCookies() {
-    for (const frame of this.hold.frames.values()) void this.frameCookies(frame, this.urlOf(frame)).then((list) => {
-      if (this.hold.frames.get(frame.win) === frame) this.pushCookies(frame, list);
+    for (const frame of this.host.frames.values()) void this.frameCookies(frame, this.urlOf(frame)).then((list) => {
+      if (this.host.holds(frame)) frame.pushCookies(list);
     }, () => {});
-  }
-  /** a frame's document.cookie, when it changed or answers the page's write */
-  private pushCookies(frame: RendererFrame, list: DocumentCookie[], answer = false) {
-    const sent = JSON.stringify(list);
-    if (sent === frame.cookies.sent && !answer) return;
-    frame.cookies.sent = sent;
-    frame.port.postMessage({ kind: "cookies", list, ack: frame.cookies.ack } satisfies AppMessage);
   }
   /** `message` to the page once its script listens, which rejects once the page closes */
   private ask<M extends AppMessage & { kind: keyof Answers }>(message: M, ms: number) {
@@ -220,18 +205,17 @@ export class WebViewChromium extends JObj {
   }
   async bitmapSnapshot(): Promise<ImageBitmap> {
     const failed = (message: string) => rt.mkThrowable("java/lang/UnsupportedOperationException", message);
-    if (!this.hold.remote) throw failed("WebView content is unavailable for bitmap capture");
+    if (!this.host.bridge) throw failed("WebView content is unavailable for bitmap capture");
     const answer = await this.ask({ kind: "snapshot" }, 10_000).catch((why) => { throw failed("WebView snapshot " + why); });
     if ("error" in answer) throw failed(answer.error);
     return createImageBitmap(await (await fetch(answer.data)).blob());
   }
   stop() {
     this.gen++;
-    const main = [...this.hold.frames.values()].find(frame => !frame.sub);
-    if (main) main.port.postMessage({ kind: "stop" } satisfies AppMessage);
+    this.host.main()?.port.postMessage({ kind: "stop" } satisfies AppMessage);
   }
   private closeBridge() {
-    unbridge(this.hold);
+    this.host.close();
     this.loading = null; this.subframes.clear();
     this.page.closed.abort(); this.page = newPage();
   }
@@ -239,7 +223,7 @@ export class WebViewChromium extends JObj {
 
   /** the display composed: show the content at the rect its functor drew, or hide it */
   place(rect: Rect | null): void {
-    const el = this.hold.el;
+    const el = this.host.surface;
     if (!el) return;
     const was = this.rect;
     this.rect = rect;
@@ -265,13 +249,12 @@ export class WebViewChromium extends JObj {
       // inherited defaults; comparing JS prototype functions cannot identify Wasm overrides.
       const intercept = classNameOf(this.client) !== "android/webkit/WebViewClient";
       this.intercepting = intercept;
-      const remote = this.hold.remote = new WebBridge(weakIfaces(callbacks.ifaces),
-        intercept ? callbacks.intercept : undefined, webRenderer(webOrigin(e)));
-      this.hold.ends.push(el.ready(remote.id, callbacks.ready), watchCookies(callbacks.cookies));
-      void remote.ready.then((origin) => {
+      const bridge = new WebBridge(weakIfaces(callbacks.ifaces), intercept ? callbacks.intercept : undefined, webRenderer(webOrigin(e)));
+      this.host.open(bridge, el.ready(bridge.id, callbacks.ready), watchCookies(callbacks.cookies));
+      void bridge.ready.then((origin) => {
         if (this.gen !== g) return;
         this.loading = { entry: e, origin, prefetched };
-        el.load(rendererUrl(origin, remote.id));
+        el.load(rendererUrl(origin, bridge.id));
       }).catch(() => { if (this.gen === g) this.finishLoad(null, "", "WebView bridge unavailable"); });
     }
     if (prefetched === undefined) void onMain(() => this.gen === g && vcall(this.client, "onPageStarted", "(Landroid/webkit/WebView;Ljava/lang/String;Landroid/graphics/Bitmap;)V", this.view, url, null));
@@ -289,19 +272,26 @@ export class WebViewChromium extends JObj {
   private finishLoad(redirected: string | null, title: string, err: string | null) {
     const g = this.gen, cur = this.history.current;
     if (redirected) { this.url = redirected; if (cur) cur.url = redirected; }
-    const url = this.url ?? "";
-    this.loaded = !err; this.progress = 100; this.title = title || url;
-    const view = this.view, error = mkError(-2, err ?? "");
-    // Chromium's order; each step re-checks the generation because a callback commonly starts
-    // the next load (an app's error page), which ends this one's sequence. The content size
-    // changed, which AwLayoutSizer answers with a layout.
-    const steps: [unknown, string, string, ...unknown[]][] = [[view, "requestLayout", "()V"], ...(err
-      ? [[this.client, "onReceivedError", "(Landroid/webkit/WebView;Landroid/webkit/WebResourceRequest;Landroid/webkit/WebResourceError;)V", view, mkRequest(url), error],
-         [this.client, "onPageFinished", WV_S, view, url]] as [unknown, string, string, ...unknown[]][]
-      : [[this.chrome, "onProgressChanged", "(Landroid/webkit/WebView;I)V", view, 100], [this.chrome, "onReceivedTitle", WV_S, view, this.title],
-         [this.client, "onPageCommitVisible", WV_S, view, url], [this.client, "onPageFinished", WV_S, view, url]] as [unknown, string, string, ...unknown[]][])];
-    const self = this;
-    void onMain(() => rt.drive(function* () { for (const [o, n, d, ...a] of steps) { if (self.gen !== g) return; if (o) yield vcall(o, n, d, ...a); } }()));
+    const url = this.url ?? "", { view, client, chrome } = this;
+    this.loaded = !err; this.progress = 100;
+    const shown = this.title = title || url, self = this;
+    // Chromium's order. A callback commonly starts the next load (an app's error page), which ends this
+    // one's sequence, so each call waits on its load still being the view's.
+    function* call(target: JObj | null, name: string, desc: string, ...args: unknown[]): Gen {
+      if (target && self.gen === g) yield vcall(target, name, desc, ...args);
+    }
+    void onMain(() => rt.drive(function* () {
+      // the content size changed, which AwLayoutSizer answers with a layout
+      yield* call(view, "requestLayout", "()V");
+      if (err) yield* call(client, "onReceivedError", "(Landroid/webkit/WebView;Landroid/webkit/WebResourceRequest;Landroid/webkit/WebResourceError;)V",
+        view, mkRequest(url), mkError(-2, err));
+      else {
+        yield* call(chrome, "onProgressChanged", "(Landroid/webkit/WebView;I)V", view, 100);
+        yield* call(chrome, "onReceivedTitle", WV_S, view, shown);
+        yield* call(client, "onPageCommitVisible", WV_S, view, url);
+      }
+      yield* call(client, "onPageFinished", WV_S, view, url);
+    }()));
   }
   /** an uncaught page error, as Chromium reports it; unhandled messages go to logcat's chromium tag */
   consoleMessage({ message: msg, source: src, line: n }: { message: string; source: string; line: number }) {
@@ -336,7 +326,7 @@ export class WebViewChromium extends JObj {
   }
   /** Chromium JSON-encodes the completion value; undefined, functions and throws all read as null */
   evalJs(js: string): string | Promise<string> {
-    if (!this.hold.remote) return "null";
+    if (!this.host.bridge) return "null";
     return this.ask({ kind: "eval", script: js }, 30_000).catch(() => "null");
   }
   findAll(query: string) {
@@ -367,7 +357,7 @@ export class WebViewChromium extends JObj {
       const superDispatch = () => vcall(self.access, "super_dispatchKeyEvent", "(Landroid/view/KeyEvent;)Z", event);
       if (yield vcall(self.client, "shouldOverrideKeyEvent", "(Landroid/webkit/WebView;Landroid/view/KeyEvent;)Z", self.view, event)) return superDispatch();
       const code: number = yield vcall(event, "getKeyCode", "()I"), key = domKeyOf.get(code);
-      if (!key || !self.hold.el || !self.loaded) return superDispatch();
+      if (!key || !self.host.surface || !self.loaded) return superDispatch();
       const type = (yield vcall(event, "getAction", "()I")) === 0 ? "keydown" : "keyup";
       const init = { key: key[0], code: code === 62 ? "Space" : key[0], keyCode: key[1], which: key[1], bubbles: true, cancelable: true,
         repeat: (yield vcall(event, "getRepeatCount", "()I")) > 0 };
@@ -394,7 +384,7 @@ export class WebViewChromium extends JObj {
     const cw = Math.round(this.remoteWidth * device.density), ch = Math.round(this.remoteHeight * device.density);
     this.measured = { width: wMode !== MS_EXACTLY, height: hMode === MS_EXACTLY ? -1 : hMode === MS_AT_MOST ? hSize : Infinity };
     // until it shows, the page lays out at the width it is measured at, its height its content's
-    const el = this.hold.el;
+    const el = this.host.surface;
     if (el && !this.rect && wMode) { el.style({width:wSize / device.density + "px", height:hMode === MS_EXACTLY ? hSize / device.density + "px" : "0"}); }
     let w = wMode === 0 ? cw : wSize, h = hMode === MS_EXACTLY || hMode === MS_AT_MOST && ch > hSize ? hSize : ch;
     if (w < cw) w |= MEASURED_STATE_TOO_SMALL;
@@ -407,7 +397,7 @@ type P = WebViewChromium;
 const loadUrl = function (this: P, u: string) { this.loadUrl(u); };
 /** AwContents.pageUp/pageDown: the page scrolls by its viewport, or to its end */
 const page = (sign: number) => function (this: P, end: number): number {
-  if (!this.hold.remote) return 0;
+  if (!this.host.bridge) return 0;
   void this.evalJs(`scrollBy(0, ${sign} * (${end ? "document.documentElement.scrollHeight" : "innerHeight"}))`);
   return 1;
 };
@@ -508,14 +498,14 @@ rt.register({
         const image = yield* awaited(this.bitmapSnapshot());
         try { nc.ctx.drawImage(image, 0, 0, this.size.w, this.size.h); } finally { image.close(); }
       } else if (iof(canvas, "android/graphics/RecordingCanvas")) {
-        yield vcall(factory().delegate, "drawWebViewFunctor", "(Landroid/graphics/Canvas;I)V", canvas, this.hold.functor);
-      } else drawFunctor(nc.ctx, this.hold.functor, [nc.cl, nc.ct, nc.cr, nc.cb]);
+        yield vcall(factory().delegate, "drawWebViewFunctor", "(Landroid/graphics/Canvas;I)V", canvas, this.host.functor);
+      } else drawFunctor(nc.ctx, this.host.functor, [nc.cl, nc.ct, nc.cr, nc.cb]);
     }),
     "onSizeChanged(IIII)V": function (this: P, w: number, h: number) { this.size.w = w; this.size.h = h; },
     "onMeasure(II)V": function (this: P, ws: number, hs: number) { return this.measure(ws, hs); },
     "setBackgroundColor(I)V": function (this: P, color: number) {
       this.background = cssColor(color);
-      if (this.hold.el) this.hold.el.style({background:this.background});
+      this.host.surface?.style({background:this.background});
     },
     "dispatchKeyEvent(Landroid/view/KeyEvent;)Z": function (this: P, event: JObj) { return this.keyEvent(event); },
     "setFrame(IIII)Z": viaAccess("super_setFrame", "(IIII)Z"),

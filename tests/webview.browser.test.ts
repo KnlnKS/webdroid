@@ -827,10 +827,8 @@ test("dropped WebView frame owners release their surface without destroy", async
       (globalThis as any).removed = 0;
       frames.useWebSurfaces(()=>({style(){},load(){},ready(){return ()=>{};},open(){},replace(){},remove(){(globalThis as any).removed++;}}));
       const {WebViewChromium} = await import(location.origin+"/webkit.js") as typeof import("../src/android/webkit.ts");
-      const {createFunctor} = await import(location.origin+"/webfunctor.js") as typeof import("../src/android/webfunctor.ts");
       const view = new WebViewChromium();
       view.url = "https://dropped.example";
-      view.hold.functor = createFunctor(view.size);
       frames.viewFrame(view);
       (globalThis as any).owner = view;
     });

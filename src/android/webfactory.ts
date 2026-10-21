@@ -6,7 +6,6 @@ import { boxBool } from "../jvm/natives/jbox.ts";
 import { hostService } from "./binder.ts";
 import { onMain } from "./mainloop.ts";
 import { cookieManager } from "./cookies.ts";
-import { createFunctor } from "./webfunctor.ts";
 import { newSettings } from "./websettings.ts";
 import { defaultUserAgent, providerVersion } from "./webuseragent.ts";
 import type { WebViewChromium } from "./webkit.ts";
@@ -60,8 +59,7 @@ rt.register({
     },
     "createWebView(Landroid/webkit/WebView;Landroid/webkit/WebView$PrivateAccess;)Landroid/webkit/WebViewProvider;": driven(function* (view: JObj, access: JObj): Gen {
       const p = inst<WebViewChromium>("webdroid/WebViewProvider");
-      p.view = view; p.access = access; p.settings = yield* newSettings();
-      p.hold.functor = createFunctor(p.size);
+      p.attach(view, access, yield* newSettings());
       return p;
     }),
     "getStatics()Landroid/webkit/WebViewFactoryProvider$Statics;": function (this: Factory) { return this.statics; },
