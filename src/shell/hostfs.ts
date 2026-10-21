@@ -71,6 +71,8 @@ export async function restoreRoots(): Promise<void> {
   }
 }
 
+/** an entry already removed is what its removal wanted */
+const gone = (error: unknown): void => { if (!(error instanceof DOMException && error.name === "NotFoundError")) throw error; };
 /** the OPFS directory of the Wasm tier's compiled app code (src/wasm/host/persist.ts): not user data, so a reset keeps it */
 export const COMPILED_CODE_DIR = "wd-wasm-apps";
 
@@ -80,5 +82,5 @@ export async function clearRoots(): Promise<void> {
   // the OPFS stand-in is ours to empty; a directory the user picked is theirs, and stays
   const opfs = await navigator.storage?.getDirectory().catch(() => null);
   if (!opfs) return;
-  for await (const [name] of opfs.entries()) if (name !== COMPILED_CODE_DIR) await opfs.removeEntry(name, { recursive: true }).catch(() => {});
+  for await (const [name] of opfs.entries()) if (name !== COMPILED_CODE_DIR) await opfs.removeEntry(name, { recursive: true }).catch(gone);
 }

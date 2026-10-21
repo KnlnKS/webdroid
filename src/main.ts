@@ -209,7 +209,9 @@ const wd = {
   reset: async () => {
     const broker = processBroker(), names = await packagesWithData(broker);
     await Promise.all(names.map((pkg) => removePackageData(broker, pkg)));
-    await Promise.all([clearRoots(), clearPickedDocuments(), broker.files.clearAll()]);
+    // the disk Worker lets its files go before the origin's storage is emptied under it
+    await broker.files.clearAll();
+    await Promise.all([clearRoots(), clearPickedDocuments()]);
     return names;
   },
   // an app's data cleared as Settings' "Clear storage" does, and its uninstall as the launcher's
