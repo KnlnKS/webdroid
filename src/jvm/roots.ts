@@ -23,7 +23,8 @@ export function qualify(pkg: string, name: string): string {
   return slashName(n);
 }
 
-export function rootsOf(manifestBytes: Uint8Array, p: Program, services: Record<string, string> = {}): Roots {
+/** the classes the platform loads by name, from the manifest and the services files, with what named each */
+export function rootClasses(manifestBytes: Uint8Array, services: Record<string, string> = {}): Pick<Roots, "classes" | "why"> {
   const manifest = parseAXML(manifestBytes);
   const pkg = attrStr(manifest, "package") ?? "";
   const classes: string[] = [];
@@ -66,7 +67,11 @@ export function rootsOf(manifestBytes: Uint8Array, p: Program, services: Record<
       if (s) note(slashName(s), file);
     }
   }
+  return { classes, why };
+}
 
+export function rootsOf(manifestBytes: Uint8Array, p: Program, services: Record<string, string> = {}): Roots {
+  const { classes, why } = rootClasses(manifestBytes, services);
   // A component's whole surface is a root: the platform calls onCreate/onBind/onReceive/
   // query/... and nothing in the apk does.
   const methods: string[] = [];

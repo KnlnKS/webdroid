@@ -10,9 +10,9 @@ import type { AppIndex, Demand } from "../link/aot.ts";
 import type { Numbering } from "../link/numbers.ts";
 import type { Intrinsic } from "../compiler/j2w.ts";
 import type { NativeBinder } from "../link/hostapi.ts";
-import { Program as Reach, callClosure, type MethodRoot } from "../../jvm/reach.ts";
 import { parseBaselineProfile } from "../../jvm/baselineprof.ts";
-import { rootsOf } from "../../jvm/roots.ts";
+import { rootClasses } from "../../jvm/roots.ts";
+import { walkRefs } from "../../jvm/opcodes.ts";
 import { dexesIn, type DexFile } from "../../jvm/dex.ts";
 import { methodOf } from "../compiler/ids.ts";
 import type { AppRoots } from "../../jvm/tier.ts";
@@ -54,6 +54,78 @@ export type CompileResponse =
 export interface Port { postMessage(message: unknown, transfer?: Transferable[]): void; onmessage: ((e: MessageEvent) => void) | null }
 
 const CLOSURE_LIMIT = 20_000;
+
+/** the methods an app build compiles, in the order the app is likely to want them: those a launch compiled on demand first, then the likely ones */
+function select(world: World, appDexes: DexFile[], roots: BuildRoots, demand: Demand): MethodInfo[] {
+  const prog = world.prog, out = new Set<MethodInfo>(), mine = new Set(appDexes), keep = (m: MethodInfo) => mine.has(m.dex);
+  const compiles = (m: MethodInfo) => !!m.codeOff || !!world.intrinsic(m);
+  for (const id of demand.methods) {
+    const m = methodOf(prog, id);
+    if (m && compiles(m)) out.add(m);
+  }
+  let called: MethodInfo[] = [];
+  for (const [name, methods] of (roots.profile && parseBaselineProfile(roots.profile)) || []) {
+    const dex = appDexes.find((d) => d.name === name), types = dex && prog.typesOf(dex);
+    if (dex && types) for (const idx of methods) if (idx < dex.methodCount) {
+      const m = prog.resolve(types.typeName(dex.method(idx).cls), dex.method(idx).name, types.methodDesc(idx));
+      if (!m) continue;
+      if (m.dex === dex && m.methodIdx === idx && compiles(m)) out.add(m);
+      called.push(m);
+    }
+  }
+  if (roots.whole) {
+    for (const cls of [roots.launch, [...prog.own()].filter((c) => c.dex && mine.has(c.dex)).map((c) => c.name)].flat())
+      for (const m of prog.get(cls)?.methods ?? []) if (compiles(m)) out.add(m);
+    return [...out];
+  }
+  const others = roots.manifest ? rootClasses(roots.manifest).classes.filter((c) => !roots.launch.includes(c)) : [];
+  let budget = roots.limit ?? CLOSURE_LIMIT;
+  for (const classes of [roots.launch, others]) {
+    for (const cls of classes) {
+      const c = prog.get(cls);
+      if (c?.dex && mine.has(c.dex)) for (const m of c.methods) { if (m.codeOff) out.add(m); called.push(m); }
+    }
+    const closure = callClosure(prog, called, budget, keep);
+    budget -= closure.length;
+    called = [];
+    for (const m of closure) out.add(m);
+  }
+  return [...out];
+}
+
+/** The methods `roots` call when they run, breadth first and at most `limit` of those `keep` takes: each call's target as its site declares it (a virtual call's
+ *  declared class, without dispatch to subclasses) and the static initializers of the classes they touch */
+function callClosure(prog: Program, roots: MethodInfo[], limit: number, keep: (m: MethodInfo) => boolean): MethodInfo[] {
+  const seen = new Set<MethodInfo>(), touched = new Set<string>(), out: MethodInfo[] = [];
+  let next: MethodInfo[] = [];
+  const add = (m: MethodInfo | undefined, root = false) => {
+    if (!m?.codeOff || !keep(m) || seen.has(m)) return;
+    seen.add(m);
+    if (!root) out.push(m);
+    next.push(m);
+  };
+  const touch = (cls: string) => { if (!touched.has(cls)) { touched.add(cls); add(prog.resolve(cls, "<clinit>", "()V")); } };
+  for (const m of roots) add(m, true);
+  while (next.length && out.length < limit) {
+    const level = next;
+    next = [];
+    for (const m of level) {
+      const dex = m.dex, types = prog.typesOf(dex);
+      touch(m.cls);
+      walkRefs(dex.code(m.codeOff), {
+        invoke(op, idx) {
+          const owner = types.typeName(dex.method(idx).cls);
+          if (op === 0x71 || op === 0x77) touch(owner);
+          add(prog.resolve(owner, dex.method(idx).name, types.methodDesc(idx)));
+        },
+        type(op, idx) { if (op === 0x22) touch(types.typeName(idx)); },
+        // sget/sput
+        field(op, idx) { if (op >= 0x60) touch(types.typeName(dex.field(idx).cls)); },
+      });
+    }
+  }
+  return out.slice(0, limit);
+}
 
 export function serveCompile(port: Port, env: CompileEnv): void {
   let w: World | undefined, units: UnitCompiler | undefined;
@@ -98,49 +170,6 @@ export function serveCompile(port: Port, env: CompileEnv): void {
     const t0 = performance.now(), methods = select(w, dexes, req.roots, req.demand), [shard, shards] = req.shard ?? [0, 1];
     const part = buildPart(w, methods, req.demand, shard, shards), ms = performance.now() - t0;
     send({ type: "built", part, methods: methods.length, ms }, part.files.map(([, bytes]) => bytes.buffer as ArrayBuffer));
-  }
-
-  /** the methods an app build compiles, in the order the app is likely to want them: those a launch compiled on demand first, then the likely ones */
-  function select(world: World, appDexes: DexFile[], roots: BuildRoots, demand: Demand): MethodInfo[] {
-    const reach = new Reach(), out = new Set<MethodInfo>();
-    for (const id of demand.methods) {
-      const m = methodOf(world.prog, id);
-      if (m && (m.codeOff || world.intrinsic(m))) out.add(m);
-    }
-    appDexes.forEach((d) => reach.add(d));
-    const take = (cls: string, dex: DexFile, methodIdx: number) => {
-      const m = world.prog.get(cls)?.methods.find((x) => x.dex === dex && x.methodIdx === methodIdx);
-      if (m && (m.codeOff || world.intrinsic(m))) out.add(m);
-    };
-    const nameOf = (dex: DexFile, idx: number) => world.prog.typesOf(dex).typeName(dex.method(idx).cls);
-    const rootOf = (dex: DexFile, idx: number): MethodRoot => ({ cls: nameOf(dex, idx), sig: world.prog.typesOf(dex).methodKey(idx) });
-    let called: MethodRoot[] = [];
-    for (const [name, methods] of (roots.profile && parseBaselineProfile(roots.profile)) || []) {
-      const dex = appDexes.find((d) => d.name === name);
-      if (dex) for (const m of methods) if (m < dex.methodCount) { take(nameOf(dex, m), dex, m); called.push(rootOf(dex, m)); }
-    }
-    if (roots.whole) {
-      const mine = new Set(appDexes);
-      for (const cls of [roots.launch, [...world.prog.own()].filter((c) => c.dex && mine.has(c.dex)).map((c) => c.name)].flat())
-        for (const m of world.prog.get(cls)?.methods ?? []) if (m.codeOff || world.intrinsic(m)) out.add(m);
-      return [...out];
-    }
-    const others = roots.manifest ? rootsOf(roots.manifest, reach).classes.filter((c) => !roots.launch.includes(c)) : [];
-    let budget = roots.limit ?? CLOSURE_LIMIT;
-    for (const classes of [roots.launch, others]) {
-      for (const cls of classes) {
-        const def = reach.def(cls), dex = reach.dexOf(cls);
-        if (def && dex) for (const m of [...def.directMethods, ...def.virtualMethods]) {
-          if (m.codeOff) take(cls, dex, m.methodIdx);
-          called.push(rootOf(dex, m.methodIdx));
-        }
-      }
-      const closure = callClosure(reach, called, budget);
-      budget -= closure.length;
-      called = [];
-      for (const { cls, dex, methodIdx } of closure) take(cls, dex, methodIdx);
-    }
-    return [...out];
   }
 
   const receive = async (req: CompileRequest) => {
