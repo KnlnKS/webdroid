@@ -350,6 +350,8 @@ async function recordTextLayouts() {
   ];
   /** weight and size of the getTextWidths cases fwtest compares (fonts.ts) */
   const WIDTH_CASES = [100, 300, 400, 500, 700, 900].flatMap((w) => [10, 12, 13.5, 14, 16, 18, 20, 24, 32, 40].map((s) => `${w} ${s}`));
+  // SystemFonts reads /system/etc/font_fallback.xml, which the shell user may not
+  await asRoot();
   const dir = tempDir(), cases = PARAGRAPHS.map(([t, ...rest]) => [t.replace(/\n/g, "\\n").replace(/\t/g, "\\t"), ...rest].join("\t"));
   writeFileSync(`${dir}/cases.txt`, cases.join("\n") + "\n");
   writeFileSync(`${dir}/widths.txt`, WIDTH_CASES.join("\n") + "\n");
