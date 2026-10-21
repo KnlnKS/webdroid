@@ -1,13 +1,13 @@
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { openApk } from "../lib.ts";
+import { apkRoots, openApk } from "../lib.ts";
+import { corpusApks } from "../apk-corpus.ts";
 import { loadDexes } from "../dexes.ts";
 import { AOSP } from "../aosp.ts";
 import { dexesOfZip } from "../../src/jvm/dex.ts";
 import { addReachedMembers, buildCatalog, sdkApiXml, type ReachedSurface } from "./catalog.ts";
 import { rt } from "../../src/jvm/runtime.ts";
 import { Program, reach } from "../../src/jvm/reach.ts";
-import { reflectiveRoots, rootsOf } from "../../src/jvm/roots.ts";
 import "../../src/natives.ts";
 
 /** `pnpm fuzz inventory`: the API level's declared members by support, and with `reached` the members the corpus apps reach */
@@ -23,15 +23,12 @@ export async function inventory(options: { sdk: string; framework?: string; json
     const bump = (target: Map<string, number>, source: Iterable<readonly [string, number]>) => {
       for (const [key, count] of source) target.set(key, (target.get(key) ?? 0) + count);
     };
-    const apks = readdirSync("apks").filter((file) => /\.x?apk$/i.test(file)).sort();
-    for (const file of apks) {
+    for (const file of corpusApks()) {
       const zip = openApk(`apks/${file}`), dexes = dexesOfZip(zip), program = new Program();
       for (const dex of dexes) program.add(dex);
       for (const dex of frameworkDexes) program.add(dex);
-      const services: Record<string, string> = {};
-      for (const name of Object.keys(zip)) if (name.startsWith("META-INF/services/")) services[name] = new TextDecoder().decode(zip[name]);
-      const roots = rootsOf(zip["AndroidManifest.xml"], program, services);
-      const result = reach(program, roots.methods, [...roots.classes, ...reflectiveRoots(program, dexes)]);
+      const roots = apkRoots(zip, program, dexes);
+      const result = reach(program, roots.methods, [...roots.classes, ...roots.named]);
       for (const cls of result.classes) reached.classes.set(cls, (reached.classes.get(cls) ?? 0) + 1);
       bump(reached.classes, result.absentClasses);
       bump(reached.methods, result.methodCalls);

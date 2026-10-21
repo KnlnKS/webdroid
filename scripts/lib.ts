@@ -2,6 +2,9 @@ import { readFileSync } from "node:fs";
 import { writeWhole } from "./generated.ts";
 import { openInstall } from "../src/shell/install.ts";
 import type { XmlNode } from "../src/android/axml.ts";
+import type { DexFile } from "../src/jvm/dex.ts";
+import type { Program } from "../src/jvm/reach.ts";
+import { reflectiveRoots, rootsOf } from "../src/jvm/roots.ts";
 
 type Zip = Record<string, Uint8Array>;
 
@@ -9,6 +12,13 @@ type Zip = Record<string, Uint8Array>;
  *  read, so there is nothing for a caller to filter down to */
 export function openApk(path: string): Zip {
   return openInstall(new Uint8Array(readFileSync(path))).zip;
+}
+
+/** what an apk starts from in `program`, which holds its `dexes`: its manifest's components and META-INF/services entries, and (`named`) the classes its
+ *  strings name */
+export function apkRoots(zip: Zip, program: Program, dexes: DexFile[]) {
+  const services = Object.fromEntries(Object.keys(zip).filter((name) => name.startsWith("META-INF/services/")).map((name) => [name, new TextDecoder().decode(zip[name])]));
+  return { ...rootsOf(zip["AndroidManifest.xml"], program, services), named: reflectiveRoots(program, dexes) };
 }
 
 export function dumpXml(n: XmlNode, maxDepth = Infinity, depth = 0, out: string[] = []): string[] {
