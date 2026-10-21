@@ -4,7 +4,7 @@
 // handle to a NativeCanvas in mNativeCanvasWrapper, and TS reaches it through canvasOf.
 
 import { isRecording, nestedRecording, recordOrRun, replay, replayFor, transformOf, type Ctx2D, type DisplayList, Recorder } from "./recording.ts";
-import { tryBitmapShape } from "./bitmap-raster.ts";
+import { aliasedStroke } from "./bitmap-raster.ts";
 import { rt, type JObj, peerField, setDeclared } from "../jvm/runtime.ts";
 import { after, newObj, scall } from "../jvm/natives/jentry.ts";
 import { handle, deref, release, ownedHandle, FINALIZER } from "./handles.ts";
@@ -127,9 +127,10 @@ export class NativeCanvas {
   }
   private maskLayer: { shape: NativeCanvas; target: OffscreenCanvasRenderingContext2D; shaded: OffscreenCanvasRenderingContext2D | null; paint: NativePaint; cpu: boolean } | null = null;
   /** a draw blended through its coverage, as SkDraw blends a mask: `coverage` draws the shape in the
-   *  white paint it is given (`aliased`: sampled at pixel centres), the paint's mask filter makes that
-   *  M, and the source S blends by the mode's `op` where M covers, D·(1−M) + blend(S, D)·M. A
-   *  recording keeps the coverage and blends where it is replayed. */
+   *  white paint it is given (`aliased`: thresholded at half, approximating the pixel centres a fill
+   *  without anti-aliasing covers), the paint's mask filter makes that M, and the source S blends by
+   *  the mode's `op` where M covers, D·(1−M) + blend(S, D)·M. A recording keeps the coverage and
+   *  blends where it is replayed. */
   drawMask(p: NativePaint, op: GlobalCompositeOperation | null, coverage: (nc: NativeCanvas, white: NativePaint) => void, aliased = false) {
     const ctx = this.ctx;
     if (!isRecording(ctx)) return this.blendMask(ctx, p, op, coverage, aliased, !!this.bmp);
@@ -186,11 +187,10 @@ export class NativeCanvas {
    *  is the draw's when the caller has made it */
   drawShape(p: NativePaint, fill: (ctx: Ctx2D) => void, stroke: (ctx: Ctx2D) => void, geom?: () => NativePath, plan = this.planDraw(p)) {
     if (p.pathEffect && !p.dash && geom) return this.drawEffected(p, geom());
-    if (plan.raster && tryBitmapShape(this, p, plan.raster, fill, stroke)) return;
     if (plan.mode === "DST") return;
     // through the shape's coverage: a clip to the shape would confine an unbounded mode, but the
     // context's clips are aliased
-    if (plan.viaMask) return maskShape(this, p, plan.op, fill, stroke);
+    if (plan.viaMask || plan.raster && aliasedStroke(this, p)) return maskShape(this, p, plan.op, fill, stroke);
     const ctx = this.ctx, undo = beginPaint(ctx, p, plan.op, p.shader !== null, plan.blur);
     try {
       if (p.style !== 1) {

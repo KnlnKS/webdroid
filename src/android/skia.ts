@@ -7,7 +7,6 @@ import type { CanvasKit, Font, Paint, Surface, Typeface, FillType } from "canvas
 import { after } from "../jvm/natives/jentry.ts";
 import { servedFont, platformFontBytes } from "./fonts.ts";
 import { sfntTables, ownBuffer, T_COLR, T_HEAD } from "./sfnt.ts";
-import { MAX_SAMPLED_PIXELS } from "./hairline.ts";
 
 type Ctx = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 let kit: CanvasKit | null = null;
@@ -123,6 +122,9 @@ export function loadSkia(): Promise<void> {
   });
 }
 
+/** the most device pixels a draw into a bitmap reads back to blend in script: CanvasKit text, or an
+ *  aliased coverage mask (bitmap-raster.ts) */
+export const MAX_SAMPLED_PIXELS = 250_000;
 /** SkCanvas::drawGlyphs of one face's laid-out glyphs (minikin's ids, and positions from the run's
  *  origin) through FreeType's rasterizer into a bitmap's context; false where CanvasKit cannot */
 export function drawSkiaText(ctx: Ctx, emoji: boolean, glyphs: Uint16Array, positions: Float32Array, x: number, y: number, size: number, color: number,
