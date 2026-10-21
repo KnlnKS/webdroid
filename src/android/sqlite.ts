@@ -5,6 +5,10 @@
 // Each connection is its own sqlite3 handle on its file's one Emscripten file, so a write on one is
 // visible to the next statement on another, and what lives on a connection (the TEMP schema,
 // PRAGMAs) lasts as long as it does. The file's bytes reach the VFS in debounced snapshots.
+//
+// The engine comes first: persistence, then connections and statements. The process boundary
+// follows, where a process Worker sends each native to the broker, which runs it in that
+// process's session of opaque tokens. The natives of each family close the module.
 
 import initSqlJs from "sql.js";
 import { rt, driven, awaited } from "../jvm/runtime.ts";
@@ -95,6 +99,23 @@ const check = (c: Connection, rc: number) => { if (rc) throw dbError(c); };
 // ── persistence: the file is still the one at its path unless deleted, or replaced while no connection had it open
 const isCurrent = (f: SharedDatabase | undefined): f is SharedDatabase => !!f && sqliteStore.files.get(f.path) === f && vfs.exists(f.path)
   && (f.connections.size > 0 || vfs.mtime(f.path) === f.mtime);
+/** the file at `path`, its bytes copied from the VFS unless the current one still holds them; null
+ *  when it does not exist and the flags or a missing directory forbid creating it */
+async function sharedFile(path: string, readOnly: boolean, create: boolean): Promise<SharedDatabase | null> {
+  let file = sqliteStore.files.get(path);
+  if (isCurrent(file)) return file;
+  const data = vfs.read(path) ?? (vfs.source(path) ? await vfs.readFile(path) : null);
+  if (!data && (readOnly || !create || !vfs.isDir(path.slice(0, path.lastIndexOf("/")) || "/"))) return null;
+  // another open may have loaded it while this one read
+  if (isCurrent(file = sqliteStore.files.get(path))) return file;
+  if (file) retire(file);
+  const name = `/${crypto.randomUUID()}.db`, bytes = data ?? new Uint8Array(0);
+  C.FS.writeFile(name, bytes);
+  // opening creates the file, which callers chmod or stat before the first snapshot
+  if (!vfs.exists(path)) vfs.write(path, bytes);
+  sqliteStore.files.set(path, file = { path, name, connections: new Set(), saving: null, mtime: vfs.mtime(path) });
+  return file;
+}
 function scheduleSave(file: SharedDatabase) {
   if (file.saving) clearTimeout(file.saving);
   file.saving = setTimeout(() => void save(file), 400);
@@ -134,6 +155,12 @@ function retire(file: SharedDatabase) {
   if (file.saving) clearTimeout(file.saving);
   C.FS.unlink(file.name);
 }
+/** Release file ownership only after close_v2's final statement has destroyed its zombie. */
+function retiredConnection(c: Connection) {
+  if (!c.file) return;
+  c.file.connections.delete(c);
+  if (sqliteStore.files.get(c.file.path) !== c.file) retire(c.file);
+}
 
 // ── collations: register_android_functions' UNICODE and register_localized_collators' LOCALIZED (ICU, primary strength)
 const collators = new Map<string, number>();
@@ -149,23 +176,12 @@ function collate(c: Connection, name: string, locale: string, options: Intl.Coll
   check(c, withUTF8(name, (text) => C._sqlite3_create_collation_v2(c.ptr, text, UTF8, 0, compare, 0)));
 }
 
+// ── connections: each its own sqlite3 handle on its file
 /** SQLiteConnection.nativeOpen's flags: CREATE_IF_NECESSARY opens read-write whatever OPEN_READONLY says */
 async function openConnection(path: string, readOnly: boolean, create: boolean, raise: Raise): Promise<Connection> {
   await loadSql();
-  let file: SharedDatabase | undefined;
-  if (path !== ":memory:" && !isCurrent(file = sqliteStore.files.get(path))) {
-    const data = vfs.read(path) ?? (vfs.source(path) ? await vfs.readFile(path) : null);
-    const cantOpen = !data && (readOnly || !create || !vfs.isDir(path.slice(0, path.lastIndexOf("/")) || "/"));
-    if (cantOpen) throw raise(SQLITE_CANTOPEN, "unable to open database file", "Could not open database");
-    if (!isCurrent(file = sqliteStore.files.get(path))) {
-      if (file) retire(file);
-      const name = `/${crypto.randomUUID()}.db`, bytes = data ?? new Uint8Array(0);
-      C.FS.writeFile(name, bytes);
-      // opening creates the file, which callers chmod or stat before the first snapshot
-      if (!vfs.exists(path)) vfs.write(path, bytes);
-      sqliteStore.files.set(path, file = { path, name, connections: new Set(), saving: null, mtime: vfs.mtime(path) });
-    }
-  }
+  const file = path === ":memory:" ? undefined : await sharedFile(path, readOnly, create);
+  if (file === null) throw raise(SQLITE_CANTOPEN, "unable to open database file", "Could not open database");
   const ptr = withUTF8(file?.name ?? path, (name) => { const rc = C._sqlite3_open(name, out); return rc ? -rc : int32At(out); });
   if (ptr < 0) throw raise(-ptr, "unable to open database file", "Could not open database");
   C._RegisterExtensionFunctions(ptr);
@@ -174,12 +190,6 @@ async function openConnection(path: string, readOnly: boolean, create: boolean, 
   if (readOnly && file) withUTF8("PRAGMA query_only=1", (sql) => C._sqlite3_exec(ptr, sql, 0, 0, 0));
   collate(c, "UNICODE", "und", {});
   return c;
-}
-/** Release file ownership only after close_v2's final statement has destroyed its zombie. */
-function retiredConnection(c: Connection) {
-  if (!c.file) return;
-  c.file.connections.delete(c);
-  if (sqliteStore.files.get(c.file.path) !== c.file) retire(c.file);
 }
 /** sqlite3_close_v2 leaves an unusable zombie while statements still need finalization. */
 function closeConnection(h: bigint) {
@@ -302,6 +312,7 @@ function fillWindow(c: Connection, s: number, w: NativeWindow, startPos: number,
   return BigInt(startPos) << 32n | BigInt(total);
 }
 
+// ── the process boundary: a Worker's natives run in the broker (sqliteTransport), each process in a session
 type SQLiteFamily = "platform" | "driver" | "connection" | "statement";
 type SQLiteValue = number | bigint | string | null | Int8Array | void;
 type WindowData = Pick<NativeWindow, "rows" | "cols" | "used" | "types" | "values">;
@@ -429,6 +440,7 @@ export function createSQLiteSession() {
   };
 }
 
+// ── android.database.sqlite's natives (SQLiteConnection, SQLiteGlobal)
 const OPEN_READONLY = 1, CREATE_IF_NECESSARY = 0x10000000;
 registerSQLite("platform", "android/database/sqlite/SQLiteConnection", ["connection", "statement", "window"], {
   "nativeOpen(Ljava/lang/String;ILjava/lang/String;ZZII)J": "open", "nativeClose(J)V": "close",
