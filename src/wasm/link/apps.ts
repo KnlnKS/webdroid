@@ -94,7 +94,7 @@ function planApp(w: World, methods: MethodInfo[], demand: Demand, shards: number
   const dNames = [...new Set([...demand.classes, ...seeded])].filter((name) => {
     const jc = w.prog.get(name);
     // The platform also owns data for uncompiled classes reserved in its tail; an array class the app's code names is the app's
-    return (jc?.dex || name[0] === "[") && aot.reservedBase(name) === undefined;
+    return (jc?.dex || name[0] === "[") && !aot.platformData(name);
   });
   // each group goes to the shard with the least work so far, the first starting with the data modules
   const load = Array.from({ length: shards }, (_, i) => (i ? 0 : dNames.length * D_COST_PER_CLASS)), shardOf: number[] = [];

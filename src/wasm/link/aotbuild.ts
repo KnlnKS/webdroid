@@ -5,8 +5,52 @@ import { mid } from "../compiler/ids.ts";
 import { uleb } from "../compiler/wasmbin.ts";
 import type { JClass, MethodInfo } from "../compiler/program.ts";
 import { compileModule } from "./module.ts";
-import { VERSION, type DHeader, type SHeader, type UnitHeader } from "./aot.ts";
+import { AotRuntime, dexSig, VERSION, type AotBuild, type AotIndex, type DHeader, type SHeader, type UnitHeader } from "./aot.ts";
+import { hostTakeover } from "./hostclass.ts";
+import type { Marks } from "./numbers.ts";
 import type { Touched, World } from "./world.ts";
+
+const rle = (a: number[]): number[] => { const o: number[] = []; for (const v of a) { if (o.length && o[o.length - 2] === v) o[o.length - 1]++; else o.push(v, 1); } return o; };
+
+/** The platform build's grouping, over a World made to build it (WorldOptions.build): the classes of the build's dexes are numbered first, in definition order,
+ *  and given the D and C module of their group (-1 for no C module); the World links them as the build lays them out (AotRuntime) */
+export class AotBuilder {
+  private readonly w: World;
+  private readonly dexSigs = new Set<string>();
+  /** what the World had numbered once the platform classes were */
+  private readonly seeded: Marks;
+  readonly dGroupOf: number[] = [];
+  cGroupOf: number[] = [];
+  readonly dKeys: string[] = [];
+  readonly cKeys: string[] = [];
+  constructor(w: World, build: AotBuild) {
+    this.w = w;
+    const n = w.seedPlatform((d) => build.dexes.has(d) && !!this.dexSigs.add(dexSig(d)));
+    this.seeded = w.numbers.marks();
+    // the methods the host takes over keep their slots, as a process's World overrides them
+    const host = hostTakeover(w.prog, w.natives.source?.hostSpecs?.() ?? [], w.opts.hostWhole);
+    w.hosts.adoptTakeover(host.implemented, []);
+    for (const m of host.taken) w.hosts.take(m);
+    const dIds = new Map<string, number>(), cIds = new Map<string, number>(), id = (m: Map<string, number>, keys: string[], k: string | null) => {
+      if (k === null) return -1;
+      let i = m.get(k); if (i === undefined) { m.set(k, i = keys.length); keys.push(k); }
+      return i;
+    };
+    for (let i = 1; i <= n; i++) {
+      const name = w.nameOf(i);
+      this.dGroupOf.push(id(dIds, this.dKeys, build.dGroup(name)));
+      this.cGroupOf.push(id(cIds, this.cKeys, build.cGroup(name)));
+    }
+    w.aot = new AotRuntime(w, { dOf: Int32Array.from(this.dGroupOf), cOf: new Int32Array(0), extraGroup: this.dKeys.length });
+  }
+  /** the index of the finished build, whose runtime functions are in `synths` */
+  finish(synths: string[][]): AotIndex {
+    const w = this.w, withCode = [...w.prog.all()].filter((c) => c.dex);
+    return { version: VERSION, dexes: [...new Set(withCode.map((c) => dexSig(c.dex!)))], programClasses: withCode.length, aotDexes: [...this.dexSigs], classes: w.slots.seeded,
+      numbering: w.numbers.since(this.seeded), dOf: rle(this.dGroupOf), cOf: rle(this.cGroupOf), extraGroup: this.dKeys.length, intrinsics: [...w.opts.intrinsics.keys()], synths,
+      ...w.hosts.takeoverRecord() };
+  }
+}
 
 // the estimated bytes of a method with code in a code module (by its dex code units) and of a class in a data module, measured over the platform build
 const C_BYTES_PER_METHOD = 150, C_BYTES_PER_UNIT = 14, D_BYTES_PER_CLASS = 330, D_BYTES_PER_METHOD = 52, D_BYTES_PER_FIELD = 19;

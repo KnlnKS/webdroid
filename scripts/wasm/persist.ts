@@ -90,7 +90,7 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
 // App data must not reinstall the platform's reserved, uncompiled classes.
 {
   const producer = world(app, { compileOnly: true });
-  const name = producer.slots.blockClass.find(n => producer.idOf(n) > producer.aot!.nSeeded && producer.prog.get(n)?.dex && producer.aot!.reservedBase(n) !== undefined);
+  const name = producer.slots.blockClass.find(n => producer.idOf(n) > producer.aot!.nSeeded && producer.prog.get(n)?.dex && producer.aot!.platformData(n));
   if (name) {
     const built = buildApp(producer, [], { classes: [name, "Pst$Base"], methods: [], synths: [] }), files = new Map(built.files);
     const page = world(app, { app: { index: built.index, store: { get: f => files.get(f) } } });

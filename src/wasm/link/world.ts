@@ -22,7 +22,7 @@ import type { PreparedInstruction } from "../../jvm/prepared.ts";
 import { mid } from "../compiler/ids.ts";
 import type { DexFile } from "../../jvm/dex.ts";
 import { compileModule } from "./module.ts";
-import { AotRuntime, type AotBuild, type AotStore, type AppIndex } from "./aot.ts";
+import { AotRuntime, type AotStore, type AppIndex } from "./aot.ts";
 import { Numbers, type Marks, type Numbering } from "./numbers.ts";
 import { SlotTable } from "./slots.ts";
 import { Planner } from "./planning.ts";
@@ -60,8 +60,8 @@ export interface WorldOptions {
   hostWhole?: (name: string) => boolean;
   /** precompiled platform code (aot.ts); the Program holds exactly the platform dexes it was built from, apps are added with addDexes */
   aot?: AotStore;
-  /** a build of that code: classes, slots and selectors are numbered but nothing is instantiated */
-  build?: AotBuild;
+  /** a World that makes that code (aotbuild.ts AotBuilder): classes, slots and selectors are numbered but nothing is instantiated */
+  build?: boolean;
   /** timers and event loop turns for threads that wait (sched.ts); the host's own where there is one */
   loop?: HostLoop;
   /** marks a moment on the host's timeline (src/timeline.ts: Ev) */
@@ -152,7 +152,7 @@ export class World {
     this.rt = startRuntime(this);
     this.sched = new Sched(this, this.rt, opts.loop ?? defaultLoop);
     this.host = hostImports(this);
-    this.aot = opts.build ? new AotRuntime(this, opts.build) : opts.aot ? AotRuntime.attach(this, opts.aot) : undefined;
+    this.aot = opts.aot && !opts.build ? AotRuntime.attach(this, opts.aot) : undefined;
     this.base = this.numbers.marks();
     if (opts.app) this.attachApp(opts.app);
   }
@@ -198,7 +198,7 @@ export class World {
       if (this.idOf(c.name) !== n + 1) throw new Error("platform classes must be numbered first");
       this.slots.addBlock(c.name, c.methodCount + 1); n++;
     }
-    return n;
+    return this.slots.seeded = n;
   }
 
   // ---------- ids, selectors, vtable layout
@@ -285,15 +285,15 @@ export class World {
     if (aot) { this.classes.set(name, aot); this.classModules.repair(name); return aot; }
     const t0 = performance.now();
     const jc = this.prog.get(name), id = this.idOf(name), methods = jc?.methods ?? [];
-    let slotBase = this.aot?.reservedBase(name) ?? this.slots.preassigned.get(name);
-    slotBase ??= this.slots.numberBlock(name, methods.length + 1);
+    const slotBase = this.slots.baseOf(name) ?? this.slots.numberBlock(name, methods.length + 1);
     if (!this.instantiates) {
-      this.classes.set(name, rt = { name, id, ...this.opts.build ? { mod: this.aot!.extraMod, from: "platform" as const } : { mod: "c" + id, from: "own" as const }, slotBase, nMethods: methods.length, exports: {} });
+      // a class a build numbers after the platform's has its data in the build's module of them
+      this.classes.set(name, rt = { name, id, ...this.opts.build ? { mod: "g" + this.aot!.extraGroup, from: "platform" as const } : { mod: "c" + id, from: "own" as const }, slotBase, nMethods: methods.length, exports: {} });
       return rt;
     }
     this.classes.set(name, rt = this.classModules.lazy(name, id, slotBase, jc));
     this.stats.classes++; this.stats.classMs += performance.now() - t0;
-    if (jc?.dex && id > (this.aot?.nSeeded ?? 0) && !name.includes("@")) this.demand.classes.push(name);
+    if (jc?.dex && id > this.slots.seeded && !name.includes("@")) this.demand.classes.push(name);
     return rt;
   }
 

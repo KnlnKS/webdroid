@@ -11,14 +11,13 @@
 //  - Soundness. Precompiled code relies on no class-hierarchy decision a later class could falsify (Compiler.devirt), so loading an app's
 //    classes never undoes it; only sites that fail on a class missing at the build are undone, once the class is there.
 import type { ClassRt, World } from "./world.ts";
-import { sameMarks, type Marks, type Numbering, type Tail } from "./numbers.ts";
+import { sameMarks, type Marks, type Numbering } from "./numbers.ts";
 import type { SymbolicSite } from "../compiler/sites.ts";
 
 import type { DexFile } from "../../jvm/dex.ts";
 import type { Loader, MethodInfo } from "../compiler/program.ts";
 import type { FnTrace } from "../compiler/j2w.ts";
 import { methodOf } from "../compiler/ids.ts";
-import { hostTakeover } from "./hostclass.ts";
 import { LebReader } from "./module.ts";
 
 /** the files of a build, read synchronously: a page fetches them (and may compile them) before the code that needs them runs */
@@ -41,14 +40,9 @@ export interface AotIndex {
   /** the dexes whose classes the build numbers (from 1, in definition order) and compiles, and how many classes that is */
   aotDexes: string[];
   classes: number;
-  /** the other ids, in order: array classes, classes without bytecode */
-  extraNames: string[];
-  /** slots reserved after the platform classes, in order: [class, size] or a runtime function's name */
-  tail: Tail[];
-  selectors: string[];
-  gaps: string[];
-  /** the link errors compiled code throws, by index */
-  linkMessages: string[];
+  /** what the build numbered after its classes: the other ids (array classes, classes without bytecode), the slots reserved after the platform classes, selectors,
+   *  gaps and the link errors compiled code throws */
+  numbering: Numbering;
   /** the methods the build replaced by intrinsics, "class.name+descriptor" */
   intrinsics: string[];
   /** the D module of the classes the build reserved slots for after the platform's (array classes, ...), which are all in one */
@@ -89,7 +83,7 @@ export interface CHeader extends UnitHeader {
   /** the slots of methods of its classes the module lacks: abstract ones, natives without an implementation, and those the compiler produced invalid code for */
   absent: number[];
 }
-export const VERSION = 21;
+export const VERSION = 22;
 
 /** where numbering `a` first departs from `b`: the part, its sizes and the first entries that differ */
 function numberingDiff(a: Numbering, b: Numbering): string {
@@ -103,7 +97,7 @@ function numberingDiff(a: Numbering, b: Numbering): string {
 }
 
 /** an app compiled ahead on top of the platform build (the build `apps.ts` makes): the numbering of what its code names that the platform does not, and code modules a1.. for the app's classes */
-export const APP_VERSION = 21;
+export const APP_VERSION = 22;
 /** what launches built on demand because no saved code had it: method ids, class names and the names of the synthetic functions the host made when asked, in order of first use */
 export interface Demand { methods: string[]; classes: string[]; synths: string[] }
 export interface AppIndex {
@@ -136,15 +130,8 @@ export interface AppIndex {
 /** the module of synthetic functions: what it relies on, and the functions it holds */
 export interface SHeader extends UnitHeader { names: string[] }
 /** what identifies a dex of the platform: DexFile.id is its SHA-1, but only where the engine has Uint8Array.toHex for views into a larger buffer */
-const dexSig = (d: DexFile): string => [d.fileSize, d.classDefCount, d.stringCount, d.typeCount, d.version].join(":");
+export const dexSig = (d: DexFile): string => [d.fileSize, d.classDefCount, d.stringCount, d.typeCount, d.version].join(":");
 
-/** the keys of each value of `entries`, by value */
-function invert(entries: Iterable<[string, string[]]>): Map<string, string[]> {
-  const out = new Map<string, string[]>();
-  for (const [k, vs] of entries) for (const v of vs) (out.get(v) ?? out.set(v, []).get(v)!).push(k);
-  return out;
-}
-const rle = (a: number[]): number[] => { const o: number[] = []; for (const v of a) { if (o.length && o[o.length - 2] === v) o[o.length - 1]++; else o.push(v, 1); } return o; };
 const unrle = (a: number[]): Int32Array<ArrayBuffer> => { let n = 0; for (let i = 1; i < a.length; i += 2) n += a[i]; const o = new Int32Array(n); let k = 0; for (let i = 0; i < a.length; i += 2) o.fill(a[i], k, k += a[i + 1]); return o; };
 const customSection = (m: WebAssembly.Module, name: string): Uint8Array => new Uint8Array(WebAssembly.Module.customSections(m, name)[0]);
 /** a module's header, parsed once: linking asks a code module's on every lazy link until the module loads */
@@ -157,36 +144,35 @@ export const header = <H>(m: WebAssembly.Module): H => {
 
 const LIVE = 1, DEAD = 2, LOADING = 3;
 
+/** where a build puts the platform classes: the D and C module of each (by id - 1; -1 for none) and the D module of the classes it reserved slots for after them */
+export interface AotLayout { dOf: Int32Array; cOf: Int32Array; extraGroup: number }
+
 export class AotRuntime {
   private w: World;
-  readonly building: boolean;
-  /** the classes that implement each instance method a host spec implements */
-  private hostKeys = new Map<string, string[]>();
   /** the platform classes; the on-demand compiler numbers everything after them */
-  nSeeded = 0;
-  private index!: AotIndex;
+  readonly nSeeded: number;
+  /** the D module of the classes the build reserved slots for after the platform's, and the class blocks it numbered: those after are the app's */
+  readonly extraGroup: number;
+  private readonly platformBlocks: number;
   private store?: AotStore;
-  private dOf = new Int32Array(0);
-  private cOf = new Int32Array(0);
+  private dOf: Int32Array;
+  private cOf: Int32Array;
   private dExports: (WebAssembly.Exports | undefined)[] = [];
   private fallbackD = new Set<number>();
   private rejectedData = new Set<string>();
   private cState: number[] = [];
   private cAbsent: (Set<number> | undefined)[] = [];
-  private overridden = new Set<number>();
-  /** the overridden slots by the code module that holds them, made from `overridden` when it has grown */
+  /** the slots the host took over by the code module that holds them, made again when the host has taken more (HostClasses.takes) */
   private overriddenBy = new Map<number, number[]>();
   private overriddenSeen = 0;
   private cModule: (WebAssembly.Module | undefined)[] = [];
   private cClasses: number[][] = [];
   /** where each function's trace starts in the section of a loaded code module, by slot */
   private cTraces = new Map<number, { bytes: Uint8Array; starts: Map<number, number> }>();
-  /** slots reserved by the build after the platform classes, by class */
-  private reservedBases = new Map<string, number>();
   /** how many classes with bytecode the platform build's dexes define */
-  private programClasses = 0;
+  private readonly programClasses: number;
   /** what the World had numbered once the platform build was attached */
-  platformMarks!: Marks;
+  readonly platformMarks: Marks;
   /** code modules from this one on belong to the app build; the classes it defines */
   private appFrom = Infinity;
   /** the app build's data modules, and the one that holds each class block */
@@ -197,34 +183,14 @@ export class AotRuntime {
   private synthIn = new Map<string, string>();
   private synthState = new Map<string, number>();
   private appDOf = new Map<number, number>();
-  // ---- build
-  private dexSigs = new Set<string>();
-  dGroupOf: number[] = [];
-  /** the name of the D module the build gives the classes it reserves slots for after the platform's */
-  get extraMod(): string { return "g" + this.dKeys.length; }
-  cGroupOf: number[] = [];
-  dKeys: string[] = [];
-  cKeys: string[] = [];
 
-  constructor(w: World, build?: AotBuild) {
-    this.w = w;
-    this.building = !!build;
-    if (!build) return;
-    this.nSeeded = w.seedPlatform((d) => build.dexes.has(d) && !!this.dexSigs.add(dexSig(d)));
-    // the methods the host takes over keep their slots, as a process's World overrides them
-    const host = hostTakeover(w.prog, w.natives.source?.hostSpecs?.() ?? [], w.opts.hostWhole);
-    this.hostKeys = invert(host.implemented);
-    for (const m of host.taken) this.override(m);
-    const dIds = new Map<string, number>(), cIds = new Map<string, number>(), id = (m: Map<string, number>, keys: string[], k: string | null) => {
-      if (k === null) return -1;
-      let i = m.get(k); if (i === undefined) { m.set(k, i = keys.length); keys.push(k); }
-      return i;
-    };
-    for (let i = 1; i <= this.nSeeded; i++) {
-      const name = w.nameOf(i);
-      this.dGroupOf.push(id(dIds, this.dKeys, build.dGroup(name)));
-      this.cGroupOf.push(id(cIds, this.cKeys, build.cGroup(name)));
-    }
+  /** the build laid out as `layout` over `w`, which has numbered its platform classes and what the build numbered after them */
+  constructor(w: World, layout: AotLayout, store?: AotStore, programClasses = 0) {
+    this.w = w; this.store = store; this.programClasses = programClasses;
+    this.nSeeded = w.slots.seeded; this.platformBlocks = w.slots.blockBase.length; this.platformMarks = w.numbers.marks();
+    this.dOf = layout.dOf; this.cOf = layout.cOf; this.extraGroup = layout.extraGroup;
+    this.dExports.length = this.dOf.reduce((m, v) => Math.max(m, v + 1), 0);
+    this.cState.length = this.cOf.reduce((m, v) => Math.max(m, v + 1), 0);
   }
 
   /** attaches the build in `store` to `w`, whose Program holds the platform dexes it was made from (and possibly more after them); undefined if it was made from other ones */
@@ -241,33 +207,19 @@ export class AotRuntime {
       if (seen[seen.length - 1] !== dexSig(c.dex)) seen.push(dexSig(c.dex));
     }
     if (n < index.programClasses || seen.length !== index.dexes.length || seen.some((d, i) => d !== index.dexes[i])) return undefined;
-    const a = new AotRuntime(w);
-    a.hostKeys = invert(index.hostKeys); a.overridden = new Set(index.overridden);
-    a.index = index; a.store = store; a.nSeeded = index.classes; a.programClasses = index.programClasses;
     const mine = new Set(index.aotDexes);
     if (w.seedPlatform((d) => mine.has(dexSig(d))) !== index.classes) return undefined;
-    for (const name of index.extraNames) w.idOf(name);
-    for (const t of index.tail) {
-      if (typeof t === "string") w.slots.reserveSynth(t);
-      else {
-        if ((w.prog.get(t[0])?.methods.length ?? 0) + 1 !== t[1]) return undefined;
-        a.reservedBases.set(t[0], w.slots.addBlock(t[0], t[1]));
-      }
-    }
-    index.selectors.forEach((k) => w.selectorId(k));
-    index.gaps.forEach((g) => w.gapId(g));
-    for (const l of index.linkMessages) w.linkId(l);
-    a.dOf = unrle(index.dOf); a.cOf = unrle(index.cOf);
+    // a class the build reserved slots for has as many methods here
+    if (index.numbering.tail.some((t) => typeof t !== "string" && (w.prog.get(t[0])?.methods.length ?? 0) + 1 !== t[1]) || !w.adopt(index.numbering)) return undefined;
+    const a = new AotRuntime(w, { dOf: unrle(index.dOf), cOf: unrle(index.cOf), extraGroup: index.extraGroup }, store, index.programClasses);
     index.synths.forEach((names, module) => names.forEach((n) => a.synthIn.set(n, `y${module}.wasm`)));
-    a.dExports.length = a.dOf.reduce((m, v) => Math.max(m, v + 1), 0);
-    a.cState.length = a.cOf.reduce((m, v) => Math.max(m, v + 1), 0);
+    w.hosts.adoptTakeover(index.hostKeys, index.overridden);
     // a method this World replaces by an intrinsic that the build did not, or the reverse, is not the build's
     const built = new Set(index.intrinsics), now = new Set(w.opts.intrinsics.keys());
     for (const id of [...now].filter((k) => !built.has(k)).concat(index.intrinsics.filter((k) => !now.has(k)))) {
       const dot = id.indexOf("."), cls = w.numbers.ids.get(id.slice(0, dot)), m = w.prog.get(id.slice(0, dot))?.byKey.get(id.slice(dot + 1));
-      if (m && cls !== undefined && cls <= a.nSeeded) a.overridden.add(w.slots.blockBase[cls - 1] + m.index);
+      if (m && cls !== undefined && cls <= a.nSeeded) w.hosts.take(m);
     }
-    a.platformMarks = w.numbers.marks();
     return a;
   }
 
@@ -335,27 +287,22 @@ export class AotRuntime {
   // ---- numbering
   /** the platform build's code module of the class block `b`, -1 if it has none (a class of the app, or one the build does not number) */
   platformModule(b: number): number { return b >= 0 && b < this.nSeeded ? this.cOf[b] : -1; }
-  /** the slots of a class compiled on demand although the build numbered it: those the build gave it */
-  reservedBase(name: string): number | undefined {
-    const id = this.w.numbers.ids.get(name);
-    return this.reservedBases.get(name) ?? (id !== undefined && id <= this.nSeeded ? this.w.slots.blockBase[id - 1] : undefined);
-  }
+  /** whether the platform build lays out the data of class `name`: one of its classes, or one it reserved slots for after them */
+  platformData(name: string): boolean { const base = this.w.slots.baseOf(name); return base !== undefined && this.w.slots.blockOf(base) < this.platformBlocks; }
 
   // ---- loading
   /** the class module of platform class `name`, if the build has one: its D module is loaded, with those of the classes its vtable needs */
   linkClass(name: string): ClassRt | undefined {
     const w = this.w, id = w.numbers.ids.get(name);
-    if (id === undefined || this.building && id > this.nSeeded) return undefined;
-    let base: number, g = 0, app: number | undefined;
-    const reserved = this.reservedBases.get(name);
-    if (id <= this.nSeeded) { base = w.slots.blockBase[id - 1]; g = (this.building ? this.dGroupOf : this.dOf)[id - 1]; }
-    else if (reserved !== undefined) { base = reserved; g = this.building ? this.dKeys.length : this.index.extraGroup; }
+    if (id === undefined) return undefined;
+    let base: number | undefined, g = this.extraGroup, app: number | undefined;
+    if (id <= this.nSeeded) { base = w.slots.blockBase[id - 1]; g = this.dOf[id - 1]; }
     else {
-      // a class the app build gave a data module to
-      const slots = w.slots.preassigned.get(name);
-      app = slots === undefined ? undefined : this.appDOf.get(w.slots.blockOf(slots));
-      if (slots === undefined || app === undefined) return undefined;
-      base = slots;
+      // a class the platform build reserved slots for after its own, or one the app build gave a data module to
+      base = w.slots.preassigned.get(name);
+      if (base === undefined) return undefined;
+      const b = w.slots.blockOf(base);
+      if (b >= this.platformBlocks && (app = this.appDOf.get(b)) === undefined) return undefined;
     }
     const exports = !w.instantiates ? {} : app === undefined ? this.loadD(g) : this.data(`e${app}.wasm`, this.appD, app);
     // Returning without data hands publication to World.link. Block the group before class building can re-enter it.
@@ -434,18 +381,6 @@ export class AotRuntime {
     return w.compile(f as Uint8Array);
   }
 
-  /** the host implements `m`: the build's code for it is not to be used */
-  override(m: MethodInfo): void {
-    const base = this.reservedBase(m.cls) ?? this.w.slots.preassigned.get(m.cls);
-    if (base !== undefined) this.overridden.add(base + m.index);
-  }
-  overriddenAt(slot: number): boolean { return this.overridden.has(slot); }
-  /** whether a call of `t` through `decl` may reach a host spec's native: a spec of a class related to `decl` below `t`'s implements it, or one of a class this
-   *  World does not have, which may be any */
-  hostDispatch(decl: string, t: MethodInfo): boolean {
-    const prog = this.w.prog;
-    return !!this.hostKeys.get(t.key)?.some((s) => !prog.get(s) || prog.isSubclass(s, t.cls) && (prog.isSubclass(s, decl) || prog.isSubclass(decl, s)));
-  }
   /** whether a loaded code module or app patch installed the method of `slot` */
   installed(slot: number): boolean {
     const b = this.w.slots.blockOf(slot), c = b < 0 ? -1 : this.cOf[b];
@@ -538,11 +473,11 @@ export class AotRuntime {
     for (const m of head.mods) if (!this.fallbackD.has(+m.slice(1)) && !this.ready(`d${m.slice(1)}.wasm`)) dataReady = false;
     if (!dataReady) return false;
     if (!head.mods.every(m => this.fallbackD.has(+m.slice(1)) || !!this.loadD(+m.slice(1)))) { this.cState[c] = DEAD; w.stats.aot.dead++; return false; }
-    const absent = new Set(head.absent);
-    if (this.overriddenSeen !== this.overridden.size) {
+    const absent = new Set(head.absent), taken = w.hosts.taken();
+    if (this.overriddenSeen !== taken.size) {
       this.overriddenBy.clear();
-      for (const slot of this.overridden) { const m = this.cOf[w.slots.blockOf(slot)]; if (m >= 0) (this.overriddenBy.get(m) ?? this.overriddenBy.set(m, []).get(m)!).push(slot); }
-      this.overriddenSeen = this.overridden.size;
+      for (const slot of taken) { const m = this.cOf[w.slots.blockOf(slot)]; if (m >= 0) (this.overriddenBy.get(m) ?? this.overriddenBy.set(m, []).get(m)!).push(slot); }
+      this.overriddenSeen = taken.size;
     }
     this.cState[c] = LIVE; this.cModule[c] = mod; this.cAbsent[c] = absent;
     if (app) this.cClasses[c] = head.classes;
@@ -563,7 +498,7 @@ export class AotRuntime {
     w.units.recordHeader(head);
     for (const slot of this.overriddenBy.get(c) ?? []) if (!this.cAbsent[c]!.has(slot)) { w.assumptions.undoCode(slot); this.cAbsent[c]!.add(slot); }
     // code that holds a method of another module the host took since the build: that module may have undone the method before this one was loaded
-    for (const [callee, ...by] of head.held ?? []) if (this.overridden.has(callee)) for (const x of by) w.assumptions.undoCode(x);
+    for (const [callee, ...by] of head.held ?? []) if (taken.has(callee)) for (const x of by) w.assumptions.undoCode(x);
     w.stats.aot.ms += performance.now() - t2;
     // the app build's patches of this module's methods: after its own code, which they replace where they have some
     for (const p of this.patchesOver.get(c) ?? []) this.loadC(p);
@@ -583,7 +518,7 @@ export class AotRuntime {
   trace(name: string): FnTrace | undefined {
     const w = this.w, m = methodOf(w.prog, name);
     if (!m) return undefined;
-    const base = this.reservedBase(m.cls) ?? w.slots.preassigned.get(m.cls);
+    const base = w.slots.baseOf(m.cls);
     if (base === undefined) return undefined;
     const c = this.cOf[w.slots.blockOf(base)];
     if (c < 0) return undefined;
@@ -612,14 +547,5 @@ export class AotRuntime {
     if (k) t.inline = Array.from({ length: k }, () => [this.w.slots.method(r.u32())!.m, r.u32(), r.u32()]);
     this.w.stacks.traces.set(name, t);
     return t;
-  }
-
-  // ---- build output
-  /** the index of a finished build whose runtime functions are in `synths` */
-  finish(synths: string[][]): AotIndex {
-    const w = this.w;
-    const withCode = [...w.prog.all()].filter((c) => c.dex);
-    return { version: VERSION, dexes: [...new Set(withCode.map((c) => dexSig(c.dex!)))], programClasses: withCode.length, aotDexes: [...this.dexSigs], classes: this.nSeeded,
-      extraNames: w.numbers.names.slice(this.nSeeded + 1), tail: w.numbers.tail, selectors: w.numbers.selKeys.slice(1), gaps: w.numbers.gapList, linkMessages: w.numbers.links.messages, dOf: rle(this.dGroupOf), cOf: rle(this.cGroupOf), extraGroup: this.dKeys.length, intrinsics: [...w.opts.intrinsics.keys()], synths, hostKeys: [...invert(this.hostKeys)], overridden: [...this.overridden].sort((x, y) => x - y) };
   }
 }
