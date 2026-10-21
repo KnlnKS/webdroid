@@ -4,7 +4,7 @@ import { Code, OP, inlineMark } from "./code.ts";
 import { T, ref, refNull, type VT } from "./wasmbin.ts";
 import { kindOf, type FieldInfo, type Kind, type MethodInfo } from "./program.ts";
 import { staticallyBound, type Compiler } from "./j2w.ts";
-import { H, ELEM_KINDS, elemKindOf, type ElemKind } from "./consts.ts";
+import { ELEM_KINDS, elemKindOf, type ElemKind } from "./consts.ts";
 import { isWide } from "../../jvm/abi.ts";
 import type { DexTypes } from "../../jvm/dex.ts";
 import { argRegisters, endsBlock, ifTarget, switchCases, type PreparedInstruction as Ins, type PreparedMethod } from "../../jvm/prepared.ts";
@@ -690,7 +690,7 @@ export class MC {
     return nx && nx.op >= 0x0a && nx.op <= 0x0c ? nx : undefined;
   }
   emitInvoke(ins: Ins) {
-    const cx = this.cx, c = this.code, prog = cx.prog;
+    const cx = this.cx, c = this.code;
     if (ins.op >= 0xfc) return emitCustom(this, ins);
     if (ins.op >= 0xfa) return emitPolymorphic(this, ins);
     const { desc, decl, target } = this.invoke(ins);
@@ -710,25 +710,12 @@ export class MC {
       cx.callMethod(c, target);
     } else {
       // A native callback can load an override while this activation is still running.
-      const declC = prog.get(decl);
       // the slot the receiver's class gives the method; a call that expects one of the likely implementations tests for it first, so the engine can inline it
       const guards = this.guards(ins, b);
       this.nonNull(ins.regs[0]); c.lset(this.tmpL);
       c.lget(this.tmpL); pushArgs(this, ins, p.params);
       c.lget(this.tmpL).refCast(cx.tObj).structGet(cx.tObj, 0);
-      if (declC && !declC.isInterface) {
-        c.i32(cx.w.dispatch.vslot(decl, target.key)).arrayGet(cx.tVT);
-      } else if (prog.get("java/lang/Object")!.byKey.has(target.key)) {
-        c.i32(cx.w.dispatch.vslot("java/lang/Object", target.key)).arrayGet(cx.tVT);
-      } else {
-        const sel = cx.w.selectorId(target.key), s = sel % H.IMT_N;
-        // fn = vt[IMT+2s] == sel ? vt[IMT+2s+1] : imtslow(vt, sel)
-        const vtl = this.scratchLocal("vt", ref(cx.tVT));
-        c.lset(vtl);
-        c.lget(vtl).i32(H.IMT + 2 * s).arrayGet(cx.tVT).i32(sel).raw(OP.i32_eq).if_(T.i32)
-          .lget(vtl).i32(H.IMT + 2 * s + 1).arrayGet(cx.tVT).else_()
-          .lget(vtl).i32(sel).call(cx.helper("imtslow")).end();
-      }
+      cx.emitDispatchSlot(c, decl, target.key, () => this.scratchLocal("vt", ref(cx.tVT)));
       // the receiver and arguments stay on the stack under the tests: a guard takes them as block parameters instead of repeating them
       const type = cx.descSig(desc, false);
       if (guards.length) {

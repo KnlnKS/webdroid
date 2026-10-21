@@ -492,6 +492,19 @@ export class Compiler implements Base {
     }, true)).unreachable();
   }
 
+  // ---------- Java operations, as compiled methods and the bodies link generates lower them
+  /** replaces the vtable on the stack with the table slot that a virtual or interface call of `key` through `decl` runs: a class's vtable slot, Object's for
+   *  a method Object declares, else the interface method table's (`vt` gives the local the probe keeps the vtable in) */
+  emitDispatchSlot(c: Code, decl: string, key: string, vt = () => c.newLocal(ref(this.tVT))): void {
+    const d = this.prog.get(decl);
+    const owner = d && !d.isInterface ? decl : this.prog.get("java/lang/Object")!.byKey.has(key) ? "java/lang/Object" : undefined;
+    if (owner) { c.i32(this.w.dispatch.vslot(owner, key)).arrayGet(this.tVT); return; }
+    const sel = this.w.selectorId(key), s = sel % H.IMT_N, l = vt();
+    // vt[IMT+2s] == sel ? vt[IMT+2s+1] : imtslow(vt, sel)
+    c.lset(l).lget(l).i32(H.IMT + 2 * s).arrayGet(this.tVT).i32(sel).raw(OP.i32_eq).if_(T.i32)
+      .lget(l).i32(H.IMT + 2 * s + 1).arrayGet(this.tVT).else_().lget(l).i32(sel).call(this.helper("imtslow")).end();
+  }
+
   // ---------- allocation
   private allocBytes(c: Code, add: () => void): void {
     const g = this.global("rt", "alloc", T.i32, true);

@@ -7,7 +7,6 @@ import { OP } from "../compiler/code.ts";
 import { T, refNull } from "../compiler/wasmbin.ts";
 import { ACC, kindOf, type JClass, type MethodInfo, typeName } from "../compiler/program.ts";
 import { descToName } from "../../jvm/abi.ts";
-import { H } from "../compiler/consts.ts";
 import { emitString, idOfClass, emitNameEq } from "./classes.ts";
 import { UInfo, RInfo } from "../compiler/info.ts";
 import { WIDEN, BOX, box } from "../compiler/primitives.ts";
@@ -143,12 +142,7 @@ function callBoxed(cx: Compiler, c: Code, m: MethodInfo, direct: boolean, values
   else {
     const ps: ("I" | "J" | "L")[] = ["L", ...m.params.map(kindOf)], sig = cx.sig(ps, m.ret === "V" ? "V" : kindOf(m.ret));
     c.lget(0).call(cx.helper("vtab"));
-    if (!decl.isInterface) c.i32(cx.w.dispatch.vslot(m.cls, m.key)).arrayGet(cx.tVT);
-    else {
-      const sel = cx.w.selectorId(m.key), s = sel % H.IMT_N, vt = c.newLocal(refNull(cx.tVT));
-      c.lset(vt).lget(vt).refAsNonNull().i32(H.IMT + 2 * s).arrayGet(cx.tVT).i32(sel).raw(OP.i32_eq).if_(T.i32)
-        .lget(vt).refAsNonNull().i32(H.IMT + 2 * s + 1).arrayGet(cx.tVT).else_().lget(vt).refAsNonNull().i32(sel).call(cx.helper("imtslow")).end();
-    }
+    cx.emitDispatchSlot(c, m.cls, m.key);
     c.callIndirect(sig);
   }
   if (m.ret === "V") c.anyNull();
