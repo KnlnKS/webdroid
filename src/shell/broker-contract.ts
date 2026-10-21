@@ -4,7 +4,6 @@
 // bundle the broker. Caller identity is bound to the port, never supplied in a request's arguments.
 import type { PendingAccess } from "../android/pendingintent.ts";
 import type { PermissionCalls } from "../android/permissions.ts";
-import type { PreferenceCalls } from "../android/sharedprefs.ts";
 import type { WebStorageCalls } from "../android/webstorage.ts";
 import type { ForegroundNotificationRequest } from "../android/notification.ts";
 import type { SQLiteRequest, SQLiteReply } from "../android/sqlite.ts";
@@ -47,7 +46,6 @@ export type BrokerCalls = CookieCalls & {
   /** the start state of the caller's services */
   starts: Calls<ServiceStarts>;
   pending: Calls<PendingAccess>;
-  prefs: PreferenceCalls;
   files: FilePathCalls;
   descriptors: DescriptorCalls;
   permissions: PermissionCalls;
@@ -81,7 +79,6 @@ export const brokerMethods = {
   webStorage: methodsOf<WebStorageCalls>()(["webRenderer", "webStorage"]),
   starts: methodsOf<ServiceStarts>()(["created", "destroyed", "start", "deliver", "requested", "stop", "stopSelf", "done", "foreground"]),
   pending: methodsOf<PendingAccess>()(["create", "cancel", "send", "operation", "kind", "flags", "creator"]),
-  prefs: methodsOf<PreferenceCalls>()(["preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles"]),
   files: methodsOf<FilePathCalls>()(["filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "fileRename", "fileRemove", "fileCreate", "fileFifo", "fileSetAttributes"]),
   descriptors: methodsOf<DescriptorCalls>()(["fileDescriptor"]),
   permissions: methodsOf<PermissionCalls>()(["permissionCheck", "permissionGrant"]),

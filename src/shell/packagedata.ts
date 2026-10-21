@@ -14,6 +14,7 @@ import { jobData } from "../android/job.ts";
 import { shortcutData } from "../android/shortcuts.ts";
 import { installData, installedPath, knownUid, packages } from "../android/packages.ts";
 import { packageConfigData } from "../android/packageconfig.ts";
+import { legacyPreferenceData } from "../android/sharedprefs.ts";
 import { forgetPackage } from "./packages.ts";
 
 type Broker = ReturnType<typeof processBroker>;
@@ -29,7 +30,7 @@ export type PackageState = {
 };
 /** in the order they clear: what is keyed by uid first, files and web data last */
 const owners = (broker: Broker): PackageState[] => [
-  broker.alarms, jobData, shortcutData, keystoreData, broker.notifications, uriGrantData, broker.permissions, broker.preferences, legacySnapshotData,
+  broker.alarms, jobData, shortcutData, keystoreData, broker.notifications, uriGrantData, broker.permissions, legacyPreferenceData, legacySnapshotData,
   { clear: async (pkg) => (await broker.cookies(pkg)).remove(), remove: async (pkg) => (await broker.cookies(pkg)).forget(),
     packages: async () => (await import("./webcookies.ts")).WebCookies.packages() },
   broker.files, webData, broker.intents, broker.accounts, exitRecordData, packageConfigData, installData,

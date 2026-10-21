@@ -1,7 +1,7 @@
 import type { Act } from "./probe.ts";
 import type { Screen, UiNode } from "../types.ts";
 
-export type EnvironmentConfig = { fixedMs: number | null; storage: [string, string][] };
+export type EnvironmentConfig = { fixedMs: number | null; files: [string, string][] };
 
 function installEnvironment(cfg: EnvironmentConfig): void {
   if (self !== top) return;
@@ -28,7 +28,15 @@ function installEnvironment(cfg: EnvironmentConfig): void {
       return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
     };
   }
-  for (const [k, v] of cfg.storage) if (localStorage.getItem(k) === null) localStorage.setItem(k, v);
+  // in the store a package's private files load from (src/shell/privatefiles.ts); add keeps a file already there
+  if (!cfg.files.length) return;
+  const open = indexedDB.open("webdroid-private-files", 1);
+  open.onupgradeneeded = () => open.result.createObjectStore("files");
+  open.onsuccess = () => {
+    const transaction = open.result.transaction("files", "readwrite"), store = transaction.objectStore("files");
+    for (const [path, text] of cfg.files) store.add({ kind: "file", bytes: new TextEncoder().encode(text) }, path).onerror = (event) => event.preventDefault();
+    transaction.oncomplete = () => open.result.close();
+  };
 }
 
 export const environmentScript = (cfg: EnvironmentConfig): string => `(${installEnvironment.toString()})(${JSON.stringify(cfg)})`;

@@ -24,7 +24,6 @@ import { exported, componentPermission, componentProcess, resolveProvider } from
 import { PermissionStore } from "../android/permissions.ts";
 import { attrStr } from "../android/axml.ts";
 import { sqliteStore, type createSQLiteSession } from "../android/sqlite.ts";
-import { preferenceStore } from "../android/sharedprefs.ts";
 import { notificationStore } from "../android/notification.ts";
 import { settingsStore } from "../android/settings.ts";
 import { awaited, rt } from "../jvm/runtime.ts";
@@ -124,7 +123,6 @@ export class ProcessBroker {
     return store;
   }
   readonly databases = sqliteStore;
-  readonly preferences = preferenceStore;
   readonly notifications = notificationStore;
   private entries = new Map<number, Entry>();
   private byName = new Map<string, Entry>();

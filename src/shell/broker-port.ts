@@ -6,7 +6,7 @@ import { receiveForegroundNotification } from "../android/notification.ts";
 import { ownedBy, packages } from "../android/packages.ts";
 import { canonicalPermissionCommands, checkUidPermission, holdsPlatformPermission } from "../android/permissions.ts";
 import { REASON_EXIT_SELF, deathOf, exitRecords, recordRemoteExit } from "../android/server/appexitinfo.ts";
-import { canonicalPreferenceCommands, createAppData } from "../android/sharedprefs.ts";
+import { createAppData } from "../android/sharedprefs.ts";
 import { createSQLiteSession } from "../android/sqlite.ts";
 import { systemProviders } from "../android/systemproviders.ts";
 import { canonicalWebStorage } from "../android/webstorage.ts";
@@ -35,15 +35,6 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
     if (privileged || ownedBy(pkg, caller.uid) || holdsPlatformPermission(caller.pkg, "android.permission.GRANT_RUNTIME_PERMISSIONS")) return;
     throw rt.mkThrowable("java/lang/SecurityException", "Permission grants belong to another UID");
   });
-  const authorizePreference = (name: string, write: boolean) => {
-    broker.entry(pid);
-    const notification = name.startsWith("android:notification-policy:");
-    const pkg = notification ? name.slice("android:notification-policy:".length) : name.split(":", 1)[0];
-    const publicRead = notification || name === `${pkg}:__system_power`;
-    if (privileged || ownedBy(pkg, caller.uid) || !write && publicRead) return;
-    throw rt.mkThrowable("java/lang/SecurityException", "Preferences belong to another UID");
-  };
-  const preferences = canonicalPreferenceCommands(broker.preferences, authorizePreference);
   const authorizePath = (path: string): number => {
     broker.entry(pid);
     const owner = packageOfPath(path);
@@ -106,7 +97,6 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
     },
     descriptors: broker.fileDescriptors.session(pid, path => isMutablePath(path) ? authorizePath(path) : 13, caller.uid),
     webStorage: canonicalWebStorage(caller.pkg),
-    prefs: { ...preferences, preferenceFiles: pkg => { authorizePreference(pkg + ":", false); return preferences.preferenceFiles(pkg); } },
     permissions,
     settings: {
       get: (table, name) => broker.settings.get(table, name),

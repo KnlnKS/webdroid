@@ -114,9 +114,8 @@ type FlowBase<TStep extends Step> = {
   crop: { top: number; bottom: number; left: number; right: number };
   /**
    * An Android shared_prefs XML written before the flow starts, so a flow can begin past a
-   * gate it does not exist to exercise. Both drivers honour it -- the emulator writes the
-   * file, webdroid parses it into its own prefs store -- or the two passes would be walking
-   * different screens and the diff would be meaningless.
+   * gate it does not exist to exercise. Both drivers write the file before the app starts, or
+   * the two passes would be walking different screens and the diff would be meaningless.
    */
   seedPrefs?: string;
   /** Browser fallback for directory picking, with files staged before launch. */

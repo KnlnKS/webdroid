@@ -99,7 +99,7 @@ export async function startWebdroid(apkPath: string, options: WebdroidOptions = 
     browser = await launchBrowser();
     const context = await browser.newContext(CONTEXT_OPTS);
     // the e2e probe's page half, on the wall clock: it keeps the mirrored frames a screenshot composites
-    await context.addInitScript({ content: probeScript({ fixedMs: null, storage: [], shots: false }) });
+    await context.addInitScript({ content: probeScript({ fixedMs: null, files: [], shots: false }) });
     const page = await context.newPage();
     page.on("pageerror", (error) => errors.push(String(error)));
     page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });

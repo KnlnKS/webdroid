@@ -22,7 +22,6 @@ import { activityTransport, startActivityInProcess, taskVisibility, type ResultD
 import { publishedProvider, providerProcesses } from "../android/server/am.ts";
 import { usePermissionStore, usePermissionAccess } from "../android/permissions.ts";
 import { sqliteTransport } from "../android/sqlite.ts";
-import { usePreferenceStore, usePreferenceAccess } from "../android/sharedprefs.ts";
 import { useNotificationStore, notificationTransport } from "../android/notification.ts";
 import { useSettingsStore, useSettingsAccess } from "../android/settings.ts";
 import { awaited, rt, driven, type Gen } from "../jvm/runtime.ts";
@@ -82,7 +81,6 @@ function connectRemoteStores(broker: BrokerCalls): void {
   usePathOwner(broker);
   vfs.prepare = broker.files.filePrepare;
   useHostUi(() => broker.ui);
-  usePreferenceAccess(broker.prefs);
   usePermissionAccess(broker.permissions);
   exitRecordTransport.records = broker.exitRecords;
   exitRecordTransport.publish = broker.processExited;
@@ -147,7 +145,6 @@ export function connectProcess(broker: ProcessBroker): ProcessEndpoint {
   broker.files.attach(procIdentity.pid, vfs);
   descriptorTransport.local = broker.descriptorRights(procIdentity.pid);
   useNotificationStore(broker.notifications);
-  usePreferenceStore(broker.preferences);
   usePermissionStore(broker.permissions);
   useFocusedUid(() => broker.foregroundUid());
   useAlarmScheduler(broker.alarms);
