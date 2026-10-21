@@ -2,14 +2,17 @@
 // node's rasterised content. An input of 0 is that content.
 import { rt } from "../jvm/runtime.ts";
 import { handle, deref, FINALIZER } from "./handles.ts";
-import { COMPOSITE, BLEND_MODES, type NativeColorFilter, NativeShader, fillWithShader, recolor } from "./graphics.ts";
+import { COMPOSITE, BLEND_MODES } from "./graphics.ts";
+import { type NativeColorFilter, recolor } from "./colorfilter.ts";
+import { NativeShader, fillWithShader } from "./shader.ts";
 import type { NativeBitmap } from "./bitmap.ts";
+import { radiusToSigma } from "./maskfilter.ts";
 import type { RuntimeShaderBuilder } from "./runtime-shader.ts";
 import type { Ctx2D } from "./recording.ts";
 
 /** the rasters a blur reuses from one run to the next */
 export type BlurCache = { padded: OffscreenCanvas | null; blurred: OffscreenCanvas | null };
-function sized(c: OffscreenCanvas | null, w: number, h: number): OffscreenCanvas {
+export function sized(c: OffscreenCanvas | null, w: number, h: number): OffscreenCanvas {
   if (!c) return new OffscreenCanvas(w, h);
   if (c.width !== w) c.width = w;
   if (c.height !== h) c.height = h;
@@ -58,8 +61,6 @@ function flatten(target: OffscreenCanvas | null, f: Filtered): OffscreenCanvas {
   g.reset(); g.drawImage(f.img, 0, 0, f.w, f.h);
   return c;
 }
-/** Blur::convertRadiusToSigma */
-const sigmaOf = (radius: number) => (radius > 0 ? Math.fround(Math.fround(0.57735 * radius) + 0.5) : 0);
 
 export abstract class NativeRenderEffect {
   protected out: OffscreenCanvas | null = null;
@@ -93,7 +94,7 @@ class Blur extends Unary implements BlurCache {
   constructor(rx: number, ry: number, tile: number, input: NativeRenderEffect | null) {
     super(input);
     this.tile = tile;
-    this.sx = sigmaOf(rx); this.sy = sigmaOf(ry);
+    this.sx = radiusToSigma(rx); this.sy = radiusToSigma(ry);
   }
   protected apply(f: Filtered): Filtered {
     if (!this.sx && !this.sy) return f;

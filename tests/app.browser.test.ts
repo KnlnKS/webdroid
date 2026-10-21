@@ -77,6 +77,14 @@ test.concurrent("blur mask styles combine geometry before paint alpha and preser
   expect(probeResult.tints).toMatchObject({ identity: true, clear: [0, 0, 0, 0], before: [255, 0, 0, 64] });
   for (const [index, value] of [91, 53, 43, 192].entries()) expect(Math.abs(probeResult.tints.add[index] - value)).toBeLessThanOrEqual(2);
   for (const [index, value] of [64, 64, 0, 64].entries()) expect(Math.abs(probeResult.tints.multiply[index] - value)).toBeLessThanOrEqual(2);
+  // SkBlendMode's formulas with the filter's colour as the source: PorterDuff's MULTIPLY (kModulate) S·D,
+  // SCREEN S + D − S·D, DST the paint's colour; a shader's colours and a nine-patch's pixels go through the filter too
+  const filters = probeResult.filters;
+  expect([filters.multiply, filters.screen, filters.dst]).toEqual([[0, 0, 0, 128], [128, 255, 0, 255], [255, 0, 0, 128]]);
+  const [left, right, outside] = filters.shader;
+  expect([left.slice(0, 3), right.slice(0, 3), outside]).toEqual([[0, 255, 0], [0, 255, 0], [0, 0, 0, 0]]);
+  expect(left[3]).toBeGreaterThan(right[3] + 40);
+  expect(filters.patch).toEqual([[0, 255, 0, 128], [0, 0, 0, 0]]);
   const fx = probeResult.effects;
   expect(fx).toMatchObject({ cornerCut: 0, cornerCenter: 255, noShadow: 0, tablePartial: 0 });
   expect(fx.shadow).toBeGreaterThan(0);

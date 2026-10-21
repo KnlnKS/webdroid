@@ -9,7 +9,9 @@ import { handle, deref, FINALIZER } from "./handles.ts";
 import { device } from "../shell/config.ts";
 import { type NativeTypeface, type FakedFont, resolveDefault } from "./fonts.ts";
 import type { FaceMetrics } from "./sfnt.ts";
-import { type NativeColorFilter, type NativeShader, COMPOSITE, BLEND_MODES, cssColor, matrixColor, setEdges, emptyBox } from "./graphics.ts";
+import { COMPOSITE, BLEND_MODES, cssColor, setEdges, emptyBox } from "./graphics.ts";
+import type { NativeColorFilter } from "./colorfilter.ts";
+import type { NativeShader } from "./shader.ts";
 import { colorLongAt } from "./bitmap.ts";
 import { NativePath, skCommands, setSkCommands, pathAt } from "./path.ts";
 import { type NativeMaskFilter, maskFilterAt } from "./maskfilter.ts";
@@ -17,7 +19,7 @@ import { type NativePathEffect, DashEffect, effectAt, strokeRec } from "./pathef
 import { shapeTextRun, layoutOutlines, layoutBounds, hasGlyph } from "./shaping.ts";
 import { strokeCommands } from "./skia.ts";
 import { deviceScale } from "./matrix.ts";
-import { isRecording, recordOrRun, transformOf, type Ctx2D } from "./recording.ts";
+import { recordOrRun, transformOf, type Ctx2D } from "./recording.ts";
 
 const PAINT = "android/graphics/Paint";
 /** Paint's flag bits hwui keeps (getJavaFlags): LCD_RENDER_TEXT and VERTICAL_TEXT are not */
@@ -95,8 +97,8 @@ export class NativePaint {
   /** the mode a draw of this paint blends by (null for SRC_OVER): an unbounded mode (UNBOUNDED) of
    *  a solid colour gives way to the bounded mode that draws it alike */
   drawMode(): string | null {
-    const name = this.blendName;
-    if (name === null || this.shader || !UNBOUNDED.has(this.blend!)) return name;
+    const name = this.blendName, blend = this.blend;
+    if (name === null || blend === null || this.shader || !UNBOUNDED.has(blend)) return name;
     const alpha = this.filteredColor() >>> 24;
     return alpha === 255 ? OPAQUE_MODES[name] : alpha === 0 ? "CLEAR" : name;
   }
@@ -119,15 +121,7 @@ export class NativePaint {
     return this.clears() ? "#000" : this.shader?.pattern(ctx) ?? cssColor(this.filteredColor());
   }
   /** the paint's colour through its colour filter */
-  filteredColor(): number {
-    const filter = this.colorFilter, color = this.color;
-    if (!filter) return color;
-    if (filter.matrix) return matrixColor(filter.matrix, color);
-    // PorterDuff/BlendMode SRC_IN — how Material tints every shape it draws: the filter's
-    // colour replaces the paint's, keeping the alpha the two agree on
-    const f = filter.color;
-    return ((f & 0xffffff) | ((((f >>> 24) * (color >>> 24) / 255) | 0) << 24)) | 0;
-  }
+  filteredColor(): number { return this.colorFilter ? this.colorFilter.filter(this.color) : this.color; }
 }
 /** Paint::operator=, as nSet and nInitWithPaint copy one */
 export function copyPaint(src: NativePaint, dst: NativePaint) {
@@ -214,8 +208,7 @@ const strokeWidthOn = (ctx: Ctx2D, width: number, antiAlias: boolean): number =>
 /** a stroke's width, cap, join and miter limit on `ctx`; a recording takes the device pixel of the transform it is drawn under */
 export function applyStroke(ctx: Ctx2D, width: number, antiAlias: boolean, cap: CanvasLineCap, join: CanvasLineJoin, miter: number): void {
   if (antiAlias && width > 0) ctx.lineWidth = width;
-  else if (isRecording(ctx)) recordOrRun(ctx, (c) => { c.lineWidth = strokeWidthOn(c, width, antiAlias); });
-  else ctx.lineWidth = strokeWidthOn(ctx, width, antiAlias);
+  else recordOrRun(ctx, (c) => { c.lineWidth = strokeWidthOn(c, width, antiAlias); });
   ctx.lineCap = cap; ctx.lineJoin = join;
   if (join === "miter") ctx.miterLimit = miter;
 }

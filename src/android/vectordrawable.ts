@@ -5,14 +5,16 @@
 
 import { rt } from "../jvm/runtime.ts";
 import { deref, ownedHandle, weakHandle } from "./handles.ts";
-import { type NativeColorFilter, type NativeShader, cssColor, tintedBmp, edges } from "./graphics.ts";
-import { type NativeCanvas, drawingCanvas } from "./canvas.ts";
+import { edges } from "./graphics.ts";
+import type { NativeColorFilter } from "./colorfilter.ts";
+import type { NativeShader } from "./shader.ts";
+import { NativeCanvas, drawingCanvas } from "./canvas.ts";
+import { drawBitmap, drawPath } from "./canvas-draw.ts";
 import { NativeBitmap } from "./bitmap.ts";
-import { CAPS, JOINS, applyStroke } from "./paint.ts";
+import { CAPS, JOINS, NativePaint } from "./paint.ts";
 import { NativePath, PathMeasure } from "./path.ts";
 import { PathData, parsePathData, throwParseFailure, verbsToPath } from "./pathparser.ts";
 
-type Ctx = OffscreenCanvasRenderingContext2D;
 /** hwui's applyAlpha: the colour's alpha byte scaled, truncated as SkColorSetA takes it */
 const applyAlpha = (color: number, alpha: number) => ((((color >>> 24) * alpha) & 255) << 24 | (color & 0xffffff)) | 0;
 
@@ -20,7 +22,7 @@ abstract class Node {
   name = "";
   tree: Tree | null = null;
   changed(): void { if (this.tree) this.tree.dirty = true; }
-  abstract draw(ctx: Ctx): void;
+  abstract draw(nc: NativeCanvas): void;
   adopt(tree: Tree): void { this.tree = tree; }
 }
 
@@ -36,14 +38,14 @@ export class Group extends Node {
   override adopt(tree: Tree): void { this.tree = tree; for (const c of this.children) c.adopt(tree); }
   /** Group::draw: the local matrix (pivot, scale, rotation, translation), children in order, and
    *  whatever a clip-path clipped undone after */
-  draw(ctx: Ctx): void {
-    const p = this.props;
+  draw(nc: NativeCanvas): void {
+    const p = this.props, ctx = nc.ctx;
     ctx.save();
     ctx.translate(p[TRANSLATE_X] + p[PIVOT_X], p[TRANSLATE_Y] + p[PIVOT_Y]);
     if (p[ROTATE]) ctx.rotate(p[ROTATE] * Math.PI / 180);
     ctx.scale(p[SCALE_X], p[SCALE_Y]);
     ctx.translate(-p[PIVOT_X], -p[PIVOT_Y]);
-    for (const c of this.children) c.draw(ctx);
+    for (const c of this.children) c.draw(nc);
     ctx.restore();
   }
 }
@@ -60,7 +62,7 @@ export abstract class VPath extends Node {
   }
 }
 class ClipPath extends VPath {
-  draw(ctx: Ctx): void { ctx.clip(this.built().path()); }
+  draw(nc: NativeCanvas): void { nc.ctx.clip(this.built().path()); }
 }
 
 // FullPathProperties::PrimitiveFields in field order; the ints stored as their bits' value
@@ -114,29 +116,27 @@ export class FullPath extends VPath {
     if (this.fillGradient || p[FILL_COLOR]) out.setFillType(p[FILL_TYPE]);
     return out;
   }
-  draw(ctx: Ctx): void {
-    const p = this.props, path = this.updated(), p2d = path.path();
+  /** FullPath::draw: the fill, then the stroke, each an anti-aliased paint (a gradient's black at the
+   *  path's alpha through its shader, a colour at its own alpha) */
+  draw(nc: NativeCanvas): void {
+    const p = this.props, path = this.updated(), paint = pathPaint;
     if (this.fillGradient || p[FILL_COLOR]) {
-      ctx.fillStyle = this.style(ctx, this.fillGradient, p[FILL_COLOR], p[FILL_ALPHA]);
-      ctx.fill(p2d, path.fillRule);
+      paint.style = 0;
+      paint.shader = this.fillGradient;
+      paint.color = applyAlpha(this.fillGradient ? -16777216 : p[FILL_COLOR], p[FILL_ALPHA]);
+      drawPath(nc, path, paint);
     }
     if (this.strokeGradient || p[STROKE_COLOR]) {
-      ctx.strokeStyle = this.style(ctx, this.strokeGradient, p[STROKE_COLOR], p[STROKE_ALPHA]);
-      // hwui strokes a path anti-aliased
-      applyStroke(ctx, p[STROKE_WIDTH], true, CAPS[p[CAP]] ?? "butt", JOINS[p[JOIN]] ?? "miter", p[MITER]);
-      ctx.stroke(p2d);
+      paint.style = 1;
+      paint.shader = this.strokeGradient;
+      paint.color = applyAlpha(this.strokeGradient ? -16777216 : p[STROKE_COLOR], p[STROKE_ALPHA]);
+      paint.strokeWidth = p[STROKE_WIDTH]; paint.strokeMiter = p[MITER];
+      paint.strokeCapN = CAPS[p[CAP]] ?? "butt"; paint.strokeJoinN = JOINS[p[JOIN]] ?? "miter";
+      drawPath(nc, path, paint);
     }
-  }
-  /** a gradient paints black at the path's alpha through its shader; a colour at its own alpha */
-  private style(ctx: Ctx, shader: NativeShader | null, color: number, alpha: number): string | CanvasGradient | CanvasPattern {
-    if (shader) {
-      const style = shader.pattern(ctx);
-      if (style) { ctx.globalAlpha = ((255 * alpha) & 255) / 255; return style; }
-    }
-    ctx.globalAlpha = 1;
-    return cssColor(applyAlpha(shader ? -16777216 : color, alpha));
   }
 }
+const pathPaint = new NativePaint();
 
 /** Tree::MAX_CACHED_BITMAP_SIZE */
 const MAX_CACHE = 2048;
@@ -146,9 +146,13 @@ export class Tree {
   alpha = 1;
   dirty = true;
   private cache: NativeBitmap | null = null;
+  /** the canvas the tree paints its cache through, and the paint the cache is drawn with */
+  private canvas: NativeCanvas | null = null;
+  private readonly paint = new NativePaint();
   constructor(root: Group) { this.root = root; root.adopt(this); }
   /** Tree::draw: the canvas's scale sizes the cache (no skew or rotation), which is drawn at the
-   *  bounds, mirrored for RTL, through the colour filter; answers the cache's pixel count */
+   *  bounds, mirrored for RTL, through the colour filter at the root alpha; answers the cache's
+   *  pixel count */
   draw(cv: NativeCanvas, filter: NativeColorFilter | null, l: number, t: number, r: number, b: number, mirror: boolean, canReuse: boolean): number {
     const ctx = cv.ctx, m = ctx.getTransform(), w = r - l, h = b - t;
     const plain = m.b === 0 && m.c === 0;
@@ -159,21 +163,23 @@ export class Tree {
     let cache = this.cache;
     if (!cache || cache.w !== sw || cache.h !== sh) { this.cache = cache = new NativeBitmap(sw, sh); this.dirty = true; }
     if (this.dirty) {
-      const c = cache.ctx;
+      const nc = this.canvas ??= new NativeCanvas(), c = cache.ctx;
+      nc.setTarget(c, sw, sh, null);
       c.setTransform(1, 0, 0, 1, 0, 0);
       c.clearRect(0, 0, sw, sh);
       c.scale(sw / this.vpW, sh / this.vpH);
-      this.root.draw(c);
+      this.root.draw(nc);
       this.dirty = false;
     }
+    const paint = this.paint;
+    paint.setAlpha(Math.trunc(this.alpha * 255));
+    paint.colorFilter = filter;
     ctx.save();
-    ctx.translate(l, t);
-    if (mirror) { ctx.translate(w, 0); ctx.scale(-1, 1); }
-    ctx.globalAlpha *= Math.trunc(this.alpha * 255) / 255;
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = "low";
-    ctx.drawImage(filter ? tintedBmp(cache, filter.color, filter.matrix, filter.mode) : cache.image, 0, 0, w, h);
-    ctx.restore();
+    try {
+      ctx.translate(l, t);
+      if (mirror) { ctx.translate(w, 0); ctx.scale(-1, 1); }
+      drawBitmap(cv, cache, paint, 0, 0, w, h);
+    } finally { ctx.restore(); }
     return sw * sh;
   }
 }

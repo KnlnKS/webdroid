@@ -33,6 +33,8 @@ import "./android/cursorwindow.ts";
 import "./android/binder.ts";
 import "./android/mediasession.ts";
 import "./android/graphics.ts";
+import "./android/colorfilter.ts";
+import "./android/shader.ts";
 import "./android/matrix.ts";
 import "./android/ninepatch.ts";
 import "./android/bitmap.ts";

@@ -17,9 +17,9 @@ import { newObj, scall, vcall, after } from "../jvm/natives/jentry.ts";
 import { writeThrough } from "../jvm/natives/jio.ts";
 import { type JBuffer, readBufferBytes, writeRemainingBytes, position, elementShift } from "../jvm/natives/jnio.ts";
 import { u8 } from "../jvm/abi.ts";
-import { paintAt } from "./paint.ts";
+import type { NativePaint } from "./paint.ts";
 import { nativeParcel, createByteArray, outOfLine, readInt, writeByteArray, writeInt } from "./parcel.ts";
-import { extractBitmapAlpha } from "./maskfilter.ts";
+import { invert } from "./matrix.ts";
 
 export const ALPHA_8 = 1, RGB_565 = 3, ARGB_4444 = 4, ARGB_8888 = 5, RGBA_F16 = 6, HARDWARE = 7, RGBA_1010102 = 8;
 const BPP = [0, 1, 0, 2, 2, 4, 8, 4, 4];
@@ -294,11 +294,7 @@ function transfer([a, b, c, d, e, f, g]: number[], x: number): number {
   const s = Math.sign(x), v = Math.abs(x);
   return s * (v < d ? c * v + f : Math.pow(a * v + b, g) + e);
 }
-function invert3(m: number[]): number[] {
-  const [a, b, c, d, e, f, g, h, i] = m, A = e * i - f * h, B = f * g - d * i, C = d * h - e * g, det = a * A + b * B + c * C;
-  return [A / det, (c * h - b * i) / det, (b * f - c * e) / det, B / det, (a * i - c * g) / det, (c * d - a * f) / det, C / det, (b * g - a * h) / det, (a * e - b * d) / det];
-}
-const SRGB_FROM_XYZ = invert3([0, 3, 6, 1, 4, 7, 2, 5, 8].map((k) => SRGB_D50[k]));
+const SRGB_FROM_XYZ = invert(Float64Array.from([0, 3, 6, 1, 4, 7, 2, 5, 8], (k) => SRGB_D50[k]))!;
 /** a colour in `space` as sRGB, clamped: what drawing it into an 8-bit sRGB bitmap stores */
 function toSrgb(space: NativeColorSpace, rgb: number[]): number[] {
   if (isSrgb(space)) return rgb.map((v) => Math.min(1, Math.max(0, v)));
@@ -380,6 +376,23 @@ function copyBitmap(src: NativeBitmap, config: number): NativeBitmap {
   }
   dst.commit(0, 0, dst.w, dst.h);
   return dst;
+}
+/** SkBitmap::extractAlpha: an ALPHA_8 copy of the coverage, through the paint's mask filter, its
+ *  rows 4-byte aligned as SkMask lays them out */
+function extractBitmapAlpha(src: NativeBitmap, paint: NativePaint | null, offsets: Int32Array | null): NativeBitmap {
+  const filter = paint?.maskFilter ?? null, border = filter ? filter.border() : 0;
+  const w = src.w + 2 * border, h = src.h + 2 * border, b = new NativeBitmap(w, h, ALPHA_8, PREMUL, (w + 3) & ~3);
+  if (filter) {
+    const ctx = b.ctx;
+    filter.apply(ctx, src.image, border, border, 1);
+    ctx.globalCompositeOperation = "source-in"; ctx.fillStyle = "#000"; ctx.fillRect(0, 0, b.w, b.h);
+    ctx.globalCompositeOperation = "source-over";
+  } else {
+    const source = src.pixels(), target = b.pixels();
+    for (let i = 3; i < target.length; i += 4) target[i] = source[i];
+  }
+  if (offsets && offsets.length >= 2) { offsets[0] = -border; offsets[1] = -border; }
+  return b;
 }
 const wrap = (b: NativeBitmap, mutable: number | boolean) => { b.immutable = !mutable; return javaBitmap(b); };
 
@@ -465,7 +478,7 @@ rt.registerJnis(BITMAP, {
     return javaBitmap(b, density);
   },
   "nativeExtractAlpha(JJ[I)Landroid/graphics/Bitmap;": waits((h: bigint, paint: bigint, offsetXY: Int32Array | null) =>
-    wrap(extractBitmapAlpha(bitmapAt(h), paint ? paintAt(paint) : null, offsetXY), true)),
+    wrap(extractBitmapAlpha(bitmapAt(h), paint ? deref<NativePaint>(paint) : null, offsetXY), true)),
   // hwui uploads a texture ahead of drawing; the 2D path has none to prepare
   "nativePrepareToDraw(J)V": () => {},
   "nativeHasAlpha(J)Z": (h: bigint) => +bitmapAt(h).hasAlpha,

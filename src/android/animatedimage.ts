@@ -6,8 +6,11 @@
 
 import { rt } from "../jvm/runtime.ts";
 import { handle, deref, FINALIZER } from "./handles.ts";
-import { type NativeColorFilter, edges, tintedBmp } from "./graphics.ts";
+import { edges } from "./graphics.ts";
+import type { NativeColorFilter } from "./colorfilter.ts";
 import { type NativeCanvas, drawingCanvas } from "./canvas.ts";
+import { drawBitmap } from "./canvas-draw.ts";
+import { NativePaint } from "./paint.ts";
 import { NativeBitmap } from "./bitmap.ts";
 import type { EncodedImage } from "./decode.ts";
 import { uptimeMillis } from "../guest-clock.ts";
@@ -23,6 +26,8 @@ class AnimatedImage {
   start = 0;
   current = 0;
   alpha = 255; filter: NativeColorFilter | null = null; mirrored = false;
+  /** what a frame is drawn with: the alpha and colour filter */
+  private readonly paint = new NativePaint();
   bounds = [0, 0, 0, 0];
   constructor(w: number, h: number) { this.w = w; this.h = h; }
 
@@ -66,15 +71,16 @@ class AnimatedImage {
   draw(cv: NativeCanvas): void {
     const frame = this.frames[this.current];
     if (!frame) return;
-    const [l, t, r, b] = this.bounds, ctx = cv.ctx;
+    const [l, t, r, b] = this.bounds, ctx = cv.ctx, paint = this.paint;
+    paint.setAlpha(this.alpha);
+    paint.colorFilter = this.filter;
     ctx.save();
-    ctx.translate(l, t);
-    ctx.scale((r - l) / this.w, (b - t) / this.h);
-    if (this.mirrored) { ctx.translate(this.w, 0); ctx.scale(-1, 1); }
-    ctx.globalAlpha *= this.alpha / 255;
-    const f = this.filter;
-    ctx.drawImage(f ? tintedBmp(frame.image, f.color, f.matrix, f.mode) : frame.image.image, 0, 0);
-    ctx.restore();
+    try {
+      ctx.translate(l, t);
+      ctx.scale((r - l) / this.w, (b - t) / this.h);
+      if (this.mirrored) { ctx.translate(this.w, 0); ctx.scale(-1, 1); }
+      drawBitmap(cv, frame.image, paint, 0, 0, this.w, this.h);
+    } finally { ctx.restore(); }
   }
 }
 

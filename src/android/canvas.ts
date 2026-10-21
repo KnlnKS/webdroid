@@ -3,18 +3,20 @@
 // paint is applied to a draw. The draws themselves are canvas-draw.ts. A Java canvas holds a
 // handle to a NativeCanvas in mNativeCanvasWrapper, and TS reaches it through canvasOf.
 
-import { isRecording, nestedRecording, recordOrRun, replay, replayFor, transformOf, type Ctx2D, type DisplayList, Recorder } from "./recording.ts";
-import { rasterPlan, tryBitmapShape } from "./bitmap-raster.ts";
+import { isInvertible, isRecording, nestedRecording, recordOrRun, replay, replayFor, replayingCanvas, transformOf, type Ctx2D, type DisplayList, Recorder } from "./recording.ts";
+import { aliasedStroke } from "./bitmap-raster.ts";
 import { rt, type JObj, peerField, setDeclared } from "../jvm/runtime.ts";
 import { after, newObj, scall } from "../jvm/natives/jentry.ts";
 import { handle, deref, release, ownedHandle, FINALIZER } from "./handles.ts";
 import { NativePath, inversePath, pathAt } from "./path.ts";
 import { type NativeBitmap, bitmapAt } from "./bitmap.ts";
-import { BlurMask, MAX_SIGMA } from "./maskfilter.ts";
+import { BlurMask, cssBlur } from "./maskfilter.ts";
 import { strokeRec } from "./patheffect.ts";
 import { NativePaint, UNBOUNDED, copyPaint, beginPaintShadow, applyStroke } from "./paint.ts";
-import { setEdges, emptyBox, type Box, type NativeColorFilter, NativeBitmapShader, COMPOSITE, PLANE, canvasLocalBounds, fillWithShader, shaderIdentity, recolor } from "./graphics.ts";
-import { type Affine, setAffine, applyMatrix, matrixAt, deviceScale, deviceBounds, localBounds } from "./matrix.ts";
+import { setEdges, emptyBox, type Box, COMPOSITE } from "./graphics.ts";
+import { type NativeColorFilter, recolor } from "./colorfilter.ts";
+import { NativeBitmapShader, fillWithShader, shaderIdentity } from "./shader.ts";
+import { type Affine, PLANE, setAffine, applyMatrix, matrixAt, deviceScale, deviceBounds, localBounds, canvasLocalBounds } from "./matrix.ts";
 
 /** the Java canvases TS hands framework and app code: a Canvas or RecordingCanvas peer */
 export type JavaCanvas = JObj;
@@ -30,6 +32,30 @@ const NO_DASH: number[] = [];
 const MATRIX_CLIP = 3;
 /** the context's transform as SkMatrix holds it, in floats */
 const skMatrix = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+/** the bounds each clip and layer computation reads before the next */
+const box = new Float64Array(4);
+
+/** what planDraw draws: geometry (and text), an ALPHA_8 image (coverage in the paint's colour) or
+ *  any other image, whose source is its pixels rather than a colour */
+export const SHAPE = 0, MASK = 1, IMAGE = 2;
+/** a shape's fill, or with `clip` the context clipped to the shape for a shader to fill */
+export type Fill = (ctx: Ctx2D, clip: boolean) => void;
+/** how one draw applies its paint, as planDraw decides it */
+export class DrawPlan {
+  /** the blend mode by BlendMode's name (drawMode's for a solid colour), null for SRC_OVER; by DST
+   *  the draw changes nothing */
+  mode: string | null = null;
+  /** the composite op, null for source-over; `unbounded` when Canvas2D's would clear beyond the draw */
+  op: GlobalCompositeOperation | null = null;
+  unbounded = false;
+  /** a normal blur, which the context's filter draws */
+  blur: BlurMask | null = null;
+  /** the draw blends through its coverage (drawMask): a mask filter other than a normal blur, an
+   *  unbounded mode, a shader under a colour filter, or an ALPHA_8 image's shader */
+  viaMask = false;
+  /** into a bitmap, the op Skia's own raster rules composite a solid colour with (bitmap-raster.ts) */
+  raster: GlobalCompositeOperation | null = null;
+}
 
 /** SkiaCanvas: a 2D context and the state Canvas2D does not expose — the save count, the device
  *  clip bounds, open layers */
@@ -60,12 +86,32 @@ export class NativeCanvas {
     nc.setTarget(ctx, w, h, bmp);
     return nc;
   }
+  /** the canvas a draw this canvas defers reaches `ctx` through: this one when it draws there, the
+   *  canvas replaying it when that does (its clip and bitmap), else one over `ctx` */
+  at(ctx: Ctx2D): NativeCanvas {
+    if (ctx === this.ctx) return this;
+    const r = replayingCanvas();
+    return r?.ctx === ctx ? r : NativeCanvas.over(ctx);
+  }
   /** SkiaCanvas::setBitmap: a fresh device, its matrix identity and its clip the whole target */
   setTarget(ctx: Ctx2D, w: number, h: number, bmp: NativeBitmap | null) {
     this.ctx = ctx; this.w = w; this.h = h; this.bmp = bmp;
     this.saveCount = 1; this.layers = null; this.persistent = null;
     this.clips.length = this.polys.length = this.flags.length = 0;
     this.cl = this.ct = 0; this.cr = w; this.cb = h; this.poly = null;
+  }
+  private readonly drawPlan = new DrawPlan();
+  /** the plan of one draw of `p` (`kind` SHAPE, MASK or IMAGE): the canvas's one plan, which its
+   *  next draw replaces */
+  planDraw(p: NativePaint, kind = SHAPE): DrawPlan {
+    const plan = this.drawPlan, mode = kind === IMAGE ? p.blendName : p.drawMode();
+    const op = mode === null ? null : COMPOSITE[mode] ?? null, unbounded = op !== null && UNBOUNDED.has(op);
+    const mf = kind === IMAGE ? null : p.maskFilter, blur = kind === SHAPE && mf instanceof BlurMask && mf.style === 0 ? mf : null;
+    plan.mode = mode; plan.op = op; plan.unbounded = unbounded; plan.blur = blur;
+    plan.viaMask = kind !== IMAGE && (mf !== null && blur === null || unbounded || p.shader !== null && (kind === MASK || p.colorFilter !== null));
+    plan.raster = kind === SHAPE && this.bmp && mode !== "DST" && !unbounded && !p.shader && !mf && (!p.pathEffect || p.dash) && !p.shadowRadius
+      ? op ?? "source-over" : null;
+    return plan;
   }
   /** a Canvas.drawXxx paint through the canvas's draw filter */
   paint(h: bigint): NativePaint {
@@ -92,30 +138,32 @@ export class NativeCanvas {
     }
     return shader !== null && (!!replayed || typeof CanvasPattern !== "undefined" && ctx[stroke ? "strokeStyle" : "fillStyle"] instanceof CanvasPattern);
   }
-  private maskLayer: { shape: NativeCanvas; target: OffscreenCanvasRenderingContext2D; paint: NativePaint; cpu: boolean } | null = null;
+  private maskLayer: { shape: NativeCanvas; target: OffscreenCanvasRenderingContext2D; shaded: OffscreenCanvasRenderingContext2D | null; paint: NativePaint; cpu: boolean } | null = null;
   /** a draw blended through its coverage, as SkDraw blends a mask: `coverage` draws the shape in the
-   *  white paint it is given (`aliased`: sampled at pixel centres), the paint's mask filter makes that
-   *  M, and the source S blends by the mode where M covers, D·(1−M) + blend(S, D)·M. A recording
-   *  keeps the coverage and blends where it is replayed. */
-  drawMask(p: NativePaint, coverage: (nc: NativeCanvas, white: NativePaint) => void, aliased = false) {
+   *  white paint it is given (`aliased`: thresholded at half, approximating the pixel centres a fill
+   *  without anti-aliasing covers), the paint's mask filter makes that M, and the source S blends by
+   *  the mode's `op` where M covers, D·(1−M) + blend(S, D)·M. A recording keeps the coverage and
+   *  blends where it is replayed. */
+  drawMask(p: NativePaint, op: GlobalCompositeOperation | null, coverage: (nc: NativeCanvas, white: NativePaint) => void, aliased = false) {
     const ctx = this.ctx;
-    if (!isRecording(ctx)) return this.blendMask(ctx, p, coverage, aliased, !!this.bmp);
+    if (!isRecording(ctx)) return this.blendMask(ctx, p, op, coverage, aliased, !!this.bmp);
     const ops: DisplayList = [], q = new NativePaint();
     coverage(NativeCanvas.over(nestedRecording(ctx, ops)), whitePaint(p, q));
     copyPaint(p, q);
-    recordOrRun(ctx, (target) => this.blendMask(target, q, (nc) => replay(nc.ctx, ops), aliased, false));
+    recordOrRun(ctx, (target) => this.blendMask(target, q, op, (nc) => replay(nc.ctx, ops), aliased, false));
   }
   /** `cpu`: the target is a bitmap's raster, whose side (CPU or GPU) the layers take, as openLayer's
    *  do, or every blend is a readback */
-  private blendMask(ctx: Ctx2D, p: NativePaint, coverage: (nc: NativeCanvas, white: NativePaint) => void, aliased: boolean, cpu: boolean) {
+  private blendMask(ctx: Ctx2D, p: NativePaint, op: GlobalCompositeOperation | null, coverage: (nc: NativeCanvas, white: NativePaint) => void, aliased: boolean, cpu: boolean) {
     const w = ctx.canvas.width, h = ctx.canvas.height, m = ctx.getTransform(), scale = deviceScale(m);
     if (!w || !h || !scale) return;
     let layer = this.maskLayer;
+    const raster = () => new OffscreenCanvas(w, h).getContext("2d", { willReadFrequently: cpu })!;
     if (!layer || layer.shape.w !== w || layer.shape.h !== h || layer.cpu !== cpu) {
-      const raster = () => new OffscreenCanvas(w, h).getContext("2d", { willReadFrequently: cpu })!;
-      layer = this.maskLayer = { shape: NativeCanvas.over(raster(), w, h), target: raster(), paint: new NativePaint(), cpu };
+      layer = this.maskLayer = { shape: NativeCanvas.over(raster(), w, h), target: raster(), shaded: null, paint: new NativePaint(), cpu };
     }
     const source = layer.shape.ctx as OffscreenCanvasRenderingContext2D, target = layer.target;
+    const shaded = p.shader && p.colorFilter ? filteredShader(layer.shaded ??= raster(), p, m) : null;
     source.resetTransform(); source.clearRect(0, 0, w, h); source.setTransform(m);
     coverage(layer.shape, whitePaint(p, layer.paint));
     if (aliased) {
@@ -127,13 +175,10 @@ export class NativeCanvas {
     const mf = p.maskFilter;
     if (mf) mf.apply(target, source.canvas, 0, 0, scale, p.filteredColor());
     else target.drawImage(source.canvas, 0, 0);
-    const mode = p.blendName && p.drawMode();
-    if (mode === "DST") return;
-    const op = mode ? COMPOSITE[mode] ?? null : null;
     if (op && UNBOUNDED.has(op) && !mf?.colored) {
       // blend(S, D) over all of `source`, kept where M covers and added to D·(1−M)
       source.resetTransform(); source.clearRect(0, 0, w, h); source.drawImage(ctx.canvas, 0, 0);
-      fillSource(source, p, op, m);
+      fillSource(source, p, op, m, shaded);
       source.globalCompositeOperation = "destination-in"; source.drawImage(target.canvas, 0, 0);
       source.globalCompositeOperation = "source-over";
       ctx.save();
@@ -145,37 +190,39 @@ export class NativeCanvas {
       return;
     }
     // a mask filter that colours (emboss) has drawn the shape's colours itself
-    if (!mf?.colored) fillSource(target, p, "source-in", m);
+    if (!mf?.colored) fillSource(target, p, "source-in", m, shaded);
     const undo = beginPaint(ctx, p, op, false, null);
     ctx.save();
     try { ctx.resetTransform(); ctx.drawImage(target.canvas, 0, 0); }
     finally { ctx.restore(); endPaint(ctx, undo); }
   }
   /** a shape drawn with the paint; `geom` gives it as a path, for a path effect to change, and `plan`
-   *  is the draw's rasterPlan when the caller has made it */
-  drawShape(p: NativePaint, fill: (ctx: Ctx2D) => void, stroke: (ctx: Ctx2D) => void, geom?: () => NativePath, plan = rasterPlan(this, p)) {
+   *  is the draw's when the caller has made it */
+  drawShape(p: NativePaint, fill: Fill, stroke: (ctx: Ctx2D) => void, geom?: () => NativePath, plan = this.planDraw(p)) {
     if (p.pathEffect && !p.dash && geom) return this.drawEffected(p, geom());
-    if (plan && tryBitmapShape(this, p, plan, fill, stroke)) return;
-    const mode = p.blendName && p.drawMode();
-    if (mode === "DST") return;
-    const op = mode ? COMPOSITE[mode] ?? null : null, mf = p.maskFilter, blur = mf instanceof BlurMask && mf.style === 0 ? mf : null;
-    // a mask filter other than a normal blur, and an unbounded mode, blend through the shape's
-    // coverage (a clip to the shape would confine the mode, but the context's clips are aliased)
-    if (mf && !blur || op !== null && UNBOUNDED.has(op)) return maskShape(this, p, fill, stroke);
-    const ctx = this.ctx, undo = beginPaint(ctx, p, op, p.shader !== null, blur);
+    if (plan.mode === "DST") return;
+    // through the shape's coverage: a clip to the shape would confine an unbounded mode, but the
+    // context's clips are aliased
+    if (plan.viaMask || plan.raster && aliasedStroke(this, p)) return maskShape(this, p, plan.op, fill, stroke);
+    const ctx = this.ctx, undo = beginPaint(ctx, p, plan.op, p.shader !== null, plan.blur);
     try {
       if (p.style !== 1) {
         const shader = p.shader, lm = shader?.local;
-        if (shader instanceof NativeBitmapShader) fill(this.shaderClipCtx(lm ?? shaderIdentity, shader));
-        else {
-          const pattern = this.prep(p, false);
-          // a gradient with a local matrix: Canvas2D gradients have no transform of their own, so
-          // clip to the shape and fill the plane under the matrix instead
-          fill(lm && !pattern ? this.shaderClipCtx(lm) : ctx);
-        }
+        if (shader instanceof NativeBitmapShader) this.shaderFill(fill, lm ?? shaderIdentity, shader);
+        else if (!this.prep(p, false) && lm) this.shaderFill(fill, lm, null);
+        else fill(ctx, false);
       }
       if (p.style === 1 || p.style === 2 && p.strokeWidth !== 0) { this.prep(p, true); stroke(ctx); }
     } finally { endPaint(ctx, undo); }
+  }
+  private restyled: NativePaint | null = null;
+  /** `p` for a draw that sets its own style, as SkDraw strokes lines and fills points: the paint, or
+   *  the canvas's copy restyled */
+  restyle(p: NativePaint, style: number): NativePaint {
+    if (p.style === style) return p;
+    const q = this.restyled ??= new NativePaint();
+    copyPaint(p, q); q.style = style;
+    return q;
   }
   private effected: NativePaint | null = null;
   /** SkCanvas::drawPath through a path effect other than a lone dash: the geometry it makes, filled
@@ -185,50 +232,28 @@ export class NativeCanvas {
     const path = p.pathEffect!.filter(dst, src, rec) ? dst : src;
     copyPaint(p, q); q.setPathEffect(null);
     if (rec.fill) q.style = 0;
-    this.drawShape(q, (c) => c.fill(path.path(), path.fillRule), (c) => c.stroke(path.path()));
+    this.drawShape(q, (c, clip) => clip ? c.clip(path.path(), path.fillRule) : c.fill(path.path(), path.fillRule), (c) => c.stroke(path.path()));
   }
   /** SkCanvas::drawPaint: the paint over the whole clip */
   drawPaint(paint: NativePaint) {
     const bounds = canvasLocalBounds(this.ctx);
     if (!bounds) return;
     const [l, t, r, b] = bounds;
-    copyPaint(paint, paintScratch); paintScratch.style = 0; paintScratch.maskFilter = null;
-    this.drawShape(paintScratch, c => c.fillRect(l, t, r - l, b - t), () => {});
+    const q = this.restyled ??= new NativePaint();
+    copyPaint(paint, q); q.style = 0; q.maskFilter = null;
+    this.drawShape(q, (c, clip) => { if (!clip) c.fillRect(l, t, r - l, b - t); }, () => {});
   }
-  private shaderCtx: Ctx2D | null = null;
-  private shaderBaseCtx: Ctx2D | null = null;
-  private shaderCtxLm: number[] | null = null;
-  private bitmapShader: NativeBitmapShader | undefined;
-  shaderClipCtx(lm: Affine, bitmap?: NativeBitmapShader): Ctx2D {
+  /** a fill by a shader the 2D context cannot fill with, a bitmap's or a gradient under a local
+   *  matrix (Canvas2D gradients have no transform of their own): the plane under the matrix,
+   *  clipped to the shape */
+  private shaderFill(fill: Fill, lm: Affine, bitmap: NativeBitmapShader | null) {
     const ctx = this.ctx;
-    const under = (clip: (c: typeof ctx) => void) => {
-      ctx.save();
-      clip(ctx);
-      ctx.transform(lm[0], lm[1], lm[2], lm[3], lm[4], lm[5]);
-      if (bitmap) bitmap.draw(ctx);
-      else ctx.fillRect(-PLANE, -PLANE, 2 * PLANE, 2 * PLANE);
-      ctx.restore();
-    };
-    if (!this.shaderCtx || this.shaderBaseCtx !== ctx || this.shaderCtxLm !== lm || this.bitmapShader !== bitmap) {
-      this.shaderBaseCtx = ctx;
-      this.shaderCtxLm = lm;
-      this.bitmapShader = bitmap;
-      const over: Record<string, unknown> = {
-        fill: (a?: Path2D | CanvasFillRule, b?: CanvasFillRule) => under((c) => { if (a instanceof Path2D) c.clip(a, b); else c.clip(a); }),
-        fillRect: (x: number, y: number, w: number, h: number) => under((c) => { c.beginPath(); c.rect(x, y, w, h); c.clip(); }),
-      };
-      // every other member goes to the real context with the real receiver (a 2D context's
-      // methods throw on any other `this`)
-      this.shaderCtx = new Proxy(ctx, {
-        get: (t, k) => {
-          if (k in over) return over[k as string];
-          const v = Reflect.get(t, k, t);
-          return typeof v === "function" ? v.bind(t) : v;
-        },
-        set: (t, k, v) => Reflect.set(t, k, v, t),
-      });
-    }
-    return this.shaderCtx!;
+    ctx.save();
+    fill(ctx, true);
+    ctx.transform(lm[0], lm[1], lm[2], lm[3], lm[4], lm[5]);
+    if (bitmap) bitmap.draw(ctx);
+    else ctx.fillRect(-PLANE, -PLANE, 2 * PLANE, 2 * PLANE);
+    ctx.restore();
   }
 
   // ── save and restore (SkiaCanvas, with its partial saves) ──
@@ -287,7 +312,7 @@ export class NativeCanvas {
     const ctx = this.ctx, m = transformOf(ctx);
     if (l > r) { const x = l; l = r; r = x; }
     if (t > b) { const y = t; t = b; b = y; }
-    if (r === l || b === t || !(m.a * m.d - m.b * m.c)) {
+    if (r === l || b === t || !isInvertible(m)) {
       this.setClipEmpty();
       clipNothing(ctx);
       this.persist(clipNothing);
@@ -300,7 +325,7 @@ export class NativeCanvas {
     if (this.clipEmpty) return false;
     if (m.b === 0 && m.c === 0 && !this.poly) {
       // an axis-aligned rect: a hard edge, rounded to pixels as SkRect::round does
-      const d = deviceBounds(m, l, t, r, b);
+      const d = deviceBounds(m, l, t, r, b, box);
       this.narrow(Math.round(d[0]), Math.round(d[1]), Math.round(d[2]), Math.round(d[3]));
       return !this.clipEmpty;
     }
@@ -361,8 +386,8 @@ export class NativeCanvas {
     recordOrRun(this.ctx, apply);
     this.persist(apply);
     const m = transformOf(this.ctx);
-    if (this.clipEmpty || !(m.a * m.d - m.b * m.c)) return !this.clipEmpty;
-    const d = deviceBounds(m, l, t, r, b), x0 = Math.round(d[0]), y0 = Math.round(d[1]), x1 = Math.round(d[2]), y1 = Math.round(d[3]);
+    if (this.clipEmpty || !isInvertible(m)) return !this.clipEmpty;
+    const d = deviceBounds(m, l, t, r, b, box), x0 = Math.round(d[0]), y0 = Math.round(d[1]), x1 = Math.round(d[2]), y1 = Math.round(d[3]);
     const exact = m.b === 0 && m.c === 0;
     if (x0 <= this.cl && x1 >= this.cr && y0 <= this.ct && y1 >= this.cb && (exact || !this.poly)) this.setClipEmpty();
     else if (exact && !this.poly) {
@@ -397,15 +422,15 @@ export class NativeCanvas {
   private narrowOut(l: number, t: number, r: number, b: number) {
     if (this.clipEmpty) return;
     const m = transformOf(this.ctx);
-    if (!(m.a * m.d - m.b * m.c)) { this.setClipEmpty(); return; }
-    const d = deviceBounds(m, l, t, r, b);
+    if (!isInvertible(m)) { this.setClipEmpty(); return; }
+    const d = deviceBounds(m, l, t, r, b, box);
     this.narrow(Math.floor(d[0]), Math.floor(d[1]), Math.ceil(d[2]), Math.ceil(d[3]));
   }
   /** SkCanvas::quickReject: whether the rect under the matrix misses the device clip's bounds,
    *  outset a pixel for anti-aliasing */
   quickReject(l: number, t: number, r: number, b: number): boolean {
     if (this.clipEmpty) return true;
-    const d = deviceBounds(transformOf(this.ctx), l, t, r, b);
+    const d = deviceBounds(transformOf(this.ctx), l, t, r, b, box);
     if (!(Number.isFinite(d[0]) && Number.isFinite(d[1]) && Number.isFinite(d[2]) && Number.isFinite(d[3]))) return true;
     return !(Math.max(d[0], this.cl - 1) < Math.min(d[2], this.cr + 1) && Math.max(d[1], this.ct - 1) < Math.min(d[3], this.cb + 1));
   }
@@ -414,17 +439,16 @@ export class NativeCanvas {
     if (this.clipEmpty) return null;
     const m = transformOf(this.ctx), f = Math.fround;
     skMatrix.a = f(m.a); skMatrix.b = f(m.b); skMatrix.c = f(m.c); skMatrix.d = f(m.d); skMatrix.e = f(m.e); skMatrix.f = f(m.f);
-    const d = localBounds(skMatrix, this.cr - this.cl, this.cb - this.ct, this.cl, this.ct);
+    const d = localBounds(skMatrix, this.cr - this.cl, this.cb - this.ct, this.cl, this.ct, box);
     return d && { left: Math.round(d[0]), top: Math.round(d[1]), right: Math.round(d[2]), bottom: Math.round(d[3]) };
   }
   /** a layer confines what is drawn in it to its device bounds, rounded out */
   clipToLayer(bounds: Box | null) {
     if (!bounds) return;
-    const d = deviceBounds(transformOf(this.ctx), bounds.left, bounds.top, bounds.right, bounds.bottom);
+    const d = deviceBounds(transformOf(this.ctx), bounds.left, bounds.top, bounds.right, bounds.bottom, box);
     this.narrow(Math.floor(d[0]), Math.floor(d[1]), Math.ceil(d[2]), Math.ceil(d[3]));
   }
 }
-const paintScratch = new NativePaint();
 /** clip everything away: the context's clip only narrows, so it is intersected with a pixel off the target */
 function clipNothing(ctx: Ctx2D) {
   const m = ctx.getTransform();
@@ -503,7 +527,7 @@ function openLayer(target: Ctx2D, bounds: Box | null, cpu: boolean): LayerRaster
   const W = target.canvas.width, H = target.canvas.height, m = target.getTransform();
   let x0 = 0, y0 = 0, x1 = W, y1 = H;
   if (bounds) {
-    const d = deviceBounds(m, bounds.left, bounds.top, bounds.right, bounds.bottom);
+    const d = deviceBounds(m, bounds.left, bounds.top, bounds.right, bounds.bottom, box);
     x0 = Math.max(0, Math.floor(d[0])); y0 = Math.max(0, Math.floor(d[1]));
     x1 = Math.min(W, Math.ceil(d[2])); y1 = Math.min(H, Math.ceil(d[3]));
   }
@@ -563,7 +587,7 @@ export function saveLayer(nc: NativeCanvas, bounds: Box | null, paint: NativePai
 function saveBehind(nc: NativeCanvas, l: number, t: number, r: number, b: number): number {
   const count = nc.save(), parent = nc.ctx, behind: Behind = { image: null, x: 0, y: 0 };
   recordOrRun(parent, (ctx) => {
-    const d = deviceBounds(ctx.getTransform(), l, t, r, b);
+    const d = deviceBounds(ctx.getTransform(), l, t, r, b, box);
     const x0 = Math.max(0, Math.floor(d[0])), y0 = Math.max(0, Math.floor(d[1]));
     const x1 = Math.min(ctx.canvas.width, Math.ceil(d[2])), y1 = Math.min(ctx.canvas.height, Math.ceil(d[3]));
     behind.image = null;
@@ -591,13 +615,15 @@ function restoreBehind(nc: NativeCanvas, count: number, paint: NativePaint) {
   if (nc.saveCount !== count + 1) return;
   const behind = nc.layers?.at(-1)?.behind;
   if (behind) {
+    const q = new NativePaint();
+    copyPaint(paint, q);
     recordOrRun(nc.ctx, (ctx) => {
       const image = behind.image;
       if (!image) return;
       ctx.save();
       ctx.resetTransform();
       ctx.beginPath(); ctx.rect(behind.x, behind.y, image.width, image.height); ctx.clip();
-      NativeCanvas.over(ctx).drawPaint(paint);
+      nc.at(ctx).drawPaint(q);
       ctx.restore();
     });
   }
@@ -615,7 +641,7 @@ export function beginPaint(ctx: Ctx2D, p: NativePaint, op: GlobalCompositeOperat
   if (fade && beginAlpha(ctx, p.color >>> 24)) undo = FADED;
   if (p.shadowRadius > 0 && beginPaintShadow(ctx, p)) undo |= SHADOWED;
   if (op !== null) { ctx.globalCompositeOperation = op; undo |= BLENDED; }
-  if (blur !== null) { ctx.filter = `blur(${Math.min(blur.sigma * deviceScale(transformOf(ctx)), MAX_SIGMA)}px)`; undo |= BLURRED; }
+  if (blur !== null) { ctx.filter = cssBlur(blur.sigma, deviceScale(transformOf(ctx))); undo |= BLURRED; }
   return undo;
 }
 export function endPaint(ctx: Ctx2D, undo: number): void {
@@ -636,8 +662,8 @@ function beginAlpha(ctx: Ctx2D, alpha: number): boolean {
 const restoreOp = (c: Ctx2D) => c.restore();
 // out of line, as each draw's mask path is: a closure over a draw's arguments would make every
 // call of the draw allocate a context for them
-function maskShape(nc: NativeCanvas, p: NativePaint, fill: (ctx: Ctx2D) => void, stroke: (ctx: Ctx2D) => void) {
-  nc.drawMask(p, (m, q) => m.drawShape(q, fill, stroke), !p.antiAlias);
+function maskShape(nc: NativeCanvas, p: NativePaint, op: GlobalCompositeOperation | null, fill: Fill, stroke: (ctx: Ctx2D) => void) {
+  nc.drawMask(p, op, (m, q) => m.drawShape(q, fill, stroke), !p.antiAlias);
 }
 /** the paint drawMask draws a shape's coverage with: its geometry, in opaque white */
 function whitePaint(p: NativePaint, into: NativePaint): NativePaint {
@@ -646,11 +672,14 @@ function whitePaint(p: NativePaint, into: NativePaint): NativePaint {
   into.color = -1; into.shader = null; into.colorFilter = null;
   return into;
 }
-/** the paint's source over all of `c` by `op`, under the draw's transform `m`: its colour, or its
- *  shader at the paint's alpha; `c` is left untransformed */
-function fillSource(c: OffscreenCanvasRenderingContext2D, p: NativePaint, op: GlobalCompositeOperation, m: DOMMatrix) {
+/** the paint's source over all of `c` by `op`, under the draw's transform `m`: its colour, its
+ *  shader at the paint's alpha, or `shaded`, that through the colour filter; `c` is left untransformed */
+function fillSource(c: OffscreenCanvasRenderingContext2D, p: NativePaint, op: GlobalCompositeOperation, m: DOMMatrix, shaded: OffscreenCanvas | null) {
   c.globalCompositeOperation = op;
-  if (p.shader) {
+  if (shaded) {
+    c.resetTransform();
+    c.drawImage(shaded, 0, 0);
+  } else if (p.shader) {
     c.setTransform(m);
     c.globalAlpha = (p.color >>> 24) / 255;
     fillWithShader(c, p.shader);
@@ -662,6 +691,18 @@ function fillSource(c: OffscreenCanvasRenderingContext2D, p: NativePaint, op: Gl
     c.fillRect(0, 0, c.canvas.width, c.canvas.height);
   }
   c.globalCompositeOperation = "source-over";
+}
+/** the paint's shader at its alpha, over all of `c` under `m`, then through its colour filter, as
+ *  Skia filters what a shader makes before coverage */
+function filteredShader(c: OffscreenCanvasRenderingContext2D, p: NativePaint, m: DOMMatrix): OffscreenCanvas {
+  const w = c.canvas.width, h = c.canvas.height, f = p.colorFilter!;
+  c.resetTransform(); c.clearRect(0, 0, w, h); c.setTransform(m);
+  c.globalAlpha = (p.color >>> 24) / 255;
+  fillWithShader(c, p.shader!);
+  c.globalAlpha = 1;
+  c.resetTransform();
+  recolor(c, w, h, f.color, f.matrix, f.mode);
+  return c.canvas;
 }
 
 export function unsupported(what: string) { return () => { throw rt.unimplemented(what); }; }
@@ -701,7 +742,7 @@ rt.registerJnis("android/graphics/Canvas", {
   "nTranslate(JFF)V": (h: bigint, x: number, y: number) => {
     const ctx = canvasAt(h).ctx, m = transformOf(ctx);
     // a singular matrix stays singular: Canvas2D would drop a translate under one
-    if (m.a * m.d === m.b * m.c) ctx.setTransform(m.a, m.b, m.c, m.d, m.e + m.a * x + m.c * y, m.f + m.b * x + m.d * y);
+    if (!isInvertible(m)) ctx.setTransform(m.a, m.b, m.c, m.d, m.e + m.a * x + m.c * y, m.f + m.b * x + m.d * y);
     else ctx.translate(x, y);
   },
   "nScale(JFF)V": (h: bigint, x: number, y: number) => canvasAt(h).ctx.scale(x, y),

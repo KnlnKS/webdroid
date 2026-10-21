@@ -1,6 +1,6 @@
 import { rt } from "../jvm/runtime.ts";
 import { handle, deref, FINALIZER } from "./handles.ts";
-import { NativeShader, fillWithShader } from "./graphics.ts";
+import { NativeShader, fillWithShader } from "./shader.ts";
 import { localMatrix, type Affine } from "./matrix.ts";
 import type { Ctx2D } from "./recording.ts";
 import { device } from "../shell/config.ts";

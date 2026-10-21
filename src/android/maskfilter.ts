@@ -1,16 +1,16 @@
 // SkMaskFilter behind android.graphics.MaskFilter and its subclasses, whose Java runs from AOSP
-// bytecode: what a shape's coverage becomes before it is coloured, and Bitmap.extractAlpha's use of it.
+// bytecode: what a shape's coverage (or Bitmap.extractAlpha's) becomes before it is coloured.
 
 import { rt } from "../jvm/runtime.ts";
 import { handle, deref, release } from "./handles.ts";
-import { NativeBitmap, ALPHA_8, PREMUL } from "./bitmap.ts";
-import type { NativePaint } from "./paint.ts";
 import type { Ctx2D } from "./recording.ts";
 
-/** Blur::convertRadiusToSigma */
-const radiusToSigma = (r: number) => (r > 0 ? 0.57735 * r + 0.5 : 0);
+/** Blur::convertRadiusToSigma, in float */
+export const radiusToSigma = (r: number) => (r > 0 ? Math.fround(Math.fround(Math.fround(0.57735) * r) + 0.5) : 0);
 /** SkMaskBlurFilter pins a device sigma to this */
-export const MAX_SIGMA = 135;
+const MAX_SIGMA = 135;
+/** the 2D context's filter for a mask blur of `sigma`, scaled to device pixels */
+export const cssBlur = (sigma: number, scale: number) => `blur(${Math.min(sigma * scale, MAX_SIGMA)}px)`;
 export abstract class NativeMaskFilter {
   /** whether apply writes the shape's final colours (a 3D mask), not coverage to be coloured */
   readonly colored: boolean = false;
@@ -46,7 +46,7 @@ export class BlurMask extends NativeMaskFilter {
     return n - 1;
   }
   apply(ctx: Ctx2D, source: CanvasImageSource, x: number, y: number, scale: number) {
-    ctx.filter = `blur(${Math.min(this.sigma * scale, MAX_SIGMA)}px)`;
+    ctx.filter = cssBlur(this.sigma, scale);
     ctx.drawImage(source, x, y); ctx.filter = "none";
     if (this.style) {
       ctx.globalCompositeOperation = this.style === 2 ? "destination-out" : this.style === 3 ? "destination-in" : "source-over";
@@ -78,7 +78,7 @@ class EmbossMask extends NativeMaskFilter {
     ctx.drawImage(source, x, y);
     const src = ctx.getImageData(0, 0, w, h);
     ctx.clearRect(0, 0, w, h);
-    ctx.filter = `blur(${Math.min(this.sigma * scale, MAX_SIGMA)}px)`;
+    ctx.filter = cssBlur(this.sigma, scale);
     ctx.drawImage(source, x, y); ctx.filter = "none";
     const blurred = ctx.getImageData(0, 0, w, h), b = blurred.data, s = src.data;
     // the inner blur: the blurred coverage inside the shape (merge_src_with_blur)
@@ -154,21 +154,3 @@ rt.registerJnis("android/graphics/TableMaskFilter", {
     return handle(new TableMask(t));
   },
 });
-
-/** SkBitmap::extractAlpha: an ALPHA_8 copy of the coverage, through the paint's mask filter, its
- *  rows 4-byte aligned as SkMask lays them out */
-export function extractBitmapAlpha(src: NativeBitmap, paint: NativePaint | null, offsets: Int32Array | null): NativeBitmap {
-  const filter = paint?.maskFilter ?? null, border = filter ? filter.border() : 0;
-  const w = src.w + 2 * border, h = src.h + 2 * border, b = new NativeBitmap(w, h, ALPHA_8, PREMUL, (w + 3) & ~3);
-  if (filter) {
-    const ctx = b.ctx;
-    filter.apply(ctx, src.image, border, border, 1);
-    ctx.globalCompositeOperation = "source-in"; ctx.fillStyle = "#000"; ctx.fillRect(0, 0, b.w, b.h);
-    ctx.globalCompositeOperation = "source-over";
-  } else {
-    const source = src.pixels(), target = b.pixels();
-    for (let i = 3; i < target.length; i += 4) target[i] = source[i];
-  }
-  if (offsets && offsets.length >= 2) { offsets[0] = -border; offsets[1] = -border; }
-  return b;
-}

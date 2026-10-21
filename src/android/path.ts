@@ -425,6 +425,11 @@ export class NativePath {
     walkOps(this.ops, new Pen(null, box));
     return box.left === Infinity ? { left: 0, top: 0, right: 0, bottom: 0 } : box;
   }
+  /** SkPath::isFinite */
+  finite(): boolean {
+    const b = this.bounds();
+    return Number.isFinite(b.left + b.top + b.right + b.bottom);
+  }
   /** SkPath::isRect: one contour of axis-aligned lines turning four right angles, closed or implicitly */
   isRect(): Box | null {
     const vs = this.verbs(), xs: number[] = [], ys: number[] = [];
@@ -680,7 +685,8 @@ function cubicSegs(c: Contour, x0: number, y0: number, x1: number, y1: number, x
   if (next > d) c.seg(next, pi, CUBIC_SEG, maxt);
   return next;
 }
-const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+/** SkScalarInterp, in float as Skia's geometry is */
+export const lerp = (a: number, b: number, t: number) => Math.fround(a + Math.fround(Math.fround(b - a) * t));
 
 export class PathMeasure {
   private verbs: Verb[] = [];
@@ -848,39 +854,41 @@ export class PathMeasure {
         for (let k = 0; k < 6; k++) a[k] = p[i + k];
         if (startT === 0) {
           if (stopT === 1) return dst.quadTo(a[2], a[3], a[4], a[5]);
-          chopQuad(a, stopT, b);
+          chopQuadAt(a, stopT, b);
           return dst.quadTo(b[2], b[3], b[4], b[5]);
         }
-        chopQuad(a, startT, b);
+        chopQuadAt(a, startT, b);
         if (stopT === 1) return dst.quadTo(b[6], b[7], b[8], b[9]);
-        chopQuad(b.subarray(4), (stopT - startT) / (1 - startT), a);
+        chopQuadAt(b.subarray(4), (stopT - startT) / (1 - startT), a);
         return dst.quadTo(a[2], a[3], a[4], a[5]);
       case CUBIC_SEG:
         for (let k = 0; k < 8; k++) a[k] = p[i + k];
         if (startT === 0) {
           if (stopT === 1) return dst.cubicTo(a[2], a[3], a[4], a[5], a[6], a[7]);
-          chopCubic(a, stopT, b);
+          chopCubicAt(a, stopT, b);
           return dst.cubicTo(b[2], b[3], b[4], b[5], b[6], b[7]);
         }
-        chopCubic(a, startT, b);
+        chopCubicAt(a, startT, b);
         if (stopT === 1) return dst.cubicTo(b[8], b[9], b[10], b[11], b[12], b[13]);
-        chopCubic(b.subarray(6), (stopT - startT) / (1 - startT), a);
+        chopCubicAt(b.subarray(6), (stopT - startT) / (1 - startT), a);
         return dst.cubicTo(a[2], a[3], a[4], a[5], a[6], a[7]);
     }
   }
 }
-/** SkChopQuadAt: src's three points split at t into five (the middle one shared) */
-function chopQuad(src: Float64Array, t: number, dst: Float64Array) {
-  const [x0, y0, x1, y1, x2, y2] = src;
+/** SkChopQuadAt: the quad src[0..6) split at t into the five points dst[0..10), the middle one shared */
+export function chopQuadAt(src: ArrayLike<number>, t: number, dst: Float64Array) {
+  const x0 = src[0], y0 = src[1], x1 = src[2], y1 = src[3], x2 = src[4], y2 = src[5];
   const ax = lerp(x0, x1, t), ay = lerp(y0, y1, t), bx = lerp(x1, x2, t), by = lerp(y1, y2, t);
-  dst.set([x0, y0, ax, ay, lerp(ax, bx, t), lerp(ay, by, t), bx, by, x2, y2]);
+  dst[0] = x0; dst[1] = y0; dst[2] = ax; dst[3] = ay; dst[4] = lerp(ax, bx, t); dst[5] = lerp(ay, by, t);
+  dst[6] = bx; dst[7] = by; dst[8] = x2; dst[9] = y2;
 }
-/** SkChopCubicAt: src's four points split at t into seven */
-function chopCubic(src: Float64Array, t: number, dst: Float64Array) {
-  const [x0, y0, x1, y1, x2, y2, x3, y3] = src;
+/** SkChopCubicAt: the cubic src[0..8) split at t into the seven points dst[0..14) */
+export function chopCubicAt(src: ArrayLike<number>, t: number, dst: Float64Array) {
+  const x0 = src[0], y0 = src[1], x1 = src[2], y1 = src[3], x2 = src[4], y2 = src[5], x3 = src[6], y3 = src[7];
   const abx = lerp(x0, x1, t), aby = lerp(y0, y1, t), bcx = lerp(x1, x2, t), bcy = lerp(y1, y2, t), cdx = lerp(x2, x3, t), cdy = lerp(y2, y3, t);
   const abcx = lerp(abx, bcx, t), abcy = lerp(aby, bcy, t), bcdx = lerp(bcx, cdx, t), bcdy = lerp(bcy, cdy, t);
-  dst.set([x0, y0, abx, aby, abcx, abcy, lerp(abcx, bcdx, t), lerp(abcy, bcdy, t), bcdx, bcdy, cdx, cdy, x3, y3]);
+  dst[0] = x0; dst[1] = y0; dst[2] = abx; dst[3] = aby; dst[4] = abcx; dst[5] = abcy; dst[6] = lerp(abcx, bcdx, t); dst[7] = lerp(abcy, bcdy, t);
+  dst[8] = bcdx; dst[9] = bcdy; dst[10] = cdx; dst[11] = cdy; dst[12] = x3; dst[13] = y3;
 }
 
 /** SkPath::RawIter over a snapshot of the verbs, as PathIterator and androidx's pre-34 iterator walk them */
