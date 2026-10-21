@@ -61,12 +61,10 @@ function start() {
   let owner = parent;
   for (let i = 0; app && i < ancestors.length - 1 && ancestors[i] !== app; i++) owner = owner.parent;
   // the page the app loads here, and everything it and the worker tell the app, go over `port`
-  const load = async (task: LoadMessage, port: MessagePort) => {
-    const send = (message: PageMessage) => port.postMessage(message), doc = task.document;
+  const load = async ({ kind: _, document: doc, ...loaded }: LoadMessage, port: MessagePort) => {
+    const send = (message: PageMessage) => port.postMessage(message), context: RendererContext = { ...loaded, id: id!, sub: sub !== null };
     try {
       const service = navigator.serviceWorker;
-      const context: RendererContext = { id: id!, page: task.page, agent: task.userAgent, interfaces: task.interfaces, cookies: task.cookies,
-        clientHints: task.clientHints, sharedThread: task.sharedThread, intercept: task.intercept, sub: sub !== null, frames: task.frames, fonts: task.fonts };
       // the document's own response may set cookies before it is written
       port.onmessage = ({ data }: MessageEvent<AppMessage>) => { if (data.kind === "cookies") context.cookies = data.list; };
       const stop = Event.prototype.stopImmediatePropagation;
@@ -81,8 +79,7 @@ function start() {
       await service.ready;
       if (!service.controller) await new Promise((resolve) => service.addEventListener("controllerchange", resolve, { once: true }));
       const response = "src" in doc ? await fetch(doc.src, {
-        method: doc.init?.method || "GET", body: doc.init?.body,
-        headers: { "x-wd-user-agent": task.userAgent, ...(doc.init?.contentType ? { "content-type": doc.init.contentType } : {}) },
+        method: doc.init?.method || "GET", body: doc.init?.body, headers: doc.init?.contentType ? { "content-type": doc.init.contentType } : {},
       }) : null;
       const answer = response && readAnswer(response), final = answer?.finalUrl ?? ("html" in doc ? doc.final : undefined);
       // A download commits no document: the app's DownloadListener takes it. Chromium keeps the frame's

@@ -19,7 +19,7 @@ function installWebFonts(fonts: WebFonts): void {
 }
 
 function start(config: PageConfig | undefined) {
-  const ua = config?.agent;
+  const ua = config?.userAgent;
   if (ua) {
     Object.defineProperty(navigator, "userAgent", { value: ua });
     Object.defineProperty(navigator, "appVersion", { value: ua.startsWith("Mozilla/") ? ua.slice(8) : ua });

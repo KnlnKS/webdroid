@@ -25,9 +25,8 @@ export interface LoadMessage {
  *  IndexedDB and file systems ("origin"), with its localStorage ("data"), or everything ("all") */
 export type StorageOp = "usage" | "origin" | "data" | "all";
 export type RendererTask = LoadMessage | { kind: "storage"; op: StorageOp };
-/** the load's context, as the renderer bootstrap answers its worker */
-export type RendererContext = { id: string; page: string; agent: string; interfaces: LoadMessage["interfaces"]; cookies: DocumentCookie[];
-  clientHints: ClientHints; sharedThread: boolean | undefined; intercept: boolean; sub: boolean; frames: string; fonts: WebFonts };
+/** the load's context, as the renderer bootstrap answers its worker: its bridge, and whether it is a subframe */
+export type RendererContext = Omit<LoadMessage, "kind" | "document"> & { id: string; sub: boolean };
 /** what the renderer bootstrap leaves the page script: the context, and the port to the app */
 export type PageConfig = RendererContext & { port: MessagePort };
 
