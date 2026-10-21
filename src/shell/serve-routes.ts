@@ -1,7 +1,7 @@
 // What the dev server (server.ts) and the deployed Worker (worker/index.ts) both answer; each host lends its
 // bridge sessions, its resolver and its upstream fetch.
 import { WEB_FRAME, WEB_PROXY_WORKER } from "./webinject.ts";
-import { forwardDnsMessage, proxyRequest } from "./proxy.ts";
+import { forwardDnsMessage, proxyRequest, type ProxyOptions } from "./proxy.ts";
 
 /** a renderer bridge's id, as the page's crypto.randomUUID() names it */
 const BRIDGE_ID = /^[a-f0-9-]{36}$/;
@@ -12,7 +12,7 @@ export interface ServeHost {
   bridge(request: Request, id: string): Response | Promise<Response>;
   /** `name`'s IPv4 addresses as `{addresses}`, or 404 (ENOTFOUND, ENODATA) or 502 */
   dnsLookup(name: string): Promise<Response>;
-  proxy?: Omit<Parameters<typeof proxyRequest>[1], "bridgeCall">;
+  proxy?: Omit<ProxyOptions, "bridgeCall">;
 }
 type Route = (request: Request) => Response | Promise<Response>;
 

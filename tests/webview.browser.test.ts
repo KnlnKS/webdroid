@@ -423,7 +423,7 @@ describe("WebView isolation", () => {
       const url = new URL(req.url);
       if (url.pathname === "/webview-worker.js") return new Response(WEB_PROXY_WORKER, { headers: { "content-type": "text/javascript" } });
       if (url.pathname === "/webview") return new Response(WEB_FRAME, { headers: html });
-      if (url.pathname === "/proxy") return proxyRequest(req, { bridgeCall: async () => new Response(null, { status: 503 }), fetchUpstream: async target => target === "https://upstream.example/site.css" ? new Response("upstream-style", {headers:{"content-type":"text/css"}}) : new Response(
+      if (url.pathname === "/proxy") return proxyRequest(req, { bridgeCall: async () => new Response(null, { status: 503 }), fetch: async target => target === "https://upstream.example/site.css" ? new Response("upstream-style", {headers:{"content-type":"text/css"}}) : new Response(
         "<script>parent.postMessage({kind: 'upstream', storage: (() => { try { return top.localStorage.getItem('secret'); } catch (e) { return e.name; } })()}, '*')</script>", { headers: html }) });
       return new Response("<!doctype html><body>app", { headers: html });
     } });
@@ -533,7 +533,7 @@ describe("WebView isolation", () => {
     const server = await serve({ fetch: (req) => {
       const path = new URL(req.url).pathname;
       if (path === "/webview-worker.js") return new Response(WEB_PROXY_WORKER, { headers: { "content-type": "text/javascript" } });
-      if (path === "/proxy") return proxyRequest(req, { bridgeCall: async () => new Response(null, { status: 503 }), fetchUpstream: async (target) => {
+      if (path === "/proxy") return proxyRequest(req, { bridgeCall: async () => new Response(null, { status: 503 }), fetch: async (target) => {
         const [status, headers] = upstream[new URL(target).pathname];
         return new Response(/html/.test(headers["content-type"]) ? "<!doctype html><body>shown" : "%PDF", { status, headers });
       } });

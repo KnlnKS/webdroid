@@ -14,12 +14,16 @@ export function sandboxDocument(request: Request, response: Response): Response 
   return response;
 }
 
-interface ProxyOptions {
+export interface ProxyOptions {
   target?: (requested: string) => string;
   /** whether this server may connect to `hostname`: the deployed Worker keeps off private networks */
   reachable?: (hostname: string) => boolean;
   bridgeCall: (request: Request) => Promise<Response>;
-  fetchUpstream?: (url: string, init: RequestInit, encoded: boolean) => Promise<Response>;
+  /** the upstream fetch, which follows a redirect unless told otherwise: the global one by default */
+  fetch?: (url: string, init: RequestInit) => Promise<Response>;
+  /** one exchange whose body stays as the server encoded it, for a device that asked for an encoding and
+   *  decodes it itself; without it (a Worker's fetch decodes), the device gets the body decoded */
+  fetchEncoded?: (url: string, init: RequestInit) => Promise<Response>;
 }
 
 /** The class of an upstream fetch failure, so the Java side can throw what a socket would. */
@@ -51,7 +55,8 @@ async function proxied(request: Request, options: ProxyOptions): Promise<Respons
     for (const [name, value] of JSON.parse(query.get("headers") ?? "[]") as [string, string][]) headers.set(name, value);
     const range = request.headers.get("range");
     if (range && !headers.has("range")) headers.set("range", range);
-    const encoded = !frame && !isolated && headers.has("accept-encoding");
+    // only a manual answer names the encoding (a media element decodes none), so its redirects are the device's to follow
+    const encoded = manual && !!options.fetchEncoded && !frame && !isolated && headers.has("accept-encoding");
     const bridge = query.get("bridge"), body = request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer();
     /** the WebView's process answering `call`: its WebResourceResponse, or null for none */
     const bridged = async (call: BridgeCall): Promise<Response | null> => {
@@ -81,7 +86,7 @@ async function proxied(request: Request, options: ProxyOptions): Promise<Respons
       body,
       redirect: manual ? "manual" : "follow",
     };
-    const upstream = intercepted ?? await (options.fetchUpstream?.(url, init, encoded) ?? fetch(url, init));
+    const upstream = intercepted ?? await (encoded ? options.fetchEncoded! : options.fetch ?? fetch)(url, init);
     const contentType = upstream.headers.get("content-type") ?? "";
     const html = !!(frame && upstream.body && /^text\/html/i.test(contentType));
     const script = !!(isolated && upstream.body && /^(?:text|application)\/(?:x-)?(?:java|ecma)script(?:;|$)/i.test(contentType));

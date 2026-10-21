@@ -34,40 +34,19 @@ function proxyTarget(requested: string): string {
   return new URL(`${url.pathname}${url.search}`, fuzzOrigin).href;
 }
 
-/** fetch that leaves the body encoded: node's fetch always decodes, and a guest that asked for an encoding decodes it itself */
+/** one exchange that leaves the body encoded: node's fetch always decodes, and a guest that asked for an encoding decodes it itself */
 async function fetchEncoded(url: string, init: RequestInit): Promise<Response> {
-  for (let hops = 0; ; hops++) {
-    const res = await new Promise<IncomingMessage>((resolve, reject) => {
-      const body = init.body ? Buffer.from(init.body as ArrayBuffer) : undefined, headers = Object.fromEntries(init.headers as Headers);
-      if (body) headers["content-length"] ??= String(body.length);
-      const req = (url.startsWith("https:") ? https : http).request(url, { method: init.method, headers }, resolve);
-      req.once("error", reject).end(body);
-    });
-    const status = res.statusCode!, location = res.headers.location;
-    if (init.redirect !== "manual" && location && [301, 302, 303, 307, 308].includes(status) && hops < 20) {
-      res.resume();
-      const next = new URL(location, url);
-      if (next.origin !== new URL(url).origin) {
-        // as node's fetch does: credentials stay with the origin they were sent to
-        const headers = new Headers(init.headers);
-        for (const name of ["authorization", "proxy-authorization", "cookie", "host"]) headers.delete(name);
-        init = { ...init, headers };
-      }
-      url = next.href;
-      if (status === 303 || ((status === 301 || status === 302) && init.method === "POST")) {
-        const headers = new Headers(init.headers);
-        for (const name of ["content-length", "content-type", "content-encoding"]) headers.delete(name);
-        init = { ...init, method: "GET", headers, body: undefined };
-      }
-      continue;
-    }
-    const headers = new Headers();
-    for (let i = 0; i < res.rawHeaders.length; i += 2) headers.append(res.rawHeaders[i], res.rawHeaders[i + 1]);
-    const empty = init.method === "HEAD" || [204, 205, 304].includes(status);
-    if (empty) res.resume();
-    const response = new Response(empty ? null : toWeb(res), { status, statusText: res.statusMessage, headers });
-    return Object.defineProperty(response, "url", { value: url });
-  }
+  const res = await new Promise<IncomingMessage>((resolve, reject) => {
+    const body = init.body ? Buffer.from(init.body as ArrayBuffer) : undefined, headers = Object.fromEntries(init.headers as Headers);
+    if (body) headers["content-length"] ??= String(body.length);
+    const req = (url.startsWith("https:") ? https : http).request(url, { method: init.method, headers }, resolve);
+    req.once("error", reject).end(body);
+  });
+  const status = res.statusCode!, headers = new Headers();
+  for (let i = 0; i < res.rawHeaders.length; i += 2) headers.append(res.rawHeaders[i], res.rawHeaders[i + 1]);
+  const empty = init.method === "HEAD" || [204, 205, 304].includes(status);
+  if (empty) res.resume();
+  return new Response(empty ? null : toWeb(res), { status, statusText: res.statusMessage, headers });
 }
 
 const IMMUTABLE = "public, max-age=31536000, immutable";
@@ -141,7 +120,7 @@ const host: ServeHost = {
   dnsLookup: (name) => dns.lookup(name, { all: true }).then(
     (addresses) => Response.json({ addresses: addresses.map((a) => a.address) }),
     (e: { code?: string }) => new Response(String(e.code ?? e), { status: e.code === "ENOTFOUND" || e.code === "ENODATA" ? 404 : 502 })),
-  proxy: { target: proxyTarget, fetchUpstream: (url, init, encoded) => encoded ? fetchEncoded(url, init) : fetch(url, init) },
+  proxy: { target: proxyTarget, fetchEncoded },
 };
 export function devServer(): Plugin {
   return {
