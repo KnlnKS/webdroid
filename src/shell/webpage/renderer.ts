@@ -3,7 +3,7 @@
 // through this origin's proxy worker, or written by the app), or work on the origin's storage.
 import { holdFrames } from "./frames.ts";
 import { readAnswer } from "./proxywire.ts";
-import { withPageScript, type AppMessage, type LoadMessage, type PageConfig, type PageMessage, type RendererContext, type RendererReady, type RendererTask,
+import { respond, withPageScript, type AppMessage, type LoadMessage, type PageConfig, type PageMessage, type RendererContext, type RendererReady, type RendererTask,
   type StorageOp } from "./protocol.ts";
 
 /** the page script, as the renderer bootstrap writes it into an apk asset's document */
@@ -74,7 +74,7 @@ function start() {
       service.addEventListener("message", (event) => {
         if (!event.isTrusted || event.source !== controller() || !event.ports[0]) return;
         if (event.data?.kind === "webcontext") {
-          stop.call(event); event.ports[0].postMessage(context); event.ports[0].close();
+          stop.call(event); respond(event.data, event.ports[0], context);
         } else if (event.data?.kind === "webcookies" || event.data?.kind === "webasset") { stop.call(event); port.postMessage(event.data, [event.ports[0]]); }
       }, { capture: true });
       await service.register("/webview-worker.js");
@@ -123,7 +123,8 @@ function start() {
     if (event.data.kind === "load") { started = true; void load(event.data, port); }
     else if (event.data.kind === "storage") {
       started = true;
-      storageOp(event.data.op).then((answer) => port.postMessage(answer), () => port.postMessage({}));
+      const task = event.data;
+      storageOp(task.op).then((answer) => respond(task, port, answer), () => respond(task, port, {}));
     }
   });
   owner.postMessage({ kind: "ready", bridge: id, sub } satisfies RendererReady, app ?? "*");

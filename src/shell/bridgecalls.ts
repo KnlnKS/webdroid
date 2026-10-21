@@ -1,3 +1,5 @@
+import { decodeFrame, encodeFrame } from "./webpage/protocol.ts";
+
 interface BridgePeer { send(message: string): void }
 
 export class BridgeCalls<Peer extends BridgePeer> {
@@ -23,16 +25,14 @@ export class BridgeCalls<Peer extends BridgePeer> {
       const timer = setTimeout(() => finish(new Response("bridge timed out", { status: 504 })), wait);
       this.pending.set(seq, { peer, finish });
       request.signal.addEventListener("abort", abort, { once: true });
-      try { peer.send(`${seq}\n${body}`); } catch { finish(new Response("bridge unavailable", { status: 410 })); }
+      try { peer.send(encodeFrame(seq, body)); } catch { finish(new Response("bridge unavailable", { status: 410 })); }
     });
   }
 
   reply(peer: Peer, message: string): void {
-    const at = message.indexOf("\n"), seq = Number(message.slice(0, at));
-    if (at < 1 || !Number.isSafeInteger(seq)) return;
-    const call = this.pending.get(seq);
+    const frame = decodeFrame(message), call = frame && this.pending.get(Number(frame.seq));
     if (call?.peer !== peer) return;
-    call.finish(new Response(message.slice(at + 1), {
+    call.finish(new Response(frame!.body, {
       headers: { "content-type": "application/json", "cache-control": "no-store" },
     }));
   }

@@ -13,9 +13,10 @@ import { toJsArray } from "../jvm/natives/jcoll.ts";
 import { device } from "../shell/config.ts";
 import { onMain } from "./mainloop.ts";
 import { cookieTransport, watchCookies } from "./cookies.ts";
-import { WebBridge, type WebInterfaces, type WebRequest, type WebResponse } from "../shell/webbridge.ts";
+import { WebBridge, type WebInterfaces } from "../shell/webbridge.ts";
 import { rendererPattern, rendererUrl } from "../shell/webrenderer.ts";
-import { parsePageMessage, request, type Answers, type AppMessage, type DocumentCookie, type LoadMessage, type PageMessage } from "../shell/webpage/protocol.ts";
+import { parsePageMessage, request, respond, type Answers, type AppMessage, type DocumentCookie, type LoadMessage, type PageMessage, type WebRequest,
+  type WebResponse } from "../shell/webpage/protocol.ts";
 import { webRenderer } from "./webstorage.ts";
 import { webPrintAdapter } from "./printing.ts";
 import { canvasOf, type JavaCanvas } from "./canvas.ts";
@@ -28,7 +29,7 @@ import { webAsset, webFonts } from "./webfonts.ts";
 import { javaInterface, weakIfaces } from "./webjavabridge.ts";
 import { WebHistory, documentFor, srcEntry, srcFor, srcdoc, webOrigin, type Entry } from "./webnavigation.ts";
 import { interceptRequest, mkError, mkRequest } from "./webrequests.ts";
-import { RendererFrame, Subframes, dropFrame, reply, unbridge, viewFrame, type FrameHold, type FrameLoad } from "./webframes.ts";
+import { RendererFrame, Subframes, dropFrame, unbridge, viewFrame, type FrameHold, type FrameLoad } from "./webframes.ts";
 
 import type { FrameAnnouncement } from "../shell/web-surface.ts";
 import { domKeyOf } from "./keycodes.ts";
@@ -140,14 +141,14 @@ export class WebViewChromium extends JObj {
     const sub = frame.sub;
     switch (m.kind) {
       case "webasset":
-        if (answer) void webAsset(m.path).catch(() => ({ status: 500 })).then((asset) => reply(answer, asset));
+        if (answer) void webAsset(m.path).catch(() => ({ status: 500 })).then((asset) => respond(m, answer, asset as Answers["webasset"]));
         break;
       case "webcookies":
         if (answer) void cookieTransport.calls().cookieNetwork(m.url, this.url ?? "", m.values, this.settings.thirdPartyCookies)
-          .then((header) => reply(answer, header), () => reply(answer, ""));
+          .then((header) => respond(m, answer, header), () => respond(m, answer, ""));
         break;
       case "subframe":
-        if (answer) void this.subframes.src(srcEntry(m.url, m.init)).then((src) => reply(answer, src), () => reply(answer, null));
+        if (answer) void this.subframes.src(srcEntry(m.url, m.init)).then((src) => respond(m, answer, src), () => respond(m, answer, null));
         break;
       case "console": this.consoleMessage(m); break;
       case "cookie":

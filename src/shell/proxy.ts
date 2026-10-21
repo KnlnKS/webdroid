@@ -1,7 +1,7 @@
 import { htmlAttribute, webDocument } from "./webhtml.ts";
 import { webScript } from "./webscript.ts";
 import { isGuestHost } from "../native/net-address.ts";
-import type { BridgeCall } from "./webpage/protocol.ts";
+import type { BridgeCall, BridgeReply, WebResponse } from "./webpage/protocol.ts";
 import { failedAnswer, fromProxyHeaders, parseProxyQuery, writeAnswer } from "./webpage/proxywire.ts";
 
 const DROP = /^(content-encoding|transfer-encoding|set-cookie)$/i;
@@ -63,10 +63,11 @@ async function proxied(request: Request, options: ProxyOptions): Promise<Respons
         method: "POST", signal: request.signal, body: JSON.stringify(call),
       }));
       if (!response.ok) throw new Error("WebView request callback unavailable");
-      const reply = await response.json() as { error?: string; value?: { body: string; status: number; reason: string; headers: Record<string, string> } };
-      if (reply.error) throw new Error(reply.error);
-      if (!reply.value) return null;
-      const value = reply.value, empty = request.method === "HEAD" || [204, 205, 304].includes(value.status);
+      const reply = await response.json() as BridgeReply<WebResponse | null>;
+      if ("error" in reply) throw new Error(reply.error);
+      const value = "value" in reply ? reply.value : null;
+      if (!value) return null;
+      const empty = request.method === "HEAD" || [204, 205, 304].includes(value.status);
       return new Response(empty ? null : Uint8Array.fromBase64(value.body), { status: value.status, statusText: value.reason, headers: value.headers });
     };
     let intercepted = bridge && query.intercept

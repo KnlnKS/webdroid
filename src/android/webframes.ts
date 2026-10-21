@@ -5,7 +5,8 @@ import type { JObj } from "../jvm/runtime.ts";
 import { vcall } from "../jvm/natives/jentry.ts";
 import { onMain } from "./mainloop.ts";
 import { onProcessExit } from "../process-exit.ts";
-import type { WebBridge, WebRequest, WebResponse } from "../shell/webbridge.ts";
+import type { WebBridge } from "../shell/webbridge.ts";
+import type { WebRequest, WebResponse } from "../shell/webpage/protocol.ts";
 import { rendererUrl } from "../shell/webrenderer.ts";
 import type { WebSurface, FrameIdentity } from "../shell/web-surface.ts";
 import { webRenderer } from "./webstorage.ts";
@@ -65,7 +66,6 @@ export function webViewInfo(): { url: string | null; title: string; loaded: bool
 }
 
 /** `value` as the answer on `port`, its only one */
-export const reply = (port: MessagePort, value: unknown) => { port.postMessage(value); port.close(); };
 
 /** a document a renderer frame is to load: its entry, the renderer origin, and a redirect's document */
 export interface FrameLoad { entry: Entry; origin: string; prefetched?: string }
