@@ -45,32 +45,30 @@ export const JOINING = /[\p{sc=Arab}\p{sc=Nkoo}\p{sc=Phlp}\p{sc=Mand}\p{sc=Mong}
 const featuresOf = (p: NativePaint): string | null => Math.abs(p.letterSpacingEm) > 0.03
   ? "liga=0,clig=0" + (p.fontFeatureSettings ? "," + p.fontFeatureSettings : "") : p.fontFeatureSettings;
 
-const fontCache = new WeakMap<NativeFont, Font>();
-/** the HarfBuzz font drawing `f`: its own axes, then the fakery's */
+const fontCache = new WeakMap<NativeFont, Map<number, Font>>();
+/** the HarfBuzz font drawing `f` at a weight and italic (-1 for its own): its own axes, then those */
 function hbFont(hb: HarfBuzz, f: NativeFont, weight = -1, italic = -1): Font {
-  if (weight < 0 && italic < 0) {
-    let font = fontCache.get(f);
-    if (!font) {
-      const axes: [number, number][] = f.axes.map((a) => [a.tag, a.value]);
-      fontCache.set(f, font = withAdvances(f, hb.font(hb.face(f.bytes, f.ttcIndex), axes), axes));
-    }
-    return font;
+  let byStyle = fontCache.get(f);
+  if (!byStyle) fontCache.set(f, byStyle = new Map());
+  const key = weight * 4 + italic + 1;
+  let font = byStyle.get(key);
+  if (!font) {
+    const axes: [number, number][] = f.axes.map((a) => [a.tag, a.value]);
+    if (weight >= 0) axes.push([WGHT, weight]);
+    if (italic >= 0) axes.push([ITAL, italic]);
+    byStyle.set(key, font = hb.font(hb.face(f.bytes, f.ttcIndex), axes));
+    if (!ftAdvances.has(font)) ftAdvances.set(font, axes.length ? variedAdvances(f.bytes, f.ttcIndex, axes) : null);
   }
-  const axes: [number, number][] = f.axes.map((a) => [a.tag, a.value]);
-  if (weight >= 0) axes.push([WGHT, weight]);
-  if (italic >= 0) axes.push([ITAL, italic]);
-  return withAdvances(f, hb.font(hb.face(f.bytes, f.ttcIndex), axes), axes);
+  return font;
 }
 /** Skia's advances of a varied font come from FreeType, which varies them in other arithmetic than
  *  HarfBuzz's (sfnt.ts' variedAdvances): by font, in HarfBuzz's units */
 const ftAdvances = new WeakMap<Font, ((glyph: number) => number) | null>();
-function withAdvances(f: NativeFont, font: Font, axes: [number, number][]): Font {
-  if (!ftAdvances.has(font)) ftAdvances.set(font, axes.length ? variedAdvances(f.bytes, f.ttcIndex, axes) : null);
-  return font;
-}
 /** a glyph's advance as Skia has it, in the font's HarfBuzz units: `hbAdvance` unless FreeType varies it */
-const skiaAdvance = (varied: ((glyph: number) => number) | null | undefined, font: Font, glyph: number, hbAdvance: number) =>
-  varied ? varied(glyph) * (font.units / font.face.upem) : hbAdvance;
+const skiaAdvance = (font: Font, glyph: number, hbAdvance: number) => {
+  const varied = ftAdvances.get(font);
+  return varied ? varied(glyph) * (font.units / font.face.upem) : hbAdvance;
+};
 
 /** whether Skia hints a paint's glyphs: hinting on, without LINEAR_TEXT, and not skewed
  *  (SUBPIXEL_TEXT does not change advances) */
@@ -86,8 +84,7 @@ const hints = (paintHinted: boolean, font: NativeFont, fakery = 0) => paintHinte
 const isEmojiFamily = (f: NativeFamily) => /(^|[ ,-])Zsye\b/.test(f.langTags);
 const isVS = (c: number) => c >= 0xfe00 && c <= 0xfe0f || c >= 0xe0100 && c <= 0xe01ef;
 /** characters shaped with whatever font is current (joiners, selectors, bidi and tag controls) */
-const noFontNeeded = (c: number) => c === 0x200c || c === 0x200d || isVS(c) || c >= 0x200e && c <= 0x200f
-  || c >= 0x202a && c <= 0x202e || c >= 0x2066 && c <= 0x2069 || c >= 0xe0020 && c <= 0xe007f;
+const noFontNeeded = (c: number) => c === 0x200c || c === 0x200d || isVS(c) || isBidiControl(c) || c >= 0xe0020 && c <= 0xe007f;
 /** characters that stay in the current font when it has them */
 const STICKY = new Set([0x21, 0x2c, 0x2d, 0x2e, 0x3a, 0x3b, 0x3f, 0xa0, 0x2010, 0x2011, 0x202f, 0x2640, 0x2642, 0x2695]);
 const COMBINING = /\p{M}/u, EMOJI_PRESENTATION = /\p{Emoji_Presentation}/u;
@@ -221,20 +218,20 @@ export const shapeStyle = (p: NativePaint): ShapeStyle =>
 const layoutSize = (p: NativePaint) => p.linearText ? p.textSize : Math.trunc(p.textSize);
 /** a font run as HarfBuzz shaped it: its font as the family matches the style, pixels per unit
  *  (`sx` horizontally), whether its advances are hinted, and the glyph count */
-interface ShapedRun { faked: FakedFont; font: Font; varied: ((glyph: number) => number) | null | undefined; s: number; sx: number; hinted: boolean; n: number }
+interface ShapedRun { faked: FakedFont; font: Font; s: number; sx: number; hinted: boolean; n: number }
 /** the run [offset, offset + count) of the text set by setText, shaped in its family's match for
  *  the style, `extent` widened to its font's when it drew glyphs */
 function shapeRun(hb: HarfBuzz, family: NativeFamily, style: ShapeStyle, offset: number, count: number, direction: number, extent: { ascent: number; descent: number }): ShapedRun {
   const faked = family.match(style.tf.weight, style.tf.italic), font = hbFont(hb, faked.font, faked.weight, faked.italic), s = style.size / font.units;
   const n = hb.shape(font, offset, count, direction, style.lang, style.features), m = n && faked.font.faceMetrics;
   if (m) { extent.ascent = Math.min(extent.ascent, f32(-m.ascent * style.size)); extent.descent = Math.max(extent.descent, f32(m.descent * style.size)); }
-  return { faked, font, varied: ftAdvances.get(font), s, sx: s * style.scaleX, hinted: hints(style.hinted, faked.font, faked.fakery), n };
+  return { faked, font, s, sx: s * style.scaleX, hinted: hints(style.hinted, faked.font, faked.fakery), n };
 }
 /** a shaped glyph's advance in pixels: Skia's advance and HarfBuzz's kerning, as minikin has them;
  *  one HarfBuzz zeroed (a mark, a default ignorable) stays zero */
 function advanceOf(hb: HarfBuzz, run: ShapedRun, glyph: number, advance: number): number {
   if (advance === 0) return 0;
-  const hbAdvance = hb.advance(run.font, glyph), nominal = skiaAdvance(run.varied, run.font, glyph, hbAdvance) * run.sx;
+  const hbAdvance = hb.advance(run.font, glyph), nominal = skiaAdvance(run.font, glyph, hbAdvance) * run.sx;
   const skia = run.hinted ? hintedAdvance(nominal) : Math.trunc(nominal * 256) / 256;
   return f32(skia + grid((advance - hbAdvance) * run.sx));
 }
@@ -306,7 +303,7 @@ function glyphBox(hb: HarfBuzz, f: Font, glyph: number, p: NativePaint, size: nu
 function glyphBounds(font: NativeFont, glyph: number, p: NativePaint): [advance: number, bounds: Box] | Promise<[number, Box]> {
   return shaped((hb) => {
     const f = hbFont(hb, font), box = glyphBox(hb, f, glyph, p, p.textSize);
-    const advance = skiaAdvance(ftAdvances.get(f), f, glyph, hb.advance(f, glyph)) * (p.textSize / f.units) * p.textScaleX;
+    const advance = skiaAdvance(f, glyph, hb.advance(f, glyph)) * (p.textSize / f.units) * p.textScaleX;
     return [f32(hints(paintHinted(p), font) ? hintedAdvance(advance) : advance),
       box ? { left: Math.floor(box[0]), top: Math.floor(box[1]), right: Math.ceil(box[2]), bottom: Math.ceil(box[3]) } : emptyBox];
   });
