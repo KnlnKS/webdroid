@@ -163,6 +163,12 @@ export function nextId(): number {
   return (Math.random() * 0x10000000) | 0x30000000;
 }
 
+/** a pointer's PointerProperties */
+interface Pointer { readonly id: number; readonly tool: number }
+/** the pointers' coordinates at one time, in pointer order */
+interface Sample { time: bigint; coords: Coords[] }
+const copySample = (s: Sample): Sample => ({ time: s.time, coords: s.coords.map((c) => c.copy()) });
+
 export class NativeMotionEvent {
   id = 0; deviceId = 0; source = 0; displayId = 0;
   action = 0; actionButton = 0; flags = 0; edgeFlags = 0; metaState = 0; buttonState = 0; classification = 0;
@@ -171,22 +177,19 @@ export class NativeMotionEvent {
   xPrecision = 0; yPrecision = 0;
   rawXCursor = NaN; rawYCursor = NaN;
   downTime = 0n;
-  ids: number[] = [];
-  tools: number[] = [];
-  /** one event time per sample, the current sample last */
-  times: bigint[] = [];
-  /** pointer coordinates sample by sample, each sample's pointers in pointer order */
-  coords: Coords[] = [];
-  get pointerCount(): number { return this.ids.length; }
-  get historySize(): number { return this.times.length - 1; }
-  get eventTime(): bigint { return this.times[this.times.length - 1]; }
-  rawCoords(i: number, h = this.historySize): Coords { return this.coords[h * this.ids.length + i]; }
+  pointers: readonly Pointer[] = [];
+  /** the history, then the current sample */
+  samples: Sample[] = [];
+  get pointerCount(): number { return this.pointers.length; }
+  get historySize(): number { return this.samples.length - 1; }
+  get eventTime(): bigint { return this.samples[this.samples.length - 1].time; }
+  rawCoords(i: number, h = this.historySize): Coords { return this.samples[h].coords[i]; }
   axis(axis: number, i = 0, h = this.historySize): number { return transformedAxis(axis, this.source, this.flags, this.xform, this.rawCoords(i, h)); }
   rawAxis(axis: number, i = 0, h = this.historySize): number { return transformedAxis(axis, this.source, this.flags, this.rawXform, this.rawCoords(i, h)); }
-  findPointerIndex(id: number): number { return this.ids.indexOf(id); }
+  findPointerIndex(id: number): number { return this.pointers.findIndex((p) => p.id === id); }
   /** MotionEvent::offsetLocation */
   offsetLocation(dx: number, dy: number): void {
-    const t = this.xform = Float32Array.from(this.xform);
+    const t = this.xform;
     t[2] = f32(t[2] + dx); t[5] = f32(t[5] + dy);
   }
   /** Java's setLocation, which offsets the transform to put pointer 0 there */
@@ -195,14 +198,10 @@ export class NativeMotionEvent {
     this.id = o.id; this.deviceId = o.deviceId; this.source = o.source; this.displayId = o.displayId;
     this.action = o.action; this.actionButton = o.actionButton; this.flags = o.flags; this.edgeFlags = o.edgeFlags;
     this.metaState = o.metaState; this.buttonState = o.buttonState; this.classification = o.classification;
-    this.xform = o.xform; this.rawXform = o.rawXform; this.xPrecision = o.xPrecision; this.yPrecision = o.yPrecision;
+    this.xform = o.xform.slice(); this.rawXform = o.rawXform.slice(); this.xPrecision = o.xPrecision; this.yPrecision = o.yPrecision;
     this.rawXCursor = o.rawXCursor; this.rawYCursor = o.rawYCursor; this.downTime = o.downTime;
-    this.ids = o.ids.slice(); this.tools = o.tools.slice();
-    if (keepHistory) { this.times = o.times.slice(); this.coords = o.coords.map((c) => c.copy()); }
-    else {
-      const n = o.ids.length, at = o.historySize * n;
-      this.times = [o.eventTime]; this.coords = o.coords.slice(at, at + n).map((c) => c.copy());
-    }
+    this.pointers = o.pointers;
+    this.samples = keepHistory ? o.samples.map(copySample) : [copySample(o.samples[o.historySize])];
   }
 }
 
@@ -241,10 +240,11 @@ function describe(e: NativeMotionEvent): string {
   let s = `MotionEvent { action=${ACTIONS[masked] ?? masked}${masked === ACTION_POINTER_DOWN || masked === ACTION_POINTER_UP ? `(${index})` : ""}`;
   if (e.actionButton) s += `, actionButton=${e.actionButton}`;
   for (let i = 0; i < e.pointerCount; i++) {
-    s += `, id[${i}]=${e.ids[i]}`;
+    const { id, tool } = e.pointers[i];
+    s += `, id[${i}]=${id}`;
     const x = e.axis(AXIS_X, i), y = e.axis(AXIS_Y, i);
     if (x !== 0 || y !== 0) s += `, x[${i}]=${g6(x)}, y[${i}]=${g6(y)}`;
-    if (e.tools[i] !== 1) s += `, toolType[${i}]=${TOOLS[e.tools[i]] ?? e.tools[i]}`;
+    if (tool !== 1) s += `, toolType[${i}]=${TOOLS[tool] ?? tool}`;
   }
   if (e.buttonState) s += `, buttonState=${e.buttonState}`;
   if (e.metaState) s += `, metaState=${e.metaState}`;
@@ -274,17 +274,17 @@ const FIELD_AXES: [keyof PCFields, number][] = [["x", AXIS_X], ["y", AXIS_Y], ["
 const FIELD_HI = FIELD_AXES.reduce((m, [, a]) => m | 1 << (31 - a), 0);
 /** pointerCoordsToNative: Java coordinates mapped by `t`, the inverse of the event's transform, as
  *  calculateTransformedXY maps them (rounded) */
-function coordsToNative(o: Record<string, any>, source: number, t: Xform): Coords {
+function coordsToNative(o: Record<string, unknown>, source: number, t: Xform): Coords {
   const f = pcFields(), c = new Coords();
-  const x = o[f.x], y = o[f.y];
+  const x = o[f.x] as number, y = o[f.y] as number;
   if ((source & SOURCE_CLASS_POINTER) !== SOURCE_CLASS_POINTER) {
     const [rx, ry] = withoutTranslation(t, x, y);
     c.set(AXIS_X, rx); c.set(AXIS_Y, ry);
   } else { c.set(AXIS_X, round(mapX(t, x, y))); c.set(AXIS_Y, round(mapY(t, x, y))); }
-  for (let k = 2; k < FIELD_AXES.length; k++) c.set(FIELD_AXES[k][1], o[f[FIELD_AXES[k][0]]]);
-  const bits: bigint = o[f.bits];
+  for (let k = 2; k < FIELD_AXES.length; k++) c.set(FIELD_AXES[k][1], o[f[FIELD_AXES[k][0]]] as number);
+  const bits = o[f.bits] as bigint;
   if (bits) {
-    const values: Float32Array | null = o[f.values];
+    const values = o[f.values] as Float32Array | null;
     if (values) {
       let index = 0;
       for (let axis = 0; axis < 64; axis++) if (bits >> BigInt(63 - axis) & 1n) c.set(axis, values[index++]);
@@ -294,7 +294,7 @@ function coordsToNative(o: Record<string, any>, source: number, t: Xform): Coord
   return c;
 }
 /** pointerCoordsFromNative */
-function coordsFromNative(e: NativeMotionEvent, c: Coords, o: Record<string, any>): void {
+function coordsFromNative(e: NativeMotionEvent, c: Coords, o: Record<string, unknown>): void {
   const f = pcFields();
   o[f.x] = transformedAxis(AXIS_X, e.source, e.flags, e.xform, c);
   o[f.y] = transformedAxis(AXIS_Y, e.source, e.flags, e.xform, c);
@@ -307,7 +307,7 @@ function coordsFromNative(e: NativeMotionEvent, c: Coords, o: Record<string, any
   const hi = c.hi & ~FIELD_HI, lo = c.lo;
   if (hi || lo) {
     const count = popcount(hi) + popcount(lo);
-    let values: Float32Array | null = o[f.values];
+    let values = o[f.values] as Float32Array | null;
     if (!values || values.length < count) { let size = 8; while (size < count) size *= 2; o[f.values] = values = new Float32Array(size); }
     let index = 0;
     for (let axis = 0; axis < 64; axis++) if (axis < 32 ? hi >>> (31 - axis) & 1 : lo >>> (63 - axis) & 1) values[index++] = c.v[axis];
@@ -326,27 +326,26 @@ function pointerArrays(count: number, props: unknown[] | null, coords: unknown[]
 
 /** MotionEvent::split: the action and pointers of `src` limited to the pointers in `idBits` */
 function split(dst: NativeMotionEvent, src: NativeMotionEvent, idBits: number): void {
-  const masked = src.action & 0xff, actionId = src.ids[src.action >> 8 & 0xff];
+  const masked = src.action & 0xff, actionId = src.pointers[src.action >> 8 & 0xff].id;
   const kept: number[] = [];
-  for (let i = 0; i < src.pointerCount; i++) if (idBits >>> src.ids[i] & 1) kept.push(i);
+  for (let i = 0; i < src.pointerCount; i++) if (idBits >>> src.pointers[i].id & 1) kept.push(i);
   let action = src.action;
   if (masked === ACTION_POINTER_DOWN || masked === ACTION_POINTER_UP) {
     if (idBits >>> actionId & 1) {
       action = kept.length === 1 ? masked === ACTION_POINTER_DOWN ? ACTION_DOWN : src.flags & FLAG_CANCELED ? ACTION_CANCEL : ACTION_UP
-        : masked | kept.findIndex((i) => src.ids[i] === actionId) << 8;
+        : masked | kept.findIndex((i) => src.pointers[i].id === actionId) << 8;
     } else action = ACTION_MOVE;
   }
-  dst.copyFrom(src, true);
+  dst.copyFrom(src, false);
   dst.id = nextId(); dst.action = action;
-  dst.ids = kept.map((i) => src.ids[i]); dst.tools = kept.map((i) => src.tools[i]);
-  dst.coords = [];
-  for (let h = 0; h <= src.historySize; h++) for (const i of kept) dst.coords.push(src.rawCoords(i, h).copy());
+  dst.pointers = kept.map((i) => src.pointers[i]);
+  dst.samples = src.samples.map((s) => ({ time: s.time, coords: kept.map((i) => s.coords[i].copy()) }));
 }
 
 const writeXform = (p: NativeParcel, t: Xform) => { for (const i of [0, 1, 2, 3, 4, 5]) writeFloat(p, t[i]); };
 const readXform = (p: NativeParcel): Xform => Float32Array.from([0, 1, 2, 3, 4, 5], () => readFloat(p));
 function writeEvent(e: NativeMotionEvent, p: NativeParcel): void {
-  writeInt(p, e.pointerCount); writeInt(p, e.times.length);
+  writeInt(p, e.pointerCount); writeInt(p, e.samples.length);
   writeInt(p, e.id); writeInt(p, e.deviceId); writeInt(p, e.source); writeInt(p, e.displayId);
   writeInt(p, 32); for (let i = 0; i < 8; i++) writeInt(p, 0); // the HMAC, which this host never signs
   for (const v of [e.action, e.actionButton, e.flags, e.edgeFlags, e.metaState, e.buttonState, e.classification]) writeInt(p, v);
@@ -354,11 +353,10 @@ function writeEvent(e: NativeMotionEvent, p: NativeParcel): void {
   writeFloat(p, e.xPrecision); writeFloat(p, e.yPrecision); writeFloat(p, e.rawXCursor); writeFloat(p, e.rawYCursor);
   writeXform(p, e.rawXform);
   writeLong(p, e.downTime);
-  for (let i = 0; i < e.pointerCount; i++) { writeInt(p, e.ids[i]); writeInt(p, e.tools[i]); }
-  for (let h = 0; h < e.times.length; h++) {
-    writeLong(p, e.times[h]);
-    for (let i = 0; i < e.pointerCount; i++) {
-      const c = e.rawCoords(i, h);
+  for (const { id, tool } of e.pointers) { writeInt(p, id); writeInt(p, tool); }
+  for (const { time, coords } of e.samples) {
+    writeLong(p, time);
+    for (const c of coords) {
       writeInt(p, c.lo); writeInt(p, c.hi);
       for (const axis of c.axes()) writeFloat(p, c.v[axis]);
       writeInt(p, +c.resampled);
@@ -377,19 +375,14 @@ function readEvent(e: NativeMotionEvent, p: NativeParcel): boolean {
   e.xPrecision = readFloat(p); e.yPrecision = readFloat(p); e.rawXCursor = readFloat(p); e.rawYCursor = readFloat(p);
   e.rawXform = readXform(p);
   e.downTime = readLong(p);
-  e.ids = []; e.tools = [];
-  for (let i = 0; i < pointers; i++) { e.ids.push(readInt(p)); e.tools.push(readInt(p)); }
-  e.times = []; e.coords = [];
-  for (let h = 0; h < samples; h++) {
-    e.times.push(readLong(p));
-    for (let i = 0; i < pointers; i++) {
-      const c = new Coords();
-      c.lo = readInt(p); c.hi = readInt(p);
-      for (const axis of c.axes()) c.v[axis] = readFloat(p);
-      c.resampled = readInt(p) !== 0;
-      e.coords.push(c);
-    }
-  }
+  e.pointers = Array.from({ length: pointers }, () => ({ id: readInt(p), tool: readInt(p) }));
+  e.samples = Array.from({ length: samples }, () => ({ time: readLong(p), coords: Array.from({ length: pointers }, () => {
+    const c = new Coords();
+    c.lo = readInt(p); c.hi = readInt(p);
+    for (const axis of c.axes()) c.v[axis] = readFloat(p);
+    c.resampled = readInt(p) !== 0;
+    return c;
+  }) }));
   return true;
 }
 
@@ -409,20 +402,20 @@ rt.registerJnis(ME, {
     count: number, props: Record<string, number>[] | null, coords: Record<string, unknown>[] | null): bigint => {
     pointerArrays(count, props, coords);
     const xform = Float32Array.of(1, 0, xOffset, 0, 1, yOffset), inv = inverse(xform);
-    const ids: number[] = [], tools: number[] = [], raw: Coords[] = [];
+    const pointers: Pointer[] = [], raw: Coords[] = [];
     const [id, tool] = ppFields();
     flags &= ~PRIVATE_FLAGS;
     for (let i = 0; i < count; i++) {
       const pp = props![i], pc = coords![i];
       if (!pp) return 0n;
       if (!pc) throw npe("pointerCoords");
-      ids.push(pp[id]); tools.push(pp[tool]);
+      pointers.push({ id: pp[id], tool: pp[tool] });
       const c = coordsToNative(pc, source, inv);
       if (c.get(AXIS_ORIENTATION) !== 0) flags |= PRIVATE_FLAGS;
       raw.push(c);
     }
     return into(ptr, (e) => Object.assign(e, { id: nextId(), deviceId, source, displayId, action, actionButton: 0, flags, edgeFlags, metaState, buttonState,
-      classification, xform, rawXform: IDENTITY_XF(), xPrecision, yPrecision, rawXCursor: NaN, rawYCursor: NaN, downTime, ids, tools, times: [eventTime], coords: raw }));
+      classification, xform, rawXform: IDENTITY_XF(), xPrecision, yPrecision, rawXCursor: NaN, rawYCursor: NaN, downTime, pointers, samples: [{ time: eventTime, coords: raw }] }));
   },
   "nativeDispose(J)V": () => {},
   "nativeAddBatch(JJ[Landroid/view/MotionEvent$PointerCoords;I)V": (ptr: bigint, eventTime: bigint, coords: Record<string, unknown>[] | null, metaState: number) => {
@@ -434,7 +427,7 @@ rt.registerJnis(ME, {
       if (!coords[i]) throw npe("pointerCoords");
       raw.push(coordsToNative(coords[i], e.source, inv));
     }
-    e.times.push(eventTime); e.coords.push(...raw);
+    e.samples.push({ time: eventTime, coords: raw });
     e.metaState |= metaState;
   },
   "nativeGetPointerCoords(JIILandroid/view/MotionEvent$PointerCoords;)V": (ptr: bigint, i: number, h: number, out: Record<string, unknown> | null) => {
@@ -447,7 +440,7 @@ rt.registerJnis(ME, {
     checkPointer(e, i);
     if (!out) throw npe("pointerProperties must not be null");
     const [id, tool] = ppFields();
-    out[id] = e.ids[i]; out[tool] = e.tools[i];
+    out[id] = e.pointers[i].id; out[tool] = e.pointers[i].tool;
   },
   "nativeReadFromParcel(JLandroid/os/Parcel;)J": (ptr: bigint, p: JObj) => {
     return into(ptr, (e) => { if (!readEvent(e, nativeParcel(p))) throw rt.mkThrowable("java/lang/RuntimeException", "Failed to read MotionEvent parcel."); });
@@ -455,13 +448,13 @@ rt.registerJnis(ME, {
   "nativeWriteToParcel(JLandroid/os/Parcel;)V": (ptr: bigint, p: JObj) => writeEvent(at(ptr), nativeParcel(p)),
   "nativeAxisToString(I)Ljava/lang/String;": (axis: number) => AXIS_LABELS[axis] ?? null,
   "nativeAxisFromString(Ljava/lang/String;)I": (label: string) => AXIS_LABELS.indexOf(label),
-  "nativeGetPointerId(JI)I": (ptr: bigint, i: number) => { const e = at(ptr); checkPointer(e, i); return e.ids[i]; },
-  "nativeGetToolType(JI)I": (ptr: bigint, i: number) => { const e = at(ptr); checkPointer(e, i); return e.tools[i]; },
+  "nativeGetPointerId(JI)I": (ptr: bigint, i: number) => { const e = at(ptr); checkPointer(e, i); return e.pointers[i].id; },
+  "nativeGetToolType(JI)I": (ptr: bigint, i: number) => { const e = at(ptr); checkPointer(e, i); return e.pointers[i].tool; },
   "nativeGetEventTimeNanos(JI)J": (ptr: bigint, h: number) => {
     const e = at(ptr);
     if (h === HISTORY_CURRENT) return e.eventTime;
     checkHistory(e, h);
-    return e.times[h];
+    return e.samples[h].time;
   },
   "nativeGetRawAxisValue(JIII)F": (ptr: bigint, axis: number, i: number, h: number) => { const e = at(ptr); return e.rawAxis(axis, i, sample(e, i, h)); },
   "nativeGetAxisValue(JIII)F": (ptr: bigint, axis: number, i: number, h: number) => { const e = at(ptr); return e.axis(axis, i, sample(e, i, h)); },
@@ -471,7 +464,7 @@ rt.registerJnis(ME, {
   },
   "nativeApplyTransform(JLandroid/graphics/Matrix;)V": (ptr: bigint, matrix: object) => {
     const e = at(ptr), t = xformOf(matrix);
-    for (const c of e.coords) transformCoords(c, t);
+    for (const { coords } of e.samples) for (const c of coords) transformCoords(c, t);
     if (!isNaN(e.rawXCursor) && !isNaN(e.rawYCursor)) {
       const x = e.rawXCursor, y = e.rawYCursor;
       e.rawXCursor = mapX(t, x, y); e.rawYCursor = mapY(t, x, y);
@@ -524,11 +517,10 @@ rt.registerJnis(ME, {
   "nativeGetHistorySize(J)I": (ptr: bigint) => at(ptr).historySize,
   "nativeScale(JF)V": (ptr: bigint, s: number) => {
     const e = at(ptr);
-    e.xform = Float32Array.from(e.xform); e.xform[2] = f32(e.xform[2] * s); e.xform[5] = f32(e.xform[5] * s);
-    e.rawXform = Float32Array.from(e.rawXform); e.rawXform[2] = f32(e.rawXform[2] * s); e.rawXform[5] = f32(e.rawXform[5] * s);
+    for (const t of [e.xform, e.rawXform]) { t[2] = f32(t[2] * s); t[5] = f32(t[5] * s); }
     e.xPrecision = f32(e.xPrecision * s); e.yPrecision = f32(e.yPrecision * s);
     e.rawXCursor = f32(e.rawXCursor * s); e.rawYCursor = f32(e.rawYCursor * s);
-    for (const c of e.coords) for (const axis of SCALED_AXES) scaleAxis(c, axis, s);
+    for (const { coords } of e.samples) for (const c of coords) for (const axis of SCALED_AXES) scaleAxis(c, axis, s);
   },
   // MotionEvent::getSurfaceRotation: the inverse of the rotation the event's transform applies
   "nativeGetSurfaceRotation(J)I": (ptr: bigint) => {

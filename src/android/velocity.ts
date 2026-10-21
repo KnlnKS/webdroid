@@ -257,10 +257,10 @@ class Tracker {
     let axes: number[];
     switch (e.action & 0xff) {
       case ACTION_DOWN: case ACTION_HOVER_ENTER: this.clear(); axes = PLANAR; break;
-      case ACTION_POINTER_DOWN: this.clearPointer(e.ids[e.action >> 8 & 0xff]); axes = PLANAR; break;
+      case ACTION_POINTER_DOWN: this.clearPointer(e.pointers[e.action >> 8 & 0xff].id); axes = PLANAR; break;
       case ACTION_MOVE: case ACTION_HOVER_MOVE: axes = PLANAR; break;
       case ACTION_POINTER_UP:
-        if (e.flags & FLAG_CANCELED) { this.clearPointer(e.ids[e.action >> 8 & 0xff]); return; }
+        if (e.flags & FLAG_CANCELED) { this.clearPointer(e.pointers[e.action >> 8 & 0xff].id); return; }
       // fall through: an up ends the trace, after the stopped-pointer check
       case ACTION_UP:
         if (e.eventTime - this.lastEventTime > ASSUME_STOPPED) for (const axis of PLANAR) this.strategies.delete(axis);
@@ -270,10 +270,10 @@ class Tracker {
       default: return;
     }
     for (let h = 0; h <= e.historySize; h++) {
-      const t = e.times[h];
+      const t = e.samples[h].time;
       for (let i = 0; i < e.pointerCount; i++) {
         if (e.rawCoords(i, h).resampled) continue;
-        for (const axis of axes) this.addMovement(t, e.ids[i], axis, e.axis(axis, i, h));
+        for (const axis of axes) this.addMovement(t, e.pointers[i].id, axis, e.axis(axis, i, h));
       }
     }
   }
