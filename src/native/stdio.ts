@@ -4,27 +4,28 @@
 
 import { mem, wrote, anchor } from "./mem.ts";
 import { hostLib, hostData, vaList, type HostFn, PTR, stp, ldp, ldLong, stLong, ARG0, ptr, guestSort, complete } from "./host.ts";
-import { E, AT_FDCWD, O_ACCMODE, O_APPEND, O_CREAT, O_EXCL, O_TRUNC, S_IFDIR, S_IFMT, S_IFREG } from "./abi.ts";
+import { E, AT_FDCWD, O_ACCMODE, O_APPEND, O_CLOEXEC, O_CREAT, O_DIRECTORY, O_EXCL, O_TRUNC, S_IFDIR, S_IFMT, S_IFREG } from "./abi.ts";
 import { utf8 as codec } from "../jvm/abi.ts";
 import type { Cpu } from "./cpu.ts";
 import { asWrappers, fail, kernelResult, logLine, readTs, DIRENT64, fillStat, inoOf, KLAYOUT } from "./kernel.ts";
 import { format, scan, scanSink } from "./printf.ts";
 import { vfs, storageEstimate } from "../shell/vfs.ts";
 import { filePaths } from "../shell/file-path.ts";
-import { FS_SYSCALLS, fdRead, fdWrite, statProcess, faccessatPath, renameProcess, mkdirProcess, removeProcess, mknodProcess, changeProcess,
-  modifiedTime, makePipe, pread, pwrite, listProcess } from "./fs.ts";
-import { type FileStat, openFd, javaCloseFd, javaDup2Fd, javaLseekFd, javaPreadFd, javaTruncateFd, javaAllocateFd, javaChangeFdAttributes } from "./fd.ts";
+import { FS_SYSCALLS, fallocate, fdRead, fdWrite, statProcess, faccessatPath, renameProcess, mkdirProcess, removeProcess, mknodProcess, changeProcess,
+  modifiedTime, makePipe, pread, pwrite, getdents64 } from "./fs.ts";
+import { type FileStat, openFd, javaCloseFd, javaDup2Fd, javaLseekFd, javaReadFd, javaPreadFd, javaTruncateFd, javaAllocateFd, javaChangeFdAttributes } from "./fd.ts";
 import { processOpenFd } from "./process-fd.ts";
 import { POLL_SYSCALLS, epollCreate } from "./poll.ts";
 const utf8 = (s: string) => codec.enc.encode(s);
 
 /** bionic's ARM32 __sFILE: the fields guest macros read */
 const FILE = { flags: 12, file: 14, size: 84 };
-/** struct dirent: linux_dirent64's fields, padded */
-const DIRENT_SIZE = 276;
 const files = new Map<number, number>();       // FILE* → fd
 const pushback = new Map<number, number[]>();
-const dirs = new Map<number, { entries: string[]; i: number; dirent: number }>();
+/** a DIR*: its descriptor and the getdents64 records read from it, which readdir hands out in place as bionic's does */
+interface DirStream { fd: number; buffer: number; available: number; next: number }
+const DIR_BUFFER = 4096;
+const dirs = new Map<number, DirStream>();
 
 /** mkstemp's contract: the six trailing X's become the name in place, and the file is created exclusively */
 function fdTemp(tpl: number, flags: number, dir: boolean): number | Promise<number> {
@@ -83,15 +84,11 @@ let scratch = 0;
 function fgetc(cpu: Cpu, fp: number): number | Promise<number> {
   const pending = pushback.get(fp), c = pending?.pop();
   if (c !== undefined) { if (!pending?.length) pushback.delete(fp); return c; }
-  const fd = fileFd(fp);
-  const f = openFd(fd);
-  if (!f) { setFlag(fp, F_ERR); return -1; }
-  const byte = f.byte ?? (f.byte = mem.hostAlloc(1));
-  const done = (read: number) => {
+  const byte = new Uint8Array(1);
+  return complete(kernelResult(cpu, javaReadFd(fileFd(fp), byte)), (read) => {
     if (read <= 0) { setFlag(fp, read < 0 ? F_ERR : F_EOF); return -1; }
-    return mem.u8[byte];
-  };
-  return complete(kernelResult(cpu, fdRead(fd, byte, 1)), done);
+    return byte[0];
+  });
 }
 function fwriteBytes(cpu: Cpu, fp: number, p: number, n: number): number | Promise<number> {
   return complete(kernelResult(cpu, fdWrite(cpu, fileFd(fp), p, n)), written => { if (written < 0) { setFlag(fp,F_ERR); return 0; } return written; });
@@ -105,23 +102,29 @@ function fwriteStr(cpu: Cpu, fp: number, s: string): number | Promise<number> {
   return complete(r, written => written < b.length ? -1 : b.length);
 }
 const chk = (cpu: Cpu, n: number, size: number, what: string) => { if (n > size) cpu.fault(`fortify: ${what} past the buffer`); };
-function openDir(cpu: Cpu, path: string): number | Promise<number> {
-  const open = (entries: string[] | number) => {
-    if (typeof entries === "number") { fail(cpu, -entries); return 0; }
+/** a stream over the directory descriptor `fd` (or -errno), which closedir closes */
+function openDir(cpu: Cpu, fd: number | Promise<number>): number | Promise<number> {
+  return complete(fd, (n) => {
+    if (n < 0) { fail(cpu, -n); return 0; }
     const h = mem.malloc(16);
-    dirs.set(h, { entries, i: 0, dirent: mem.malloc(DIRENT_SIZE) });
+    dirs.set(h, { fd: n, buffer: mem.malloc(DIR_BUFFER), available: 0, next: 0 });
     return h;
-  };
-  return complete(listProcess(path), open);
+  });
 }
-function nextDirent(d: { entries: string[]; i: number }, de: number): number {
-  const name = d.entries[d.i++];
-  mem.memset(de, 0, DIRENT_SIZE);
-  mem.st32(de + DIRENT64.ino, d.i); mem.st32(de + DIRENT64.off, d.i);
-  mem.st16(de + DIRENT64.reclen, DIRENT_SIZE);
-  mem.st8(de + DIRENT64.type, 8);
-  mem.putCstr(de + DIRENT64.name, name, 256);
-  return de;
+/** the next record, 0 at the end, or -errno */
+function readDir(d: DirStream): number | Promise<number> {
+  if (d.next < d.available) { const de = d.buffer + d.next; d.next += mem.ld16u(de + DIRENT64.reclen); return de; }
+  return complete(getdents64(d.fd, d.buffer, DIR_BUFFER), (n) => {
+    if (n <= 0) return n;
+    d.available = n; d.next = 0;
+    return readDir(d);
+  });
+}
+function closeDir(h: number): number | Promise<number> {
+  const d = dirs.get(h);
+  if (!d) return -E.BADF;
+  dirs.delete(h); mem.free(d.buffer); mem.free(h);
+  return javaCloseFd(d.fd);
 }
 
 interface FtsNode {
@@ -245,6 +248,9 @@ export function stdioInit(): void {
     mkdir: (_c, a) => mkdirProcess(a.str()),
     rmdir: (_c, a) => removeProcess(a.str(), true),
     ftruncate64: (_c, a) => javaTruncateFd(a.i(), Number(a.l())),
+    // a 32-bit off_t, where fallocate64's is the kernel's
+    fallocate: (_c, a) => { const fd = a.i(), mode = a.i(), off = a.i(); return fallocate(fd, mode, off, a.i()); },
+    fallocate64: FS_SYSCALLS.fallocate,
     dup2: (_c, a) => javaDup2Fd(a.i(), a.i()),
     pipe: (_c, a) => makePipe(a.p(), 0),
     epoll_create: () => epollCreate(false),
@@ -281,25 +287,40 @@ export function stdioInit(): void {
     isatty: () => 0,
     realpath: (_c, a) => { const p = vfs.norm(a.str()); let out = a.p(); if (!out) out = mem.malloc(4096); mem.putCstr(out, p, 4096); return ptr(out); },
 
-    opendir: (cpu, a) => openDir(cpu, a.str()),
-    fdopendir: (cpu, a) => { const f = openFd(a.i()); if (!f || !f.dir) { fail(cpu, E.NOTDIR); return 0; } return openDir(cpu, f.path); },
-    readdir: (_c, a) => { const d = dirs.get(a.p()); return d && d.i < d.entries.length ? nextDirent(d, d.dirent) : 0; },
-    readdir_r: (_c, a) => { const d = dirs.get(a.p()), ent = a.p(), res = a.p(); stp(res, d && d.i < d.entries.length ? nextDirent(d, ent) : 0); return 0; },
-    rewinddir: (_c, a) => { const d = dirs.get(a.p()); if (d) d.i = 0; },
-    closedir: (_c, a) => { const h = a.p(); const d = dirs.get(h); if (d) { mem.free(d.dirent); mem.free(h); dirs.delete(h); return 0; } return -1; },
-    dirfd: () => -1,
+    opendir: (cpu, a) => openDir(cpu, processOpenFd(a.str(), O_DIRECTORY | O_CLOEXEC)),
+    fdopendir: (cpu, a) => { const fd = a.i(), f = openFd(fd); return openDir(cpu, !f ? -E.BADF : f.dir ? fd : -E.NOTDIR); },
+    readdir: (cpu, a) => {
+      const d = dirs.get(a.p());
+      return d ? complete(readDir(d), (de) => de < 0 ? (fail(cpu, -de), 0) : de) : (fail(cpu, E.BADF), 0);
+    },
+    // the error itself, the entry copied out
+    readdir_r: (_c, a) => {
+      const d = dirs.get(a.p()), entry = a.p(), result = a.p();
+      return d ? complete(readDir(d), (de) => {
+        if (de < 0) return -de;
+        if (de) mem.memmove(entry, de, mem.ld16u(de + DIRENT64.reclen));
+        stp(result, de && entry);
+        return 0;
+      }) : E.BADF;
+    },
+    rewinddir: (_c, a) => { const d = dirs.get(a.p()); if (!d) return; d.available = d.next = 0; return complete(javaLseekFd(d.fd, 0, 0), () => {}); },
+    closedir: (cpu, a) => kernelResult(cpu, closeDir(a.p())),
+    dirfd: (cpu, a) => dirs.get(a.p())?.fd ?? fail(cpu, E.INVAL),
     // scandir(path, &namelist, filter, compar): every entry the filter keeps, each its own
-    // malloc'd dirent, sorted by the guest's comparator (over dirent**) into a malloc'd array
+    // malloc'd copy, sorted by the guest's comparator (over dirent**) into a malloc'd array
     scandir: async (cpu, a) => {
-      const path = a.str(), out = a.p(), filter = a.p(), compar = a.p(), entries = await listProcess(path);
-      if (typeof entries === "number") return fail(cpu, -entries);
-      const kept: number[] = [];
-      for (const name of entries) {
-        const de = mem.malloc(DIRENT_SIZE);
-        nextDirent({ entries: [name], i: 0 }, de);
-        if (filter && !(await cpu.call(filter, [de]))) { mem.free(de); continue; }
-        kept.push(de);
+      const path = a.str(), out = a.p(), filter = a.p(), compar = a.p(), h = await openDir(cpu, processOpenFd(path, O_DIRECTORY | O_CLOEXEC));
+      if (!h) return -1;
+      const d = dirs.get(h)!, kept: number[] = [];
+      let de: number;
+      while ((de = await readDir(d)) > 0) {
+        const size = mem.ld16u(de + DIRENT64.reclen), copy = mem.malloc(size);
+        mem.memmove(copy, de, size);
+        if (filter && !(await cpu.call(filter, [copy]))) { mem.free(copy); continue; }
+        kept.push(copy);
       }
+      await closeDir(h);
+      if (de < 0) { for (const copy of kept) mem.free(copy); return fail(cpu, -de); }
       if (compar && kept.length > 1) {
         const cell = mem.malloc(2 * PTR);
         try { await guestSort(kept, (x, y) => { stp(cell, x); stp(cell + PTR, y); return cpu.call(compar, [cell, cell + PTR]); }); } finally { mem.free(cell); }

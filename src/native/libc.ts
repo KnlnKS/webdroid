@@ -3,7 +3,7 @@
 // runs bionic itself (bionic.ts). stdio is in stdio.ts, printf/scanf in printf.ts.
 
 import { mem } from "./mem.ts";
-import { hostLib, hostData, NORET, ARG0, SERVED, ptr, vaList, type HostFn, retF, retD, PTR, stp, ldp } from "./host.ts";
+import { hostLib, hostData, NORET, ARG0, SERVED, ptr, vaList, type HostFn, retF, retD, PTR, stp, ldp, cstr } from "./host.ts";
 import { E, strerror, PAGE_SIZE } from "./abi.ts";
 import { utf8 as codec } from "../jvm/abi.ts";
 import { invalidateRange, type Cpu } from "./cpu.ts";
@@ -95,7 +95,15 @@ function strtodAt(s: number, endp: number): number {
   return parseFloat(m[1]);
 }
 
-const tzOffsetMin = () => -new Date().getTimezoneOffset();
+/** the host's zone, which the device's is (config.ts): its abbreviation at each offset it takes */
+let zoneFormat: Intl.DateTimeFormat;
+const zoneNames = new Map<number, number>();
+function zoneName(d: Date): number {
+  const west = d.getTimezoneOffset();
+  let p = zoneNames.get(west);
+  if (p === undefined) zoneNames.set(west, (p = cstr(zoneFormat.formatToParts(d).find((part) => part.type === "timeZoneName")?.value ?? "UTC")));
+  return p;
+}
 function fillTm(tm: number, d: Date, utc: boolean): void {
   const g = utc ? { s: d.getUTCSeconds(), mi: d.getUTCMinutes(), h: d.getUTCHours(), md: d.getUTCDate(), mo: d.getUTCMonth(), y: d.getUTCFullYear(), wd: d.getUTCDay() }
     : { s: d.getSeconds(), mi: d.getMinutes(), h: d.getHours(), md: d.getDate(), mo: d.getMonth(), y: d.getFullYear(), wd: d.getDay() };
@@ -104,7 +112,7 @@ function fillTm(tm: number, d: Date, utc: boolean): void {
   const f = [g.s, g.mi, g.h, g.md, g.mo, g.y - 1900, g.wd, yday, 0];
   for (let i = 0; i < f.length; i++) mem.st32(tm + i * 4, f[i]);
   mem.st32(tm + TM.gmtoff, utc ? 0 : -d.getTimezoneOffset() * 60);
-  stp(tm + TM.zone, tznames[utc ? 0 : 1]);
+  stp(tm + TM.zone, utc ? cstr("UTC") : zoneName(d));
 }
 function readTm(tm: number): number[] { const f: number[] = []; for (let i = 0; i < 9; i++) f.push(mem.ld32(tm + i * 4) | 0); return f; }
 function strftime(fmt: string, tm: number): string {
@@ -124,8 +132,8 @@ function strftime(fmt: string, tm: number): string {
       case "S": return p2(sec); case "t": return "\t"; case "T": return `${p2(hour)}:${p2(min)}:${p2(sec)}`;
       case "u": return String(wday || 7); case "w": return String(wday); case "x": return `${p2(mon + 1)}/${p2(mday)}/${p2(y % 100)}`;
       case "X": return `${p2(hour)}:${p2(min)}:${p2(sec)}`; case "y": return p2(y % 100); case "Y": return String(y);
-      case "z": { const o = tzOffsetMin(); return (o < 0 ? "-" : "+") + p2(Math.floor(Math.abs(o) / 60)) + p2(Math.abs(o) % 60); }
-      case "Z": return "UTC"; case "s": return String(Math.floor(mktime(tm) / 1000)); case "%": return "%";
+      case "z": { const o = Math.trunc((mem.ld32(tm + TM.gmtoff) | 0) / 60); return (o < 0 ? "-" : "+") + p2(Math.floor(Math.abs(o) / 60)) + p2(Math.abs(o) % 60); }
+      case "Z": { const zone = ldp(tm + TM.zone); return zone ? mem.cstr(zone) : ""; } case "s": return String(Math.floor(mktime(tm) / 1000)); case "%": return "%";
       default: return "%" + c;
     }
   });
@@ -140,7 +148,6 @@ function timegm(tm: number): number {
   const [sec, min, hour, mday, mon, year] = readTm(tm);
   return Math.floor(Date.UTC(year + 1900, mon, mday, hour, min, sec) / 1000);
 }
-let tznames: number[] = [0, 0];
 
 // ── setjmp/longjmp: the callee-saved registers r4–r14 live in the guest jmp_buf itself
 function setjmp(cpu: Cpu, buf: number): number {
@@ -170,18 +177,23 @@ const next48 = (): void => {
 /** an ARM32 process's libc: libc.so, liblog.so, libm.so and libz.so, which expose the kernel's
  *  calls as well */
 export function libcInit(): void {
-  // _ctype_ (257 bytes, index c+1), tzname
+  // _ctype_ (257 bytes, index c+1)
   const ct = mem.hostAlloc(384);
   for (let c = 0; c < 256; c++) mem.u8[ct + 1 + c] = c < 128 ? ctypeBits(c) : 0;
   const ctype = mem.hostAlloc(PTR);
   stp(ctype, ct);
   hostData("libc.so", "_ctype_", ctype);
-  tznames = [mem.hostStr("UTC"), mem.hostStr("UTC")];
-  const tzn = mem.hostAlloc(2 * PTR);
-  stp(tzn, tznames[0]); stp(tzn + PTR, tznames[1]);
+  // tzname, timezone and daylight: the zone's standard and summer times, as tzset reads them
+  zoneFormat = new Intl.DateTimeFormat("en-US", { timeZoneName: "short" }); zoneNames.clear();
+  const year = new Date().getFullYear(), jan = new Date(year, 0, 1), jul = new Date(year, 6, 1);
+  const [standard, summer] = jan.getTimezoneOffset() >= jul.getTimezoneOffset() ? [jan, jul] : [jul, jan];
+  const daylight = standard.getTimezoneOffset() !== summer.getTimezoneOffset();
+  const tzn = mem.hostAlloc(2 * PTR), timezone = mem.hostAlloc(4), daylightFlag = mem.hostAlloc(4);
+  stp(tzn, zoneName(standard)); stp(tzn + PTR, daylight ? zoneName(summer) : cstr("   "));
+  mem.st32(timezone, standard.getTimezoneOffset() * 60); mem.st32(daylightFlag, +daylight);
   hostData("libc.so", "tzname", tzn);
-  hostData("libc.so", "timezone", mem.hostAlloc(8));
-  hostData("libc.so", "daylight", mem.hostAlloc(4));
+  hostData("libc.so", "timezone", timezone);
+  hostData("libc.so", "daylight", daylightFlag);
   const environ = mem.hostAlloc(PTR);
   hostData("libc.so", "environ", environ);
   const optErr = mem.hostAlloc(4); hostData("libc.so", "opterr", optErr);
@@ -217,10 +229,9 @@ export function libcInit(): void {
     __cxa_finalize: () => 0,
     __cxa_pure_virtual: (cpu) => cpu.fault("pure virtual call"),
     __stack_chk_fail: (cpu) => cpu.fault("stack smashing detected"),
-    getpid: (cpu) => cpu.pid,
-    gettid: (cpu) => cpu.osTid,
     getpgrp: (cpu) => cpu.pid,
-    bsd_signal: () => 0,
+    // its arguments are not the kernel's clone, and no thread starts this way
+    clone: (cpu) => fail(cpu, E.NOSYS),
     getpriority: (cpu, a) => { const which = a.i(), who = a.i(); return which < 0 || which > 2 ? fail(cpu, E.INVAL) : which ? 0 : niceOf(cpu, who); },
     nice: (cpu, a) => setNice(cpu, 0, niceOf(cpu, 0) + a.i()),
     sysconf: (_c, a) => sysconf(a.i()),
@@ -310,12 +321,12 @@ export function libcInit(): void {
     },
     strerror: (_c, a) => { mem.putCstr(strerrorBuf, strerror(a.i()), 64); return strerrorBuf; },
     strerror_r: (_c, a) => { const e = a.i(), b = a.p(), n = a.u(); mem.putCstr(b, strerror(e), n); return 0; },
-    strtol: (cpu, a) => strtoNum(cpu, a.p(), a.p(), a.i(), cpu.a64 ? 64 : 32, false),
-    strtoul: (cpu, a) => strtoNum(cpu, a.p(), a.p(), a.i(), cpu.a64 ? 64 : 32, true),
+    strtol: (cpu, a) => strtoNum(cpu, a.p(), a.p(), a.i(), 32, false),
+    strtoul: (cpu, a) => strtoNum(cpu, a.p(), a.p(), a.i(), 32, true),
     strtoll: (cpu, a) => strtoNum(cpu, a.p(), a.p(), a.i(), 64, false),
     strtoull: (cpu, a) => strtoNum(cpu, a.p(), a.p(), a.i(), 64, true),
     atoi: (cpu, a) => strtoNum(cpu, a.p(), 0, 10, 32, false),
-    atol: (cpu, a) => strtoNum(cpu, a.p(), 0, 10, cpu.a64 ? 64 : 32, false),
+    atol: (cpu, a) => strtoNum(cpu, a.p(), 0, 10, 32, false),
     atoll: (cpu, a) => strtoNum(cpu, a.p(), 0, 10, 64, false),
     strtod: (c, a) => retD(c, strtodAt(a.p(), a.p())),
     strtof: (c, a) => retF(c, Math.fround(strtodAt(a.p(), a.p()))),
@@ -424,11 +435,7 @@ export function libcInit(): void {
       return (value % bound) | 0;
     },
 
-    gethostbyname: () => 0,
-    gethostbyaddr: () => 0,
     gethostname: (_c, a) => { const b = a.p(), n = a.u(); mem.putCstr(b, "localhost", n); return 0; },
-    inet_aton: (_c, a) => { const s = a.str(), out = a.p(); const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(s); if (!m) return 0; for (let i = 0; i < 4; i++) mem.st8(out + i, +m[i + 1]); return 1; },
-    inet_addr: (_c, a) => { const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(a.str()); if (!m) return -1; return (+m[1]) | (+m[2] << 8) | (+m[3] << 16) | (+m[4] << 24); },
     inet_ntoa: (_c, a) => { const v = a.u(); mem.putCstr(inetBuf, `${v & 255}.${(v >>> 8) & 255}.${(v >>> 16) & 255}.${v >>> 24}`, 20); return inetBuf; },
     htons: (_c, a) => { const v = a.i() & 0xffff; return ((v & 255) << 8) | (v >>> 8); },
     htonl: (_c, a) => { const v = a.i(); return ((v & 255) << 24) | ((v & 0xff00) << 8) | ((v >>> 8) & 0xff00) | (v >>> 24); },

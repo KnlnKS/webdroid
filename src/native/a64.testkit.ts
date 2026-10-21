@@ -1,11 +1,11 @@
-// The harness the A64 tests share: a code page reserved through mem.reserve (never an address
+// The harness the A64 and ARM tests share: a code page reserved through mem.reserve (never an address
 // the stack allocator can march into), a fresh Cpu, and the slice loop run to the return
 // sentinel. Encodings in the tests come from `clang -target aarch64-linux-gnu`, never hand-derived.
 // Every program also runs past the heat threshold so its region compiles (synchronously under
 // node), and the JIT's register file must agree with the interpreter's.
 import { expect } from "vite-plus/test";
 import { mem } from "./mem.ts";
-import { Cpu } from "./cpu.ts";
+import { Cpu, SliceExit } from "./cpu.ts";
 import { core, jitStats, JIT_HEAT } from "./core.ts";
 import { mainThread } from "../jvm/natives/jentry.ts";
 import { RET_SENTINEL } from "./abi.ts";
@@ -13,8 +13,8 @@ import { RET_SENTINEL } from "./abi.ts";
 export const RET = 0xd65f03c0;
 /** run c's slices to the return sentinel; a fault's synchronous signal throws with its siginfo */
 export function finish(c: Cpu, budget = 10000): void {
-  for (let ex; (ex = c.runSlice(budget)) !== 2;) {
-    if (ex !== 3) continue;
+  for (let ex; (ex = c.runSlice(budget)) !== SliceExit.Exit;) {
+    if (ex !== SliceExit.Signal) continue;
     const { sig, info } = c.raised!;
     c.raised = null;
     throw new Error(`signal ${sig} code ${info.code} addr 0x${info.addr.toString(16)}`);
@@ -28,14 +28,14 @@ mem.reserve = (size, align) => { const base = reserve(size, align); images.push(
 
 /** one Cpu for every run: a thread stack is address space that is never given back */
 let shared: Cpu | null = null;
-function execute(at: number, setup: (c: Cpu) => void): Cpu {
+export function execute(at: number, setup: (c: Cpu) => void): Cpu {
   const c = (shared ??= new Cpu(mainThread, "test"));
   c.w.fill(0); c.si.fill(0);
   c.cpsr = 0; c.excl = 0; c.fpcr = 0; c.fpsr = 0;
   c.ensureStack();
-  c.w[62] = c.stackTop;
+  c.w[2 * c.spx] = c.stackTop;
   setup(c);
-  c.w[60] = RET_SENTINEL;
+  c.w[2 * c.lrx] = RET_SENTINEL;
   c.setPc(at);
   finish(c);
   return c;

@@ -4,12 +4,12 @@
 // would on a device at its process limit or under its sandbox.
 
 import { wrote, mem } from "./mem.ts";
-import { hostLib, hostData, type HostFn, PTR, stp, stLong, vaList, ARG0, ptr, guestSort } from "./host.ts";
-import { E } from "./abi.ts";
+import { hostLib, hostData, type HostFn, PTR, ldWord, stp, stLong, vaList, ARG0, ptr, guestSort } from "./host.ts";
+import { E, PAGE_SIZE } from "./abi.ts";
 import { type Cpu, cpuByOsTid, nameThread } from "./cpu.ts";
-import { setAbortMessage } from "./crash.ts";
+import { exitGroup, setAbortMessage } from "./crash.ts";
 import { SIGNAL_LIBC } from "./signals.ts";
-import { fail, fillRandom, logLine } from "./kernel.ts";
+import { fail, fillRandom, logLine, wrapped } from "./kernel.ts";
 import { format, snprintfInto } from "./printf.ts";
 import { device } from "../shell/config.ts";
 import { PROP_VALUE_MAX, propertyHandle, propertyKey, propertyValue } from "../shell/properties.ts";
@@ -98,7 +98,45 @@ const chk = (n: number, len: number, cpu: Cpu) => { if (n > len) cpu.fault(`fort
 /** what the core leaves to the host of a __memcpy_chk it serves: a failed check */
 export const memcpyChk: HostFn = (cpu, a) => { const d = a.p(), s = a.p(), n = a.u(); chk(n, a.u(), cpu); mem.memmove(d, s, n); return ARG0; };
 
+/** a scheduling policy's change: the normal policies; a real-time one needs CAP_SYS_NICE */
+const schedPolicy = (policy: number): number => policy === 0 || policy === 3 || policy === 5 ? 0 : -(policy === 1 || policy === 2 || policy === 6 ? E.PERM : E.INVAL);
+const SCHED_RESET_ON_FORK = 0x40000000;
+/** struct sched_attr's first and current sizes */
+const SCHED_ATTR_SIZE_VER0 = 48, SCHED_ATTR_SIZE = 56;
+/** sched_getaffinity(2): every core, answering the kernel mask's size */
+function getAffinity(pid: number, n: number, set: number): number {
+  if (n < PTR || pid < 0) return -E.INVAL;
+  mem.memset(set, 0, n); mem.st32(set, (1 << device.cpu.cores) - 1);
+  return PTR;
+}
+/** process_vm_readv(2) of this process: a crash reporter's safe read */
+function processVmReadv(cpu: Cpu, pid: number, local: number, nLocal: number, remote: number, nRemote: number): number {
+  if (pid !== cpu.pid) return -E.SRCH;
+  const iov = (at: number, n: number) => Array.from({ length: n }, (_, i) => ({ va: ldWord(at + i * 2 * PTR), len: Number(ldWord(at + i * 2 * PTR + PTR)) }));
+  const chunks: Uint8Array[] = [];
+  for (const { va, len } of iov(remote, nRemote)) {
+    try { if (len) chunks.push(mem.bytes(mem.txVa(va & 0x00ffffffffffffffn), len).slice()); } catch { if (!chunks.length) return -E.FAULT; break; }
+  }
+  let moved = 0, at = 0, chunk = 0;
+  for (const { va, len } of iov(local, nLocal)) {
+    for (let done = 0; done < len && chunk < chunks.length;) {
+      const n = Math.min(len - done, chunks[chunk].length - at);
+      mem.write(mem.txVa(va + BigInt(done)), chunks[chunk].subarray(at, at + n));
+      done += n; at += n; moved += n;
+      if (at === chunks[chunk].length) { chunk++; at = 0; }
+    }
+  }
+  return moved;
+}
+
 export const PROC_SYSCALLS: Record<string, HostFn> = {
+  getpid: (cpu) => cpu.pid, gettid: (cpu) => cpu.osTid,
+  getcpu: (_c, a) => { const at = a.p(), node = a.p(); if (at) mem.st32(at, 0); if (node) mem.st32(node, 0); return 0; },
+  exit_group: (cpu, a) => exitGroup(cpu, a.i(), "exit_group"),
+  // no second process (see cloneThread), so no child to wait for
+  wait4: () => -E.CHILD,
+  process_vm_readv: (cpu, a) => processVmReadv(cpu, a.i(), a.p(), a.u(), a.p(), a.u()),
+  getrandom: (_c, a) => { const buf = a.p(), n = a.u(); if (n) fillRandom(buf, n); return n; },
   getuid: () => procIdentity.uid, geteuid: () => procIdentity.uid, getgid: () => procIdentity.uid, getegid: () => procIdentity.uid,
   getppid: () => 1,
   // the process leads its own group, as /proc/self/stat says; no other process is visible
@@ -119,6 +157,21 @@ export const PROC_SYSCALLS: Record<string, HostFn> = {
   sched_getparam: (_c, a) => { a.i(); mem.st32(a.p(), 0); return 0; },
   // one core, nothing to pin
   sched_setaffinity: () => 0,
+  sched_getaffinity: (_c, a) => getAffinity(a.i(), a.u(), a.p()),
+  sched_setscheduler: (_c, a) => { a.i(); return schedPolicy(a.i() & ~SCHED_RESET_ON_FORK); },
+  sched_setattr: (_c, a) => {
+    const pid = a.i(), attr = a.p(), flags = a.u(), size = attr ? mem.ld32(attr) || SCHED_ATTR_SIZE_VER0 : 0;
+    if (pid < 0 || !attr || flags) return -E.INVAL;
+    if (size < SCHED_ATTR_SIZE_VER0 || size > PAGE_SIZE) { mem.st32(attr, SCHED_ATTR_SIZE); return -E.TOOBIG; }
+    return schedPolicy(mem.ld32(attr + 4));
+  },
+  // SCHED_OTHER at nice 0: the kernel's struct, its size the smaller of the caller's and its own, the rest zero
+  sched_getattr: (_c, a) => {
+    const pid = a.i(), attr = a.p(), size = a.u(), flags = a.u();
+    if (pid < 0 || flags || size < SCHED_ATTR_SIZE_VER0 || size > PAGE_SIZE) return -E.INVAL;
+    mem.memset(attr, 0, size); mem.st32(attr, Math.min(size, SCHED_ATTR_SIZE));
+    return 0;
+  },
   getrlimit: (_cpu, a) => {
     const current = limit(a.i()), out = a.p();
     writeLimit(out, current.soft); writeLimit(out + PTR, current.hard);
@@ -152,14 +205,13 @@ export function procInit(): void {
   const uid = procIdentity.uid;
   stp(pw, mem.hostStr(appUserName(uid))); stp(pw + PTR, mem.hostStr("")); mem.st32(pw + 2 * PTR, uid); mem.st32(pw + 2 * PTR + 4, uid);
   stp(pw + 2 * PTR + 8, mem.hostStr("")); stp(pw + 3 * PTR + 8, mem.hostStr("/data")); stp(pw + 4 * PTR + 8, mem.hostStr("/system/bin/sh"));
-  const cpuMask = (1 << device.cpu.cores) - 1;
   const M: Record<string, HostFn> = {
     ...SIGNAL_LIBC,
-    sched_getaffinity: (_c, a) => { a.i(); const n = a.u(), set = a.p(); mem.memset(set, 0, n); mem.st32(set, cpuMask); return 0; },
+    // libc answers 0 where the kernel answers the mask's size
+    sched_getaffinity: (cpu, a) => { const r = getAffinity(a.i(), a.u(), a.p()); return r < 0 ? fail(cpu, -r) : 0; },
     sched_getcpu: () => 0,
     __sched_cpucount: (_c, a) => { const n = a.u(), set = a.p(); let k = 0; for (let i = 0; i < n; i++) { let b = mem.ld8u(set + i); while (b) { k += b & 1; b >>= 1; } } return k; },
     sched_get_priority_max: () => 99, sched_get_priority_min: () => 1,
-    sched_setscheduler: () => 0,
     getpwuid: () => pw,
     getpwuid_r: (_c, a) => { a.i(); const out = a.p(); a.p(); a.p(); const res = a.p(); mem.memmove(out, pw, 8 * PTR); stp(res, out); return 0; },
     getpwnam: () => pw,
@@ -236,9 +288,8 @@ export function procInit(): void {
     __FD_CLR_chk: (_c, a) => { const fd = a.i(), set = a.p(); mem.st8(set + (fd >> 3), mem.ld8u(set + (fd >> 3)) & ~(1 << (fd & 7))); },
     __FD_ISSET_chk: (_c, a) => { const fd = a.i(), set = a.p(); return (mem.ld8u(set + (fd >> 3)) >> (fd & 7)) & 1; },
   };
-  // no second process (see cloneThread), so no child to wait for
   for (const n of ["fork", "vfork"]) M[n] = (cpu) => fail(cpu, E.AGAIN);
-  for (const n of ["waitpid", "wait"]) M[n] = (cpu) => fail(cpu, E.CHILD);
+  for (const n of ["waitpid", "wait"]) M[n] = wrapped(PROC_SYSCALLS.wait4);
   for (const n of ["execl", "execlp", "execv", "execve", "execvp"]) M[n] = (cpu) => fail(cpu, E.NOSYS);
   hostLib("libc.so", M);
 }

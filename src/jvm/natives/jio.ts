@@ -11,7 +11,8 @@ import { addressSize } from "./jvmruntime.ts";
 import { mem } from "../../native/mem.ts";
 import { syncShared, trackSharedMap } from "../../native/mappings.ts";
 import { fdFile } from "../../native/fs.ts";
-import { openFd as openFile, javaFdSource, javaIsSocketFd, javaCloseFd, javaLseekFd, javaReadFd, javaPreadFd, javaWriteFd,
+import { remoteOf } from "../../native/process-fd.ts";
+import { javaFdSource, javaIsSocketFd, javaCloseFd, javaLseekFd, javaReadFd, javaPreadFd, javaWriteFd,
   javaPwriteFd, javaTruncateFd, javaFcntlFd, javaSyncFd, javaFdStat, javaIoctlIntFd } from "../../native/fd.ts";
 import { inoOf } from "../../native/kernel.ts";
 import { fdLease, guardJavaDescriptor, unguardJavaDescriptor } from "../../android/fd-scope.ts";
@@ -212,7 +213,7 @@ rt.registerJnis("sun/nio/ch/FileChannelImpl", {
   "map0(IJJ)J": waits(function (this: JObj, prot: number, position: bigint, length: bigint) {
     const fd = openFd(channelFd.get(this));
     const start = Number(position), n = Number(length);
-    const remote = openFile(fd)?.remote;
+    const remote = remoteOf(fd);
     if (remote) {
       if (prot === MAP_PV) return BigInt(lastError(-E.NOTSUP,"Map failed"));
       return mapRemote(remote,start,n,prot === MAP_RO ? 1 : 3).then(address => typeof address === "number" ? BigInt(lastError(address,"Map failed")) : address);

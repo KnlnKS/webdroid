@@ -18,10 +18,11 @@ import { never, processExited } from "../process-exit.ts";
 import { SIGILL, SIGTRAP, SIGBUS, SIGSEGV, SA_SIGINFO, SA_ONSTACK, SA_RESETHAND, SA_NODEFER, SS_DISABLE, SS_AUTODISARM, BLOCKABLE, action, blocked, dispositions, sigbit, type Handler } from "./signals.ts";
 import { frameSize, writeFrame, loadContext, type SigInfo } from "./sigframe.ts";
 import { dieOfSignal } from "./crash.ts";
+import { setKernelLayout } from "./kernel.ts";
 import { backtrace } from "./dl.ts";
 
-const SliceExit = { Budget: 0, Suspend: 1, Exit: 2, Signal: 3 } as const;
-type SliceExit = (typeof SliceExit)[keyof typeof SliceExit];
+export const SliceExit = { Budget: 0, Suspend: 1, Exit: 2, Signal: 3 } as const;
+export type SliceExit = (typeof SliceExit)[keyof typeof SliceExit];
 const CoreExit = { Budget: 0, Host: 1, Ret: 2, Fault: 3, Syscall: 4 } as const;
 const ILL_ILLOPC = 1, TRAP_BRKPT = 1, BUS_ADRALN = 1, SEGV_MAPERR = 1, SEGV_ACCERR = 2;
 /** a nested call() on this register file: what it is for (wd.native.regs) and, for a signal handler,
@@ -93,6 +94,7 @@ export function setA64(on: boolean): void {
   // the pointer width is a property of the process, not of a thread: set it here, because the
   // JNI tables are laid out before the first Cpu exists
   setPtrWidth(on ? 8 : 4);
+  setKernelLayout(on);
   for (const c of cpus) c.setAbi(on);
   core.invalidate_all();
 }
@@ -131,7 +133,6 @@ export class Cpu {
   readonly pid: number;
   readonly osTid: number;
   stackBase = 0; stackTop = 0;
-  errnoAddr = 0;
   env = 0;
   /** the pthread key table: TLS_KEYS guest pointers, read and written by the core */
   tlsTab = 0;
@@ -163,7 +164,6 @@ export class Cpu {
     this.base = core.cpu_alloc(this.tid, this.osTid, this.pid, A64 ? 1 : 0) >>> 0;
     if (!this.base) throw new NativeFault("[native] out of memory for thread state");
     this.views();
-    this.args = A64 ? new Args64(this) : new Args(this);
     this.setAbi(A64);
     // the TLS block, errno, the pthread key table the core serves lookups from, then the
     // pthread_internal_t pthread_self() names (bionic's layout: tid at +0x10, the stack in
@@ -172,7 +172,6 @@ export class Cpu {
     if (!this.threadData) throw new NativeFault("[native] out of memory for thread data");
     this.tlsBase = this.threadData;
     this.errnoAddr = this.threadData + 256;
-    this.u32[OFF_ERRNO >> 2] = this.errnoAddr;
     this.tlsTab = this.threadData + 264;
     this.u32[OFF_TLSTAB >> 2] = this.tlsTab;
     this.pthreadSelf = this.tlsTab + 8 * TLS_KEYS;
@@ -219,6 +218,9 @@ export class Cpu {
   /** exclusive monitor: set by LDXR, consumed by STXR; a slice must not end between them */
   get excl(): number { return this.u32[OFF_EXCL >> 2]; }
   set excl(v: number) { this.u32[OFF_EXCL >> 2] = v; }
+  /** where the guest libc keeps this thread's errno, which the host's and the core's failures set */
+  get errnoAddr(): number { return this.u32[OFF_ERRNO >> 2]; }
+  set errnoAddr(v: number) { this.u32[OFF_ERRNO >> 2] = v; }
   get tlsBase(): number { return this.u32[OFF_TLS >> 2]; }
   set tlsBase(v: number) { this.u32[OFF_TLS >> 2] = v; this.u32[(OFF_TLS >> 2) + 1] = 0; }
   /** the thread pointer as the guest holds it: a guest libc's TLS block may lie in a plane */
@@ -374,7 +376,9 @@ export class Cpu {
   exc: unknown = null;
   ret1 = 0;           // r1 (ARM32) or the high half of x0 at the return of the last call() (64-bit results)
   private retFp0 = 0; private retFp1 = 0;
-  args: ArgReader & { reset(cpu: Cpu): void };
+  args!: ArgReader & { reset(cpu: Cpu): void };
+  /** a system call's arguments, in registers alone */
+  private svcArgs!: ArgReader & { reset(cpu: Cpu): void };
   name: string;
   depth = 0;
   /** guest-visible thread exit (pthread_exit / thread function returned) */
@@ -430,13 +434,15 @@ export class Cpu {
   /** the host's binding of this thread to the guest libc: TPIDR, pthread_self() and errno's address */
   bindThread(tp: number, self: number, errno: number): void {
     this.tlsBase = tp; this.pthreadSelf = self;
-    this.errnoAddr = errno; this.u32[OFF_ERRNO >> 2] = errno;
+    this.errnoAddr = errno;
     this.libc = "host";
   }
+  /** clone(CLONE_SETTLS): the guest libc made this thread, with `tls` its thread pointer */
+  cloned(tls: bigint): void { this.tlsVa = tls; this.libc = "guest"; threadHooks?.cloned(this); }
 
-  ensureStack(): void {
+  ensureStack(size = this.jthread === mainThread ? MAIN_STACK_SIZE : STACK_SIZE): void {
     if (!this.stackTop) {
-      const s = mem.allocStack(this.jthread === mainThread ? MAIN_STACK_SIZE : STACK_SIZE);
+      const s = mem.allocStack(size);
       this.stackBase = s.base; this.stackTop = s.top;
       this.w[2 * this.spx] = s.top; this.w[2 * this.spx + 1] = 0;
       if (this.a64) { mem.st64(this.pthreadSelf + 0x20, BigInt(s.base)); mem.st64(this.pthreadSelf + 0x28, BigInt(s.top - s.base)); }
@@ -703,29 +709,22 @@ export class Cpu {
       }
     }
   }
-  /** the syscalls the host owns, left by the core with their number: the signal mask here, the
-   *  rest through the kernel's table (syscall.ts), which libc's syscall(2) reaches too */
+  /** the syscalls the host owns, left by the core with their number, through the kernel's table
+   *  (syscall.ts), which libc's syscall(2) reaches too */
   private syscall(nr: number): void {
     const w = this.w;
     if (hostTrace.on) hostTrace.ring.push(`${this.name}:svc ${nr}(${[0, 1, 2, 3, 4, 5].map((i) => (BigInt(w[2 * i + 1] >>> 0) << 32n | BigInt(w[2 * i] >>> 0)).toString(16)).join(",")}) lr=${symbolizeHook(this.lr >>> 0)}`);
-    if (nr === (this.a64 ? 135 : 175)) {                                                  // rt_sigprocmask
-      const set = this.a64 ? this.xp(1) : w[2] >>> 0, old = this.a64 ? this.xp(2) : w[4] >>> 0;
-      const result = w[6] === 8 ? this.sigmask(w[0], set, old, 8) : 22;
-      w[0] = -result; w[1] = result ? -1 : 0;
-    } else {
-      if (!rawSyscall) this.fault(`syscall ${nr}`);
-      const a = this.args;
-      a.reset(this);
-      let ret: HostRet | Promise<HostRet>;
-      try { ret = rawSyscall(this, nr, a); } catch (e) { ret = this.copyFault(e); }
-      // the core has already stepped past the svc: a parked syscall resumes by writing x0 alone
-      if (ret instanceof Promise) {
-        if (nr === 124) this.deferSignalsUntilResume(); // sched_yield completes before a pending signal is delivered
-        this.pending = ret.then((r) => { this.syscallReturn(r); return NORET; }, (e) => { this.syscallReturn(this.copyFault(e)); return NORET; });
-        return;
-      }
-      this.syscallReturn(ret);
+    if (!rawSyscall) this.fault(`syscall ${nr}`);
+    const a = this.svcArgs;
+    a.reset(this);
+    let ret: HostRet | Promise<HostRet>;
+    try { ret = rawSyscall(this, nr, a); } catch (e) { ret = this.copyFault(e); }
+    // the core has already stepped past the svc: a parked syscall resumes by writing x0 alone
+    if (ret instanceof Promise) {
+      this.pending = ret.then((r) => { this.syscallReturn(r); return NORET; }, (e) => { this.syscallReturn(this.copyFault(e)); return NORET; });
+      return;
     }
+    this.syscallReturn(ret);
   }
   /** a system call's access through a bad user pointer fails as copy_from_user does */
   private copyFault(e: unknown): HostRet {
@@ -734,9 +733,10 @@ export class Cpu {
   }
   /** the kernel's convention: the result in x0/r0, a failure as -errno */
   private syscallReturn(ret: HostRet): void {
-    const v = typeof ret === "number" || typeof ret === "bigint" ? ret : 0;
-    if (typeof v === "bigint") { this.w[0] = Number(v & 0xffffffffn) | 0; this.w[1] = Number((v >> 32n) & 0xffffffffn) | 0; }
-    else { this.w[0] = v | 0; this.w[1] = v < 0 ? -1 : 0; }
+    const w = this.w;
+    if (typeof ret === "number") { w[0] = ret; w[1] = ret < 0 ? -1 : 0; }
+    else if (typeof ret === "bigint") { w[0] = Number(ret & 0xffffffffn); w[1] = Number((ret >> 32n) & 0xffffffffn); }
+    else w[0] = w[1] = 0;
   }
   private trap(e: unknown): NativeFault {
     if (e instanceof NativeFault) {
@@ -767,7 +767,9 @@ export class Cpu {
     this.a64 = on;
     this.u32[OFF_A64 >> 2] = on ? 1 : 0;
     this.pcx = on ? 32 : 15; this.lrx = on ? 30 : 14; this.spx = on ? 31 : 13;
-    if (on !== (this.args instanceof Args64)) this.args = on ? new Args64(this) : new Args(this);
+    if (this.args && on === this.args instanceof Args64) return;
+    this.args = on ? new Args64(this) : new Args(this);
+    this.svcArgs = on ? this.args : new Args(this, 7);
   }
   /** register `i` in hex, a 64-bit one with a set high half as hi_lo */
   regHex(i: number): string {
@@ -852,8 +854,9 @@ export function setRawSyscall(fn: (cpu: Cpu, nr: number, a: ArgReader) => HostRe
 const PTHREAD_SIZE = 0x200;
 let tidSeq = 0;
 /** the guest libc's state for a thread the host created: `start` binds it (bindThread) before its
- *  first instruction, `end` tears it down when its Java thread ends */
-let threadHooks: { start: (cpu: Cpu) => Promise<void>; end: (cpu: Cpu) => Promise<void> } | null = null;
+ *  first instruction, `end` tears it down when its Java thread ends; `cloned` finds a thread's the
+ *  guest libc created */
+let threadHooks: { start: (cpu: Cpu) => Promise<void>; end: (cpu: Cpu) => Promise<void>; cloned: (cpu: Cpu) => void } | null = null;
 export function setThreadHooks(hooks: NonNullable<typeof threadHooks>): void { threadHooks = hooks; }
 export const cpus = new Set<Cpu>();
 const byThread = new WeakMap<JThread, Cpu>();

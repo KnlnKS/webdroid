@@ -4,6 +4,7 @@
 
 import { JIT_BUF, MEM_SIZE_INITIAL, MEM_SIZE_A64, STACK_BASE } from "./abi.ts";
 import { JIT_SLOTS, LIBC_FNS, TLS_KEYS } from "./core-abi.gen.ts";
+export { JIT_HEAT } from "./core-abi.gen.ts";
 import { perf } from "../perf.ts";
 import { guestNow, wallMillis } from "../guest-clock.ts";
 
@@ -163,8 +164,6 @@ const freeSlots: number[] = [];
 let syncCompile: boolean | null = null;
 /** the linked batches, oldest first, each with the table slots it holds */
 const instances: { inst: WebAssembly.Instance; slots: number[] }[] = [];
-/** entries of a block before the JIT takes it (jit.zig) */
-export const JIT_HEAT = 255;
 export const jitStats = {
   get regions(): number { return core.jit_stat(); }, get modules(): number { return instances.length; }, evictions: 0, async: 0, on: true, chain: TAIL,
 };

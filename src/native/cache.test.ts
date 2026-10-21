@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "vite-plus/test";
-import { codeStats, invalidateRange, setA64 } from "./cpu.ts";
+import { codeStats, invalidateRange, setA64, SliceExit } from "./cpu.ts";
 import { mem } from "./mem.ts";
 import { finish, RET, run } from "./a64.testkit.ts";
 import { JIT_HEAT, jitEvict, jitStats } from "./core.ts";
@@ -147,7 +147,7 @@ describe("the decode cache", () => {
       c.setPc(at);
       const start = c.ic;
       for (let i = 0; i < 16; i++) {
-        if (c.runSlice(1000) === 2) return { regs: [...c.w], vectors: [...c.si], pc: c.pc,
+        if (c.runSlice(1000) === SliceExit.Exit) return { regs: [...c.w], vectors: [...c.si], pc: c.pc,
           cpsr: c.cpsr, fpcr: c.fpcr, fpsr: c.fpsr, excl: c.excl, instructions: c.ic - start };
       }
       throw new Error("self-modifying region did not return");

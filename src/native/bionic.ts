@@ -6,8 +6,8 @@
 // code: __errno, getauxval, __init_static_tls, __allocate_thread_mapping, pthread_getattr_np).
 
 import { mem } from "./mem.ts";
-import { defineHost, hostLib, stp, SERVED, type HostFn } from "./host.ts";
-import { interposed, linkerHooks, loadModule, runInit, libdl as dl, modules } from "./dl.ts";
+import { defineHost, hostLib, ldp, stp, SERVED, type HostFn } from "./host.ts";
+import { interposed, linkerHooks, loadModule, prefetchModules, runInit, libdl as dl, modules } from "./dl.ts";
 import { setThreadHooks, type Cpu } from "./cpu.ts";
 import { setAbortMessage } from "./crash.ts";
 import { E, RET_SENTINEL, TRAMP_BASE, TRAMP_END } from "./abi.ts";
@@ -73,10 +73,10 @@ export async function bootBionic(cpu: Cpu): Promise<void> {
     staticModules.push(mod);
   };
   const mods: Module[] = [];
+  // the libraries' reads overlap; they link in order
+  prefetchModules(BIONIC_LIBS);
   try {
-    for (const path of BIONIC_LIBS) {
-      mods.push(await loadModule(path.slice(path.lastIndexOf("/") + 1), undefined, true, cpu));
-    }
+    for (const path of BIONIC_LIBS) mods.push(await loadModule(path, undefined, true, cpu));
   } finally { linkerHooks.placeTls = null; }
   // the executable's libraries are its global group, which dlclose never unloads
   for (const mod of mods) mod.nodelete = true;
@@ -93,6 +93,8 @@ export async function bootBionic(cpu: Cpu): Promise<void> {
   attach(cpu);
   setThreadHooks({
     start: async (c) => { attach(c); await c.call(add, [c.pthreadSelf]); },
+    // pthread_create named the thread's pthread_internal_t in its TLS before the clone
+    cloned: (c) => { c.errnoAddr = ldp(mem.txVa(c.tlsVa) + SLOT_THREAD) + T_ERRNO; },
     // pthread_exit's teardown, but for the stack, which the Cpu owns; the static TLS block starts
     // with the bionic_tcb, TP below the thread pointer
     end: async (c) => {

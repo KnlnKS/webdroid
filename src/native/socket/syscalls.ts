@@ -18,7 +18,7 @@ import {
 import { record, installSocket, socketOf, SO_LINGER, SO_PEERCRED, SO_RCVTIMEO, SO_SNDTIMEO, type Socket, type Received, type Accepted } from "./core.ts";
 import { inetSocket, IPPROTO_IP, IP_ADD_MEMBERSHIP, IP_DROP_MEMBERSHIP } from "./inet.ts";
 import { unixSocket, unixSocketPair } from "./unix.ts";
-import { RESOLVER } from "./resolver.ts";
+import { RESOLVER, hostLookups } from "./resolver.ts";
 
 const UIO_MAXIOV = 1024;
 
@@ -208,7 +208,7 @@ export const NET_SYSCALLS: Record<string, HostFn> = {
 
 export function netInit(): void {
   hostLib("libc.so", {
-    ...RESOLVER,
+    ...RESOLVER, ...hostLookups(),
     send: wrapped((cpu, a) => sendto(cpu, a.i(), a.p(), a.u(), a.i(), 0, 0)),
     recv: wrapped((_c, a) => recvfrom(a.i(), a.p(), a.u(), a.i())),
     poll: wrapped((_c, a) => nativePoll(a.p(), a.u(), a.i())),

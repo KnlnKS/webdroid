@@ -2,25 +2,9 @@ import { beforeAll, describe, expect, test } from "vite-plus/test";
 import { mem } from "./mem.ts";
 import { Cpu, setA64 } from "./cpu.ts";
 import { core, jitStats, JIT_HEAT } from "./core.ts";
-import { finish, pattern, place, sweep } from "./a64.testkit.ts";
-import { mainThread } from "../jvm/natives/jentry.ts";
+import { execute, pattern, run, sweep } from "./a64.testkit.ts";
 import { RET_SENTINEL } from "./abi.ts";
 
-let shared: Cpu | null = null;
-function execute(at: number, setup: (c: Cpu) => void): Cpu {
-  const c = (shared ??= new Cpu(mainThread, "test"));
-  c.w.fill(0); c.si.fill(0); c.cpsr = 0; c.fpcr = 0; c.fpsr = 0; c.excl = 0;
-  c.ensureStack();
-  c.w[26] = c.stackTop;
-  setup(c);
-  c.w[28] = RET_SENTINEL;
-  c.setPc(at);
-  finish(c, 1000);
-  return c;
-}
-function run(words: number[], setup: (c: Cpu) => void = () => {}): Cpu {
-  return sweep(execute, place(words), setup);
-}
 function runThumb(half: number[], setup: (c: Cpu) => void = () => {}): Cpu {
   const at = mem.reserve((half.length * 2 + 0xfff) & ~0xfff, 0x1000);
   for (let i = 0; i < half.length; i++) mem.u16[(at >>> 1) + i] = half[i];

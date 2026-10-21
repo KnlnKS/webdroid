@@ -25,9 +25,9 @@ const call = wasm.call;
 const bit = bt.bit;
 const bits = bt.bits;
 
-// The most a block's u8 heat holds: a batch holds the process's one JS thread 8–21 ms (emit, module
-// compile, lazy function compiles), so startup code entered a few dozen times stays interpreted.
-pub const HEAT = 255;
+// A batch holds the process's one JS thread 8–21 ms (emit, module compile, lazy function compiles),
+// so startup code entered a few dozen times stays interpreted.
+pub const HEAT = abi.JIT_HEAT;
 const MAX_BLOCKS = 40;
 const MAX_INSTR = 640;
 const MAX_REGIONS = 64;

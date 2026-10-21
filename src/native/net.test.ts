@@ -62,6 +62,27 @@ test("getifaddrs exposes the same loopback interface as Java networking", async 
   } finally { mem.free(result); cpu.dispose(); }
 });
 
+test("the ARM32 libc reads IPv4 text as inet_pton does and answers gethostby* from the resolver", async () => {
+  setA64(false); kernelInit(); libcInit(); netInit();
+  const cpu = new Cpu(mainThread, "hostent-test"), text = mem.malloc(32), out = mem.malloc(4);
+  const call = libCalls(cpu, "libc.so"), str = (s: string) => { mem.putCstr(text, s, 32); return text; };
+  const addresses = (entry: number) => [ldp(ldp(entry + 16)), ldp(ldp(entry + 16) + 4)];
+  try {
+    expect(await call("inet_aton", str("256.1.1.1"), out)).toBe(0);
+    expect(await call("inet_aton", str("10.0.0.1"), out)).toBe(1);
+    expect([...mem.bytes(out, 4)]).toEqual([10, 0, 0, 1]);
+    expect((await call("inet_addr", str("1.2.3.4"))) >>> 0).toBe(0x04030201);
+    mem.u8.set([127, 0, 0, 1], out);
+    const byAddress = await call("gethostbyaddr", out, 4, AF_INET);
+    expect([mem.cstr(ldp(byAddress)), mem.ld32(byAddress + 8), mem.ld32(byAddress + 12)]).toEqual(["localhost", AF_INET, 4]);
+    expect(addresses(byAddress)[1]).toBe(0);
+    const byName = await call("gethostbyname", str("localhost"));
+    expect([...mem.bytes(addresses(byName)[0], 4)]).toEqual([127, 0, 0, 1]);
+    expect(await call("gethostbyname", str("256.0.0.1"))).toBe(0);
+    expect(mem.ld32(await call("__get_h_errno"))).toBe(1);
+  } finally { mem.free(text); mem.free(out); cpu.dispose(); }
+});
+
 test("native AF_INET6 sockets take IPv4-mapped peers, and recvmsg keeps a seqpacket message whole", async () => {
   setA64(false); kernelInit(); libcInit(); netInit();
   const cpu = new Cpu(mainThread, "inet6-test"), scratch = mem.malloc(256);

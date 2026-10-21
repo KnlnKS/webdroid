@@ -13,11 +13,11 @@ import { filePaths, changeOpenFile, isRandomDevice, openFileStat, type Attribute
 import { procMemory, procText, procWritable, procWrite } from "../shell/procfs.ts";
 import { readAt, writable, type FileSource } from "../shell/lazyfile.ts";
 import { utf8 } from "../jvm/abi.ts";
-import { ANON, FIONREAD, installFile, newFile, openFd, placeFile, refused, woken, javaChangeFdAttributes, javaCloseFd, javaDup2Fd,
+import { ANON, FIONREAD, installFile, newFile, openFd, placeFile, refused, woken, javaAllocateFd, javaChangeFdAttributes, javaCloseFd, javaDup2Fd,
   javaDupFd, javaFcntlFd, javaIoctlIntFd, javaLseekFd, javaSyncFd, javaTruncateFd, type FdStat, type FileOps, type OpenFile } from "./fd.ts";
 import { fifoOf, holdFifo, javaPipeFds, openFifo } from "./pipe.ts";
 import { closedWrite, hookInotify } from "./inotify.ts";
-import { gather, MSG_NOSIGNAL, SOCK_STREAM } from "./socket/abi.ts";
+import { gather, MSG_NOSIGNAL } from "./socket/abi.ts";
 import { SIGPIPE } from "./signals.ts";
 import { processOpenFd } from "./process-fd.ts";
 
@@ -115,16 +115,17 @@ const DIR: FileOps = {
   change: (f, change, uid) => changeOpenFile(f.path, change, uid),
   entries: (f) => [".", "..", ...vfs.list(f.path)],
 };
-/** stdin, which reads nothing, and stdout and stderr, which write lines to the log */
-const STDIO: FileOps = {
+/** stdin, which reads nothing, and stdout and stderr, which write lines to the log at their
+ *  priority, holding each unfinished one */
+const STDIO: FileOps<{ log: number; line: string }> = {
   ...ANON,
   mode: S_IFCHR | 0o666,
   positional: true,
   read: () => 0,
-  write(f, bytes) {
-    f.line = (f.line ?? "") + utf8.dec.decode(bytes);
+  write({ state }, bytes) {
+    state.line += utf8.dec.decode(bytes);
     let i: number;
-    while ((i = f.line.indexOf("\n")) >= 0) { logLine(f.log!, f.log === 6 ? "stderr" : "stdout", f.line.slice(0, i)); f.line = f.line.slice(i + 1); }
+    while ((i = state.line.indexOf("\n")) >= 0) { logLine(state.log, state.log === 6 ? "stderr" : "stdout", state.line.slice(0, i)); state.line = state.line.slice(i + 1); }
     return bytes.length;
   },
   seek: seekPosition,
@@ -142,14 +143,14 @@ const RANDOM: FileOps = {
 /** an open of a file this realm holds */
 export function javaOpenFd(name: string, flags: number): number {
   const path = vfs.norm(name), access = flags & O_ACCMODE, status = flags & (O_ACCMODE | O_APPEND | O_NONBLOCK), cloexec = !!(flags & O_CLOEXEC);
-  if (isRandomDevice(path)) return access ? -E.ACCES : installFile(newFile(RANDOM, path, status), cloexec);
+  if (isRandomDevice(path)) return access ? -E.ACCES : installFile(newFile(RANDOM, path, status, undefined), cloexec);
   const s = procText(path);
   if (s !== null) {
     if (access && !procWritable(path)) return -E.ACCES;
     const b = utf8.enc.encode(s);
-    return installFile(newFile(SNAPSHOT, path, status, { path: null, data: b, len: b.length }), cloexec);
+    return installFile(newFile(SNAPSHOT, path, status, undefined, { path: null, data: b, len: b.length }), cloexec);
   }
-  if (vfs.isDir(path)) return access ? -E.ISDIR : installFile(newFile(DIR, path, status, undefined, true), cloexec);
+  if (vfs.isDir(path)) return access ? -E.ISDIR : installFile(newFile(DIR, path, status, undefined, undefined, true), cloexec);
   if (flags & O_DIRECTORY) return -(vfs.exists(path) ? E.NOTDIR : E.NOENT);
   const existing = vfs.open(path), fifo = fifoOf(existing);
   if (fifo) return holdFifo(fifo, 0) ? openFifo(path, fifo, flags, existing!) : -E.NXIO;
@@ -161,12 +162,12 @@ export function javaOpenFd(name: string, flags: number): number {
     vfs.write(path, new Uint8Array(0));
   } else if (flags & O_CREAT && flags & O_EXCL) return -E.EXIST;
   if (flags & O_TRUNC && access) vfs.write(path, new Uint8Array(0));
-  return installFile(newFile(FILE, path, status, vfs.open(path)!), cloexec);
+  return installFile(newFile(FILE, path, status, undefined, vfs.open(path)!), cloexec);
 }
 /** a Java-side open of `bytes` into the descriptor table native code reads, so a fd handed across JNI is live */
-export const javaBytesFd = (bytes: Uint8Array): number => installFile(newFile(SNAPSHOT, "", O_RDONLY, { path: null, data: bytes, len: bytes.length }));
+export const javaBytesFd = (bytes: Uint8Array): number => installFile(newFile(SNAPSHOT, "", O_RDONLY, undefined, { path: null, data: bytes, len: bytes.length }));
 /** a descriptor, close-on-exec, on `content`, a file without a name (ashmem) */
-export const javaAnonymousFd = (content: VfsFile): number => installFile(newFile(FILE, "", O_RDWR, content), true);
+export const javaAnonymousFd = (content: VfsFile): number => installFile(newFile(FILE, "", O_RDWR, undefined, content), true);
 /** the file a descriptor reads and writes, which a shared mapping of it shares */
 export function fdFile(fd: number): VfsFile | null {
   const f = openFd(fd);
@@ -190,7 +191,7 @@ export const pread = (fd: number, p: number, n: number, off: number): number | P
 /** EPIPE's signal: a write to a pipe or stream socket no one reads any more raises SIGPIPE in the
  *  writer, unless the call passed MSG_NOSIGNAL */
 export function written(cpu: Cpu | null, f: OpenFile, r: number, flags = 0): number {
-  if (r === -E.PIPE && cpu && !(flags & MSG_NOSIGNAL) && (!f.socket || f.socket.type === SOCK_STREAM)) cpu.kill(SIGPIPE);
+  if (r === -E.PIPE && cpu && !(flags & MSG_NOSIGNAL) && !f.ops.messages(f)) cpu.kill(SIGPIPE);
   return r;
 }
 /** write(2), or pwrite(2) at `off`, of guest memory */
@@ -252,6 +253,8 @@ function dirents(f: OpenFile, entries: string[], buf: number, size: number): num
   }
   return at || f.pos >= entries.length ? at : -E.INVAL;
 }
+/** fallocate(2): mode 0 allocates; punching holes and collapsing ranges are not supported */
+export const fallocate = (fd: number, mode: number, off: number, length: number): number | Promise<number> => mode ? -E.NOTSUP : javaAllocateFd(fd, off, length);
 export function makePipe(out: number, flags: number): number {
   const [read, write] = javaPipeFds(flags);
   mem.st32(out, read); mem.st32(out + 4, write);
@@ -311,12 +314,9 @@ export function modifiedTime(times: number): AttributeChange {
 export function fsInit(): void {
   hookInotify();
   procMemory.resident = () => mem.u8.byteLength;
-  placeFile(0, newFile(STDIO, "/dev/stdin", O_RDONLY));
-  for (const [fd, log] of [[1, 4], [2, 6]]) {
-    const f = newFile(STDIO, fd === 1 ? "/dev/stdout" : "/dev/stderr", O_WRONLY);
-    f.log = log;
-    placeFile(fd, f);
-  }
+  placeFile(0, newFile(STDIO, "/dev/stdin", O_RDONLY, { log: 0, line: "" }));
+  placeFile(1, newFile(STDIO, "/dev/stdout", O_WRONLY, { log: 4, line: "" }));
+  placeFile(2, newFile(STDIO, "/dev/stderr", O_WRONLY, { log: 6, line: "" }));
 }
 
 export const FS_SYSCALLS: Record<string, HostFn> = {
@@ -331,7 +331,7 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
   readv: (_c, a) => { const fd = a.i(); return vectored(a.p(), a.i(), (p, n, moved) => moved && readWouldWait(fd) ? 0 : fdRead(fd, p, n)); },
   writev: (cpu, a) => {
     const fd = a.i(), iov = a.p(), count = a.i(), f = openFd(fd);
-    if (f?.socket?.messages) return written(cpu, f, f.socket.send(gather(iov, count), null, null));
+    if (f?.ops.messages(f)) return complete(f.ops.write(f, gather(iov, count), -1), (r) => written(cpu, f, r));
     return vectored(iov, count, (p, n) => fdWrite(cpu, fd, p, n));
   },
   pread64: (_c, a) => pread(a.i(), a.p(), a.u(), Number(a.l())),
@@ -360,6 +360,10 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
   mkdirat: (_c, a) => { const path = atPath(a.i(), a.str()); return typeof path === "string" ? mkdirProcess(path) : path; },
   mknodat: (_c, a) => { const path = atPath(a.i(), a.str()); return typeof path === "string" ? mknodProcess(path, a.i()) : path; },
   ftruncate: (_c, a) => javaTruncateFd(a.i(), offArg(a)),
+  fallocate: (_c, a) => { const fd = a.i(), mode = a.i(), off = Number(a.l()); return fallocate(fd, mode, off, Number(a.l())); },
+  // the raw call has no flags, libc's (stdio.ts) has
+  faccessat: (_c, a) => faccessatPath(a.i(), a.str(), a.i(), 0),
+  getdents64: (_c, a) => getdents64(a.i(), a.p(), a.u()),
   truncate: (_c, a) => {
     const path = a.str(), n = offArg(a);
     return complete(processOpenFd(path, 1), fd => fd < 0 ? fd : complete(javaTruncateFd(fd, n), r => complete(javaCloseFd(fd), () => r)));
@@ -394,13 +398,12 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
     const path = atPath(dirfd, mem.cstr(name));
     return typeof path === "string" ? changeProcess(path, change) : path;
   },
+  // the int a request answers into its argument: FIONREAD's, the one request files take
   ioctl: (_c, a) => {
-    const fd = a.i(), request = a.i(), argument = a.p();
-    if (request !== FIONREAD) return -(openFd(fd)?.socket ? E.NOTTY : E.NOSYS);
-    const destination = anchor(argument);
+    const fd = a.i(), request = a.i(), destination = request === FIONREAD ? anchor(a.p()) : null;
     return complete(javaIoctlIntFd(fd, request), n => {
       if (n < 0) return n;
-      mem.st32(destination(), n);
+      mem.st32(destination!(), n);
       return 0;
     });
   },

@@ -5,7 +5,8 @@ import { Cpu, cpus, setA64 } from "./cpu.ts";
 import { core, CORE_LIBC } from "./core.ts";
 import { Args, hostFn, lookupHost } from "./host.ts";
 import { mem } from "./mem.ts";
-import { pthreadInit, startThread } from "./pthread.ts";
+import { E } from "./abi.ts";
+import { pthreadInit, startThread, threadAttr } from "./pthread.ts";
 
 test("pthread attributes and cleanup handlers preserve bionic behavior", async () => {
   setA64(false); pthreadInit();
@@ -22,6 +23,12 @@ test("pthread attributes and cleanup handlers preserve bionic behavior", async (
     expect(await call("pthread_attr_setscope", [attr, 0])).toBe(0);
     expect(await call("pthread_attr_setscope", [attr, 1])).toBe(95);
     expect(await call("pthread_attr_setscope", [attr, 2])).toBe(22);
+    expect(await call("pthread_attr_setstacksize", [attr, 0x40000])).toBe(0);
+    expect(await call("pthread_attr_getstacksize", [attr, out])).toBe(0);
+    expect(mem.ld32(out)).toBe(0x40000);
+    expect(await call("pthread_getattr_np", [cpu.pthreadSelf, attr])).toBe(0);
+    expect(await call("pthread_attr_getstack", [attr, out, out + 4])).toBe(0);
+    expect([mem.ld32(out), mem.ld32(out + 4)]).toEqual([cpu.stackBase, cpu.stackTop - cpu.stackBase]);
     await call("__pthread_cleanup_push", [entry, routine, value]);
     expect(mem.ld32(entry + 4) >>> 0).toBe(routine);
     await call("__pthread_cleanup_pop", [entry, 1]);
@@ -37,10 +44,10 @@ test("joinable pthread handles remain distinct after their routines exit", async
   const routine = mem.reserve(4096, 4096), result = mem.malloc(8);
   mem.u32.set([0xe3a00007, 0xe12fff1e], routine >>> 2);
   try {
-    const first = startThread(parent, routine, 0n, false);
+    const first = startThread(parent, routine, 0n, threadAttr(0));
     for (let i = 0; cpus.has(first) && i < 5000; i++) await sleep(1);
     expect(cpus.has(first)).toBe(false);
-    const second = startThread(parent, routine, 0n, false);
+    const second = startThread(parent, routine, 0n, threadAttr(0));
     expect(second.pthreadSelf).not.toBe(first.pthreadSelf);
     expect(await parent.call(lookupHost("pthread_join", "libc.so")!, [first.pthreadSelf, result])).toBe(0);
     expect(mem.ld32(result)).toBe(7);
@@ -76,5 +83,23 @@ test("rwlock words are shared by the core's uncontended calls and the host's wai
     expect(mem.ld32(lock)).toBe(0);
   } finally {
     mem.free(lock); reader.dispose(); writer.dispose();
+  }
+});
+
+test("timed mutex and rwlock waits end at their deadlines", async () => {
+  setA64(false); pthreadInit();
+  const owner = new Cpu(new JThread(), "owner"), waiter = new Cpu(new JThread(), "waiter");
+  const mutex = mem.calloc(1, 4), rwlock = mem.calloc(1, 64), epoch = mem.calloc(1, 8);
+  const call = (cpu: Cpu, name: string, ...args: number[]) => cpu.call(lookupHost(name, "libc.so")!, args);
+  try {
+    expect(await call(owner, "pthread_mutex_lock", mutex)).toBe(0);
+    expect(await call(waiter, "pthread_mutex_timedlock", mutex, epoch)).toBe(E.TIMEDOUT);
+    expect(await call(owner, "pthread_mutex_unlock", mutex)).toBe(0);
+    expect(await call(waiter, "pthread_mutex_timedlock", mutex, epoch)).toBe(0);
+    expect(await call(owner, "pthread_rwlock_rdlock", rwlock)).toBe(0);
+    expect(await call(waiter, "pthread_rwlock_timedwrlock", rwlock, epoch)).toBe(E.TIMEDOUT);
+    expect(mem.ld32(rwlock + 8)).toBe(0);
+  } finally {
+    mem.free(mutex); mem.free(rwlock); mem.free(epoch); owner.dispose(); waiter.dispose();
   }
 });

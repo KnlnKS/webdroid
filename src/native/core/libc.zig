@@ -232,12 +232,11 @@ fn checksum(c: *Cpu, id: Fn) Result {
 
 extern "env" fn guest_ms() f64;
 extern "env" fn wall_ms() f64;
-/// libc.ts clockTime: REALTIME, REALTIME_COARSE and REALTIME_ALARM read the wall clock; every other
-/// clock is the guest's monotonic one, offset so it is never 0
+/// the clock abi.WALL_CLOCKS picks for the id
 pub fn clockGettime(c: *Cpu) Result {
     const id: u32 = @truncate(arg(c, 0));
     const ts = ptr(c, 1) orelse return .fault;
-    const ms = if (id == 0 or id == 5 or id == 8) wall_ms() else guest_ms() + 1000;
+    const ms = if (id < 32 and (abi.WALL_CLOCKS >> @as(u5, @intCast(id))) & 1 != 0) wall_ms() else guest_ms() + abi.MONOTONIC_BASE_MS;
     const sec = @floor(ms / 1000);
     const nsec: u64 = @intFromFloat(@floor((ms - sec * 1000) * 1e6));
     const half: u32 = if (c.a64 != 0) 8 else 4;

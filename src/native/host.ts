@@ -66,23 +66,25 @@ export class Args extends Cursor {
   private cpu!: Cpu;
   private n = 0;      // next core register
   private sp = 0;     // next stack slot
-  constructor(cpu: Cpu) { super(); this.reset(cpu); }
+  /** the core registers that carry arguments: a call's r0–r3, a system call's r0–r6 */
+  private readonly regs: number;
+  constructor(cpu: Cpu, regs = 4) { super(); this.regs = regs; this.reset(cpu); }
   reset(cpu: Cpu): void { this.cpu = cpu; this.n = 0; this.sp = cpu.w[26]; }
   i(): number {
-    if (this.n < 4) return this.cpu.w[2 * this.n++];
+    if (this.n < this.regs) return this.cpu.w[2 * this.n++];
     const v = mem.ld32(this.sp); this.sp += 4; return v;
   }
   l(): bigint {
     if (this.n & 1) this.n++;
-    if (this.n < 4) { const lo = this.cpu.w[2 * this.n], hi = this.cpu.w[2 * this.n + 2]; this.n += 2; return retPair(lo, hi); }
-    this.n = 4;
+    if (this.n + 1 < this.regs) { const lo = this.cpu.w[2 * this.n], hi = this.cpu.w[2 * this.n + 2]; this.n += 2; return retPair(lo, hi); }
+    this.n = this.regs;
     this.sp = (this.sp + 7) & ~7;
     const v = mem.ld64(this.sp); this.sp += 8; return v;
   }
   d(): number {
     if (this.n & 1) this.n++;
-    if (this.n < 4) { const v = wordsd(this.cpu.w[2 * this.n], this.cpu.w[2 * this.n + 2]); this.n += 2; return v; }
-    this.n = 4;
+    if (this.n + 1 < this.regs) { const v = wordsd(this.cpu.w[2 * this.n], this.cpu.w[2 * this.n + 2]); this.n += 2; return v; }
+    this.n = this.regs;
     this.sp = (this.sp + 7) & ~7;
     const v = mem.ldf64(this.sp); this.sp += 8; return v;
   }

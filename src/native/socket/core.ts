@@ -5,8 +5,8 @@
 
 import { E, O_CLOEXEC, O_NONBLOCK, O_RDWR, S_IFSOCK } from "../abi.ts";
 import { guestNow } from "../../guest-clock.ts";
-import { ANON, dropFile, installFile, newFile, openFd, type FileOps, type OpenFile } from "../fd.ts";
-import { msLeft, waitUntil } from "../poll.ts";
+import { ANON, dropFile, installFile, isKind, newFile, openFd, type FileOps, type OpenFile } from "../fd.ts";
+import { WaitQueue, msLeft, waitUntil } from "../poll.ts";
 import { SOL_SOCKET, SOCK_STREAM, SOCK_NONBLOCK, SHUT_RD, SHUT_RDWR, MSG_DONTWAIT, type SocketAddress, type Ucred, type Cmsg } from "./abi.ts";
 
 export const SO_REUSEADDR = 2, SO_TYPE = 3, SO_ERROR = 4, SO_BROADCAST = 6, SO_SNDBUF = 7, SO_RCVBUF = 8, SO_LINGER = 13, SO_PASSCRED = 16;
@@ -48,7 +48,7 @@ export class Loopback implements Stream {
   /** this end shut down reading: its peer's writes meet EPIPE */
   private refusing = false;
   peer: Loopback | null = null;
-  private readonly waiters = new Set<() => void>();
+  private readonly waiters = new WaitQueue();
   constructor(messages = false) { this.messages = messages; }
   static pair(messages = false): [Loopback, Loopback] {
     const a = new Loopback(messages), b = new Loopback(messages);
@@ -117,8 +117,8 @@ export class Loopback implements Stream {
     if (c) this.advance(this.head + 1, c.bytes.length);
     return c ?? null;
   }
-  subscribe(waiter: () => void): () => void { this.waiters.add(waiter); return () => this.waiters.delete(waiter); }
-  wake(): void { const ws = [...this.waiters]; this.waiters.clear(); for (const w of ws) w(); }
+  subscribe(waiter: () => void): () => void { return this.waiters.add(waiter); }
+  wake(): void { this.waiters.wakeAll(); }
   shutdownWrite(): void { if (this.peer) { this.peer.eof = true; this.peer.wake(); } }
   shutdownRead(): void { this.eof = this.refusing = true; this.wake(); }
   /** the reader goes: the peer reads the end and meets EPIPE. The open files no read took are
@@ -150,7 +150,7 @@ export abstract class Socket {
   error = 0;
   readShut = false;
   writeShut = false;
-  readonly waiters = new Set<() => void>();
+  private readonly waiters = new WaitQueue();
   /** setsockopt values by level << 16 | option */
   readonly options = new Map<number, number>();
   constructor(type: number, protocol: number) { this.type = type; this.protocol = protocol; }
@@ -159,14 +159,13 @@ export abstract class Socket {
   /** each write stays whole: SOCK_DGRAM and SOCK_SEQPACKET */
   get messages(): boolean { return this.type !== SOCK_STREAM; }
   option(level: number, name: number, fallback = 0): number { return this.options.get(level << 16 | name) ?? fallback; }
-  wake(): void { const ws = [...this.waiters]; this.waiters.clear(); for (const w of ws) w(); }
+  wake(): void { this.waiters.wakeAll(); }
   /** the stream whose arrivals also wake the socket's waiters */
   protected get rx(): Stream | null { return null; }
   /** call `waiter` once something about the socket changes */
   watch(waiter: () => void): () => void {
-    this.waiters.add(waiter);
-    const rx = this.rx?.subscribe(waiter);
-    return () => { this.waiters.delete(waiter); rx?.(); };
+    const stop = this.waiters.add(waiter), rx = this.rx?.subscribe(waiter);
+    return () => { stop(); rx?.(); };
   }
 
   abstract bind(addr: SocketAddress): number;
@@ -239,34 +238,36 @@ const lengthOf = (r: Received | number): number => {
   return r.length;
 };
 /** a socket's open file: read(2) and write(2) are receive and send without addresses */
-const SOCKET: FileOps = {
+const SOCKET: FileOps<Socket> = {
   ...ANON,
   mode: S_IFSOCK | 0o777,
   read(f, target, at, n, _off, fd) {
-    const socket = f.socket!, now = socket.receive(fd, target.subarray(at, at + n), MSG_DONTWAIT) as Received | number;
+    const socket = f.state, now = socket.receive(fd, target.subarray(at, at + n), MSG_DONTWAIT) as Received | number;
     if (now !== -E.AGAIN || socket.nonblock) return lengthOf(now);
     const into = new Uint8Array(n);
     return Promise.resolve(socket.receive(fd, into, 0)).then((r) => typeof r === "number" ? r : into.subarray(0, lengthOf(r)));
   },
-  write: (f, bytes) => f.socket!.send(bytes, null, null),
-  poll: (f, events) => f.socket!.poll(events),
-  watch: (f, wake) => f.socket!.watch(wake),
-  available: (f) => f.socket!.available(),
-  close: (f) => f.socket!.close(),
+  write: (f, bytes) => f.state.send(bytes, null, null),
+  messages: (f) => f.state.messages,
+  poll: (f, events) => f.state.poll(events),
+  watch: (f, wake) => f.state.watch(wake),
+  available: (f) => f.state.available(),
+  // a socket call waiting on the descriptor ends with EBADF
+  unnamed: (f) => f.state.wake(),
+  close: (f) => f.state.close(),
 };
 /** a new socket's descriptor, the lowest free; `flags` SOCK_NONBLOCK and SOCK_CLOEXEC */
 export function installSocket(socket: Socket, flags: number): number {
-  socket.file = newFile(SOCKET, "socket", O_RDWR | flags & O_NONBLOCK);
-  socket.file.socket = socket;
+  socket.file = newFile(SOCKET, "socket", O_RDWR | flags & O_NONBLOCK, socket);
   return installFile(socket.file, !!(flags & O_CLOEXEC));
 }
 /** the socket `fd` names, or EBADF, or ENOTSOCK for another open file */
 export function socketOf(fd: number): Socket | number {
   const f = openFd(fd);
-  return f?.socket ?? (f ? -E.NOTSOCK : -E.BADF);
+  return isKind(f, SOCKET) ? f.state : f ? -E.NOTSOCK : -E.BADF;
 }
 /** while descriptor `fd` names `socket`: what a socket call waiting on it checks */
-export const naming = (fd: number, socket: Socket) => (): boolean => openFd(fd)?.socket === socket;
+export const naming = (fd: number, socket: Socket) => (): boolean => openFd(fd) === socket.file;
 /** a socket read's bytes alone, the open files it passed dropped: read(2), recv without msg_control */
 export function readSocket(fd: number, target: Uint8Array, flags = 0): number | Promise<number> {
   const s = socketOf(fd);

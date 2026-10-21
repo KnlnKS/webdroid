@@ -1,7 +1,7 @@
 import { expect, test, describe } from "vite-plus/test";
 import "../src/natives.ts";
 import { driven, type Gen, rt } from "../src/jvm/runtime.ts";
-import { Cpu, setA64 } from "../src/native/cpu.ts";
+import { Cpu, setA64, SliceExit } from "../src/native/cpu.ts";
 import { mem } from "../src/native/mem.ts";
 import { mainThread, curThread, JThread, setCurThread, vcall } from "../src/jvm/natives/jentry.ts";
 import { RET_SENTINEL, PAGE_SIZE, STACK_SIZE } from "../src/native/abi.ts";
@@ -45,7 +45,7 @@ describe("native-arm-status", () => {
     const cpu = new Cpu(mainThread, "apsr-test");
     cpu.w[28] = RET_SENTINEL;
     cpu.setPc(address | 1);
-    expect(cpu.runSlice(32)).toBe(2);
+    expect(cpu.runSlice(32)).toBe(SliceExit.Exit);
     expect(cpu.w[4] & 0xf0000000).toBe(0x60000000);
   });
 });

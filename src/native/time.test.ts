@@ -1,7 +1,7 @@
 import { expect, test } from "vite-plus/test";
 import { mainThread } from "../jvm/natives/jentry.ts";
 import { Cpu, setA64 } from "./cpu.ts";
-import { defineHost, ldp, stp } from "./host.ts";
+import { defineHost, ldp, lookupHost, stp } from "./host.ts";
 import { libCalls } from "./calls.testkit.ts";
 import { libcInit, TM } from "./libc.ts";
 import { KLAYOUT, readTs, writeTs } from "./kernel.ts";
@@ -24,6 +24,11 @@ test("native time fields preserve signed longs and the process ABI width", async
           await call("localtime_r", value, tm);
           expect(mem.ld32(tm + TM.gmtoff) | 0).toBe(-25200);
           expect(mem.ld32(tm + 20)).toBe(125);
+          const text = mem.hostAlloc(32);
+          expect(await call("strftime", text, 32, mem.strdup("%Z %z"), tm)).toBe(9);
+          expect([mem.cstr(text), mem.cstr(ldp(tm + TM.zone))]).toEqual(["PDT -0700", "PDT"]);
+          const names = lookupHost("tzname", "libc.so")!;
+          expect([mem.cstr(ldp(names)), mem.cstr(ldp(names + 4)), mem.ld32(lookupHost("timezone", "libc.so")!)]).toEqual(["PST", "PDT", 28800]);
         }
         for (const time of [-1, ...(a64 ? [Date.UTC(2140, 0, 1)] : [])]) {
           writeTs(value, time);

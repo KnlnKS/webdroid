@@ -4,7 +4,8 @@
 import { mem, anchor } from "./mem.ts";
 import { PTR, complete, type HostFn } from "./host.ts";
 import { E, O_CLOEXEC, O_RDWR, POLLIN, POLLPRI, POLLOUT, POLLERR, POLLHUP, POLLNVAL } from "./abi.ts";
-import { ANON, openFd, installFile, newFile, pollEvents, watchFd, type FileOps } from "./fd.ts";
+import { ANON, openFd, installFile, isKind, newFile, pollEvents, watchFd, type FileOps } from "./fd.ts";
+import { readTimeout } from "./kernel.ts";
 import { clearGuestTimeout, guestNow, setGuestTimeout, type GuestTimer } from "../guest-clock.ts";
 import { parkTimeout, unparkTimeout } from "../jvm/yield.ts";
 
@@ -28,6 +29,34 @@ export function waitUntil(subscribe: (wake: () => void) => () => void, ms: numbe
     signal?.addEventListener("abort", stop, { once: true });
     if (ms >= 0) timer = park ? parkTimeout(stop, ms) : setGuestTimeout(stop, ms);
   });
+}
+/** Callers waiting on one condition, each woken once: the first n in order, or everyone. */
+export class WaitQueue {
+  private waiters: (() => void)[] = [];
+  get size(): number { return this.waiters.length; }
+  /** call `wake` at its turn; answers how to stop waiting */
+  add(wake: () => void): () => void {
+    this.waiters.push(wake);
+    return () => { const i = this.waiters.indexOf(wake); if (i >= 0) this.waiters.splice(i, 1); };
+  }
+  /** a thread's wait: true once woken, false once `ms` guest ms pass first (-1: no limit). `woken`
+   *  runs at the wake itself, before any other thread does, as a lock's handoff must. */
+  wait(ms = -1, woken?: () => void): Promise<boolean> {
+    return waitUntil((wake) => this.add(woken ? () => { woken(); wake(); } : wake), ms, undefined, true);
+  }
+  /** wakes the first `n`, answering how many */
+  wake(n = 1): number {
+    let woken = 0;
+    for (; woken < n && this.waiters.length; woken++) this.waiters.shift()!();
+    return woken;
+  }
+  /** wakes everyone waiting now, not those a wake adds */
+  wakeAll(): void {
+    if (!this.waiters.length) return;
+    const waiters = this.waiters;
+    this.waiters = [];
+    for (const wake of waiters) wake();
+  }
 }
 /** the guest milliseconds left before `deadline`, or -1 for a wait without one */
 export const msLeft = (timeout: number, deadline: number): number => timeout < 0 ? -1 : Math.max(0, deadline - guestNow());
@@ -104,17 +133,14 @@ export function nativeSelect(count: number, readSet: number, writeSet: number, e
 // ── epoll: an open file of watched descriptors, each entry woken through the descriptor's watch
 const EPOLLET = 0x80000000, EPOLLONESHOT = 0x40000000;
 interface EpollEntry { events: number; data: bigint; pending: number; disabled: boolean; cancel: () => void }
-export interface Epoll { entries: Map<number, EpollEntry>; wake: Set<() => void> }
-const EPOLL: FileOps = {
+export interface Epoll { entries: Map<number, EpollEntry>; wake: WaitQueue }
+const EPOLL: FileOps<Epoll> = {
   ...ANON,
   poll: () => 0,
-  close(f) { const ep = f.epoll!; for (const e of ep.entries.values()) e.cancel(); for (const wake of ep.wake) wake(); },
+  close(f) { const ep = f.state; for (const e of ep.entries.values()) e.cancel(); ep.wake.wakeAll(); },
 };
-export function epollCreate(cloexec: boolean): number {
-  const f = newFile(EPOLL, "epoll", O_RDWR);
-  f.epoll = { entries: new Map(), wake: new Set() };
-  return installFile(f, cloexec);
-}
+export const epollCreate = (cloexec: boolean): number => installFile(newFile(EPOLL, "epoll", O_RDWR, { entries: new Map(), wake: new WaitQueue() }), cloexec);
+const epollOf = (fd: number): Epoll | undefined => { const f = openFd(fd); return isKind(f, EPOLL) ? f.state : undefined; };
 function epollWatch(ep: Epoll, fd: number, events: number, data: bigint): EpollEntry {
   const entry: EpollEntry = { events, data, pending: pollEvents(fd, events), disabled: false, cancel: () => {} };
   let active = true, remove = () => {};
@@ -123,7 +149,7 @@ function epollWatch(ep: Epoll, fd: number, events: number, data: bigint): EpollE
     remove = watchFd(fd, () => {
       remove();
       entry.pending |= pollEvents(fd, entry.events);
-      for (const wake of ep.wake) wake();
+      ep.wake.wakeAll();
       // at once: a change before a deferred re-arm would find no watcher, and its edge would be lost
       watch();
     });
@@ -133,10 +159,9 @@ function epollWatch(ep: Epoll, fd: number, events: number, data: bigint): EpollE
   return entry;
 }
 async function epollWait(epfd: number, events: bigint, max: number, timeout: number): Promise<number> {
-  const ep = openFd(epfd)?.epoll, deadline = guestNow() + timeout;
+  const ep = epollOf(epfd), deadline = guestNow() + timeout;
   if (!ep) return -E.BADF;
   if (max <= 0) return -E.INVAL;
-  const subscribe = (wake: () => void) => { ep.wake.add(wake); return () => { ep.wake.delete(wake); }; };
   for (let woken = true; ;) {
     let n = 0;
     for (const [fd, e] of ep.entries) {
@@ -150,8 +175,8 @@ async function epollWait(epfd: number, events: bigint, max: number, timeout: num
       if (e.events & EPOLLONESHOT) e.disabled = true;
     }
     if (n || timeout === 0 || !woken) return n;
-    woken = await waitUntil(subscribe, msLeft(timeout, deadline));
-    if (openFd(epfd)?.epoll !== ep) return -E.BADF;
+    woken = await waitUntil((wake) => ep.wake.add(wake), msLeft(timeout, deadline));
+    if (epollOf(epfd) !== ep) return -E.BADF;
   }
 }
 
@@ -162,7 +187,7 @@ export const POLL_SYSCALLS: Record<string, HostFn> = {
     return epollCreate(!!flags);
   },
   epoll_ctl: (_c, a) => {
-    const epfd = a.i(), ep = openFd(epfd)?.epoll, op = a.i(), fd = a.i(), ev = a.p();
+    const epfd = a.i(), ep = epollOf(epfd), op = a.i(), fd = a.i(), ev = a.p();
     if (fd === epfd) return -E.INVAL;
     if (!ep || !openFd(fd)) return -E.BADF;
     const old = ep.entries.get(fd);
@@ -171,9 +196,11 @@ export const POLL_SYSCALLS: Record<string, HostFn> = {
     if (op < 1 || op > 3) return -E.INVAL;
     old?.cancel();
     if (op === 2) ep.entries.delete(fd); else ep.entries.set(fd, epollWatch(ep, fd, mem.ld32(ev), mem.ld64(ev + 8)));
-    for (const wake of ep.wake) wake();
+    ep.wake.wakeAll();
     return 0;
   },
-  // its sigmask is left as is
+  // their sigmasks are left as they are
   epoll_pwait: (_c, a) => epollWait(a.i(), a.va(), a.i(), a.i()),
+  pselect6: (_c, a) => { const n = a.i(), r = a.p(), w = a.p(), x = a.p(); return nativeSelect(n, r, w, x, readTimeout(a.p())); },
+  ppoll: (_c, a) => { const fds = a.p(), n = a.u(); return nativePoll(fds, n, readTimeout(a.p())); },
 };

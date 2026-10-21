@@ -6,10 +6,12 @@ import { lookupHost, stp } from "./host.ts";
 import { libcInit } from "./libc.ts";
 import { mem } from "./mem.ts";
 import { fdFile, javaOpenFd } from "./fs.ts";
-import { javaCloseFd, javaFdBytes, javaLseekFd, javaDupFd, javaReadFd } from "./fd.ts";
+import { javaCloseFd, javaFdBytes, javaLseekFd, javaDupFd, javaReadFd, openFd } from "./fd.ts";
 import { renamePath } from "../shell/file-path.ts";
 import { kernelInit } from "./syscall.ts";
 import { kernel, kernelCalls, libCalls } from "./calls.testkit.ts";
+import { mapLease, settleRemoteMaps } from "./mappings.ts";
+import type { ProcessMapping } from "./process-fd.ts";
 
 
 test("printf renders unmapped guest pointer values without dereferencing them", async () => {
@@ -98,6 +100,27 @@ test("mremap carries a shared file mapping's range, and its new pages hold the f
     if (address) await cpu.call(munmap, [address, 8192]);
     javaCloseFd(fd); vfs.delete(path); cpu.dispose(); setA64(false);
   }
+});
+
+test("mremap carries another process's shared mapping on its lease, which munmap gives back once", async () => {
+  setA64(true); kernelInit();
+  const writes: [number, number[]][] = [];
+  let closed = 0;
+  const lease: ProcessMapping = { size: 4096, region: -7, immutable: false, read: async (_o, n) => new Uint8Array(n).fill(5),
+    write: async (o, bytes) => { writes.push([o, [...bytes]]); }, close: async () => { closed++; } };
+  const cpu = new Cpu(mainThread, "remote-mremap-test"), mmap = kernel("mmap"), mremap = kernel("mremap"), munmap = kernel("munmap");
+  const settled = () => new Promise((resolve) => setTimeout(resolve, 0));
+  try {
+    const address = await cpu.call(mmap, [0, 4096, 3, 0x22, -1, 0]);
+    await mapLease(BigInt(address), lease, 8192, 3);
+    mem.st8(address, 7);
+    const moved = await cpu.call(mremap, [address, 4096, 8192, 1 /* MREMAP_MAYMOVE */]);
+    await settleRemoteMaps(); await settled();
+    expect([mem.ld8u(moved), mem.ld8u(moved + 1), writes, closed]).toEqual([7, 5, [[0, [7]]], 0]);
+    mem.st8(moved + 1, 8);
+    await cpu.call(munmap, [moved, 8192]); await settled();
+    expect([writes, closed]).toEqual([[[0, [7]], [1, [8]]], 1]);
+  } finally { cpu.dispose(); setA64(false); }
 });
 
 test("a private file mapping grows with the file's bytes, and MAP_FIXED/MREMAP_FIXED take free address space", async () => {
@@ -307,6 +330,10 @@ test("a fifo goes with its file and ends when its last writer closes", async () 
     const file = javaOpenFd("/fifo-test", 0);
     expect(await call("read", file, buf, 4)).toBe(1);
     javaCloseFd(file);
+    mem.st16(buf, 0x72);                                                          // "r"
+    const fp = await call("fopen", path, buf);
+    expect([await call("fgetc", fp), await call("fgetc", fp), await call("feof", fp)]).toEqual([7, -1, 1]);
+    expect(await call("fclose", fp)).toBe(0);
     vfs.delete("/fifo-test");
     expect(await call("mkfifo", path, 0o600)).toBe(0);
     // a renamed fifo stays volatile, and leaves its old name to a file that persists
@@ -315,4 +342,24 @@ test("a fifo goes with its file and ends when its last writer closes", async () 
     finally { stop(); vfs.delete("/fifo-moved"); }
     expect(heard).toEqual(["/fifo-test"]);
   } finally { vfs.delete("/fifo-test"); mem.free(path); mem.free(buf); cpu.dispose(); setA64(false); }
+});
+
+test("the ARM32 libc's readdir answers each entry's type over the descriptor dirfd names", async () => {
+  setA64(false); kernelInit(); libcInit();
+  vfs.mkdir("/readdir-test"); vfs.mkdir("/readdir-test/sub"); vfs.write("/readdir-test/file", new Uint8Array(1));
+  const cpu = new Cpu(mainThread, "readdir-test"), call = libCalls(cpu, "libc.so"), path = mem.strdup("/readdir-test");
+  const list = async (dir: number) => {
+    const seen: string[] = [];
+    for (let de; (de = await call("readdir", dir));) seen.push(`${mem.cstr(de + 19)}:${mem.ld8u(de + 18)}`);
+    return seen.sort();
+  };
+  try {
+    const dir = await call("opendir", path), fd = await call("dirfd", dir);
+    expect(openFd(fd)?.dir).toBe(true);
+    expect(await list(dir)).toEqual(["..:4", ".:4", "file:8", "sub:4"]);
+    await call("rewinddir", dir);
+    expect(await list(dir)).toHaveLength(4);
+    expect(await call("closedir", dir)).toBe(0);
+    expect(openFd(fd)).toBeUndefined();
+  } finally { mem.free(path); cpu.dispose(); }
 });

@@ -4,13 +4,15 @@
 // stack are its Cpu's; the frame a handler runs on is sigframe.ts's; what a fatal signal leaves
 // behind is crash.ts's.
 
-import { mem } from "./mem.ts";
-import { stp, ldp, ldWord, stWord, PTR, type HostFn, type ArgReader } from "./host.ts";
+import { mem, anchor } from "./mem.ts";
+import { stp, ldp, ldWord, stWord, PTR, complete, type HostFn, type ArgReader } from "./host.ts";
 import { E } from "./abi.ts";
-import { fail, wrapped } from "./kernel.ts";
+import { fail, readTimeout, wrapped } from "./kernel.ts";
 import { type Cpu, cpuByTid, cpuByOsTid } from "./cpu.ts";
 import { tidOf } from "./pthread.ts";
 import { dieOfSignal } from "./crash.ts";
+import { writeSiginfo } from "./sigframe.ts";
+import { waitUntil } from "./poll.ts";
 
 export const SIGQUIT = 3, SIGILL = 4, SIGTRAP = 5, SIGABRT = 6, SIGBUS = 7, SIGFPE = 8, SIGKILL = 9, SIGSEGV = 11, SIGPIPE = 13;
 export const SIGSTKFLT = 16, SIGCHLD = 17, SIGCONT = 18, SIGSTOP = 19, SIGTSTP = 20, SIGTTIN = 21, SIGTTOU = 22, SIGURG = 23;
@@ -109,8 +111,39 @@ function sigaltstack(cpu: Cpu, a: ArgReader): number {
   return 0;
 }
 
+/** sigtimedwait: the first signal of `set` pending or queued within `ms` (-1: forever), its siginfo
+ *  written to `info`; -EAGAIN when none comes */
+function sigtimedwait(cpu: Cpu, set: bigint, info: () => number, ms: number): number | Promise<number> {
+  const take = (): number => {
+    const taken = cpu.takePending((sig) => blocked(set, sig));
+    if (!taken) return 0;
+    const at = info();
+    if (at) writeSiginfo(at, taken.sig, taken.info);
+    return taken.sig;
+  };
+  let sig = take();
+  if (sig || ms === 0) return sig || -E.AGAIN;
+  // taken as it is queued, before the Cpu could deliver it to a handler
+  const subscribe = (wake: () => void) => { cpu.sigQueued = () => { if ((sig = take())) wake(); }; return () => { cpu.sigQueued = null; }; };
+  return waitUntil(subscribe, ms, undefined, true).then(() => sig || -E.AGAIN);
+}
+/** tgkill: a thread of this process by its kernel tid, ESRCH once it has run to its end */
+function signalTid(cpu: Cpu, pid: number, tid: number, sig: number): number {
+  const t = cpuByOsTid(tid);
+  return pid !== cpu.pid || !t || t.pid !== pid || t.finished ? -E.SRCH : signalThread(t, sig);
+}
+
 /** wd.native.killLog: the last pthread_kill calls, who signalled whom and what the target was doing */
 export const killLog: string[] = [];
+/** pthread_kill, answering the error itself: a thread that has run to its end is gone, ESRCH,
+ *  which a stop-the-world collector discounts */
+function killThread(c: Cpu, handle: number, sig: number): number {
+  const tid = tidOf(handle), t = cpuByTid(tid), r = !t || t.finished ? E.SRCH : sig < 0 || sig > 64 ? E.INVAL : 0;
+  killLog.push(`${c.name}->${t?.name ?? "tid" + tid}:${sig}=${r}${t ? `/${t.state},${t.loops},${t.parked ? "p" : ""}` : ""}`);
+  if (killLog.length > 300) killLog.splice(0, 100);
+  if (r === 0 && sig) t!.kill(sig);
+  return r;
+}
 
 /** the signal calls the kernel and libc's wrappers share: a handler runs on the target thread, at
  *  once when it is parked in a host call (as a kernel interrupts a syscall) and at its next slice
@@ -118,8 +151,14 @@ export const killLog: string[] = [];
 export const SIGNAL_SYSCALLS: Record<string, HostFn> = {
   // the raw syscall's struct sigaction is the kernel's (handler, flags, restorer, mask), not bionic's
   rt_sigaction: (_c, a) => exchangeAction(a, { size: 3 * PTR + 8, handler: 0, flags: PTR, mask: 3 * PTR, wideMask: true }),
-  tgkill: (cpu, a) => { const pid = a.i(), t = cpuByOsTid(a.i()), sig = a.i(); if (pid !== cpu.pid || !t || t.pid !== pid || t.finished) return -E.SRCH; return signalThread(t, sig); },
+  tgkill: (cpu, a) => signalTid(cpu, a.i(), a.i(), a.i()),
+  tkill: (cpu, a) => signalTid(cpu, cpu.pid, a.i(), a.i()),
+  // the info is not carried
+  rt_tgsigqueueinfo: (cpu, a) => signalTid(cpu, a.i(), a.i(), a.i()),
   kill: (cpu, a) => { a.i(); return signalThread(cpu, a.i()); },
+  // the kernel's sigset_t is 8 bytes on both ABIs
+  rt_sigprocmask: (cpu, a) => { const how = a.i(), set = a.p(), old = a.p(), e = a.u() === 8 ? cpu.sigmask(how, set, old, 8) : E.INVAL; return e ? -e : 0; },
+  rt_sigtimedwait: (cpu, a) => { const set = mem.ld64(a.p()), info = anchor(a.p()); return sigtimedwait(cpu, set, info, readTimeout(a.p())); },
   sigsuspend: (cpu, a) => { const mask = cpu.signalMask; cpu.sigmask(2, a.p(), 0, PTR); return new Promise<number>((r) => { cpu.sigWait = () => { cpu.signalMask = mask; cpu.pump(); r(-E.INTR); }; }); },
   sigaltstack,
 };
@@ -136,22 +175,27 @@ export const SIGNAL_LIBC: Record<string, HostFn> = {
     dispose(sig, fn, SA_RESTART, 0n);
     return prev;
   },
-  // a thread that has run to its end is gone: ESRCH, which a stop-the-world collector discounts
-  pthread_kill: (c, a) => {
-    const tid = tidOf(a.p()), t = cpuByTid(tid), sig = a.i(), r = !t || t.finished ? E.SRCH : sig < 0 || sig > 64 ? E.INVAL : 0;
-    killLog.push(`${c.name}->${t?.name ?? "tid" + tid}:${sig}=${r}${t ? `/${t.state},${t.loops},${t.parked ? "p" : ""}` : ""}`);
-    if (killLog.length > 300) killLog.splice(0, 100);
-    if (r === 0 && sig) t!.kill(sig);
-    return r;
-  },
+  pthread_kill: (c, a) => killThread(c, a.p(), a.i()),
+  // the value is not carried
+  pthread_sigqueue: (c, a) => killThread(c, a.p(), a.i()),
   raise: wrapped((cpu, a) => signalThread(cpu, a.i())),
+  // the process leads its own group
+  killpg: wrapped((cpu, a) => { const group = a.i(), sig = a.i(); return group < 0 ? -E.INVAL : group === 0 || group === cpu.pid ? signalThread(cpu, sig) : -E.SRCH; }),
   sigprocmask: (cpu, a) => { const e = cpu.sigmask(a.i(), a.p(), a.p(), 4); return e ? fail(cpu, e) : 0; },
   sigprocmask64: (cpu, a) => { const e = cpu.sigmask(a.i(), a.p(), a.p(), 8); return e ? fail(cpu, e) : 0; },
-  sigwait: () => new Promise<never>(() => {}),
   sigpending: (cpu, a) => { mem.st32(a.p(), Number(sigset(...cpu.signals.keys()) & 0xffffffffn)); return 0; },
-  pthread_sigqueue: () => 0, killpg: () => 0,
 };
+SIGNAL_LIBC.bsd_signal = SIGNAL_LIBC.signal;
 for (const suffix of ["", "64"]) {
+  // a sigset_t is a word, a sigset64_t the kernel's 8 bytes
+  const setAt = (p: number): bigint => suffix ? mem.ld64(p) : BigInt(mem.ld32(p) >>> 0);
+  // sigwait answers the error itself
+  SIGNAL_LIBC["sigwait" + suffix] = (cpu, a) => {
+    const set = setAt(a.p()), out = anchor(a.p());
+    return complete(sigtimedwait(cpu, set, () => 0, -1), (sig) => { if (sig < 0) return -sig; mem.st32(out(), sig); return 0; });
+  };
+  SIGNAL_LIBC["sigwaitinfo" + suffix] = wrapped((cpu, a) => sigtimedwait(cpu, setAt(a.p()), anchor(a.p()), -1));
+  SIGNAL_LIBC["sigtimedwait" + suffix] = wrapped((cpu, a) => { const set = setAt(a.p()), info = anchor(a.p()); return sigtimedwait(cpu, set, info, readTimeout(a.p())); });
   SIGNAL_LIBC["sigemptyset" + suffix] = (_c, a) => { mem.memset(a.p(), 0, suffix ? 8 : 4); return 0; };
   SIGNAL_LIBC["sigfillset" + suffix] = (_c, a) => { mem.memset(a.p(), 255, suffix ? 8 : 4); return 0; };
   for (const op of ["add", "del", "ismember"]) SIGNAL_LIBC[(op === "ismember" ? "sigismember" : "sig" + op + "set") + suffix] = (cpu, a) => {

@@ -27,6 +27,9 @@ export const addressKey = (a: ArrayLike<number>) => Array.from(a).join(".");
 /** an address's family: AF_INET for 4 bytes, AF_INET6 for 16 */
 export const familyOf = (a: ArrayLike<number>): number => a.length === 4 ? AF_INET : AF_INET6;
 
+/** gethostbyname's h_errno for a name or address with no entry */
+export const HOST_NOT_FOUND = 1;
+
 export type Ipv4 = [number, number, number, number];
 /** inet_pton(AF_INET): dotted-decimal, 4 bytes, or null */
 export function parseIpv4(text: string): Ipv4 | null {

@@ -4,8 +4,8 @@
 
 import { mapElf, symbolize, nearestSymbol, type Module } from "./elf.ts";
 import { mem } from "./mem.ts";
-import { defineHost, probeHost, hostLib, lookupHost, hostLibNames, missingStub, slotName, isTrampPc, PTR, stp, type HostFn } from "./host.ts";
-import { cpuFor, cpus, setSymbolizeHook, setA64, isA64, type Cpu } from "./cpu.ts";
+import { defineHost, probeHost, hostLib, lookupHost, hostLibNames, missingStub, slotName, isTrampPc, PTR, stp, cstr, type HostFn } from "./host.ts";
+import { cpuFor, cpus, setSymbolizeHook, isA64, type Cpu } from "./cpu.ts";
 import type { TombstoneFrame } from "./tombstone.ts";
 import { trampSlot, RET_SENTINEL } from "./abi.ts";
 import { rt, type Gen } from "../jvm/runtime.ts";
@@ -48,6 +48,16 @@ function libSource(name: string): { device?: string; read: () => Promise<Uint8Ar
   return device ? { device, read: async () => (await vfs.readFile(device)) ?? null } : null;
 }
 
+/** reads started before the loadModule that takes them, by name */
+const prefetched = new Map<string, Promise<Uint8Array | null>>();
+/** start reading the images at these paths together, each taken by the loadModule that loads it */
+export function prefetchModules(paths: string[]): void {
+  for (const name of paths.map(basename)) {
+    const read = byName.has(name) ? undefined : libSource(name)?.read();
+    if (read) { read.catch(() => {}); prefetched.set(name, read); }
+  }
+}
+
 /** `link` loads and relocates without executing anything — no init array, no JNI_OnLoad. It is
  *  what an image whose machine code the tier cannot run yet can still be proved to do. */
 export async function loadModule(name: string, bytes?: Uint8Array, link = false, cpu: Cpu = cpuFor(curThread)): Promise<Module> {
@@ -58,13 +68,14 @@ export async function loadModule(name: string, bytes?: Uint8Array, link = false,
   if (p) return p;
   // driven: initializers run as the call chain that loads the image (a <clinit>'s, when it loads its library)
   const q = Promise.resolve(rt.drive(function* (): Gen<Module> {
-    const source = bytes ? null : libSource(name), b: Uint8Array | null = bytes ?? (source ? yield source.read() : null);
+    const source = bytes ? null : libSource(name), early = prefetched.get(name);
+    prefetched.delete(name);
+    const b: Uint8Array | null = bytes ?? (source ? yield early ?? source.read() : null);
     if (!b) throw new Error(`dlopen failed: library "${name}" not found`);
     const { mod, relocate } = mapElf(name, b);
     mod.path = source?.device;
-    // a process is one ABI: the first image decides which emitter its code compiles with
-    if (!modules.length) setA64(mod.w64);
-    else if (mod.w64 !== isA64()) throw new Error(`${name}: ${mod.w64 ? "64" : "32"}-bit image in a ${isA64() ? "64" : "32"}-bit process`);
+    // a process is one ABI, which its first image decided (loader.ts)
+    if (mod.w64 !== isA64()) throw new Error(`${name}: ${mod.w64 ? "64" : "32"}-bit image in a ${isA64() ? "64" : "32"}-bit process`);
     modules.push(mod);
     byName.set(name, mod);
     // dependencies that are real modules load (and initialise) first, each holding a reference;
@@ -147,7 +158,6 @@ async function unload(root: Module, cpu: Cpu): Promise<void> {
     linkerHooks.unloading(m);
     modules.splice(modules.indexOf(m), 1);
     byName.delete(m.name);
-    nameStrs.delete(m);
     handles.forEach((h, i) => { if (h && "mod" in h && h.mod === m) handles[i] = null; });
     for (const at of tlsDescriptors.keys()) if (at >= m.base && at < m.end) tlsDescriptors.delete(at);
     if (m.tls) for (const c of cpus) c.releaseTls(m);
@@ -263,8 +273,8 @@ export const libdl: Record<string, HostFn> = {
     const m = moduleOf(addr);
     if (!m) return 0;
     const s = nearestSymbol(m, addr);
-    stp(info, nameStr(m)); stp(info + PTR, m.base);
-    stp(info + 2 * PTR, s ? mem.hostStr(s.name) : 0); stp(info + 3 * PTR, s ? s.addr : 0);
+    stp(info, cstr(modulePath(m))); stp(info + PTR, m.base);
+    stp(info + 2 * PTR, s ? cstr(s.name) : 0); stp(info + 3 * PTR, s ? s.addr : 0);
     return 1;
   },
   // dl_phdr_info: dlpi_addr, dlpi_name, dlpi_phdr, dlpi_phnum (u16), then the counters, all at
@@ -277,7 +287,7 @@ export const libdl: Record<string, HostFn> = {
     try {
       for (const m of [...modules]) {
         mem.memset(info, 0, size);
-        stp(info, m.base); stp(info + PTR, nameStr(m)); stp(info + 2 * PTR, m.phdr); mem.st16(info + 3 * PTR, m.phnum);
+        stp(info, m.base); stp(info + PTR, cstr(modulePath(m))); stp(info + 2 * PTR, m.phdr); mem.st16(info + 3 * PTR, m.phnum);
         const r = await cpu.call(cb, [info, size, data]);
         if (r) return r;
       }
@@ -290,8 +300,6 @@ export const libdl: Record<string, HostFn> = {
 
 /** where an image lives: its device path, else the app's library directory for its ABI */
 export const modulePath = (m: Module): string => m.path ?? `/data/app/lib/${m.w64 ? "arm64-v8a" : "armeabi-v7a"}/${m.name}`;
-const nameStrs = new Map<Module, number>();
-function nameStr(m: Module): number { let p = nameStrs.get(m); if (!p) nameStrs.set(m, (p = mem.hostStr(modulePath(m)))); return p; }
 
 export function resolveGlobalOrNull(sym: string, needed: readonly string[] = []): number | undefined {
   for (const m of modules) { const a = m.exports.get(sym); if (a !== undefined) return a; }
