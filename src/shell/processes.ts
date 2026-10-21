@@ -7,7 +7,7 @@ import { Alarms } from "./alarms.ts";
 import { AccountStore } from "./accounts.ts";
 import { encodeIntent, intentCodec } from "../android/intentipc.ts";
 import type { IntentCodec } from "./pendingintents.ts";
-import { packages } from "../android/packages.ts";
+import { packages, unregisterPackage } from "../android/packages.ts";
 import { releaseRights, SYSTEM_CALLER, INTERFACE_TRANSACTION, exportParcel, type ParcelData, type Transaction, type TransactionReply, type BinderHandle } from "../android/binder.ts";
 import { NativeParcel, writeString } from "../android/parcel.ts";
 import { newIntent } from "../android/intent.ts";
@@ -39,7 +39,7 @@ import { storageEntries } from "./device-storage.ts";
 import { bootstrapTransfers, type ProcessBootstrap } from "./process-bootstrap-data.ts";
 import { serveProcess, processProxy, processError, closePort } from "./process-port.ts";
 import { serveBrokerPort } from "./broker-port.ts";
-import { asBroker, forgetRemoved, permissionDenied, receivers, unawaited, type BroadcastData, type ProcessEndpoint, type Receiver } from "./broker-contract.ts";
+import { asBroker, permissionDenied, receivers, unawaited, type BroadcastData, type ProcessEndpoint, type Receiver } from "./broker-contract.ts";
 import { procIdentity } from "./procfs.ts";
 
 export type { ProcessBootstrap } from "./process-bootstrap-data.ts";
@@ -296,7 +296,7 @@ export class ProcessBroker {
   /** a removed package leaves every process's package manager, this one's too */
   async packageRemoved(pkg: string): Promise<void> {
     this.packageSplits.delete(pkg);
-    forgetRemoved(pkg);
+    unregisterPackage(pkg);
     await this.each(() => true, (endpoint) => endpoint.packageRemoved(pkg));
   }
   /** `f` on each live process `which` picks, once it is ready */

@@ -12,8 +12,7 @@ import { legacySnapshotData } from "../android/sqlite.ts";
 import { exitRecordData, REASON_USER_REQUESTED } from "../android/server/appexitinfo.ts";
 import { jobData } from "../android/job.ts";
 import { shortcutData } from "../android/shortcuts.ts";
-import { installData, knownUid, packages } from "../android/packages.ts";
-import { installedPath } from "../android/pm.ts";
+import { installData, installedPath, knownUid, packages } from "../android/packages.ts";
 import { forgetPackage } from "./packages.ts";
 
 type Broker = ReturnType<typeof processBroker>;

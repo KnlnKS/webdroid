@@ -4,6 +4,10 @@ import { SHARED_LIBRARIES } from "../jvm/bootclasspath.ts";
 import { device } from "../shell/config.ts";
 import type { PackageState } from "../shell/packagedata.ts";
 import { persisted } from "../shell/device-storage.ts";
+import { vfs } from "../shell/vfs.ts";
+import { PackedArchive, packedArchives } from "../shell/packedarchive.ts";
+import type { FileSource } from "../shell/lazyfile.ts";
+import type { PackageArchive } from "./packagearchive.ts";
 
 export type ComponentKind = "activity" | "service" | "receiver" | "provider";
 /** PackageManager's flags, which IPackageManager takes as a long */
@@ -48,6 +52,8 @@ function requestedPermissions(root: XmlNode, target: number): Set<string> {
   return requested;
 }
 
+/** what provisioning gives a system package: its grants and the signatures it presents in place of its own */
+export type Provisioned = { system?: boolean; grants?: Iterable<string>; signatures?: Uint8Array[] | null };
 export class PackageRecord {
   readonly root: XmlNode; readonly res: Resources; readonly path: string; readonly uid: number; readonly certificates: () => Promise<Uint8Array[]>;
   readonly pkg: string;
@@ -57,13 +63,14 @@ export class PackageRecord {
   };
   /** the permissions the package requests (PackageInfo.requestedPermissions) */
   readonly requested: Set<string>;
-  readonly grants = new Set<string>();
-  system = false;
-  compatibilityCertificates: Uint8Array[] | null = null;
+  readonly system: boolean;
+  readonly grants: ReadonlySet<string>;
+  readonly compatibilityCertificates: Uint8Array[] | null;
 
   constructor(root: XmlNode, res: Resources, path: string,
-    uid: number, certificates: () => Promise<Uint8Array[]>) {
+    uid: number, certificates: () => Promise<Uint8Array[]>, { system = false, grants = [], signatures = null }: Provisioned = {}) {
     this.root = root; this.res = res; this.path = path; this.uid = uid; this.certificates = certificates;
+    this.system = system; this.grants = new Set(grants); this.compatibilityCertificates = signatures;
     this.pkg = attrStr(root, "package") ?? "";
     this.application = root.children.find((n) => n.name === "application") ?? null;
     for (const node of this.application?.children ?? []) {
@@ -106,6 +113,27 @@ export class PackageRecord {
 }
 
 export const packages = new Map<string, PackageRecord>();
+export const installedPath = (pkg: string): string => `/data/app/${pkg}/base.apk`;
+/** a package's manifest and resources, with its signing certificates or how to read them */
+type PackageContents = Pick<PackageArchive, "root" | "res"> & { certificates: Uint8Array[] | (() => Promise<Uint8Array[]>) };
+/** a package the package manager knows, its base apk at `path` (`source`'s bytes, when given) */
+export function registerPackage({ root, res, certificates }: PackageContents, { path, uid, source, ...provisioned }: Provisioned &
+  { path?: string; uid?: number; source?: Uint8Array | FileSource } = {}): PackageRecord {
+  const pkg = attrStr(root, "package") ?? "";
+  path ??= installedPath(pkg);
+  if (source instanceof Uint8Array) vfs.write(path, source);
+  else if (source) vfs.mount(path, source);
+  if (source instanceof PackedArchive) packedArchives.set(path, source);
+  const record = new PackageRecord(root, res, path, uid ?? packageUid(pkg), typeof certificates === "function" ? certificates : () => Promise.resolve(certificates), provisioned);
+  packages.set(pkg, record);
+  return record;
+}
+/** a removed package leaves this process's package manager, with the archive it would register again from */
+export function unregisterPackage(pkg: string): void {
+  packages.delete(pkg);
+  packedArchives.delete(installedPath(pkg));
+  vfs.delete(installedPath(pkg));
+}
 /** the uids packages were given (wd:package-uids) */
 const savedUids = persisted("wd:", (saved) => Array.isArray(saved) ? saved.filter((entry): entry is [string, number] =>
   Array.isArray(entry) && typeof entry[0] === "string" && Number.isInteger(entry[1]) && entry[1] >= 10001) : null);

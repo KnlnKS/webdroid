@@ -330,7 +330,8 @@ export async function storeOwnership() {
     const grantRead=await peers[0].endpoint.permissions.permissionCheck(pkg,[permission]);grantRead[0]=false;
     const own=await ask("permissions.permissionCheck",pkg,[permission]);
     const foreignDenied=await ask("permissions.permissionGrant",foreign,[permission]) as {error:string};
-    packages.get(foreign)!.grants.add("android.permission.GRANT_RUNTIME_PERMISSIONS");
+    const held=packages.get(foreign)!;
+    packages.set(foreign,new PackageRecord(held.root,held.res,held.path,held.uid,held.certificates,{grants:["android.permission.GRANT_RUNTIME_PERMISSIONS"]}));
     await peers[1].endpoint.permissions.permissionGrant(pkg,[extra]);
     const privileged=await ask("permissions.permissionCheck",pkg,[extra]);
     const prefName = pkg + ":worker", policyName = "android:notification-policy:" + foreign;

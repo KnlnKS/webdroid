@@ -8,14 +8,14 @@ import { jarray } from "../src/jvm/abi.ts";
 import { newObj, vcall, vcallAsync, iof } from "../src/jvm/natives/jentry.ts";
 import { checkUriPermission, grantUriPermission, revokeUriPermission } from "../src/android/urigrants.ts";
 import { mkUri } from "../src/android/net.ts";
-import { packages, PackageRecord } from "../src/android/packages.ts";
+import { packages, PackageRecord, registerPackage } from "../src/android/packages.ts";
 import { vfs } from "../src/shell/vfs.ts";
 import { pickFiles } from "../src/shell/hostfs.ts";
 import { centralDir, zipTree } from "../src/zip.ts";
 import { mergeInstall } from "../src/shell/install.ts";
 import { BytesFile, readFully } from "../src/shell/lazyfile.ts";
 import { parsePackageArchive, packageArchiveSource, apkCertificates } from "../src/android/packagearchive.ts";
-import { registerPackage, FLAG_IS_GAME } from "../src/android/pm.ts";
+import { FLAG_IS_GAME } from "../src/android/pm.ts";
 import { hostedService } from "../src/android/binder.ts";
 import { notConnected } from "../src/jvm/natives/jthrowable.ts";
 import { newArrayList, toJsArray } from "../src/jvm/natives/jcoll.ts";
@@ -123,7 +123,7 @@ describe("package-checksums", () => {
     const archive = await parsePackageArchive(bytes);
     const path = "/data/app/checksum-test/base.apk";
     vfs.write(path, bytes);
-    registerPackage(archive, path);
+    registerPackage(archive, { path });
     const listener = new ChecksumListener();
     const pms = await hostedService("package");
     await vcall(pms, "requestPackageChecksums", "(Ljava/lang/String;ZIILjava/util/List;Landroid/content/pm/IOnChecksumsReadyListener;I)V", archive.pkg, 0, 0, 8, await newArrayList(), listener, 0);
@@ -176,9 +176,7 @@ describe("package-game-info", () => {
         { name: "isGame", str: null, ns: "", resId: 0, type: TV.BOOLEAN, data: 1 },
       ], children: [] },
     ] };
-    const record = new PackageRecord(root, new Resources(null, {}), "/test-game.apk", 12345, async () => []);
-    record.system = true;
-    packages.set(pkg, record);
+    packages.set(pkg, new PackageRecord(root, new Resources(null, {}), "/test-game.apk", 12345, async () => [], { system: true }));
     try {
       const info = await vcall(await hostedService("package"), "getApplicationInfo", "(Ljava/lang/String;JI)Landroid/content/pm/ApplicationInfo;", pkg, 0n, 0);
       const APP = "android/content/pm/ApplicationInfo";
@@ -235,15 +233,15 @@ describe("package-permissions", () => {
       // requested only through API 28
       { name: "uses-permission", attrs: [attr("name", "android.permission.WRITE_EXTERNAL_STORAGE"), int("maxSdkVersion", 28)], children: [] },
     ] };
-    const record = new PackageRecord(root, new Resources(null, {}), "/test.apk", 12345, async () => []);
-    packages.set(pkg, record);
+    const register = (grants: string[]) => packages.set(pkg, new PackageRecord(root, new Resources(null, {}), "/test.apk", 12345, async () => [], { grants }));
+    register([]);
     try {
       const pms = await hostedService("package"), PI = "android/content/pm/PackageInfo";
       const packageInfo = (flags: bigint) => vcall(pms, "getPackageInfo", "(Ljava/lang/String;JI)Landroid/content/pm/PackageInfo;", pkg, flags, 0);
       const info = await packageInfo(0x1000n);
       expect([...getDeclared<string[]>(info, PI, "requestedPermissions")]).toEqual(["android.permission.INTERNET", denied]);
       expect([...getDeclared<Int32Array>(info, PI, "requestedPermissionsFlags")]).toEqual([3, 1]);
-      record.grants.add(denied);
+      register([denied]);
       expect([...getDeclared<Int32Array>(await packageInfo(0x1000n), PI, "requestedPermissionsFlags")]).toEqual([3, 3]);
       const omitted = await packageInfo(0n);
       expect(getDeclared(omitted, PI, "requestedPermissions")).toBeNull();

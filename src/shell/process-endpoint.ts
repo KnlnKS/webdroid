@@ -32,7 +32,8 @@ import { useFocusedUid } from "../android/clipboard.ts";
 import { useHostUi } from "./host-ui.ts";
 import { packageDataTransport } from "../android/appdata.ts";
 import { storageChanged } from "./device-storage.ts";
-import { asBroker, brokerMethods, forgetRemoved, receivers, type BroadcastData, type BrokerCalls, type ProcessEndpoint } from "./broker-contract.ts";
+import { unregisterPackage } from "../android/packages.ts";
+import { asBroker, brokerMethods, receivers, type BroadcastData, type BrokerCalls, type ProcessEndpoint } from "./broker-contract.ts";
 import type { ProcessBroker } from "./processes.ts";
 import type { ServiceRequest } from "./servicerecords.ts";
 import { callProxy, closePort, processError, processFailure } from "./process-port.ts";
@@ -163,7 +164,7 @@ export function createProcessEndpoint(): ProcessEndpoint {
     processDied: async token => life.died(token),
     cookiesChanged: async () => cookiesChanged(),
     storageChanged: async (key, value) => storageChanged(key, value),
-    packageRemoved: async pkg => forgetRemoved(pkg),
+    packageRemoved: async pkg => unregisterPackage(pkg),
     kill: (signal, note) => { if (note) noteAppKill(note); exitProcess({ signal }); },
     activity: async (request) => {
       if (request.kind === "back") return (await import("./device.ts")).pressBack();

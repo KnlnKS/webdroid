@@ -23,7 +23,7 @@ import { SHARED_LIBRARIES } from "../jvm/bootclasspath.ts";
 import { once } from "../jvm/suspend.ts";
 import { systemActivity, SYSTEM_ACTIVITY, intentQuery$, type IntentQuery } from "./intent.ts";
 import { intentTarget$, manifestFilter$, matches$ } from "./intent-filter.ts";
-import { PackageRecord, packages, packageUid, uidPackages, qualifyComponent, componentState, installTime, type ComponentKind,
+import { type PackageRecord, packages, uidPackages, qualifyComponent, componentState, installedPath, registerPackage, installTime, type ComponentKind,
   GET_ACTIVITIES, GET_RECEIVERS, GET_SERVICES, GET_PROVIDERS, GET_INSTRUMENTATION, GET_SIGNATURES, GET_META_DATA, GET_SHARED_LIBRARY_FILES,
   GET_PERMISSIONS, GET_CONFIGURATIONS, GET_SIGNING_CERTIFICATES, MATCH_DISABLED_COMPONENTS, MATCH_DEFAULT_ONLY, MATCH_DIRECT_BOOT_UNAWARE,
   MATCH_DIRECT_BOOT_AWARE, MATCH_SYSTEM_ONLY } from "./packages.ts";
@@ -53,11 +53,10 @@ export function setManifest(root: XmlNode): void {
   if (currentPackage && packages.get(currentPackage.pkg) === currentPackage) packages.delete(currentPackage.pkg);
   if (!appHost) return;
   const host = appHost;
-  currentPackage = packages.get(pkg) ?? new PackageRecord(root, host.res, apkPath(), packageUid(pkg), async () => {
+  currentPackage = packages.get(pkg) ?? registerPackage({ root, res: host.res, certificates: async () => {
     const bytes = await vfs.readFile(apkPath());
     return bytes ? cachedCertificates(bytes, host.zip) : [];
-  });
-  packages.set(pkg, currentPackage);
+  } }, { path: apkPath() });
   extractNativeLibraries(currentPackage);
 }
 /** the splits installed beside the booted package's base; this process holds no other package's */
@@ -534,18 +533,12 @@ rt.registerJnis("android/os/incremental/IncrementalManager", {
   "nativeIsIncrementalFd(I)Z": () => 0, "nativeIsIncrementalPath(Ljava/lang/String;)Z": () => 0,
   "nativeUnsafeGetFileSignature(Ljava/lang/String;)[B": () => null,
 });
-export const installedPath = (pkg: string) => `/data/app/${pkg}/base.apk`;
-export function registerPackage(archive: PackageArchive, path = installedPath(archive.pkg), uid = packageUid(archive.pkg)): PackageRecord {
-  const record = new PackageRecord(archive.root, archive.res, path, uid, () => Promise.resolve(archive.certificates));
-  packages.set(record.pkg, record);
-  return record;
-}
 /** the package's record, registering its persisted install on first use; synchronous when known */
 function packageRecord(pkg: string): PackageRecord | Promise<PackageRecord | null> {
   return packages.get(pkg) ?? (async () => {
     await restorePackages();
     const path = installedPath(pkg), archive = await readArchive(path);
-    return archive ? packages.get(pkg) ?? registerPackage(archive, path) : null;
+    return archive ? packages.get(pkg) ?? registerPackage(archive, { path }) : null;
   })();
 }
 async function installedPackages(): Promise<PackageRecord[]> {
@@ -553,7 +546,7 @@ async function installedPackages(): Promise<PackageRecord[]> {
   for (const path of vfs.files.keys()) {
     if (!/^\/data\/app\/[^/]+\/base\.apk$/.test(path)) continue;
     const archive = await readArchive(path);
-    if (archive && !packages.has(archive.pkg)) registerPackage(archive, path);
+    if (archive && !packages.has(archive.pkg)) registerPackage(archive, { path });
   }
   return [...packages.values()];
 }
@@ -569,8 +562,7 @@ export async function installPackageArchive(bytes: Uint8Array, expectedPackage: 
   if (previous && (previous.certificates.length !== archive.certificates.length ||
       previous.certificates.some((cert, i) => !sameBytes(cert, archive.certificates[i])))) throw new Error("APK signing certificate differs from installed package");
   await persistPackage(installedPath(archive.pkg), bytes);
-  vfs.write(installedPath(archive.pkg), bytes);
-  registerPackage(archive);
+  registerPackage(archive, { source: bytes });
   return archive.pkg;
 }
 

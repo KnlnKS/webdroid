@@ -45,15 +45,13 @@ export function bootSystemOwner(): Promise<void> {
 /** Install the selected package with its original archive and split sources;
  * loading its bytecode remains the application's Worker responsibility. */
 export async function prepareWorkerInstall(install: import("./install.ts").Install): Promise<{ pkg: string; label: string }> {
-  const [{ apkCertificates, packageArchive }, { registerPackage, installedPath }, { readFully }, { vfs }] = await Promise.all([
-    import("../android/packagearchive.ts"), import("../android/pm.ts"), import("./lazyfile.ts"), import("./vfs.ts"),
+  const [{ apkCertificates, packageArchive }, { registerPackage }, { readFully }] = await Promise.all([
+    import("../android/packagearchive.ts"), import("../android/packages.ts"), import("./lazyfile.ts"),
   ]);
   const bytes = install.base instanceof Uint8Array ? install.base : await readFully(install.base);
   const archive = packageArchive(install.zip, await apkCertificates(bytes, install.zip), install.lazyEntries);
   for (const split of install.splits) if (split.resources) archive.res.arsc?.add(split.resources);
-  const record = registerPackage(archive);
-  if (install.base instanceof Uint8Array) vfs.write(installedPath(record.pkg), install.base);
-  else vfs.mount(installedPath(record.pkg), install.base);
+  const record = registerPackage(archive, { source: install.base });
   processBroker().setPackageSplits(record.pkg, install.splits.map(split => split.source));
   return { pkg: record.pkg, label: record.label() };
 }

@@ -21,14 +21,11 @@ import type { ProcessLifeCalls } from "./process-life.ts";
 import type { ServiceRequest, ServiceStarts } from "./servicerecords.ts";
 import type { SettingsAccess } from "./settings.ts";
 import { asSystem } from "../android/binder.ts";
-import { packages } from "../android/packages.ts";
 import { checkPermission } from "../android/permissions.ts";
-import { installedPath, queryReceivers } from "../android/pm.ts";
+import { queryReceivers } from "../android/pm.ts";
 import { awaited, rt, type Gen, type JObj } from "../jvm/runtime.ts";
 import { hostUiMethods } from "./host-ui.ts";
-import { packedArchives } from "./packedarchive.ts";
 import { methodsOf, qualified, type MethodTree } from "./process-port.ts";
-import { vfs } from "./vfs.ts";
 
 /** an access interface's methods, called across a port */
 export type Calls<T> = { [K in keyof T]: T[K] extends (...args: infer A) => infer R ? (...args: A) => Promise<Awaited<R>> : never };
@@ -126,10 +123,4 @@ export const unawaited = (work: Promise<unknown>) => void work.catch((error) => 
 /** the manifest receivers an intent reaches, as the sending process's package manager resolves them */
 export function* receivers(intent: JObj): Gen<Receiver[]> {
   return (yield* awaited(queryReceivers(intent))).map((r) => ({ pkg: r.owner.pkg, cls: r.name, priority: r.priority }));
-}
-/** a removed package leaves this process's package manager, with the archive it would register again from */
-export function forgetRemoved(pkg: string): void {
-  packages.delete(pkg);
-  packedArchives.delete(installedPath(pkg));
-  vfs.delete(installedPath(pkg));
 }

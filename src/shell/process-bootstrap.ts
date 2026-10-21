@@ -1,13 +1,12 @@
 import { packageArchive, packageArchiveSource } from "../android/packagearchive.ts";
 import { zipTree } from "../zip.ts";
-import { PackedArchive, packedArchives, SYSTEM_PACKAGE_BASE, systemPackage, type PackedArchiveIndex } from "./packedarchive.ts";
+import { PackedArchive, SYSTEM_PACKAGE_BASE, systemPackage, type PackedArchiveIndex } from "./packedarchive.ts";
 import { SYSTEM_PACKAGES } from "./system-packages.ts";
 import { rt } from "../jvm/runtime.ts";
 import { openInstallApks, type Install } from "./install.ts";
 import { RemoteFile } from "./remote-file.ts";
 import { readFully } from "./lazyfile.ts";
-import { installedPath, registerPackage } from "../android/pm.ts";
-import { vfs } from "./vfs.ts";
+import { installedPath, registerPackage } from "../android/packages.ts";
 import { hexBytes, u8 } from "../jvm/abi.ts";
 import type { ProcessBootstrap } from "./process-bootstrap-data.ts";
 
@@ -35,17 +34,15 @@ export async function loadProcessPackages(data: ProcessBootstrap): Promise<Insta
     if ("index" in source) {
       const packed = await preparedArchive(source.index, source.base, own);
       archive = packageArchive(packed.zip, source.index.certificates.map(hexBytes));
-      packedArchives.set(path, packed); vfs.mount(path, packed);
       if (own) rt.classpathSource = packed;
       base = { zip: packed.zip, base: packed };
     } else if (!own) {
       const file = new RemoteFile(source);
       archive = await packageArchiveSource(file, snapshot.certificates);
-      vfs.mount(path, file);
       base = {zip: archive.res.zip, base: file};
     } else {
       const bytes = await readFully(new RemoteFile(source)), zip = zipTree(bytes);
-      archive = packageArchive(zip, snapshot.certificates); vfs.write(path, bytes);
+      archive = packageArchive(zip, snapshot.certificates);
       base = { zip, base: bytes };
     }
     if (own) {
@@ -54,13 +51,9 @@ export async function loadProcessPackages(data: ProcessBootstrap): Promise<Insta
       for (const split of boot.splits) if (split.resources) archive.res.arsc?.add(split.resources);
       for (const [name, source] of boot.lazyEntries) archive.res.lazyEntries.set(name, source);
     }
-    return { snapshot, archive, path };
+    return { snapshot, archive, path, source: base.base };
   }));
-  for (const { snapshot, archive, path } of opened) {
-    const record = registerPackage(archive, path, snapshot.uid);
-    record.system = snapshot.system;
-    for (const grant of snapshot.grants) record.grants.add(grant);
-    record.compatibilityCertificates = snapshot.signatures?.map((s) => u8(s)) ?? null;
-  }
+  for (const { snapshot, archive, path, source } of opened) registerPackage(archive, { path, source, uid: snapshot.uid, system: snapshot.system,
+    grants: snapshot.grants, signatures: snapshot.signatures?.map((s) => u8(s)) ?? null });
   return boot;
 }
