@@ -101,9 +101,12 @@ const MAX_NESTING = 64;
 /** what a frozen numbering (Numbers.frozen) would have had to number, and the method whose compile asked for it (the innermost, when compiling it compiled others) */
 export class NeedsNumber extends Error { method?: MethodInfo }
 /** the linker state a Compiler reads and records into */
-export type LinkEnv = Pick<World, "prog" | "opts" | "cha" | "natives" | "intrinsic" | "aot" | "stats" | "link" | "claims" | "allocated" | "longLoops"
-  | "idOf" | "slotOf" | "dispatch" | "selectorId" | "ensureSlot" | "classModules" | "synthSlot" | "gapId" | "linkId" | "needsInit" | "initialized"
-  | "needsSymbolicSite" | "guestShared" | "units">;
+export type LinkEnv = Pick<World, "prog" | "natives" | "intrinsic" | "link" | "claims" | "allocated" | "longLoops" | "idOf" | "slotOf" | "selectorId" | "ensureSlot"
+  | "synthSlot" | "gapId" | "linkId" | "needsInit" | "initialized" | "needsSymbolicSite" | "guestShared"> & {
+  opts: Pick<World["opts"], "build" | "guest" | "intrinsics">; aot?: Pick<NonNullable<World["aot"]>, "building" | "hostDispatch" | "overriddenAt">;
+  stats: Pick<World["stats"], "phase">; cha: Pick<World["cha"], "targets">; dispatch: Pick<World["dispatch"], "vslot">;
+  classModules: Pick<World["classModules"], "ensureBody">; units: Pick<World["units"], "sharedHelpers">;
+};
 /** per virtual call (declaring class, name, descriptor): the implementations worth a guarded direct call (Planner.group) */
 export type CallPlan = ReadonlyMap<string, readonly MethodInfo[]>;
 /** a function of Compiler.buildSynthetics */
