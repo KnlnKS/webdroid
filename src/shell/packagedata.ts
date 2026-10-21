@@ -13,6 +13,7 @@ import { exitRecordData, REASON_USER_REQUESTED } from "../android/server/appexit
 import { jobData } from "../android/job.ts";
 import { shortcutData } from "../android/shortcuts.ts";
 import { installData, installedPath, knownUid, packages } from "../android/packages.ts";
+import { packageConfigData } from "../android/packageconfig.ts";
 import { forgetPackage } from "./packages.ts";
 
 type Broker = ReturnType<typeof processBroker>;
@@ -31,7 +32,7 @@ const owners = (broker: Broker): PackageState[] => [
   broker.alarms, jobData, shortcutData, keystoreData, broker.notifications, uriGrantData, broker.permissions, broker.preferences, legacySnapshotData,
   { clear: async (pkg) => (await broker.cookies(pkg)).remove(), remove: async (pkg) => (await broker.cookies(pkg)).forget(),
     packages: async () => (await import("./webcookies.ts")).WebCookies.packages() },
-  broker.files, webData, broker.intents, broker.accounts, exitRecordData, installData,
+  broker.files, webData, broker.intents, broker.accounts, exitRecordData, packageConfigData, installData,
 ];
 
 export async function clearAppData(broker: Broker, pkg: string, how: DataClear): Promise<void> {

@@ -62,16 +62,13 @@ test("preference commands acknowledge Java-visible changes without overwriting o
   const client = callProxy<PreferenceCalls>(port2, ["preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles"]);
   usePreferenceAccess(client.endpoint);
   try {
-    const prefs = getPrefs(pkg, "__system_power"), service = rt.make("webdroid/DeviceIdleController");
-    const exempt = () => vcall(service, "isPowerSaveWhitelistApp", "(Ljava/lang/String;)Z", pkg);
-    expect(await exempt()).toBe(0);
+    const prefs = getPrefs(pkg, "commands");
     let completed = false;
     const write = Promise.resolve(prefs.set("exempt", 1)).then(value => { completed = true; return value; });
     await waiting;
     expect(completed).toBe(false);
     expect(await owner.preferenceRead(prefs.name, "exempt")).toBeUndefined();
     release(); await write;
-    expect(await exempt()).toBe(1);
     await Promise.all([prefs.set("__proto__", ["kept"]), prefs.set("long", 9007199254740993n)]);
     expect(await prefs.get("long")).toBe(9007199254740993n);
     const values = await prefs.get("__proto__") as string[];

@@ -3,11 +3,13 @@
 // current by the page, and the page keeps only the writes to entries the package owns.
 
 export type StorageOwner = { pkg: string; uid: number };
-/** An install's state and WebView cookies belong to their package and a keystore to its uid; any
- *  package reads the installs (component states, install times, persisted URI grants) and the uids,
- *  and writes the device's MediaStore flags, as its in-process MediaProvider does. */
+/** An install's state, WebView cookies and per-app configuration belong to their package and a
+ *  keystore to its uid; any package reads the installs (component states, install times, persisted
+ *  URI grants, the doze allowlist) and the uids, and writes the device's MediaStore flags, as its
+ *  in-process MediaProvider does. */
 export function storageAccess(key: string, { pkg, uid }: StorageOwner): "read" | "write" | null {
   if (key === `wd:install:${pkg}` || key.startsWith(`wd:install:${pkg}:`) || key === `wd:web-cookies:${pkg}` || key === `wd:keystore2:${uid}`
+    || key === `wd:package-config:${pkg}`
     || key === "wd:media:flags") return "write";
   return key.startsWith("wd:install:") || key === "wd:package-uids" ? "read" : null;
 }
