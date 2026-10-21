@@ -8,9 +8,9 @@ import { Code, OP } from "./code.ts";
 import { T, ref, refNull, uleb, type VT } from "./wasmbin.ts";
 import { kindOf, mid } from "./program.ts";
 import { type Flow, Go } from "./structure.ts";
-import { CHUNK_MARK, COUNT_SLOTS } from "./exc.ts";
-import { FUEL } from "./hostcalls.ts";
+import { CHUNK_MARK } from "./exc.ts";
 import type { MC } from "./method.ts";
+import { COUNT_SLOTS, FUEL } from "./consts.ts";
 
 /** iterations of an outlined loop per call of its function; its dispatcher charges them to the activation's fuel */
 const CHUNK = 1024;

@@ -9,7 +9,6 @@ import { vfs } from "../../src/shell/vfs.ts";
 import { program, world } from "./lib.ts";
 import { loadDexes } from "../dexes.ts";
 import { Program, ACC, PlainClass, javaName, mid } from "../../src/wasm/compiler/program.ts";
-import { COUNT_BASE, HOT_BUDGET } from "../../src/wasm/compiler/exc.ts";
 import { wasmJni } from "../../src/wasm/host/jni.ts";
 import { jniInit, deref, javaVM } from "../../src/native/jni.ts";
 import { useJniVm, vm as priorJniVm } from "../../src/native/jnivm.ts";
@@ -34,6 +33,7 @@ import { androidFixture, java, javac, tempDir } from "../java.ts";
 import { archives } from "./loaders-archives.ts";
 import { defaults } from "./loaders-defaults.ts";
 import { nativePaths } from "./loaders-paths.ts";
+import { COUNT_BASE, HOT_BUDGET } from "../../src/wasm/compiler/consts.ts";
 
 const out = tempDir();
 /** compiles `sources` (against the Android API and `classpath`) and dexes the classes; answers the dex */

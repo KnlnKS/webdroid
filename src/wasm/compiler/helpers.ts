@@ -3,8 +3,7 @@
 import { HEAP_LIMIT } from "../../jvm/abi.ts";
 import { OP, type Code } from "./code.ts";
 import { HT, T, ref, refNull, type VT } from "./wasmbin.ts";
-import { H, type ElemKind } from "./consts.ts";
-import { ALLOC_WINDOW } from "./exc.ts";
+import { H, ALLOC_WINDOW, type ElemKind } from "./consts.ts";
 import { Block, Sync, emitBlock, emitSync } from "./hostcalls.ts";
 import type { Compiler } from "./j2w.ts";
 

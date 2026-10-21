@@ -2,10 +2,10 @@
 // them, since the engine's stack holds the limit twice over and these frames add at most MAX_UNCOUNTED to the counted ones; around the one or two calls that
 // are not such methods (a slow path, a recursion); else for the whole frame, which a handler must restore.
 import { isInvoke } from "../../jvm/opcodes.ts";
-import { MAX_UNCOUNTED } from "./exc.ts";
 import { mid } from "./program.ts";
 import type { MethodInfo } from "./program.ts";
 import type { MC } from "./method.ts";
+import { MAX_UNCOUNTED } from "./consts.ts";
 
 /** the calls of a method that may count its frame around themselves instead of in a prologue */
 const MAX_SITES = 2;

@@ -3,11 +3,11 @@
 import { ACC, mid, type MethodInfo } from "../compiler/program.ts";
 import { staticallyBound, type CallPlan } from "../compiler/j2w.ts";
 import { failed, invokeSite, symbolicOverride } from "../compiler/linkage.ts";
-import { HOT_BUDGET } from "../compiler/exc.ts";
 import { cyclic, decodeInstruction, decodeInstructions, prepareMethod, type PreparedInstruction } from "../../jvm/prepared.ts";
 import { insnLen, invokeKind, isInvoke } from "../../jvm/opcodes.ts";
 import { instructionClass } from "./resolution.ts";
 import type { World } from "./world.ts";
+import { HOT_BUDGET } from "../compiler/consts.ts";
 
 /** the most methods a first-tier unit holds (Planner.batch) */
 const BATCH = 32;

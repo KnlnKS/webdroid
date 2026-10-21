@@ -4,7 +4,7 @@
 import { Compiler, type CallPlan } from "../compiler/j2w.ts";
 import type { InlineFrame } from "../compiler/code.ts";
 import type { MethodInfo } from "../compiler/program.ts";
-import { COUNT_BASE, COUNT_SLOTS, THROWERS, throwerBody, wasmFrameNames, deepStack } from "../compiler/exc.ts";
+import { THROWERS, throwerBody, wasmFrameNames, deepStack } from "../compiler/exc.ts";
 import { mid, methodOf } from "../compiler/program.ts";
 import { HotUnits } from "./hotunits.ts";
 import { definitionReady, initiatedType } from "./resolution.ts";
@@ -13,6 +13,7 @@ import type { Slot } from "./slots.ts";
 import type { UnitHeader } from "./aot.ts";
 import { hasHierarchy, type UnitResult, type UpgradeJob } from "./unit.ts";
 import type { Built, Clock, World } from "./world.ts";
+import { COUNT_BASE, COUNT_SLOTS } from "../compiler/consts.ts";
 
 /** the engine charges a module some tens of KB of external memory however small, and external memory drives full collections: once MERGE_AT first-tier units
  *  are loose, a compile worker merges up to MERGE_MAX of their methods into one module */

@@ -1,8 +1,8 @@
 // Compiling ahead of the first call, in idle time: the methods the methods that ran call, so that an interaction's first calls find their code rather than
 // compile it. The demand marks measure how much of what a launch compiled on demand this would have found.
 import { ACC, mid, type MethodInfo } from "../compiler/program.ts";
-import { COUNT_SLOTS } from "../compiler/exc.ts";
 import type { World } from "./world.ts";
+import { COUNT_SLOTS } from "../compiler/consts.ts";
 
 /** the methods a unit compiled ahead of their first call holds (AheadCompiler.compile), how many methods its calls are taken from, and the most it compiles in a World */
 const AHEAD_UNIT = 16, AHEAD_ROOTS = 4096, AHEAD_MAX = 8192;

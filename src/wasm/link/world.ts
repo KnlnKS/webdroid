@@ -17,7 +17,7 @@ import { HostClasses } from "./hostclass.ts";
 import type { ProxyDefinition } from "./proxy.ts";
 import { initiatedInstruction, resolveClass } from "./resolution.ts";
 import { hasSignatureConstraints } from "./signatures.ts";
-import { SLOT, FIRST_FREE_SLOT, SCRATCH_BASE, INIT_DONE, isStackOverflow } from "../compiler/exc.ts";
+import { SLOT, FIRST_FREE_SLOT, isStackOverflow } from "../compiler/exc.ts";
 import type { PreparedInstruction } from "../../jvm/prepared.ts";
 import type { DexFile } from "../../jvm/dex.ts";
 import { compileModule } from "./module.ts";
@@ -38,6 +38,7 @@ import { startRuntime, type Runtime } from "./runtime.ts";
 import { hostImports, type HostImports } from "./hostimports.ts";
 import { Assumptions } from "./assumptions.ts";
 import { Namespaces } from "./namespaces.ts";
+import { SCRATCH_BASE, INIT_DONE } from "../compiler/consts.ts";
 
 export interface WorldOptions {
   intrinsics: Map<string, Intrinsic>;
