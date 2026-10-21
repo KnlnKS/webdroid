@@ -561,8 +561,7 @@ async function installedPackages(): Promise<PackageRecord[]> {
   return [...packages.values()];
 }
 export async function installPackageArchive(bytes: Uint8Array, expectedPackage: string | null = null): Promise<string> {
-  await verifyApkSignature(bytes);
-  const archive = await parsePackageArchive(bytes);
+  const archive = await parsePackageArchive(bytes, await verifyApkSignature(bytes));
   if (expectedPackage && expectedPackage !== archive.pkg) throw new Error("Session package name differs from APK");
   if (archive.pkg === appHost?.pkg) throw new Error("Replacing the running package is unsupported");
   if (!archive.certificates.length) throw new Error("APK is unsigned");
