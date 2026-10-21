@@ -388,18 +388,19 @@ let glyphMatrix: DOMMatrix | null = null;
 /** Canvas::drawGlyphs: `count` glyphs of the Java Font `fontHandle` at their positions, drawn at the
  *  paint's size, scale and skew. `draw` fills or strokes with the paint as the canvas draws any
  *  shape; outlines become one Path2D, and color glyphs (which have none) draw the text they were
- *  shaped from in the font. */
+ *  shaped from in the font. The glyphs are copied first: the arrays are the native's, which a wait
+ *  for the font must not hold. */
 export function drawGlyphs(draw: (fill: (c: Ctx2D) => void, stroke: (c: Ctx2D) => void) => void, ids: Int32Array, idOffset: number,
   positions: Float32Array, positionOffset: number, count: number, fontHandle: bigint, p: NativePaint): void | Promise<void> {
   if (count <= 0) return;
-  const font = fontOf(fontHandle);
+  const font = fontOf(fontHandle), glyphs = ids.slice(idOffset, idOffset + count), at = positions.slice(positionOffset, positionOffset + count * 2);
   return shaped((hb) => {
     const f = hbFont(hb, font), s = p.textSize / f.units, texts = colorText.get(f), path = new Path2D();
     const m = glyphMatrix ??= new DOMMatrix();
     m.a = s * p.textScaleX; m.b = 0; m.c = -p.textSkewX * s; m.d = -s;
     let color: [string, number, number][] | null = null;
     for (let i = 0; i < count; i++) {
-      const glyph = ids[idOffset + i], x = positions[positionOffset + i * 2], y = positions[positionOffset + i * 2 + 1];
+      const glyph = glyphs[i], x = at[i * 2], y = at[i * 2 + 1];
       const text = f.face.color ? texts?.get(glyph) : undefined;
       if (text) { (color ??= []).push([text, x, y]); continue; }
       const outline = hb.outline(f, glyph);
