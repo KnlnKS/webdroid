@@ -14,7 +14,7 @@ import { asSystem, hostService, systemToken } from "../binder.ts";
 import { appHost, runningApp } from "../apphost.ts";
 import { componentParts$, intentQuery$, mkComponentName, systemActivity, withComponent$, SYSTEM_ACTIVITY, type ComponentRef, type JIntent, type SystemHandler, type SystemResult } from "../intent.ts";
 import { grantIntentUris$ } from "../urigrants.ts";
-import { pms, processRecord, runsHere, thisApp } from "./process.ts";
+import { pms, processRecord, runsHere, scheduleOnApp, thisApp } from "./process.ts";
 import { decodeIntent } from "../intentipc.ts";
 import { fillIn$, pendingTransport, senderId$, sendPending$, START_CANCELED } from "../pendingintent.ts";
 import type { PendingOperation } from "../../shell/pendingintents.ts";
@@ -73,9 +73,9 @@ function* transaction(app: JObj, callbacks: JObj | null | (JObj | null)[], lifec
   if (lifecycle) yield vcall(tx, "setLifecycleStateRequest", `(L${CT}ActivityLifecycleItem;)V`, lifecycle);
   return tx;
 }
-const send = (app: JObj, tx: JObj) => vcall(app, "scheduleTransaction", `(L${CT}ClientTransaction;)V`, tx);
+const send = (tx: JObj) => scheduleOnApp("scheduleTransaction", `(L${CT}ClientTransaction;)V`, tx);
 function* schedule(app: JObj, callbacks: JObj | null | (JObj | null)[], lifecycle: JObj | null): Gen<void> {
-  yield send(app, yield* transaction(app, callbacks, lifecycle));
+  yield send(yield* transaction(app, callbacks, lifecycle));
 }
 const item = (cls: string, desc: string, ...args: unknown[]) => scall(CT + cls, "obtain", `(${desc})L${CT}${cls};`, ...args);
 
@@ -270,7 +270,7 @@ function* startActivity(app: JObj, intent: JObj, info: JObj, resultTo: ActivityR
     yield* pauseTop();
     stack.push(r);
     reportPresentation();
-    yield send(app, tx);
+    yield send(tx);
   } finally { transitions--; }
 }
 
