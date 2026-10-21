@@ -55,7 +55,8 @@ for (const w of todo) {
     result = answer; first.push(t[0]); steady.push(med(t.slice(Math.max(1, t.length >> 1))));
   }
   if (error) { console.log(w.padEnd(16), "FAILED", error.slice(0, 120)); process.exitCode = 1; continue; }
-  answers[w] = Number(result);
+  // a workload's first call answers as a fresh World's run of it does
+  if (record) { answers[w] = Number(result); console.log(w.padEnd(16), result.padStart(12)); continue; }
   const ref = refRows.get(w), cells = [result.padStart(12), med(first).toFixed(3).padStart(9), med(steady).toFixed(3).padStart(9)];
   if (ref) {
     const xs = med(ref.steady) / med(steady);
