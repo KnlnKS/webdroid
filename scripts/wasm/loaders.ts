@@ -37,20 +37,28 @@ import { defaults } from "./loaders-defaults.ts";
 import { nativePaths } from "./loaders-paths.ts";
 
 const out = tempDir();
-/** compiles `sources` (against the Android API and `classpath`) and dexes the classes; answers the dex */
-const build = (dir: string, sources: string[], classpath: string[] = []) => {
+/** compiles `sources` (against the Android API and `classpath`), adds the class files `classes` makes, and dexes the classes for `minApi`; answers the dex */
+const build = (dir: string, sources: string[], classpath: string[] = [], { minApi = 26, classes: made = {} }: { minApi?: number; classes?: Record<string, () => Uint8Array> } = {}) => {
   const to = join(out, dir);
   javac(to, sources.map((s) => join(JAVA, s)), { release: 11, classpath, android: true });
-  if (dir === "b") {
-    const p = new Pool(), type = (name: string, descriptor: string) => method(p, 9, name, "()Ljava/lang/invoke/MethodType;", [0x13, ...u2(p.methodType(descriptor)), 0xb0], { stack: 1, locals: 0 });
-    writeFileSync(join(to, "TypeSite.class"), classFile(p, { name: "TypeSite", methods: [type("value", "(LShared;)LShared;"), type("missing", "()LAbsentOptional;")] }));
-  }
-  const classes = readdirSync(to, { recursive: true, encoding: "utf8" }).filter(path => /\.class$/.test(path) && !/(^|\/)(AbsentOptional|MissingCatch|UnusedMemberType)\.class$/.test(path)).map(path => join(to, path));
-  return join(androidFixture({ out: to, classpath, minApi: dir === "b" ? 34 : 26, classes }), "classes.dex");
+  for (const [name, bytes] of Object.entries(made)) writeFileSync(join(to, `${name}.class`), bytes());
+  const classes = readdirSync(to, { recursive: true, encoding: "utf8" })
+    .filter(path => /\.class$/.test(path) && !/(^|\/)(AbsentOptional|MissingCatch|UnusedMemberType)\.class$/.test(path)).map(path => join(to, path));
+  return join(androidFixture({ out: to, classpath, minApi, classes }), "classes.dex");
+};
+/** TypeSite, whose methods load MethodType constants (which javac does not emit): one over Shared, one naming AbsentOptional, which the dex leaves out */
+const typeSite = () => {
+  const p = new Pool(), type = (name: string, descriptor: string) =>
+    method(p, 9, name, "()Ljava/lang/invoke/MethodType;", [0x13, ...u2(p.methodType(descriptor)), 0xb0], { stack: 1, locals: 0 });
+  return classFile(p, { name: "TypeSite", methods: [type("value", "(LShared;)LShared;"), type("missing", "()LAbsentOptional;")] });
 };
 const app = build("app", ["Ldr.java", "Tag.java"]);
 const common = build("common", ["Tag.java"]), layeredApp = build("layeredapp", ["Ldr.java"], [join(out, "app")]);
-const a = build("a", ["ldr1/Shared.java", "ldr1/Boom.java", "members1/pack/PackageBase.java", "members1/pack/PackageType.java", "members1/MemberBase.java", "members1/MemberContract.java", "members1/MemberType.java"], [join(out, "app")]), b = build("b", ["ldr2/Shared.java", "ldr2/Boom.java", "ldr2/Sub.java", "members2/pack/PackageChild.java", "members2/pack/PackagePrivateChild.java", "members2/pack/PackageType.java", "members2/MemberUse.java", "members2/MemberOverride.java", "members2/MemberImplementation.java", "members2/MemberType.java"], [join(out, "app"), join(out, "a")]);
+const a = build("a", ["ldr1/Shared.java", "ldr1/Boom.java", "members1/pack/PackageBase.java", "members1/pack/PackageType.java", "members1/MemberBase.java",
+  "members1/MemberContract.java", "members1/MemberType.java"], [join(out, "app")]);
+const b = build("b", ["ldr2/Shared.java", "ldr2/Boom.java", "ldr2/Sub.java", "members2/pack/PackageChild.java", "members2/pack/PackagePrivateChild.java",
+  "members2/pack/PackageType.java", "members2/MemberUse.java", "members2/MemberOverride.java", "members2/MemberImplementation.java", "members2/MemberType.java"],
+  [join(out, "app"), join(out, "a")], { minApi: 34, classes: { TypeSite: typeSite } });
 const suite = checker("loaders"), { check, fail } = suite;
 await archives(suite, out, app, a, b);
 // the files the loaders open: libcore finds them through the file system, the World reads their dex
