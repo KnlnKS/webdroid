@@ -24,11 +24,12 @@ export class Namespaces {
     const w = this.w, prog = w.prog, slots = w.slots;
     if (prog.dynamicRoot) return;
     prog.dynamicRoot = true;
-    w.aot?.unbindApp();
     for (let b = 0; b < slots.blockClass.length; b++) {
       const dex = prog.get(slots.blockClass[b])?.dex;
       if (dex && prog.loaderOfDex(dex) === prog.root) for (let i = 0; i < slots.methodsIn(b); i++) w.assumptions.undoCode(slots.blockBase[b] + i);
     }
+    // after the undoing, which finds a slot nothing has asked for through the app module that installed it
+    w.aot?.unbindApp();
     w.changed((s) => s.namespaces());
   }
   initiateClass(loader: Loader, name: string, key: string): void {

@@ -331,6 +331,16 @@ if (saved) {
   check("its modules were loaded", loaded.length > 0, true);
   check("it compiled fewer methods on demand", w.stats.methods < plain.stats.methods, true);
   console.log(`  with the app build: ${w.stats.methods} methods compiled on demand against ${plain.stats.methods}, ${loaded.length} app module(s), ${w.stats.units} units`);
+  // Once the app's loader resolves through Java, app build code linked as the Program resolved is undone, also in slots nothing has asked for yet.
+  {
+    const dyn = world(app, { app: { index, store } });
+    answers(dyn);
+    const unasked = dyn.slots.blockBase.flatMap((base, b) => Array.from({ length: dyn.slots.methodsIn(b) }, (_, i) => base + i)).find((s) => !dyn.slots.peek(s) && dyn.aot!.fromAppBuild(s));
+    check("the app build installed a slot nothing asked for", unasked !== undefined, true);
+    const code = dyn.table.get(unasked!);
+    dyn.namespaces.dynamicRoot();
+    check("a dynamic root undoes it", dyn.table.get(unasked!) !== code, true);
+  }
   // A later override must be honoured without losing sound code from the saved build.
   const later = world(app, { app: { index, store } });
   check("chain before", later.entry("Pst", "chain", "()I")(), 6);
