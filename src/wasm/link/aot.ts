@@ -89,6 +89,12 @@ export const VERSION = 22;
 
 /** the module files of a build: the platform build's code (c), data (d) and runtime-function (y) modules, and an app build's code (a), data (e) and runtime-function (s) ones */
 export type AotKind = "c" | "d" | "y" | "a" | "e" | "s";
+/** the loaders the root namespace's libraries reach, theirs too, in the order a walk of its graph first meets them */
+export function libraryLoaders(prog: World["prog"]): Set<Loader> {
+  const seen = new Set<Loader>(), walk = (l: Loader) => { if (seen.has(l)) return; seen.add(l); l.before?.forEach(walk); l.after?.forEach(walk); };
+  prog.root.before?.forEach(walk); prog.root.after?.forEach(walk);
+  return seen;
+}
 /** the file of module `n` of kind `kind` */
 export const aotFile = (kind: AotKind, n: number): string => kind + n + ".wasm";
 /** the kind and number of the module in file `name`; undefined for another file of the build */
@@ -247,16 +253,11 @@ export class AotRuntime {
     return sigs;
   }
   get appClassCount(): number { return this.rest.length; }
-  /** the root namespace's libraries by loader number and dexes, and theirs */
+  /** the root namespace's library graph: its libraries and theirs by loader number, with their dexes */
   rootLibraries(): string {
-    const prog = this.w.prog, dexes = new Map<Loader, string[]>(), seen = new Set<Loader>();
-    for (const [dex, owner] of prog.loadedDexes()) (dexes.get(owner) ?? dexes.set(owner, []).get(owner)!).push(dexSig(dex));
-    const graph = (l: Loader): string => {
-      if (seen.has(l)) return `${l.id}`;
-      seen.add(l);
-      return `${l.id}[${(dexes.get(l) ?? []).join(",")}](${(l.before ?? []).map(graph).join(" ")}|${(l.after ?? []).map(graph).join(" ")})`;
-    };
-    return `${(prog.root.before ?? []).map(graph).join(" ")}|${(prog.root.after ?? []).map(graph).join(" ")}`;
+    const prog = this.w.prog, loaders = libraryLoaders(prog), dexes = new Map<Loader, string[]>(), ids = (ls: Loader[] = []) => ls.map((l) => l.id).join(" ");
+    for (const [dex, owner] of prog.loadedDexes()) if (loaders.has(owner)) (dexes.get(owner) ?? dexes.set(owner, []).get(owner)!).push(dexSig(dex));
+    return [`${ids(prog.root.before)}|${ids(prog.root.after)}`, ...[...loaders].map((l) => `${l.id}[${(dexes.get(l) ?? []).join(",")}](${ids(l.before)}|${ids(l.after)})`)].join(" ");
   }
   /** the root's libraries the attached app build was compiled under, which the classes its data modules laid out keep */
   private appLibraries?: string;
