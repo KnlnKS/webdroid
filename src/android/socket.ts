@@ -13,7 +13,7 @@ import { SO_PEERCRED, SO_RCVTIMEO, SO_SNDTIMEO, SO_BINDTODEVICE, readSocket, soc
 import { IPPROTO_IP, IP_ADD_MEMBERSHIP, MCAST_JOIN_GROUP } from "../native/socket/inet.ts";
 import { socketCreate, socketPair } from "../native/socket/syscalls.ts";
 import {
-  AF_UNIX, AF_INET, AF_INET6, NI_NUMERICHOST, NI_NAMEREQD, EAI_NONAME, INTERFACES, resolveHost, hostOf, gaiText, endpointOf, addressText, parseIpv4, parseIpv6, type Endpoint,
+  AF_UNIX, AF_INET, AF_INET6, NI_NUMERICHOST, NI_NAMEREQD, EAI_NONAME, INTERFACES, hostOf, gaiText, endpointOf, addressText, parseIpv4, parseIpv6, type Endpoint,
 } from "../native/net-address.ts";
 
 const ISA = "java/net/InetSocketAddress", UNIX_ADDRESS = "android/system/UnixSocketAddress", ISA_HOLDER = "java/net/InetSocketAddress$InetSocketAddressHolder";
@@ -193,13 +193,6 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     });
     return after(n, (received) => after(fillSocketAddress(source, from), () => received));
   }),
-  "android_getaddrinfo(Ljava/lang/String;Landroid/system/StructAddrinfo;I)[Ljava/net/InetAddress;": (node: string | null, hints: JObj | null) => {
-    if (node === null || hints === null) return rt.npe();
-    const A = "android/system/StructAddrinfo";
-    const found = resolveHost(node, getDeclared(hints, A, "ai_family") as number, getDeclared(hints, A, "ai_flags") as number);
-    return after(found, (addresses) => typeof addresses === "number" ? gaiError("android_getaddrinfo", addresses)
-      : Promise.all(addresses.map((address) => inetAddress({ address }))).then((list) => jarray(list, INET)));
-  },
   [`getnameinfo(${INET}I)Ljava/lang/String;`]: (address: JObj | null, flags: number) => after(endpoint(address, 0), (ep) => {
     const name = flags & NI_NUMERICHOST ? null : hostOf(ep.address);
     if (name === null && flags & NI_NAMEREQD) return gaiError("getnameinfo", EAI_NONAME);
