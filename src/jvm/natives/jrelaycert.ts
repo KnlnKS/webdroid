@@ -9,9 +9,9 @@ import { driven, type Gen } from "../runtime.ts";
 import { newObj, vcall, scall } from "./jentry.ts";
 import { vfs } from "../../shell/vfs.ts";
 import { BytesFile } from "../../shell/lazyfile.ts";
-import { md5, sha1, sha256 } from "./digest.ts";
-import { seq, oid, tlv, integer, bits, octets, bytesToBig } from "./der.ts";
-import { CURVES, G, mul, randomScalar, ecdsaSign, marshalPublicKey, EVP_PKEY_EC, type EcKey } from "./pkey.ts";
+import { md5, sha1, sha256 } from "../../crypto/digest.ts";
+import { seq, oid, tlv, integer, bits, octets, bytesToBig } from "../../crypto/der.ts";
+import { CURVES, G, mul, randomScalar, ecdsaSign, marshalPublicKey, EVP_PKEY_EC, type EcKey } from "../../crypto/pkey.ts";
 
 const P256 = CURVES.find((c) => c.name === "prime256v1")!;
 const name = (cn: string) => seq(tlv(0x31, seq(oid("2.5.4.10"), tlv(0x0c, utf8.enc.encode("webdroid")))), tlv(0x31, seq(oid("2.5.4.3"), tlv(0x0c, utf8.enc.encode(cn)))));

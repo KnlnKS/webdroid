@@ -51,11 +51,11 @@ describe("conscrypt-natives", () => {
 
   test("the TS primitives match node:crypto's BoringSSL across sizes, modes and curves", async () => {
     const nc = await import("node:crypto");
-    const { aes, ctr, AesGcm, ChaCha20Poly1305, Poly1305 } = await import("../src/jvm/natives/ciphers.ts");
-    const { DIGESTS, deferred } = await import("../src/jvm/natives/digest.ts");
-    const { curveByName, decodePoint, ecdsaVerify, ecdsaSign, mul, G } = await import("../src/jvm/natives/pkey.ts");
-    const { modPow } = await import("../src/jvm/natives/jmath.ts");
-    const { children, parseOne, bytesToBig } = await import("../src/jvm/natives/der.ts");
+    const { aes, ctr, AesGcm, ChaCha20Poly1305, Poly1305 } = await import("../src/crypto/ciphers.ts");
+    const { DIGESTS, deferred } = await import("../src/crypto/digest.ts");
+    const { curveByName, decodePoint, ecdsaVerify, ecdsaSign, mul, G } = await import("../src/crypto/pkey.ts");
+    const { modPow } = await import("../src/crypto/bigint.ts");
+    const { children, parseOne, bytesToBig } = await import("../src/crypto/der.ts");
     const rnd = (n: number) => new Uint8Array(nc.randomBytes(n));
     const same = (a: Uint8Array, b: Uint8Array | Buffer) => expect(Buffer.from(a).toString("hex")).toBe(Buffer.from(b).toString("hex"));
     for (const keyLen of [16, 24, 32]) {

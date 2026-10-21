@@ -1,7 +1,7 @@
 // X.509 certificates (RFC 5280) as BoringSSL parses them for conscrypt's natives: the raw fields,
 // the extensions it caches (key usage, basic constraints, ...), and names printed per RFC 2253.
 
-import { concat, sameBytes } from "../abi.ts";
+import { concat, sameBytes } from "../jvm/abi.ts";
 import {
   children, parseOne, expect, oidToString, tlv, bytesToBig, DerError,
   SEQUENCE, INTEGER, BIT_STRING, OCTET_STRING, OID, BOOLEAN, type Tlv,

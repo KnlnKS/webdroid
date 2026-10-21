@@ -12,14 +12,14 @@ import { unbox } from "../jvm/natives/jbox.ts";
 import { hostService } from "./binder.ts";
 import { PROCESS_UID } from "./os.ts";
 import { device } from "../shell/config.ts";
-import { DIGESTS, Hmac } from "../jvm/natives/digest.ts";
-import { aes, ctr, AesGcm } from "../jvm/natives/ciphers.ts";
+import { DIGESTS, Hmac } from "../crypto/digest.ts";
+import { aes, ctr, AesGcm } from "../crypto/ciphers.ts";
 import {
   CURVES, G, mul, randomScalar, ecdsaSign, ecdsaVerify, rsaBytes, rsaPrivate, rsaPublic, pkcs1SignPad, pssEncode, pssVerify,
   oaepDecode, oaepEncode, pkcs1EncryptPad, pkcs1Unpad, parsePrivateKey, parsePublicKey, marshalPrivateKey, marshalPublicKey, bitLength,
   EVP_PKEY_RSA, EVP_PKEY_EC, type PKey,
-} from "../jvm/natives/pkey.ts";
-import { seq, oid, tlv, integer, bits, bigToBytes, bytesToBig, derNull, octets } from "../jvm/natives/der.ts";
+} from "../crypto/pkey.ts";
+import { seq, oid, tlv, integer, bits, bigToBytes, bytesToBig, derNull, octets } from "../crypto/der.ts";
 import type { PackageState } from "../shell/packagedata.ts";
 import { persisted } from "../shell/device-storage.ts";
 

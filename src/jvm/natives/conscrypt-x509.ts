@@ -9,10 +9,10 @@ import { boxInt } from "./jbox.ts";
 import { region } from "./jmemory.ts";
 import { nc, sslError, keyOf, newKey, parsing, type Key } from "./conscrypt.ts";
 import { parseX509, X509, bitBooleans, basicConstraints, exFlags, generalNames, extKeyUsage, tbsWithout, nameRfc2253,
-  KEY_USAGE, EXT_KEY_USAGE, SUBJECT_ALT_NAME, ISSUER_ALT_NAME, type Time } from "./x509.ts";
-import { parsePublicKey, rsaPublic, rsaBytes, pkcs1SignPad, pssVerify, ecdsaVerify, digestNamed, bitLength, encodePoint, EVP_PKEY_RSA, EVP_PKEY_EC } from "./pkey.ts";
-import { children, parseOne, readTlv, oidToString, seq, oid, integer, tlv, bytesToBig, bigToBytes, DerError, orDer, SEQUENCE, INTEGER, type Tlv } from "./der.ts";
-import { hashOf, sha1 } from "./digest.ts";
+  KEY_USAGE, EXT_KEY_USAGE, SUBJECT_ALT_NAME, ISSUER_ALT_NAME, type Time } from "../../crypto/x509.ts";
+import { parsePublicKey, rsaPublic, rsaBytes, pkcs1SignPad, pssVerify, ecdsaVerify, digestNamed, bitLength, encodePoint, EVP_PKEY_RSA, EVP_PKEY_EC } from "../../crypto/pkey.ts";
+import { children, parseOne, readTlv, oidToString, seq, oid, integer, tlv, bytesToBig, bigToBytes, DerError, orDer, SEQUENCE, INTEGER, type Tlv } from "../../crypto/der.ts";
+import { hashOf, sha1 } from "../../crypto/digest.ts";
 
 const X = "Lcom/android/org/conscrypt/OpenSSLX509Certificate;";
 const x509Of = (h: bigint): X509 => {
