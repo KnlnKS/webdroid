@@ -95,8 +95,8 @@ export class NativePaint {
   /** the mode a draw of this paint blends by (null for SRC_OVER): an unbounded mode (UNBOUNDED) of
    *  a solid colour gives way to the bounded mode that draws it alike */
   drawMode(): string | null {
-    const name = this.blendName;
-    if (name === null || this.shader || !UNBOUNDED.has(this.blend!)) return name;
+    const name = this.blendName, blend = this.blend;
+    if (name === null || blend === null || this.shader || !UNBOUNDED.has(blend)) return name;
     const alpha = this.filteredColor() >>> 24;
     return alpha === 255 ? OPAQUE_MODES[name] : alpha === 0 ? "CLEAR" : name;
   }

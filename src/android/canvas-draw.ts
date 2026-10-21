@@ -2,8 +2,8 @@
 // each SkCanvas::drawXxx as its geometry, drawn through the paint by NativeCanvas.drawShape or,
 // for text and images, inside the same beginPaint bracket.
 
-import { isRecording, recordOrRun, type Ctx2D } from "./recording.ts";
-import { rasterPlan, tryBitmapLine, tryBitmapOval, tryBitmapPath, tryBitmapRect, tryBitmapRoundRect } from "./bitmap-raster.ts";
+import { recordOrRun, type Ctx2D } from "./recording.ts";
+import { tryBitmapLine, tryBitmapOval, tryBitmapPath, tryBitmapRect, tryBitmapRoundRect } from "./bitmap-raster.ts";
 import { drawSkiaText, SKIA_TEXT_FACE, SKIA_EMOJI_FACE } from "./skia.ts";
 import { rt } from "../jvm/runtime.ts";
 import { after } from "../jvm/natives/jentry.ts";
@@ -15,16 +15,15 @@ import { NativeBitmap, bitmapAt, ALPHA_8, ARGB_8888, PREMUL, OPAQUE, setPixels, 
 import { drawGlyphs, cssFont, shapeTextRun, hyphenEdited, graphemes } from "./shaping.ts";
 import { fontNatives } from "./fonts.ts";
 import { paintAdvance } from "./minikin.ts";
-import { NativePaint, UNBOUNDED, copyPaint, defaultPaint, underlinePosition, underlineThickness, strikeThruPosition, strikeThruThickness } from "./paint.ts";
+import { NativePaint, copyPaint, defaultPaint, underlinePosition, underlineThickness, strikeThruPosition, strikeThruThickness } from "./paint.ts";
 import { cssColor, canvasLocalBounds, tintedBmp, BLEND_MODES, COMPOSITE } from "./graphics.ts";
-import { BlurMask } from "./maskfilter.ts";
 import { type NinePatchChunk, drawNinePatch } from "./ninepatch.ts";
 import { applyMatrix, matrixAt } from "./matrix.ts";
-import { type NativeCanvas, drawingCanvas, beginPaint, endPaint, unsupported } from "./canvas.ts";
+import { type NativeCanvas, type DrawPlan, MASK, IMAGE, drawingCanvas, beginPaint, endPaint, unsupported } from "./canvas.ts";
 
 function drawPath(nc: NativeCanvas, path: NativePath, p: NativePaint): void | Promise<void> {
-  const plan = rasterPlan(nc, p);
-  if (plan && tryBitmapPath(nc, p, plan, path)) return;
+  const plan = nc.planDraw(p);
+  if (plan.raster && tryBitmapPath(nc, p, plan.raster, path)) return;
   if (!path.inverseFill) {
     nc.drawShape(p, (c) => c.fill(path.path(), path.fillRule), (c) => c.stroke(path.path()), () => path, plan);
     return;
@@ -38,8 +37,8 @@ function drawPath(nc: NativeCanvas, path: NativePath, p: NativePaint): void | Pr
 function drawRect(nc: NativeCanvas, l: number, t: number, r: number, b: number, p: NativePaint) {
   const left = Math.min(l, r), top = Math.min(t, b), width = Math.abs(r - l), height = Math.abs(b - t);
   if ((!width || !height) && p.style !== 1) return;
-  const plan = rasterPlan(nc, p);
-  if (plan && tryBitmapRect(nc, p, plan, left, top, left + width, top + height)) return;
+  const plan = nc.planDraw(p);
+  if (plan.raster && tryBitmapRect(nc, p, plan.raster, left, top, left + width, top + height)) return;
   nc.drawShape(p, (c) => c.fillRect(left, top, width, height), (c) => c.strokeRect(left, top, width, height),
     () => shapePath((g) => g.addRect(left, top, left + width, top + height, 0)), plan);
 }
@@ -69,8 +68,8 @@ function drawColor(nc: NativeCanvas, color: number, mode: number) {
 function drawArc(nc: NativeCanvas, l: number, t: number, r: number, b: number, start: number, sweep: number, useCenter: number, p: NativePaint) {
   if (!(r > l && b > t) && Math.abs(sweep) < 360) return;
   const left = Math.min(l, r), top = Math.min(t, b), right = Math.max(l, r), bottom = Math.max(t, b);
-  const plan = rasterPlan(nc, p);
-  if (plan && tryBitmapOval(nc, p, plan, left, top, right, bottom, sweep)) return;
+  const plan = nc.planDraw(p);
+  if (plan.raster && tryBitmapOval(nc, p, plan.raster, left, top, right, bottom, sweep)) return;
   const path = new Path2D();
   const cx = (left + right) / 2, cy = (top + bottom) / 2;
   if (useCenter) path.moveTo(cx, cy);
@@ -96,8 +95,8 @@ const cornerRadii = (r: Float32Array) => [radii(r[0], r[1]), radii(r[2], r[3]), 
 export function drawRoundRect(nc: NativeCanvas, l: number, t: number, r: number, b: number, rx: number, ry: number, p: NativePaint) {
   const left = Math.min(l, r), top = Math.min(t, b), width = Math.abs(r - l), height = Math.abs(b - t);
   if ((!width || !height) && p.style !== 1) return;
-  const plan = rasterPlan(nc, p);
-  if (plan && tryBitmapRoundRect(nc, p, plan, left, top, left + width, top + height, rx, ry)) return;
+  const plan = nc.planDraw(p);
+  if (plan.raster && tryBitmapRoundRect(nc, p, plan.raster, left, top, left + width, top + height, rx, ry)) return;
   const path = new Path2D();
   path.roundRect(left, top, width, height, radii(rx, ry));
   nc.drawShape(p, (c) => c.fill(path), (c) => c.stroke(path), () => shapePath((g) => g.addRoundRect(left, top, left + width, top + height, [rx, ry, rx, ry, rx, ry, rx, ry], 0)), plan);
@@ -128,15 +127,15 @@ function effectedLines(nc: NativeCanvas, pts: ArrayLike<number>, off: number, n:
 }
 const NOOP = () => {};
 /** SkDraw::drawPoints: lines stroked (style 1) and points filled (0), whatever the paint's style */
-function drawAs(nc: NativeCanvas, p: NativePaint, style: number, draw: (c: Ctx2D) => void, plan?: GlobalCompositeOperation | null) {
+function drawAs(nc: NativeCanvas, p: NativePaint, style: number, draw: (c: Ctx2D) => void, plan?: DrawPlan) {
   const was = p.style;
   p.style = style;
   try { nc.drawShape(p, style ? NOOP : draw, style ? draw : NOOP, undefined, plan); } finally { p.style = was; }
 }
 function drawLine(nc: NativeCanvas, x0: number, y0: number, x1: number, y1: number, p: NativePaint) {
   if (p.pathEffect && !p.dash) return effectedLines(nc, [x0, y0, x1, y1], 0, 4, p);
-  const plan = rasterPlan(nc, p);
-  if (plan && tryBitmapLine(nc, p, plan, x0, y0, x1, y1)) return;
+  const plan = nc.planDraw(p);
+  if (plan.raster && tryBitmapLine(nc, p, plan.raster, x0, y0, x1, y1)) return;
   drawAs(nc, p, 1, (c) => { c.beginPath(); c.moveTo(x0, y0); c.lineTo(x1, y1); c.stroke(); }, plan);
 }
 function drawLines(nc: NativeCanvas, pts: Float32Array, off: number, n: number, p: NativePaint) {
@@ -189,16 +188,14 @@ function punchHole(nc: NativeCanvas, l: number, t: number, r: number, b: number,
  *  shadow; an ALPHA_8 bitmap is coverage, drawn in the paint's colour */
 function drawBitmap(nc: NativeCanvas, b: NativeBitmap, paint: NativePaint | null, dx: number, dy: number, dw: number, dh: number,
   sx?: number, sy?: number, sw?: number, sh?: number) {
-  const p = paint ?? defaultPaint, alpha8 = b.config === ALPHA_8;
-  // only an ALPHA_8 bitmap's source is a solid colour, which drawMode may bound
-  const mode = p.blendName && (alpha8 ? p.drawMode() : p.blendName);
-  if (mode === "DST") return;
-  const op = mode ? COMPOSITE[mode] ?? null : null, unbounded = op !== null && UNBOUNDED.has(op);
-  if (alpha8 && (p.maskFilter || p.shader || unbounded)) return maskBitmap(nc, b, p, dx, dy, dw, dh, sx, sy, sw, sh);
-  const ctx = nc.ctx;
+  const p = paint ?? defaultPaint, alpha8 = b.config === ALPHA_8, plan = nc.planDraw(p, alpha8 ? MASK : IMAGE);
+  if (plan.mode === "DST") return;
+  const op = plan.op, unbounded = plan.unbounded;
+  if (plan.viaMask) return maskBitmap(nc, b, p, op, dx, dy, dw, dh, sx, sy, sw, sh);
+  const ctx = nc.ctx, clear = plan.mode === "CLEAR";
   // CLEAR ignores the source: what the image covers is its destination rect
-  if (mode === "CLEAR" && !alpha8) return ctx.clearRect(dx, dy, dw, dh);
-  const f = p.colorFilter, source = alpha8 ? tintedBmp(b, mode === "CLEAR" ? -16777216 : p.filteredColor()) : f ? tintedBmp(b, f.color, f.matrix, f.mode) : b.image;
+  if (clear && !alpha8) return ctx.clearRect(dx, dy, dw, dh);
+  const f = p.colorFilter, source = alpha8 ? tintedBmp(b, clear ? -16777216 : p.filteredColor()) : f ? tintedBmp(b, f.color, f.matrix, f.mode) : b.image;
   const undo = beginPaint(ctx, p, op, !alpha8, null);
   try {
     if (!unbounded) image(ctx, source, dx, dy, dw, dh, sx, sy, sw, sh);
@@ -210,9 +207,9 @@ function drawBitmap(nc: NativeCanvas, b: NativeBitmap, paint: NativePaint | null
     }
   } finally { endPaint(ctx, undo); }
 }
-function maskBitmap(nc: NativeCanvas, b: NativeBitmap, p: NativePaint, dx: number, dy: number, dw: number, dh: number,
+function maskBitmap(nc: NativeCanvas, b: NativeBitmap, p: NativePaint, op: GlobalCompositeOperation | null, dx: number, dy: number, dw: number, dh: number,
   sx?: number, sy?: number, sw?: number, sh?: number) {
-  nc.drawMask(p, (m) => image(m.ctx, b.image, dx, dy, dw, dh, sx, sy, sw, sh));
+  nc.drawMask(p, op, (m) => image(m.ctx, b.image, dx, dy, dw, dh, sx, sy, sw, sh));
 }
 const image = (ctx: Ctx2D, source: CanvasImageSource, dx: number, dy: number, dw: number, dh: number, sx?: number, sy?: number, sw?: number, sh?: number) =>
   sw === undefined ? ctx.drawImage(source, dx, dy, dw, dh) : ctx.drawImage(source, sx!, sy!, sw, sh!, dx, dy, dw, dh);
@@ -253,7 +250,7 @@ function tryDrawBitmapText(nc: NativeCanvas, s: string, x: number, y: number, p:
     p.style === 1 && p.strokeWidth === 0 && p.strokeCapN === "butt" && p.strokeJoinN === "miter" && !p.dash) &&
     p.antiAlias && p.textAlignN === 0 && !p.letterSpacingEm && p.textScaleX === 1 && !p.textSkewX &&
     !p.underline && !p.strikeThru && !p.shader && !p.maskFilter && !p.pathEffect && !p.shadowRadius &&
-    !p.colorFilter && !p.blend && !isRecording(nc.ctx) && skiaFace(p))) return false;
+    !p.colorFilter && !p.blend && skiaFace(p))) return false;
   const l = shapeTextRun(s, 0, s.length, 0, s.length, false, p);
   if (l instanceof Promise) return false;
   const path = l.fonts[0]?.font.path;
@@ -273,17 +270,14 @@ function skiaFace(p: NativePaint): boolean {
 function drawText(nc: NativeCanvas, text: string, x: number, y: number, p: NativePaint) {
   const s = p.startHyphenEdit || p.endHyphenEdit ? hyphenEdited(text, p) : text, font = cssFont(s, p);
   if (tryDrawBitmapText(nc, text, x, y, p)) return;
-  const mode = p.blendName && p.drawMode();
-  if (mode === "DST") return;
-  const op = mode ? COMPOSITE[mode] ?? null : null, mf = p.maskFilter, blur = mf instanceof BlurMask && mf.style === 0 ? mf : null;
-  // as drawShape: a mask filter other than a normal blur, and an unbounded mode, blend through the
-  // run's coverage
-  if (mf && !blur || op !== null && UNBOUNDED.has(op)) return maskText(nc, text, s, font, x, y, p);
-  const undo = beginPaint(nc.ctx, p, op, p.shader !== null, blur);
+  const plan = nc.planDraw(p);
+  if (plan.mode === "DST") return;
+  if (plan.viaMask) return maskText(nc, text, s, font, x, y, p, plan.op);
+  const undo = beginPaint(nc.ctx, p, plan.op, p.shader !== null, plan.blur);
   try { textRun(nc, text, s, font, x, y, p); } finally { endPaint(nc.ctx, undo); }
 }
-function maskText(nc: NativeCanvas, text: string, s: string, font: string, x: number, y: number, p: NativePaint) {
-  nc.drawMask(p, (m, q) => textRun(m, text, s, font, x, y, q));
+function maskText(nc: NativeCanvas, text: string, s: string, font: string, x: number, y: number, p: NativePaint, op: GlobalCompositeOperation | null) {
+  nc.drawMask(p, op, (m, q) => textRun(m, text, s, font, x, y, q));
 }
 /** the run `s` (`text` hyphen-edited) as the paint draws it, filled, stroked or both, and its
  *  decorations */

@@ -3,21 +3,12 @@
 
 import { MAX_SAMPLED_PIXELS, devicePoint, hairlineLine, hairlineRect, sampledCoverage, sampledFill } from "./hairline.ts";
 import type { NativePath } from "./path.ts";
-import { isRecording, type Ctx2D } from "./recording.ts";
-import { type NativePaint, UNBOUNDED, applyStroke } from "./paint.ts";
-import { COMPOSITE } from "./graphics.ts";
+import type { Ctx2D } from "./recording.ts";
+import { type NativePaint, applyStroke } from "./paint.ts";
 import type { NativeCanvas } from "./canvas.ts";
 
-/** the composite op a draw into a bitmap's pixels takes these rules with, decided once for every
- *  hook a draw tries: a solid colour without a mask filter, a shadow or a path effect other than a
- *  dash, by a mode that blends within what it covers; null when the 2D context draws it */
-export function rasterPlan(canvas: NativeCanvas, paint: NativePaint): GlobalCompositeOperation | null {
-  if (!canvas.bmp || paint.shader || paint.maskFilter || paint.pathEffect && !paint.dash || paint.shadowRadius || isRecording(canvas.ctx)) return null;
-  const mode = paint.blendName && paint.drawMode();
-  if (!mode) return "source-over";
-  const op = COMPOSITE[mode];
-  return op === undefined || UNBOUNDED.has(op) ? null : op;
-}
+// Each hook takes the op its draw's plan (DrawPlan.raster) composites with: a solid colour without
+// a mask filter, a shadow or a path effect other than a dash, by a mode that blends within what it covers.
 
 /** `draw` in device pixels by `op` (after the paint's stroke setup when `stroke`), the context
  *  restored afterwards; the plan has ruled out a shader, so fill styles need no transform */

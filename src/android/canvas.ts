@@ -4,7 +4,7 @@
 // handle to a NativeCanvas in mNativeCanvasWrapper, and TS reaches it through canvasOf.
 
 import { isRecording, nestedRecording, recordOrRun, replay, replayFor, transformOf, type Ctx2D, type DisplayList, Recorder } from "./recording.ts";
-import { rasterPlan, tryBitmapShape } from "./bitmap-raster.ts";
+import { tryBitmapShape } from "./bitmap-raster.ts";
 import { rt, type JObj, peerField, setDeclared } from "../jvm/runtime.ts";
 import { after, newObj, scall } from "../jvm/natives/jentry.ts";
 import { handle, deref, release, ownedHandle, FINALIZER } from "./handles.ts";
@@ -30,6 +30,26 @@ const NO_DASH: number[] = [];
 const MATRIX_CLIP = 3;
 /** the context's transform as SkMatrix holds it, in floats */
 const skMatrix = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+
+/** what planDraw draws: geometry (and text), an ALPHA_8 image (coverage in the paint's colour) or
+ *  any other image, whose source is its pixels rather than a colour */
+export const SHAPE = 0, MASK = 1, IMAGE = 2;
+/** how one draw applies its paint, as planDraw decides it */
+export class DrawPlan {
+  /** the blend mode by BlendMode's name (drawMode's for a solid colour), null for SRC_OVER; by DST
+   *  the draw changes nothing */
+  mode: string | null = null;
+  /** the composite op, null for source-over; `unbounded` when Canvas2D's would clear beyond the draw */
+  op: GlobalCompositeOperation | null = null;
+  unbounded = false;
+  /** a normal blur, which the context's filter draws */
+  blur: BlurMask | null = null;
+  /** the draw blends through its coverage (drawMask): a mask filter other than a normal blur, an
+   *  unbounded mode, or an ALPHA_8 image's shader */
+  viaMask = false;
+  /** into a bitmap, the op Skia's own raster rules composite a solid colour with (bitmap-raster.ts) */
+  raster: GlobalCompositeOperation | null = null;
+}
 
 /** SkiaCanvas: a 2D context and the state Canvas2D does not expose — the save count, the device
  *  clip bounds, open layers */
@@ -67,6 +87,19 @@ export class NativeCanvas {
     this.clips.length = this.polys.length = this.flags.length = 0;
     this.cl = this.ct = 0; this.cr = w; this.cb = h; this.poly = null;
   }
+  private readonly drawPlan = new DrawPlan();
+  /** the plan of one draw of `p` (`kind` SHAPE, MASK or IMAGE): the canvas's one plan, which its
+   *  next draw replaces */
+  planDraw(p: NativePaint, kind = SHAPE): DrawPlan {
+    const plan = this.drawPlan, mode = kind === IMAGE ? p.blendName : p.drawMode();
+    const op = mode === null ? null : COMPOSITE[mode] ?? null, unbounded = op !== null && UNBOUNDED.has(op);
+    const mf = kind === IMAGE ? null : p.maskFilter, blur = kind === SHAPE && mf instanceof BlurMask && mf.style === 0 ? mf : null;
+    plan.mode = mode; plan.op = op; plan.unbounded = unbounded; plan.blur = blur;
+    plan.viaMask = kind !== IMAGE && (mf !== null && blur === null || unbounded || kind === MASK && p.shader !== null);
+    plan.raster = kind === SHAPE && this.bmp && mode !== "DST" && !unbounded && !p.shader && !mf && (!p.pathEffect || p.dash) && !p.shadowRadius
+      ? op ?? "source-over" : null;
+    return plan;
+  }
   /** a Canvas.drawXxx paint through the canvas's draw filter */
   paint(h: bigint): NativePaint {
     const p = deref<NativePaint>(h), f = this.filter;
@@ -95,19 +128,19 @@ export class NativeCanvas {
   private maskLayer: { shape: NativeCanvas; target: OffscreenCanvasRenderingContext2D; paint: NativePaint; cpu: boolean } | null = null;
   /** a draw blended through its coverage, as SkDraw blends a mask: `coverage` draws the shape in the
    *  white paint it is given (`aliased`: sampled at pixel centres), the paint's mask filter makes that
-   *  M, and the source S blends by the mode where M covers, D·(1−M) + blend(S, D)·M. A recording
-   *  keeps the coverage and blends where it is replayed. */
-  drawMask(p: NativePaint, coverage: (nc: NativeCanvas, white: NativePaint) => void, aliased = false) {
+   *  M, and the source S blends by the mode's `op` where M covers, D·(1−M) + blend(S, D)·M. A
+   *  recording keeps the coverage and blends where it is replayed. */
+  drawMask(p: NativePaint, op: GlobalCompositeOperation | null, coverage: (nc: NativeCanvas, white: NativePaint) => void, aliased = false) {
     const ctx = this.ctx;
-    if (!isRecording(ctx)) return this.blendMask(ctx, p, coverage, aliased, !!this.bmp);
+    if (!isRecording(ctx)) return this.blendMask(ctx, p, op, coverage, aliased, !!this.bmp);
     const ops: DisplayList = [], q = new NativePaint();
     coverage(NativeCanvas.over(nestedRecording(ctx, ops)), whitePaint(p, q));
     copyPaint(p, q);
-    recordOrRun(ctx, (target) => this.blendMask(target, q, (nc) => replay(nc.ctx, ops), aliased, false));
+    recordOrRun(ctx, (target) => this.blendMask(target, q, op, (nc) => replay(nc.ctx, ops), aliased, false));
   }
   /** `cpu`: the target is a bitmap's raster, whose side (CPU or GPU) the layers take, as openLayer's
    *  do, or every blend is a readback */
-  private blendMask(ctx: Ctx2D, p: NativePaint, coverage: (nc: NativeCanvas, white: NativePaint) => void, aliased: boolean, cpu: boolean) {
+  private blendMask(ctx: Ctx2D, p: NativePaint, op: GlobalCompositeOperation | null, coverage: (nc: NativeCanvas, white: NativePaint) => void, aliased: boolean, cpu: boolean) {
     const w = ctx.canvas.width, h = ctx.canvas.height, m = ctx.getTransform(), scale = deviceScale(m);
     if (!w || !h || !scale) return;
     let layer = this.maskLayer;
@@ -127,9 +160,6 @@ export class NativeCanvas {
     const mf = p.maskFilter;
     if (mf) mf.apply(target, source.canvas, 0, 0, scale, p.filteredColor());
     else target.drawImage(source.canvas, 0, 0);
-    const mode = p.blendName && p.drawMode();
-    if (mode === "DST") return;
-    const op = mode ? COMPOSITE[mode] ?? null : null;
     if (op && UNBOUNDED.has(op) && !mf?.colored) {
       // blend(S, D) over all of `source`, kept where M covers and added to D·(1−M)
       source.resetTransform(); source.clearRect(0, 0, w, h); source.drawImage(ctx.canvas, 0, 0);
@@ -152,17 +182,15 @@ export class NativeCanvas {
     finally { ctx.restore(); endPaint(ctx, undo); }
   }
   /** a shape drawn with the paint; `geom` gives it as a path, for a path effect to change, and `plan`
-   *  is the draw's rasterPlan when the caller has made it */
-  drawShape(p: NativePaint, fill: (ctx: Ctx2D) => void, stroke: (ctx: Ctx2D) => void, geom?: () => NativePath, plan = rasterPlan(this, p)) {
+   *  is the draw's when the caller has made it */
+  drawShape(p: NativePaint, fill: (ctx: Ctx2D) => void, stroke: (ctx: Ctx2D) => void, geom?: () => NativePath, plan = this.planDraw(p)) {
     if (p.pathEffect && !p.dash && geom) return this.drawEffected(p, geom());
-    if (plan && tryBitmapShape(this, p, plan, fill, stroke)) return;
-    const mode = p.blendName && p.drawMode();
-    if (mode === "DST") return;
-    const op = mode ? COMPOSITE[mode] ?? null : null, mf = p.maskFilter, blur = mf instanceof BlurMask && mf.style === 0 ? mf : null;
-    // a mask filter other than a normal blur, and an unbounded mode, blend through the shape's
-    // coverage (a clip to the shape would confine the mode, but the context's clips are aliased)
-    if (mf && !blur || op !== null && UNBOUNDED.has(op)) return maskShape(this, p, fill, stroke);
-    const ctx = this.ctx, undo = beginPaint(ctx, p, op, p.shader !== null, blur);
+    if (plan.raster && tryBitmapShape(this, p, plan.raster, fill, stroke)) return;
+    if (plan.mode === "DST") return;
+    // through the shape's coverage: a clip to the shape would confine an unbounded mode, but the
+    // context's clips are aliased
+    if (plan.viaMask) return maskShape(this, p, plan.op, fill, stroke);
+    const ctx = this.ctx, undo = beginPaint(ctx, p, plan.op, p.shader !== null, plan.blur);
     try {
       if (p.style !== 1) {
         const shader = p.shader, lm = shader?.local;
@@ -636,8 +664,8 @@ function beginAlpha(ctx: Ctx2D, alpha: number): boolean {
 const restoreOp = (c: Ctx2D) => c.restore();
 // out of line, as each draw's mask path is: a closure over a draw's arguments would make every
 // call of the draw allocate a context for them
-function maskShape(nc: NativeCanvas, p: NativePaint, fill: (ctx: Ctx2D) => void, stroke: (ctx: Ctx2D) => void) {
-  nc.drawMask(p, (m, q) => m.drawShape(q, fill, stroke), !p.antiAlias);
+function maskShape(nc: NativeCanvas, p: NativePaint, op: GlobalCompositeOperation | null, fill: (ctx: Ctx2D) => void, stroke: (ctx: Ctx2D) => void) {
+  nc.drawMask(p, op, (m, q) => m.drawShape(q, fill, stroke), !p.antiAlias);
 }
 /** the paint drawMask draws a shape's coverage with: its geometry, in opaque white */
 function whitePaint(p: NativePaint, into: NativePaint): NativePaint {
