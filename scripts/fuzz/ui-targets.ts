@@ -1,9 +1,7 @@
-import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
-import { promisify } from "node:util";
 import type { Page } from "playwright";
-import { androidTool } from "../android-sdk.ts";
+import { adbOn, oracleIdentity, type Adb } from "../adb.ts";
 import { openApk } from "../lib.ts";
 import { parseAXML, attrStr } from "../../src/android/axml.ts";
 import { device, type Screen } from "../../src/shell/config.ts";
@@ -19,7 +17,6 @@ export type UiApp = { apk: string; pkg: string; activity: string };
 export type UiSize = { width: number; height: number };
 type Rotation = { accelerometer: string | null; user: string | null };
 
-type Adb = (...args: string[]) => Promise<Buffer>;
 
 export async function inspectUiApp(apkArg: string): Promise<UiApp> {
   const apk = existsSync(apkArg) ? apkArg : `apks/${apkArg}`;
@@ -57,15 +54,9 @@ export class AndroidUiTarget {
   }
 
   static async open(serial: string, app: UiApp): Promise<AndroidUiTarget> {
-    const adbPath = androidTool("adb");
-    const adb: Adb = async (...args) =>
-      (await promisify(execFile)(adbPath, ["-s", serial, ...args], { encoding: "buffer", maxBuffer: 1 << 30, timeout: STEP_DEADLINE_MS })).stdout;
-    const [sdk, fingerprint, accelerometer, user] = await Promise.all([
-      adb("shell", "getprop", "ro.build.version.sdk"), adb("shell", "getprop", "ro.build.fingerprint"),
-      adb("shell", "settings", "get", "system", "accelerometer_rotation"),
-      adb("shell", "settings", "get", "system", "user_rotation"),
-    ]);
-    if (sdk.toString().trim() !== "35") throw new Error(`oracle ${serial} is not API 35`);
+    const adb = adbOn(serial, STEP_DEADLINE_MS);
+    const [{ fingerprint }, accelerometer, user] = await Promise.all([oracleIdentity(adb, serial),
+      adb("shell", "settings", "get", "system", "accelerometer_rotation"), adb("shell", "settings", "get", "system", "user_rotation")]);
     const setting = (result: Buffer): string | null => {
       const value = result.toString().trim();
       return value === "null" ? null : value;
@@ -78,7 +69,7 @@ export class AndroidUiTarget {
       await adb("install", "-r", "-t", app.apk);
       await adb("shell", "am", "force-stop", app.pkg);
       await adb("shell", "am", "start", "-W", "-n", `${app.pkg}/${app.activity}`);
-      return new AndroidUiTarget(adb, app, rotation, serial, fingerprint.toString().trim());
+      return new AndroidUiTarget(adb, app, rotation, serial, fingerprint);
     } catch (error) {
       await AndroidUiTarget.restoreRotation(adb, rotation);
       throw error;

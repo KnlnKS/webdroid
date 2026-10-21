@@ -4,17 +4,18 @@
 // directly rather than a manifest — the manifest is what it writes.
 import { device } from "../../../src/shell/config.ts";
 import type { CaptureScreen, UiNode } from "../types.ts";
-import { run } from "../../../scripts/node.ts";
+import { adbOn } from "../../../scripts/adb.ts";
 import { sleep, settleOn } from "../lib/util.ts";
 import { parseUiAutomator } from "../lib/uiautomator.ts";
 
-const ADB = process.env.ADB ?? "adb";
+const adb = adbOn();
 
+/** a quiet command's failure answers what it printed */
 export async function sh(args: string[], opts: { quiet?: boolean } = {}): Promise<string> {
-  const { code, stdout, stderr } = await run(ADB, args);
-  const out = stdout.toString();
-  if (code !== 0 && !opts.quiet) throw new Error(`adb ${args.join(" ")} failed (${code}): ${stderr || out}`);
-  return out;
+  try { return (await adb(...args)).toString(); } catch (e) {
+    if (!opts.quiet) throw e;
+    return String((e as { stdout?: Buffer }).stdout ?? "");
+  }
 }
 
 export const shell = (cmd: string, opts?: { quiet?: boolean }) => sh(["shell", cmd], opts);
@@ -22,7 +23,7 @@ export const shellArg = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
 
 /** Raw PNG bytes of the current screen. `exec-out` avoids the CRLF mangling of `shell`. */
 async function screencap(): Promise<Buffer> {
-  const buf = (await run(ADB, ["exec-out", "screencap", "-p"])).stdout;
+  const buf = await adb("exec-out", "screencap", "-p");
   if (buf.length < 8 || buf[1] !== 0x50) throw new Error("screencap did not return a PNG");
   return buf;
 }
