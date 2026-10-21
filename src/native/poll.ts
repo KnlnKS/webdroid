@@ -30,6 +30,34 @@ export function waitUntil(subscribe: (wake: () => void) => () => void, ms: numbe
     if (ms >= 0) timer = park ? parkTimeout(stop, ms) : setGuestTimeout(stop, ms);
   });
 }
+/** Callers waiting on one condition, each woken once: the first n in order, or everyone. */
+export class WaitQueue {
+  private waiters: (() => void)[] = [];
+  get size(): number { return this.waiters.length; }
+  /** call `wake` at its turn; answers how to stop waiting */
+  add(wake: () => void): () => void {
+    this.waiters.push(wake);
+    return () => { const i = this.waiters.indexOf(wake); if (i >= 0) this.waiters.splice(i, 1); };
+  }
+  /** a thread's wait: true once woken, false once `ms` guest ms pass first (-1: no limit). `woken`
+   *  runs at the wake itself, before any other thread does, as a lock's handoff must. */
+  wait(ms = -1, woken?: () => void): Promise<boolean> {
+    return waitUntil((wake) => this.add(woken ? () => { woken(); wake(); } : wake), ms, undefined, true);
+  }
+  /** wakes the first `n`, answering how many */
+  wake(n = 1): number {
+    let woken = 0;
+    for (; woken < n && this.waiters.length; woken++) this.waiters.shift()!();
+    return woken;
+  }
+  /** wakes everyone waiting now, not those a wake adds */
+  wakeAll(): void {
+    if (!this.waiters.length) return;
+    const waiters = this.waiters;
+    this.waiters = [];
+    for (const wake of waiters) wake();
+  }
+}
 /** the guest milliseconds left before `deadline`, or -1 for a wait without one */
 export const msLeft = (timeout: number, deadline: number): number => timeout < 0 ? -1 : Math.max(0, deadline - guestNow());
 

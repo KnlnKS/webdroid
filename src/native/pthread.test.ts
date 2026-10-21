@@ -5,6 +5,7 @@ import { Cpu, cpus, setA64 } from "./cpu.ts";
 import { core, CORE_LIBC } from "./core.ts";
 import { Args, hostFn, lookupHost } from "./host.ts";
 import { mem } from "./mem.ts";
+import { E } from "./abi.ts";
 import { pthreadInit, startThread } from "./pthread.ts";
 
 test("pthread attributes and cleanup handlers preserve bionic behavior", async () => {
@@ -76,5 +77,23 @@ test("rwlock words are shared by the core's uncontended calls and the host's wai
     expect(mem.ld32(lock)).toBe(0);
   } finally {
     mem.free(lock); reader.dispose(); writer.dispose();
+  }
+});
+
+test("timed mutex and rwlock waits end at their deadlines", async () => {
+  setA64(false); pthreadInit();
+  const owner = new Cpu(new JThread(), "owner"), waiter = new Cpu(new JThread(), "waiter");
+  const mutex = mem.calloc(1, 4), rwlock = mem.calloc(1, 64), epoch = mem.calloc(1, 8);
+  const call = (cpu: Cpu, name: string, ...args: number[]) => cpu.call(lookupHost(name, "libc.so")!, args);
+  try {
+    expect(await call(owner, "pthread_mutex_lock", mutex)).toBe(0);
+    expect(await call(waiter, "pthread_mutex_timedlock", mutex, epoch)).toBe(E.TIMEDOUT);
+    expect(await call(owner, "pthread_mutex_unlock", mutex)).toBe(0);
+    expect(await call(waiter, "pthread_mutex_timedlock", mutex, epoch)).toBe(0);
+    expect(await call(owner, "pthread_rwlock_rdlock", rwlock)).toBe(0);
+    expect(await call(waiter, "pthread_rwlock_timedwrlock", rwlock, epoch)).toBe(E.TIMEDOUT);
+    expect(mem.ld32(rwlock + 8)).toBe(0);
+  } finally {
+    mem.free(mutex); mem.free(rwlock); mem.free(epoch); owner.dispose(); waiter.dispose();
   }
 });
