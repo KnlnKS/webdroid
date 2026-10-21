@@ -400,13 +400,12 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
     const path = atPath(dirfd, mem.cstr(name));
     return typeof path === "string" ? changeProcess(path, change) : path;
   },
+  // the int a request answers into its argument: FIONREAD's, the one request files take
   ioctl: (_c, a) => {
-    const fd = a.i(), request = a.i(), argument = a.p();
-    if (request !== FIONREAD) return -(openFd(fd)?.socket ? E.NOTTY : E.NOSYS);
-    const destination = anchor(argument);
+    const fd = a.i(), request = a.i(), destination = request === FIONREAD ? anchor(a.p()) : null;
     return complete(javaIoctlIntFd(fd, request), n => {
       if (n < 0) return n;
-      mem.st32(destination(), n);
+      mem.st32(destination!(), n);
       return 0;
     });
   },

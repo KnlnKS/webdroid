@@ -102,12 +102,14 @@ test("raw ARM32 calls take the kernel's arguments, a svc's fifth on in r4", asyn
   } finally { javaCloseFd(fd); mem.free(path); cpu.dispose(); }
 });
 
-test("ARM64 syncfs flushes an open filesystem and rejects invalid descriptors", async () => {
+test("ARM64 syncfs and ioctl tell an open descriptor from an invalid one", async () => {
   setA64(true); kernelInit();
   const cpu = new Cpu(new JThread(), "syncfs-test");
   try {
     expect(await cpu.call(syscall, [267, 0])).toBe(0);
     expect(await cpu.call(syscall, [267, -1])).toBe(-9);
+    expect(await cpu.call(syscall, [29, 0, 0x5401, 0])).toBe(-E.NOTTY);                  // TCGETS
+    expect(await cpu.call(syscall, [29, -1, 0x5401, 0])).toBe(-E.BADF);
   } finally { cpu.dispose(); setA64(false); }
 });
 
