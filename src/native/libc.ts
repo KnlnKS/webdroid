@@ -3,7 +3,7 @@
 // runs bionic itself (bionic.ts). stdio is in stdio.ts, printf/scanf in printf.ts.
 
 import { mem } from "./mem.ts";
-import { hostLib, hostData, NORET, ARG0, SERVED, ptr, vaList, type HostFn, retF, retD, PTR, stp, ldp } from "./host.ts";
+import { hostLib, hostData, NORET, ARG0, SERVED, ptr, vaList, type HostFn, retF, retD, PTR, stp, ldp, cstr } from "./host.ts";
 import { E, strerror, PAGE_SIZE } from "./abi.ts";
 import { utf8 as codec } from "../jvm/abi.ts";
 import { invalidateRange, type Cpu } from "./cpu.ts";
@@ -95,7 +95,15 @@ function strtodAt(s: number, endp: number): number {
   return parseFloat(m[1]);
 }
 
-const tzOffsetMin = () => -new Date().getTimezoneOffset();
+/** the host's zone, which the device's is (config.ts): its abbreviation at each offset it takes */
+let zoneFormat: Intl.DateTimeFormat;
+const zoneNames = new Map<number, number>();
+function zoneName(d: Date): number {
+  const west = d.getTimezoneOffset();
+  let p = zoneNames.get(west);
+  if (p === undefined) zoneNames.set(west, (p = cstr(zoneFormat.formatToParts(d).find((part) => part.type === "timeZoneName")?.value ?? "UTC")));
+  return p;
+}
 function fillTm(tm: number, d: Date, utc: boolean): void {
   const g = utc ? { s: d.getUTCSeconds(), mi: d.getUTCMinutes(), h: d.getUTCHours(), md: d.getUTCDate(), mo: d.getUTCMonth(), y: d.getUTCFullYear(), wd: d.getUTCDay() }
     : { s: d.getSeconds(), mi: d.getMinutes(), h: d.getHours(), md: d.getDate(), mo: d.getMonth(), y: d.getFullYear(), wd: d.getDay() };
@@ -104,7 +112,7 @@ function fillTm(tm: number, d: Date, utc: boolean): void {
   const f = [g.s, g.mi, g.h, g.md, g.mo, g.y - 1900, g.wd, yday, 0];
   for (let i = 0; i < f.length; i++) mem.st32(tm + i * 4, f[i]);
   mem.st32(tm + TM.gmtoff, utc ? 0 : -d.getTimezoneOffset() * 60);
-  stp(tm + TM.zone, tznames[utc ? 0 : 1]);
+  stp(tm + TM.zone, utc ? cstr("UTC") : zoneName(d));
 }
 function readTm(tm: number): number[] { const f: number[] = []; for (let i = 0; i < 9; i++) f.push(mem.ld32(tm + i * 4) | 0); return f; }
 function strftime(fmt: string, tm: number): string {
@@ -124,8 +132,8 @@ function strftime(fmt: string, tm: number): string {
       case "S": return p2(sec); case "t": return "\t"; case "T": return `${p2(hour)}:${p2(min)}:${p2(sec)}`;
       case "u": return String(wday || 7); case "w": return String(wday); case "x": return `${p2(mon + 1)}/${p2(mday)}/${p2(y % 100)}`;
       case "X": return `${p2(hour)}:${p2(min)}:${p2(sec)}`; case "y": return p2(y % 100); case "Y": return String(y);
-      case "z": { const o = tzOffsetMin(); return (o < 0 ? "-" : "+") + p2(Math.floor(Math.abs(o) / 60)) + p2(Math.abs(o) % 60); }
-      case "Z": return "UTC"; case "s": return String(Math.floor(mktime(tm) / 1000)); case "%": return "%";
+      case "z": { const o = Math.trunc((mem.ld32(tm + TM.gmtoff) | 0) / 60); return (o < 0 ? "-" : "+") + p2(Math.floor(Math.abs(o) / 60)) + p2(Math.abs(o) % 60); }
+      case "Z": { const zone = ldp(tm + TM.zone); return zone ? mem.cstr(zone) : ""; } case "s": return String(Math.floor(mktime(tm) / 1000)); case "%": return "%";
       default: return "%" + c;
     }
   });
@@ -140,7 +148,6 @@ function timegm(tm: number): number {
   const [sec, min, hour, mday, mon, year] = readTm(tm);
   return Math.floor(Date.UTC(year + 1900, mon, mday, hour, min, sec) / 1000);
 }
-let tznames: number[] = [0, 0];
 
 // ── setjmp/longjmp: the callee-saved registers r4–r14 live in the guest jmp_buf itself
 function setjmp(cpu: Cpu, buf: number): number {
@@ -170,18 +177,23 @@ const next48 = (): void => {
 /** an ARM32 process's libc: libc.so, liblog.so, libm.so and libz.so, which expose the kernel's
  *  calls as well */
 export function libcInit(): void {
-  // _ctype_ (257 bytes, index c+1), tzname
+  // _ctype_ (257 bytes, index c+1)
   const ct = mem.hostAlloc(384);
   for (let c = 0; c < 256; c++) mem.u8[ct + 1 + c] = c < 128 ? ctypeBits(c) : 0;
   const ctype = mem.hostAlloc(PTR);
   stp(ctype, ct);
   hostData("libc.so", "_ctype_", ctype);
-  tznames = [mem.hostStr("UTC"), mem.hostStr("UTC")];
-  const tzn = mem.hostAlloc(2 * PTR);
-  stp(tzn, tznames[0]); stp(tzn + PTR, tznames[1]);
+  // tzname, timezone and daylight: the zone's standard and summer times, as tzset reads them
+  zoneFormat = new Intl.DateTimeFormat("en-US", { timeZoneName: "short" }); zoneNames.clear();
+  const year = new Date().getFullYear(), jan = new Date(year, 0, 1), jul = new Date(year, 6, 1);
+  const [standard, summer] = jan.getTimezoneOffset() >= jul.getTimezoneOffset() ? [jan, jul] : [jul, jan];
+  const daylight = standard.getTimezoneOffset() !== summer.getTimezoneOffset();
+  const tzn = mem.hostAlloc(2 * PTR), timezone = mem.hostAlloc(4), daylightFlag = mem.hostAlloc(4);
+  stp(tzn, zoneName(standard)); stp(tzn + PTR, daylight ? zoneName(summer) : cstr("   "));
+  mem.st32(timezone, standard.getTimezoneOffset() * 60); mem.st32(daylightFlag, +daylight);
   hostData("libc.so", "tzname", tzn);
-  hostData("libc.so", "timezone", mem.hostAlloc(8));
-  hostData("libc.so", "daylight", mem.hostAlloc(4));
+  hostData("libc.so", "timezone", timezone);
+  hostData("libc.so", "daylight", daylightFlag);
   const environ = mem.hostAlloc(PTR);
   hostData("libc.so", "environ", environ);
   const optErr = mem.hostAlloc(4); hostData("libc.so", "opterr", optErr);
