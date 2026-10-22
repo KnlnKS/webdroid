@@ -25,3 +25,4 @@ dist/
 .wrangler/
 worker-configuration.d.ts
 vendor/wasm-aot/
+.claude
