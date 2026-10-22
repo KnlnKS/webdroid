@@ -514,6 +514,11 @@ describe("a64 simd: vector arithmetic", () => {
   });
 });
 
+test("unimplemented encodings beside implemented ones fault instead of aliasing them", () => {
+  // frint64x v0.4s (beside fsqrt), sqrdmlah v0.4s, v2.s[3] (beside sqrdmulh), fcmla v0.4s, v2.s[1], #0 (beside fmla)
+  for (const w of [0x6e21f820, 0x6fa2d820, 0x6f821820]) expect(() => run([w, RET])).toThrow("unimplemented");
+});
+
 // frsqrte had no coverage of any kind, here or in the hardware oracle. The architecture fixes the
 // estimate's precision rather than its bits, so the check is the guarantee itself -- eight bits of
 // 1/sqrt(x) -- plus the values the spec pins exactly.

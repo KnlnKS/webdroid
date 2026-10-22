@@ -474,7 +474,7 @@ inline fn emitTwoRegister(e: *Emit, w: u32) bool {
     if (opcode >= 22 or (opcode >= 12 and opcode <= 15 and fv)) {
         const op: u8 = switch (opcode) {
             15 => if (fv) (if (U) S.fneg[f] else S.fabs[f]) else return false,
-            31 => if (U) S.fsqrt[f] else return false,
+            31 => if (U and fv) S.fsqrt[f] else return false,
             24 => if (U) return false else if (fv) S.fceil[f] else S.fnearest[f],
             25 => if (U) return false else if (fv) S.ftrunc[f] else S.ffloor[f],
             29 => if (fv or dp) return false else if (U) S.f32x4_convert_i32x4_u else S.f32x4_convert_i32x4_s,
@@ -903,49 +903,42 @@ pub fn emitVector(e: *Emit, w: u32) bool {
     if (is(w, 0x9f80_0400, 0x0f00_0400) and bits(w, 19, 4) != 0) return emitShiftImmediate(e, w);
     if (is(w, 0x9f00_0400, 0x0f00_0000)) {
         const opcode = bits(w, 12, 4);
-        const Lb = bits(w, 21, 1);
-        const M = bits(w, 20, 1);
-        const H = bits(w, 11, 1);
-        const rmLow = bits(w, 16, 4);
         if (opcode == 9 and !U) {
             if (size & 2 == 0) return false;
             const dp = size & 1 != 0;
-            if (dp and Lb != 0) return false;
-            const idx: u8 = @intCast(if (dp) H else (H << 1) | Lb);
+            if (dp and bits(w, 21, 1) != 0) return false;
+            const el = simd.element(w, if (dp) 3 else 2);
             const f: u32 = @intFromBool(dp);
             b.get(L_CPU);
             vget(e, rn);
-            vget(e, @intCast((M << 4) | rmLow));
-            b.emit(.{ sv(S.fextract[f]), idx, sv(S.fsplat[f]), sv(S.fmul[f]) });
+            vget(e, el.m);
+            b.emit(.{ sv(S.fextract[f]), el.idx, sv(S.fsplat[f]), sv(S.fmul[f]) });
             vput(e, rd, q);
             return true;
         }
-        if ((opcode == 1 or opcode == 5) and size == 2) {
-            const idx: u8 = @intCast((H << 1) | Lb);
-            const m: u8 = @intCast((M << 4) | rmLow);
-            emitFma32(e, rd, rn, m, q, opcode == 5, idx);
+        if ((opcode == 1 or opcode == 5) and size == 2 and !U) {
+            const el = simd.element(w, 2);
+            emitFma32(e, rd, rn, el.m, q, opcode == 5, el.idx);
             return true;
         }
-        if (((opcode == 8 and !U) or ((opcode == 0 or opcode == 4) and U)) and (size == 1 or size == 2)) {
-            const idx: u8 = @intCast(if (size == 1) (H << 2) | (Lb << 1) | M else (H << 1) | Lb);
-            const m: u8 = @intCast(if (size == 1) rmLow else (M << 4) | rmLow);
+        if (size != 1 and size != 2) return false;
+        const el = simd.element(w, size);
+        if ((opcode == 8 and !U) or ((opcode == 0 or opcode == 4) and U)) {
             b.get(L_CPU);
             if (opcode != 8) vget(e, rd);
             vget(e, rn);
-            vget(e, m);
-            b.emit(.{ sv(S.extract_u[size]), idx, sv(S.splat[size]), sv(S.mul[size]) });
+            vget(e, el.m);
+            b.emit(.{ sv(S.extract_u[size]), el.idx, sv(S.splat[size]), sv(S.mul[size]) });
             if (opcode != 8) b.emit(.{sv(if (opcode == 4) S.sub[size] else S.add[size])});
             vput(e, rd, q);
             return true;
         }
-        if ((opcode == 2 or opcode == 6 or opcode == 10) and (size == 1 or size == 2)) {
-            const idx: u8 = @intCast(if (size == 1) (H << 2) | (Lb << 1) | M else (H << 1) | Lb);
-            const m: u8 = @intCast(if (size == 1) rmLow else (M << 4) | rmLow);
+        if (opcode == 2 or opcode == 6 or opcode == 10) {
             b.get(L_CPU);
             if (opcode != 10) vget(e, rd);
             vget(e, rn);
-            vget(e, m);
-            b.emit(.{ sv(S.extract_u[size]), idx, sv(S.splat[size]), sv(S.extmul_low_s[size] + @as(u8, if (q) 1 else 0) + @as(u8, if (U) 2 else 0)) });
+            vget(e, el.m);
+            b.emit(.{ sv(S.extract_u[size]), el.idx, sv(S.splat[size]), sv(S.extmul_low_s[size] + @as(u8, if (q) 1 else 0) + @as(u8, if (U) 2 else 0)) });
             if (opcode != 10) b.emit(.{sv(if (opcode == 6) S.sub[size + 1] else S.add[size + 1])});
             vput(e, rd, true);
             return true;

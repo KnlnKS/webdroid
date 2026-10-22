@@ -689,9 +689,7 @@ fn twoMiscF(comptime F: type, x: Ctx) Status {
                 if (x.U) OU[i] = fp.toInt(U, r) else OI[i] = fp.toInt(I, r);
             },
             29 => O[i] = if (!x.fv) (if (x.U) @floatFromInt(get(U, c, x.rn, i)) else @floatFromInt(get(I, c, x.rn, i))) else if (x.U) fp.rsqrte(F, n) else fp.recpe(F, n),
-            31 => {
-                if (x.U) O[i] = @sqrt(n) else if (x.scalar) O[i] = fp.recpx(F, n) else return fault(c, x.w);
-            },
+            31 => O[i] = if (x.fv and x.U) @sqrt(n) else if (x.fv and x.scalar) fp.recpx(F, n) else return fault(c, x.w),
             12 => OU[i] = if (if (x.U) n >= 0 else n > 0) mask else 0,
             13 => OU[i] = if (if (x.U) n <= 0 else n == 0) mask else 0,
             14 => OU[i] = if (n < 0) mask else 0,
@@ -952,27 +950,34 @@ fn shiftImmT(comptime T: type, x: Ctx) Status {
     return .next;
 }
 
+/// the register and lane of a by-element operand whose elements are 2^log2 bytes
+pub inline fn element(w: u32, log2: u32) struct { m: u8, idx: u8 } {
+    const H = bits(w, 11, 1);
+    const Lb = bits(w, 21, 1);
+    const M = bits(w, 20, 1);
+    const rm = bits(w, 16, 4);
+    return switch (log2) {
+        1 => .{ .m = @intCast(rm), .idx = @intCast((H << 2) | (Lb << 1) | M) },
+        2 => .{ .m = @intCast((M << 4) | rm), .idx = @intCast((H << 1) | Lb) },
+        else => .{ .m = @intCast((M << 4) | rm), .idx = @intCast(H) },
+    };
+}
 fn byElement(x: Ctx) Status {
     const c = x.c;
     const w = x.w;
-    const Lb = bits(w, 21, 1);
-    const M = bits(w, 20, 1);
-    const H = bits(w, 11, 1);
     const opcode = bits(w, 12, 4);
-    const rmLow = bits(w, 16, 4);
     if (opcode == 1 or opcode == 5 or opcode == 9) {
-        if (x.size & 2 == 0) return fault(c, w);
+        // U=1 with opcode 1 or 5 is FCMLA
+        if (x.size & 2 == 0 or (x.U and opcode != 9)) return fault(c, w);
         const dp = x.size & 1 != 0;
-        if (dp and Lb != 0) return fault(c, w);
-        const idx: usize = if (dp) H else (H << 1) | Lb;
-        const m: u8 = @intCast((M << 4) | rmLow);
-        return if (dp) byElementF(f64, x, m, idx) else byElementF(f32, x, m, idx);
+        if (dp and bits(w, 21, 1) != 0) return fault(c, w);
+        const el = element(w, if (dp) 3 else 2);
+        return if (dp) byElementF(f64, x, el.m, el.idx) else byElementF(f32, x, el.m, el.idx);
     }
     if (x.scalar or (x.size != 1 and x.size != 2)) return fault(c, w);
-    const idx: usize = if (x.size == 1) (H << 2) | (Lb << 1) | M else (H << 1) | Lb;
-    const m: u8 = @intCast(if (x.size == 1) rmLow else (M << 4) | rmLow);
-    if (opcode == 14) return dot(x, m, idx);
-    return if (x.size == 1) byElementI(i16, x, m, idx) else byElementI(i32, x, m, idx);
+    const el = element(w, x.size);
+    if (opcode == 14) return dot(x, el.m, el.idx);
+    return if (x.size == 1) byElementI(i16, x, el.m, el.idx) else byElementI(i32, x, el.m, el.idx);
 }
 fn byElementF(comptime F: type, x: Ctx, m: u8, idx: usize) Status {
     const c = x.c;
@@ -1000,7 +1005,8 @@ fn byElementI(comptime S: type, x: Ctx, m: u8, idx: usize) Status {
     var out: V align(16) = old(c, x.rd);
     switch (opcode) {
         8, 0, 4, 12, 13 => {
-            if ((opcode == 0 or opcode == 4) and !x.U) return fault(c, x.w);
+            // MLA and MLS are the U=1 forms; U=1 beside MUL, SQDMULH and SQRDMULH is another instruction
+            if ((opcode == 0 or opcode == 4) != x.U) return fault(c, x.w);
             const t = get(S, c, m, idx);
             const O = L(S, &out);
             for (0..count) |i| {
