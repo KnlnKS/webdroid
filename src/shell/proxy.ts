@@ -16,7 +16,6 @@ export function sandboxDocument(request: Request, response: Response): Response 
 }
 
 export interface ProxyOptions {
-  target?: (requested: string) => string;
   /** whether this server may connect to `hostname`: the deployed Worker keeps off private networks */
   reachable?: (hostname: string) => boolean;
   bridgeCall: (request: Request) => Promise<Response>;
@@ -46,8 +45,7 @@ async function proxied(request: Request, options: ProxyOptions): Promise<Respons
   if (request.headers.get("service-worker") === "script") return new Response("invalid worker", { status: 403 });
   const query = parseProxyQuery(new URL(request.url).searchParams);
   if (!query) return new Response("bad url", { status: 400 });
-  const { url: requested, manual, bridge, webview: isolated } = query, frame = !!query.frame;
-  const url = options.target?.(requested) ?? requested;
+  const { url, manual, bridge, webview: isolated } = query, frame = !!query.frame;
   try {
     const headers = fromProxyHeaders(request.headers);
     // a media element sets no headers of its own: the device's travel in `headers`, and its Range is the element's
@@ -72,9 +70,8 @@ async function proxied(request: Request, options: ProxyOptions): Promise<Respons
     };
     let intercepted = bridge && query.intercept
       ? await bridged({ kind: "request", url, method: request.method, main: query.frame === "main", headers: Object.fromEntries(headers) }) : null;
-    // the device's own address: the WebView's process serves it, and nothing else unless a remap
-    // (adb reverse's role) names a host server
-    if (!intercepted && url === requested && isGuestHost(new URL(url).hostname)) {
+    // the device's own address: the WebView's process serves it, and nothing else
+    if (!intercepted && isGuestHost(new URL(url).hostname)) {
       intercepted = bridge ? await bridged({ kind: "loopback", url, method: request.method, headers: Object.fromEntries(headers),
         body: body && new Uint8Array(body).toBase64() }) : null;
       if (!intercepted) throw new Error(`ECONNREFUSED: nothing listens at ${new URL(url).host}`);

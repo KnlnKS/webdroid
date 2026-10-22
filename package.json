@@ -27,7 +27,6 @@
     "fwtest": "scripts/node scripts/wasm/run.ts fwtest",
     "desccheck": "scripts/node scripts/desccheck.ts",
     "bypass": "scripts/node scripts/bypass.ts",
-    "fuzz": "scripts/node scripts/fuzz.ts",
     "e2e:setup": "bash tests/e2e/setup-avd.sh",
     "e2e:boot": "bash tests/e2e/boot-emulator.sh",
     "e2e": "scripts/node tests/e2e/run.ts",

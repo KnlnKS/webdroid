@@ -115,10 +115,7 @@ the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budg
    - *Cut the Rope:* the intro plays and level one completes from a swipe; frame rate beyond the level-one sample
      (36 frames/s at 1080×2160) is unmeasured on an idle host. Player ID/backend paths are unvalidated; it has no
      full-matrix flow.
-   - *Graphics parity:* minimize the 132 differences of the two larger API-33 graphics fuzz campaigns (58 and 74
-     of 1,000 cases) before changing common renderer behavior; the small retained seeds report 0 of 100.
-   - *Explorer and Integrity:* run the saved-state UI explorer over a small, diverse corpus with matched Android
-     oracles and cluster repeatable failure signatures. SPIC's Play Integrity request reaches Google with
+   - *Play Integrity:* SPIC's Play Integrity request reaches Google with
      `?attestation=1` but gets HTTP 500 (`DF-DFERH-01`): DroidGuard supplied zero bytes and microG had no auth token.
      A licensed Play Store oracle is needed before attributing that to webdroid.
    - *Unvalidated paths:* ChatGPT authenticated upload and voice; TikTok sign-in and publishing; general multi-window
@@ -179,5 +176,4 @@ Unranked; each needs a measurement or a check against the current code before wo
 Run the owning unit, framework and `wasm` suites and smoke-compile affected APKs while developing. Freeze code before
 the serialized full matrix and inspect every relevant process's `run.json`. Use matched inputs and settings for
 performance ([performance.md](docs/performance.md)); keep goldens unchanged unless reference updates are explicitly
-requested. The [E2E guide](tests/e2e/README.md) and [fuzz guide](scripts/fuzz/README.md) give commands and artifact
-locations.
+requested. The [E2E guide](tests/e2e/README.md) gives commands and artifact locations.

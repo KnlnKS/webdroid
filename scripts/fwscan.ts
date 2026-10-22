@@ -4,12 +4,19 @@ import { ACC } from "../src/jvm/dex.ts";
 import { descToName } from "../src/jvm/abi.ts";
 import { loadDexes } from "./dexes.ts";
 import { cli } from "./args.ts";
-import { frameworkSurface } from "./fuzz/catalog.ts";
 
 const { positionals: [jar = "vendor/aosp/framework.jar", prefix] } = cli("pnpm fwscan [vendor/aosp/framework.jar] [class-name-prefix]", {});
 const dexes = loadDexes(jar);
 
-const surface = frameworkSurface(dexes);
+const surface = { classes: new Set<string>(), methods: new Set<string>(), fields: new Set<string>() };
+for (const dex of dexes) for (let i = 0; i < dex.classDefCount; i++) {
+  const owner = descToName(dex.type(dex.classDef2Type(i)));
+  surface.classes.add(owner);
+  const def = dex.classDef(i);
+  for (const field of [...def.staticFields, ...def.instanceFields]) surface.fields.add(`${owner}.${dex.field(field.fieldIdx).name}`);
+  for (const method of [...def.directMethods, ...def.virtualMethods])
+    surface.methods.add(`${owner}.${dex.method(method.methodIdx).name}${dex.methodDesc(method.methodIdx)}`);
+}
 const selected = (owner: string) => !prefix || owner.startsWith(prefix);
 const classes = [...surface.classes].filter(selected).length;
 const methods = [...surface.methods].filter((key) => selected(key.slice(0, key.indexOf(".")))).length;

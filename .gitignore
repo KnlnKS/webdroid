@@ -2,9 +2,7 @@ apks
 node_modules
 .DS_Store
 webdroid-shots/
-fuzz-cache/
 conform-cache/
-fuzz-results/
 tests/e2e/actual/
 tests/e2e/actual-fast/
 tests/e2e/report/

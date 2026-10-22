@@ -15,8 +15,8 @@ the measurements, failure mechanisms and rejected experiments. Each source file'
 2. **Unchanged bytecode.** App and bundled library bytecode run as shipped.
 3. **The software draw path and the visual goldens are preserved.**
 4. **One Android build everywhere:** API 35, `sdk_gphone64_arm64` `AE3A.240806.043` (`vendor/aosp/build.txt`). It
-   supplies the framework and boot jars, framework-res, ICU and tz data, the fonts, the advertised SDK level, the
-   fuzz oracle and the e2e goldens. `pnpm gen-framework` pulls it from the reference AVD. AOSP bytecode needs
+   supplies the framework and boot jars, framework-res, ICU and tz data, the fonts, the advertised SDK level and
+   the e2e goldens. `pnpm gen-framework` pulls it from the reference AVD. AOSP bytecode needs
    its paired resources from the same build: a relinked framework-res had only 53.5% of internal ids right.
 
 ## Platform: AOSP bytecode over TypeScript boundaries
@@ -166,7 +166,6 @@ Path ops use Skia through CanvasKit (decision below). Resources drive widget def
   `tests/conformance/`.
 - **Recorded device answers:** reference-AVD results checked into fixtures and replayed in `pnpm test`
   (`scripts/simd-oracle.ts` for SIMD, `pnpm textcmp` for text layout).
-- **Differential fuzzing** of APIs, graphics and UI against an API-35 oracle: [scripts/fuzz/README.md](../scripts/fuzz/README.md).
 - **Flows:** `pnpm e2e` against device goldens ([tests/e2e/README.md](../tests/e2e/README.md)), `pnpm corpus`
   over the APK corpus, `pnpm fwtest` for framework delegates, `pnpm smoke` compiling an APK's every method.
 - **Telemetry for silent failures:** `run.json` records `newMissing`, `newErrors`, `nativeRequired`,

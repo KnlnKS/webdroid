@@ -24,17 +24,6 @@ import { tcpTarget } from "./src/shell/tcpwire.ts";
 import { relayTcp, relayUdp } from "./socket-relays.ts";
 
 const apkDirectory = process.env.WEBDROID_APK_DIR ?? "apks";
-const fuzzOrigin = process.env.WEBDROID_FUZZ_ORIGIN ? new URL(process.env.WEBDROID_FUZZ_ORIGIN) : null;
-if (fuzzOrigin && !["127.0.0.1", "localhost"].includes(fuzzOrigin.hostname))
-  throw new Error("WEBDROID_FUZZ_ORIGIN must use loopback");
-
-function proxyTarget(requested: string): string {
-  if (!fuzzOrigin) return requested;
-  const url = new URL(requested);
-  if (url.origin !== "http://127.0.0.1:4876") return requested;
-  return new URL(`${url.pathname}${url.search}`, fuzzOrigin).href;
-}
-
 /** one exchange that leaves the body encoded: node's fetch always decodes, and a guest that asked for an encoding decodes it itself */
 async function fetchEncoded(url: string, init: RequestInit): Promise<Response> {
   const res = await new Promise<IncomingMessage>((resolve, reject) => {
@@ -116,7 +105,7 @@ const host: ServeHost = {
   // a browser resolves every *.localhost name to this loopback server, each its own site
   webviewOrigin: (url) => process.env.WEBDROID_WEBVIEW_ORIGIN
     ?? (url.hostname === "localhost" || url.hostname === "127.0.0.1" ? `${url.protocol}//*.localhost:${url.port}` : null),
-  proxy: { target: proxyTarget, fetchEncoded },
+  proxy: { fetchEncoded },
 };
 export function devServer(): Plugin {
   return {
