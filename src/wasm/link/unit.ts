@@ -24,7 +24,7 @@ export interface UpgradeJob {
   merge?: boolean;
   /** the methods it installs, and the small ones it copies in for its own calls (method ids), first the method asked for */
   installed: string[]; copies: string[];
-  /** per virtual call (declaring class, name, descriptor), the implementations worth a guarded direct call (method ids) */
+  /** per call site (caller and DEX pc), the implementations worth a guarded direct call (method ids) */
   plan: [string, string[]][];
   /** Successful, prepared initiating identities needed by these methods. */
   resolved?: [referrer: string, name: string, key: string][];

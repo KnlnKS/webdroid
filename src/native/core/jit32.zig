@@ -241,7 +241,7 @@ pub fn scanArm(r: *Region, i: u32, page: *cpu.Page, pc: u32) Scan {
         },
         else => {},
     }
-    if (ends and cc != 14) b.fall = if (next & (abi.PAGE_SIZE - 1) != 0) jit.blockFor(r, next) else -1;
+    if (ends and cc != 14) b.fall = jit.blockFor(r, next);
     return .{ .len = 4, .ends = ends };
 }
 pub fn scanThumb(r: *Region, i: u32, page: *cpu.Page, pc: u32) Scan {
@@ -255,7 +255,7 @@ pub fn scanThumb(r: *Region, i: u32, page: *cpu.Page, pc: u32) Scan {
         const conditional = thumbCondBranch(h, h2);
         if (conditional) {
             b.taken = jit.blockFor(r, thumbCondTarget(pc, h, h2));
-            b.fall = if ((pc + 4) & (abi.PAGE_SIZE - 1) != 0) jit.blockFor(r, pc + 4) else -1;
+            b.fall = jit.blockFor(r, pc + 4);
         }
         if (h & 0xf800 == 0xf000 and h2 & 0xd000 == 0x9000) b.taken = jit.blockFor(r, pc +% 4 +% thumbOffset(h, h2));
         return .{ .len = 4, .ends = conditional or thumbCall(h, h2) or thumbBranch(h, h2) or
@@ -279,7 +279,7 @@ pub fn scanThumb(r: *Region, i: u32, page: *cpu.Page, pc: u32) Scan {
             if ((h & 0xff00) == 0xbe00) return .{ .len = 2, .ends = true };
             if ((h & 0xf500) == 0xb100) {
                 b.taken = jit.blockFor(r, pc + 4 + ((h >> 3) & 31) * 2 + ((h & 0x200) >> 3));
-                b.fall = if (next & (abi.PAGE_SIZE - 1) != 0) jit.blockFor(r, next) else -1;
+                b.fall = jit.blockFor(r, next);
                 return .{ .len = 2, .ends = true };
             }
         },
@@ -287,7 +287,7 @@ pub fn scanThumb(r: *Region, i: u32, page: *cpu.Page, pc: u32) Scan {
             const cc = (h >> 8) & 15;
             if (cc >= 14) return .{ .len = 2, .ends = true };
             b.taken = jit.blockFor(r, pc +% 4 +% @as(u32, @bitCast(bt.sx(i32, h & 255, 8) * 2)));
-            b.fall = if (next & (abi.PAGE_SIZE - 1) != 0) jit.blockFor(r, next) else -1;
+            b.fall = jit.blockFor(r, next);
             return .{ .len = 2, .ends = true };
         },
         14 => {

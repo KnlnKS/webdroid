@@ -10,6 +10,9 @@ public class G1 {
   static abstract class Node { int v; Node next; abstract int val(); }
   static class A extends Node { int val() { return v + 1; } }
   static class B extends Node { int val() { return v * 2; } }
+  static class C extends Node { int val() { return v + 7; } }
+  static class D extends Node { int val() { return v * 3; } }
+  static int localSites(Node a, Node b) { return a.val() + b.val(); }
   static class P { int x, y; P(int x, int y) { this.x = x; this.y = y; } int sum() { return x + y; } }
   static class Counter { int n; synchronized void inc() { n++; } synchronized int get() { return n; } void plain() { n++; } void tryinc() { try { n++; } finally { n--; n++; } } }
   // the shapes Kotlin compiles to (Compose and coroutine code): final getter chains, a lone implementation behind an interface, generic lambdas, parameter
@@ -75,6 +78,7 @@ public class G1 {
       case "syncBlock": { Counter c = new Counter(); for (int i = 0; i < 100000; i++) { synchronized (c) { c.n++; } } return c.get(); }
       case "idHash": { Object[] os = new Object[64]; for (int i = 0; i < 64; i++) os[i] = new Object(); int s = 0; for (int r = 0; r < 2000; r++) for (int i = 0; i < 64; i++) if (System.identityHashCode(os[i]) == os[i].hashCode()) s++; return s; }
       case "virtualMono": { Node n = new A(); n.v = 3; int s = 0; for (int i = 0; i < 100000; i++) s += n.val(); return s; }
+      case "virtualSites": { Node a = new A(), b = new B(); a.v = 3; b.v = 4; int s = 0; for (int i = 0; i < 20000; i++) s += a.val() + b.val(); Node c = new C(), d = new D(); c.v = 5; d.v = 6; for (int i = 0; i < 100000; i++) s += localSites(c, d); return s; }
       case "virtualBi": { Node[] ns = new Node[2]; ns[0] = new A(); ns[1] = new B(); ns[0].v = 3; ns[1].v = 4; int s = 0; for (int i = 0; i < 100000; i++) s += ns[i & 1].val(); return s; }
       case "interfaceBi": { Shape[] ss = { new Sq(3), new Rect(2, 5) }; int s = 0; for (int i = 0; i < 100000; i++) s += ss[i & 1].area(); return s; }
       case "linkedNodes": { Node head = null; for (int i = 0; i < 2000; i++) { Node n = (i & 1) == 0 ? new A() : new B(); n.v = i; n.next = head; head = n; } int s = 0; for (int r = 0; r < 20; r++) for (Node n = head; n != null; n = n.next) s += n.val(); return s; }

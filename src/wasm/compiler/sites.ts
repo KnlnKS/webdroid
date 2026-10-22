@@ -9,7 +9,7 @@ import { stringSite } from "./strings.ts";
 
 export type SymbolicSite = [name: string, cls: string, method: number, pc: number, inputs: [reg: number, kind: Kind][], ret: Kind | "V"];
 /** the name of the symbolic site of `ins` in `m` */
-export const siteKey = (m: MethodInfo, ins: PreparedInstruction): string => `${m.cls}:${m.index}:${ins.pc}`;
+export const siteKey = (m: MethodInfo, ins: { pc: number }): string => `${m.cls}:${m.index}:${ins.pc}`;
 
 export function symbolicInstruction(m: MethodInfo, ins: PreparedInstruction): boolean {
   const pool = referenceOf(ins.op);

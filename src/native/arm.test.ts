@@ -4,6 +4,7 @@ import { Cpu, setA64 } from "./cpu.ts";
 import { core, jitStats, JIT_HEAT } from "./core.ts";
 import { execute, pattern, run, sweep } from "./a64.testkit.ts";
 import { RET_SENTINEL } from "./abi.ts";
+import { LOOP_BODY, placeLoop } from "./loop.testkit.ts";
 
 function runThumb(half: number[], setup: (c: Cpu) => void = () => {}): Cpu {
   const at = mem.reserve((half.length * 2 + 0xfff) & ~0xfff, 0x1000);
@@ -17,6 +18,50 @@ function* both(arm: number[], thumb: number[], setup?: (c: Cpu) => void): Genera
 beforeAll(() => setA64(false));
 
 describe("arm decoder", () => {
+  test.each([false, true])("cross-page regions preserve registers, flags and changed code (Thumb: %s)", (thumb) => {
+    const at = mem.reserve(0x2000, 0x1000) + 0xff8, body = at + LOOP_BODY;
+    placeLoop(at, thumb);
+    const setup = (c: Cpu) => { for (let i = 0; i < 13; i++) c.w[i * 2] = 0x12340000 + i; c.w[0] = 7; c.w[2] = 0; };
+    const run1 = () => execute(at | +thumb, setup);
+    const compiled = jitStats.regions;
+    for (let i = 0; i < JIT_HEAT + 2; i++) expect(run1().w[2]).toBe(21);
+    expect(jitStats.regions).toBeGreaterThan(compiled);
+    const c = run1();
+    expect([c.w[0], c.w[4], c.c, c.z]).toEqual([0, 0x12340002, 1, 1]);
+    // Patching a different source page must invalidate the compiled region's edge too.
+    if (thumb) mem.st16(body, 0x3807); else mem.st32(body, 0xe2500007); // subs r0, #7
+    expect(run1().w[2]).toBe(3);
+  });
+
+  test.each([false, true])("a guest store invalidating a region's next page reaches the changed instruction (Thumb: %s)", (thumb) => {
+    const base = mem.reserve(0x3000, 0x1000), at = base + 0xff8, target = base + 0x1004, data = base + 0x2000;
+    if (thumb) {
+      mem.st16(at, 0x2800); mem.st16(at + 2, 0x6011); mem.st16(at + 4, 0xe002); // cmp r0,#0; str r1,[r2]; b target
+      mem.st16(target, 0x2001); mem.st16(target + 2, 0x4770); // movs r0,#1; bx lr
+    } else {
+      mem.st32(at, 0xe3500000); mem.st32(at + 4, 0xe5821000); mem.st32(at + 8, 0xeaffffff); // cmp r0,#0; str r1,[r2]; b target
+      mem.st32(target, 0xe3a00001); mem.st32(target + 4, BXLR); // mov r0,#1; bx lr
+    }
+    const run1 = (address: number) => execute(at | +thumb, c => { c.w[0] = 0; c.w[2] = thumb ? 0x47702002 : 0x03a00002; c.w[4] = address; });
+    const compiled = jitStats.regions;
+    for (let i = 0; i < JIT_HEAT + 2; i++) expect(run1(data).w[0]).toBe(1);
+    expect(jitStats.regions).toBeGreaterThan(compiled);
+    expect(run1(target).w[0]).toBe(2);
+  });
+
+  test.each([false, true])("a page-straddling Thumb instruction remains interpreted after its second half changes (entered before it: %s)", (prefix) => {
+    const at = mem.reserve(0x2000, 0x1000) + 0xffe, entry = prefix ? at - 4 : at;
+    mem.st16(at - 4, 0x2000); mem.st16(at - 2, 0x2800); // movs r0,#0; cmp r0,#0
+    mem.st16(at, 0xf240); mem.st16(at + 2, 0x0101); mem.st16(at + 4, 0x4770); // movw r1,#1; bx lr
+    const compiled = jitStats.regions;
+    for (let i = 0; i < JIT_HEAT + 2; i++) expect(execute(entry | 1, () => {}).w[2]).toBe(1);
+    if (prefix) expect(jitStats.regions).toBeGreaterThan(compiled);
+    mem.st16(at + 2, 0x0102);
+    const c = execute(entry | 1, () => {});
+    expect(c.w[2]).toBe(2);
+    if (prefix) expect([c.c, c.z]).toEqual([1, 1]);
+  });
+
   test("instruction synchronization preserves writeback, flags and Thumb IT state", () => {
     const data = mem.reserve(0x1000, 0x1000);
     const setup = (cpu: Cpu) => {

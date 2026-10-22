@@ -3,8 +3,8 @@ import { parseMethodDesc } from "../../jvm/abi.ts";
 import { HT, ModuleBuilder, T, ref, refNull, type VT, type FunctionType } from "./wasmbin.ts";
 import { Code, OP, type InlineFrame } from "./code.ts";
 import { ACC, kindOf, mid, type FieldInfo, type Program, type Kind, type MethodInfo } from "./program.ts";
-import { H, ELEM, MATH_ARITY, elemKindOf, FUEL, INIT_DONE, MAX_DEPTH, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, WARM_AT, type ElemKind } from "./consts.ts";
-import { declareSymbolicSites, type SymbolicSite } from "./sites.ts";
+import { H, ELEM, MATH_ARITY, elemKindOf, FUEL, INIT_DONE, MAX_DEPTH, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, SAMPLE_EVERY, WARM_AT, type ElemKind } from "./consts.ts";
+import { declareSymbolicSites, siteKey, type SymbolicSite } from "./sites.ts";
 import { prepareMethod, type PreparedMethod } from "../../jvm/prepared.ts";
 import { Invoke } from "../../jvm/opcodes.ts";
 import { inferTyping, type Typing } from "./infer.ts";
@@ -105,7 +105,7 @@ export type LinkEnv = Pick<World, "prog" | "natives" | "intrinsic" | "link" | "c
   stats: Pick<World["stats"], "phase">; cha: Pick<World["cha"], "targets">; dispatch: Pick<World["dispatch"], "vslot">;
   classModules: Pick<World["classModules"], "ensureBody">; units: Pick<World["units"], "sharedHelpers">;
 };
-/** per virtual call (declaring class, name, descriptor): the implementations worth a guarded direct call (Planner.group) */
+/** per call site (caller and DEX pc): the implementations worth a guarded direct call (Planner.group) */
 export type CallPlan = ReadonlyMap<string, readonly MethodInfo[]>;
 /** a function of Compiler.buildSynthetics */
 export interface SyntheticFn { name: string; params: Kind[]; ret: Kind | "V"; body: (c: Code) => void; slot?: number; exportAs?: string }
@@ -393,33 +393,43 @@ export class Compiler implements Base {
     if (!finalDispatch(this.prog, decl, t[0])) this.assumptions.push([decl, name, desc, t[0], this.assumer]);
     return t[0];
   }
-  /** the likely implementations of a virtual call that this unit contains, for a guarded direct call (see Planner.likely) */
-  guards(decl: string, name: string, desc: string): MethodInfo[] {
-    return (this.plan.get(`${decl}.${name}${desc}`) ?? []).filter((m) => this.directFunc(m) !== undefined);
+  /** the likely implementations of a virtual call that this unit contains, for a guarded direct call (see Planner.group) */
+  guards(m: MethodInfo, ins: { pc: number }): MethodInfo[] {
+    return (this.plan.get(siteKey(m, ins)) ?? []).filter((t) => this.directFunc(t) !== undefined);
   }
-  /** counts `m`'s calls and loop iterations in its word of the scratch memory and asks the host to upgrade the method when they reach the budget */
-  emitCount(c: Code, m: MethodInfo, iterations?: number): void {
-    const slot = this.w.slotOf(m);
-    if (slot >= COUNT_SLOTS) return;
-    this.scratch();
-    // a call to this module's counter is a fraction of the sequence, which the engine compiles for every method a launch runs
-    const count = (b: Code, add: (b: Code) => void, due: (b: Code, n: number) => void) => {
-      const at = b.newLocal(T.i32), n = b.newLocal(T.i32);
-      b.lget(0).i32(2).raw(OP.i32_shl).ltee(at).lget(at).mem(OP.i32_load, 2, COUNT_BASE); add(b); b.raw(OP.i32_add).ltee(n).mem(OP.i32_store, 2, COUNT_BASE);
-      due(b, n); b.if_().lget(0).call(this.imp.hot).end();
+  /** counts an entry of `m` in its word of the scratch memory and asks the host to upgrade the method when the count reaches the budget; sets the local
+   *  `sampled`, if given, when this activation records its call targets (profile.ts) */
+  emitCount(c: Code, m: MethodInfo, sampled = -1): void {
+    if (!this.pushCounter(c, m)) return;
+    const count = (b: Code) => {
+      b.i32(0).mem(OP.i32_load, 2, WARM_AT).if_().unreachable().end();
+      return this.count(b, (b) => b.i32(1), (b, n) => b.lget(n).i32(HOT_BUDGET).raw(OP.i32_eq));
     };
-    c.i32(slot);
-    if (iterations === undefined) {
-      c.call(this.defineFn("count", [T.i32], [], (b) => {
-        b.i32(0).mem(OP.i32_load, 2, WARM_AT).if_().unreachable().end();
-        count(b, (b) => b.i32(1), (b, n) => b.lget(n).i32(HOT_BUDGET).raw(OP.i32_eq));
-      }, true));
-      return;
-    }
-    // the budget is reached by this activation's iterations when the count crosses it
-    c.lget(iterations).call(this.defineFn("countLoop", [T.i32, T.i32], [], (b) => count(b, (b) => b.lget(1), (b, n) => {
+    if (sampled < 0) c.call(this.defineFn("count", [T.i32], [], count, true));
+    else c.call(this.defineFn("countSampled", [T.i32], [T.i32], (b) => b.lget(count(b)).i32(SAMPLE_EVERY - 1).raw(OP.i32_and).i32(1).raw(OP.i32_eq), true)).lset(sampled);
+  }
+  /** counts a deferred loop's `iterations` toward `m`'s budget, which they reach when the count crosses it */
+  emitLoopCount(c: Code, m: MethodInfo, iterations: number): void {
+    if (!this.pushCounter(c, m)) return;
+    c.lget(iterations).call(this.defineFn("countLoop", [T.i32, T.i32], [], (b) => this.count(b, (b) => b.lget(1), (b, n) => {
       b.lget(n).lget(1).raw(OP.i32_sub).i32(HOT_BUDGET).raw(OP.i32_lt_u).lget(n).i32(HOT_BUDGET).raw(OP.i32_ge_u, OP.i32_and);
     }), true));
+  }
+  /** pushes `m`'s counter, if it has one */
+  private pushCounter(c: Code, m: MethodInfo): boolean {
+    const slot = this.w.slotOf(m);
+    if (slot >= COUNT_SLOTS) return false;
+    this.scratch();
+    c.i32(slot);
+    return true;
+  }
+  /** the body of a counter helper, returning the local of the new count: a call to it is a fraction of the sequence, which the engine compiles for every
+   *  method a launch runs */
+  private count(b: Code, add: (b: Code) => void, due: (b: Code, n: number) => void): number {
+    const at = b.newLocal(T.i32), n = b.newLocal(T.i32);
+    b.lget(0).i32(2).raw(OP.i32_shl).ltee(at).lget(at).mem(OP.i32_load, 2, COUNT_BASE); add(b); b.raw(OP.i32_add).ltee(n).mem(OP.i32_store, 2, COUNT_BASE);
+    due(b, n); b.if_().lget(0).call(this.imp.hot).end();
+    return n;
   }
   /** a method that calls something counts its frame (exc.ts MAX_DEPTH): `entry` takes the depth before it, which is restored on return and at a handler */
   emitEnter(c: Code, entry: number): number[] {

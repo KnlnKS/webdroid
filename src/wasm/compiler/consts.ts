@@ -21,9 +21,10 @@ export const MATH_ARITY = { acos: 1, asin: 1, atan: 1, cbrt: 1, cos: 1, cosh: 1,
 export const HOT_BUDGET = 5000;
 /** The counters of first-tier methods are words of the scratch memory, one per table slot from COUNT_BASE; slots beyond COUNT_SLOTS are not counted. */
 export const COUNT_BASE = 8, COUNT_SLOTS = 1 << 20;
-/** After the counters, a fixed window the host bridge copies arrays through: growing memory during a native would detach the views it holds of its
- *  arguments. Scratch for natives starts after it. */
-export const TRANSFER_BASE = COUNT_BASE + 4 * COUNT_SLOTS, TRANSFER_BYTES = 1 << 18, SCRATCH_BASE = TRANSFER_BASE + TRANSFER_BYTES;
+/** The call-site sketch (profile.ts) follows the counters; a first-tier activation records its call targets when its count is 1 modulo SAMPLE_EVERY. */
+export const PROFILE_BASE = COUNT_BASE + 4 * COUNT_SLOTS, PROFILE_ROWS = 1 << 14, PROFILE_WORDS = 6, SAMPLE_EVERY = 64;
+/** A fixed window the host bridge copies arrays through: growing memory during a native would detach its argument views. Native scratch follows. */
+export const TRANSFER_BASE = PROFILE_BASE + 4 * PROFILE_ROWS * PROFILE_WORDS, TRANSFER_BYTES = 1 << 18, SCRATCH_BASE = TRANSFER_BASE + TRANSFER_BYTES;
 /** A word of the scratch memory that, while set, makes a first-tier method trap as it is entered: the warm Worker calls methods to have the engine compile them (warmshim.ts). */
 export const WARM_AT = 0;
 /** The weight of the frames a stack may hold, counted by the methods that call something (compiler/method.ts): a frame weighs 4 plus its Wasm locals, which is

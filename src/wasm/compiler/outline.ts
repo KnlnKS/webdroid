@@ -226,7 +226,7 @@ export class Outliner {
     mc.pop(); body.end().unreachable();
     mc.pop(); body.end().lset(mc.excLocal); this.status(ChunkStatus.Throw);
     mc.pop(); body.end();
-    if (mc.cx.counting) mc.cx.emitCount(body, mc.m, ch.count);
+    if (mc.cx.counting) mc.cx.emitLoopCount(body, mc.m, ch.count);
     body.defer((c) => { this.saveState(c, ch.locals); c.ret(); });
     for (const l of body.locals) parent.locals.add(l);
     mc.code = parent; mc.nest = nest; this.chunk = outer;

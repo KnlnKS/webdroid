@@ -85,7 +85,7 @@ export interface CHeader extends UnitHeader {
   /** the slots of methods of its classes the module lacks: abstract ones, natives without an implementation, and those the compiler produced invalid code for */
   absent: number[];
 }
-export const VERSION = 22;
+export const VERSION = 23;
 
 /** the module files of a build: the platform build's code (c), data (d) and runtime-function (y) modules, and an app build's code (a), data (e) and runtime-function (s) ones */
 export type AotKind = "c" | "d" | "y" | "a" | "e" | "s";
@@ -115,7 +115,7 @@ function numberingDiff(a: Numbering, b: Numbering): string {
 }
 
 /** an app compiled ahead on top of the platform build (the build `apps.ts` makes): the numbering of what its code names that the platform does not, and code modules a1.. for the app's classes */
-export const APP_VERSION = 22;
+export const APP_VERSION = 23;
 /** what launches built on demand because no saved code had it: method ids, class names and the names of the synthetic functions the host made when asked, in order of first use */
 export interface Demand { methods: string[]; classes: string[]; synths: string[] }
 export interface AppIndex {

@@ -31,6 +31,7 @@ pub const HEAT = abi.JIT_HEAT;
 const MAX_BLOCKS = 40;
 const MAX_INSTR = 640;
 const MAX_REGIONS = 64;
+const MAX_RETURNS = 4;
 
 pub const L_CPU = 0;
 const L_ENTRY = 1;
@@ -142,13 +143,20 @@ export fn jit_config(c: u32) void {
 }
 
 pub const Isa = enum(u8) { a64 = 0, arm = 1, thumb = 2 };
-/// epoch: its page's when it was scanned; an A64 region spans the pages its blocks are on
-pub const Block = struct { pc: u32, epoch: u32, n: u32, taken: i32, fall: i32, exits: bool };
+/// epoch: its page's when it was scanned; installation and cross-page edges validate it.
+/// ret: it ends in a RET, which may continue at any of the region's returns.
+pub const Block = struct { pc: u32, epoch: u32, n: u32, taken: i32, fall: i32, exits: bool, ret: bool = false };
 pub const Region = struct {
     entry: u32,
     isa: Isa,
     nblocks: u32,
     blocks: [MAX_BLOCKS]Block,
+    /// the continuations of the calls into the region
+    returns: [MAX_RETURNS]i32 = undefined,
+    nreturns: u32 = 0,
+    fn isReturn(r: *const Region, block: i32) bool {
+        return std.mem.indexOfScalar(i32, r.returns[0..r.nreturns], block) != null;
+    }
 };
 var regions: [MAX_REGIONS]Region = undefined;
 var nregions: u32 = 0;
@@ -210,12 +218,18 @@ export fn jit_done() void {
 fn blockPage(b: Block) ?*cpu.Page {
     return cpu.decodedPage(b.pc >> abi.PAGE_SHIFT);
 }
-/// A64 blocks may lie on any page the interpreter has decoded, which is all code that has run;
-/// ARM and Thumb stay on the entry's page, where a Thumb instruction cannot straddle into the next.
+/// Blocks may lie on any page the interpreter has decoded. Each block stays within its page;
+/// a Thumb instruction that straddles pages is left to the interpreter.
 pub fn blockFor(r: *Region, pc: u32) i32 {
     for (r.blocks[0..r.nblocks], 0..) |b, i| if (b.pc == pc) return @intCast(i);
-    if (r.nblocks >= MAX_BLOCKS or (r.isa != .a64 and (pc ^ r.entry) >> abi.PAGE_SHIFT != 0)) return -1;
+    if (r.nblocks >= MAX_BLOCKS) return -1;
     const page = cpu.decodedPage(pc >> abi.PAGE_SHIFT) orelse return -1;
+    // A decoded page may contain cold branch targets. Cross it only at an observed entry,
+    // rather than increasing ARM32's register and code footprint for paths that never ran.
+    if (r.isa != .a64 and (pc ^ r.entry) >> abi.PAGE_SHIFT != 0) {
+        const at = (pc & (abi.PAGE_SIZE - 1)) >> 1;
+        if (page.heat[at] == 0 and page.slot[at] == 0) return -1;
+    }
     r.blocks[r.nblocks] = .{ .pc = pc, .epoch = page.epoch, .n = 0, .taken = -2, .fall = -2, .exits = false };
     r.nblocks += 1;
     return @intCast(r.nblocks - 1);
@@ -228,6 +242,14 @@ fn scanA64(r: *Region, i: u32, page: *cpu.Page, pc: u32) jit32.Scan {
         .nop => mem.ld(u32, pc) & 0xfffff0ff == 0xd50330df,
         .b => blk: {
             r.blocks[i].taken = blockFor(r, @truncate(o.imm));
+            // a call into the region brings in its continuation, for the callee's RET to branch to
+            if (o.a != 0 and r.blocks[i].taken >= 0 and r.nreturns < MAX_RETURNS) {
+                const ret = blockFor(r, next);
+                if (ret >= 0) {
+                    r.returns[r.nreturns] = ret;
+                    r.nreturns += 1;
+                }
+            }
             break :blk true;
         },
         .bcond, .cbz, .tbz => blk: {
@@ -235,7 +257,11 @@ fn scanA64(r: *Region, i: u32, page: *cpu.Page, pc: u32) jit32.Scan {
             r.blocks[i].fall = blockFor(r, next);
             break :blk true;
         },
-        .br, .svc, .fault => true,
+        .br => blk: {
+            r.blocks[i].ret = o.a == 2;
+            break :blk true;
+        },
+        .svc, .fault => true,
         else => false,
     };
     return .{ .len = 4, .ends = ends };
@@ -252,6 +278,11 @@ fn discover(r: *Region) bool {
         const page = blockPage(r.blocks[i]).?;
         var n: u32 = 0;
         while (true) {
+            // An instruction straddling pages depends on both pages' epochs: leave it to the interpreter.
+            if ((pc & (abi.PAGE_SIZE - 1)) == abi.PAGE_SIZE - 2 and ilen(.thumb, pc) == 4) {
+                r.blocks[i].fall = -1;
+                break;
+            }
             const s = switch (r.isa) {
                 .a64 => scanA64(r, i, page, pc),
                 .arm => jit32.scanArm(r, i, page, pc),
@@ -271,7 +302,7 @@ fn discover(r: *Region) bool {
     // The blocks registered after that hold no instructions, so entering one leaves the region:
     // the flags a predecessor still keeps pending must be settled on that edge as on any exit.
     for (r.blocks[i..r.nblocks]) |*b| b.exits = true;
-    return r.nblocks > 0;
+    return r.blocks[0].n != 0;
 }
 
 pub const RW = struct { r: u32, w: u32, fr: u4 = 0, fw: u4 = 0, cond: bool = false };
@@ -576,8 +607,9 @@ pub fn Emit(comptime wide: bool) type {
             e.countIc(k);
             if (target < 0) return e.exitTo(pc);
             const to = e.r.blocks[@intCast(target)];
-            if ((to.pc ^ e.r.blocks[e.blk].pc) >> abi.PAGE_SHIFT != 0) {
-                // a store may since have dropped the page the target was compiled from
+            // A store may since have dropped the page the target was compiled from. A callee may
+            // also have rewritten its caller's continuation on its own page.
+            if ((to.pc ^ e.r.blocks[e.blk].pc) >> abi.PAGE_SHIFT != 0 or e.r.isReturn(target)) {
                 const page = @intFromPtr(blockPage(to).?);
                 e.b.emit(.{ c32(0), mo(O.i32_load, cpu.DECODED + (to.pc >> abi.PAGE_SHIFT) * 4), c32(@bitCast(page)), O.i32_ne,
                     c32(0), mo(O.i32_load, page + @offsetOf(cpu.Page, "epoch")), c32(@bitCast(to.epoch)), O.i32_ne, O.i32_or });
@@ -898,6 +930,16 @@ pub fn Emit(comptime wide: bool) type {
                     if (o.a == 1) {
                         b.i64c(pc + 4);
                         e.setX(30);
+                    }
+                    if (o.a == 2) {
+                        e.settle(15);
+                        for (e.r.returns[0..e.r.nreturns]) |target| {
+                            const to = e.r.blocks[@intCast(target)];
+                            b.emit(.{ get(L_RET), c32(@bitCast(to.pc)), O.i32_eq });
+                            e.ifv();
+                            e.transfer(target, to.pc, k);
+                            e.endif();
+                        }
                     }
                     e.countIc(k);
                     e.exitRet();
@@ -1295,7 +1337,9 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region) void {
             changed = false;
             for (r.blocks[0..n], 0..) |blk, i| {
                 const out = wb[i] | writes[i];
-                for ([_]i32{ blk.taken, blk.fall }) |x| if (x >= 0) {
+                const branches = [_]i32{ blk.taken, blk.fall };
+                const returns: []const i32 = if (blk.ret) r.returns[0..r.nreturns] else &.{};
+                for ([_][]const i32{ &branches, returns }) |edges| for (edges) |x| if (x >= 0) {
                     const j: usize = @intCast(x);
                     if (wb[j] | out != wb[j]) {
                         wb[j] |= out;

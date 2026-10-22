@@ -5,6 +5,9 @@ The targets are in-app latency and frame pacing: launch to first app frame, ever
 the [implementation history](implementation-history.md) records each measurement and rejected experiment, so check
 it before retrying an idea.
 
+The [2026-10-21 design investigation](performance-design.md) records the native region and call-site feedback
+experiments, their measurements and evidence limits, and the larger designs left open.
+
 ## Measuring
 
 ```bash

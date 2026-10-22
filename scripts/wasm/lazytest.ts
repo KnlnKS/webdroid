@@ -8,6 +8,7 @@ import { decodeInstructions } from "../../src/jvm/prepared.ts";
 import { JAVA, platformJars } from "./paths.ts";
 import { checker } from "./tools.ts";
 import { filesIn, fixture } from "../java.ts";
+import { UnitCompiler } from "../../src/wasm/link/unit.ts";
 import { Natives } from "../../src/wasm/host/natives.ts";
 
 const jars = platformJars("core-oj", "core-libart");
@@ -66,6 +67,22 @@ for (const [hot, own] of [[false, false], [true, false], [true, true]]) {
   w.addDexes(loadDexes(join(out, "out2/classes.dex")));
   check("a falsified assumption undoes the second tier too", w.stats.invalidated >= 1, true);
   check("and the method is compiled afresh", call(1000), 11 * 1000);
+}
+
+{
+  const w = lz({ holdUpgrades: () => true }), make = w.entry("Lz", "fn", "(I)LLz$Fn;"), call = w.entry("Lz", "sites", "(LLz$Fn;LLz$Fn;)I");
+  const [x, y, z] = [0, 1, 2].map(n => make(n));
+  const global = w.entry("Lz$X", "value", "()I");
+  for (let i = 0; i < 10000; i++) global(x);
+  for (let i = 0; i < 1024; i++) call(y, z);
+  const m = w.prog.resolve("Lz", "sites", "(LLz$Fn;LLz$Fn;)I")!, group = w.planner.group(m);
+  check("separate sites prefer their own receivers", [...group.plan.values()].map(ms => ms.map(m => m.cls).join()).join(";"), "Lz$Y;Lz$Z");
+  const slot = w.slotOf(m), job = w.tiers.upgradeJob(slot)!, worker = new UnitCompiler(lz({ compileOnly: true }));
+  check("profile worker follows numbering", worker.sync(w.numbers.since(w.base), true), true);
+  const compiled = worker.upgrade(job);
+  check("profiled unit installs from a worker", typeof compiled !== "string" && w.tiers.adoptUnit(slot, job, compiled, w.epoch), true);
+  check("profiled guards answer", call(y, z), 57);
+  check("profiled guards fall back for changed receivers", call(z, x), 73);
 }
 
 // ---- implicit exceptions: class (caught by Java code) and message (computed by the host)

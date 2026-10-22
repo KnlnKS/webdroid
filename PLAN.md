@@ -1,4 +1,4 @@
-# Webdroid status — 2026-10-20
+# Webdroid status — 2026-10-21
 
 This file tracks where the work stands and what is open. [AGENTS.md](AGENTS.md) defines the working and
 verification rules, [docs/architecture.md](docs/architecture.md) the design, [docs/performance.md](docs/performance.md)
@@ -51,6 +51,10 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
   `main`; both build paired previews for other branches. See [deployment.md](docs/deployment.md).
 
 ## Gate state
+
+The 2026-10-21 native-region and call-site experiments pass the gates listed in their
+[verification report](docs/performance-design.md#verification), which also records a cold FitNotes page crash and
+an intermittent Chrome startup SIGILL. Negligible overhead across all apps remains open.
 
 After the second code-quality pass (2026-10-20; history, "Second code-quality pass (2026-10-20)"): typecheck passes,
 along with 1,187 unit tests, all `wasm all` suites, `fwtest` (31 of 31), desccheck (no mismatches), `build:prod` and the
@@ -148,8 +152,9 @@ Unranked; each needs a measurement or a check against the current code before wo
   whole root display list (no damage tracking); measure raster time on a hardware GPU first.
 - **GLES:** `keepsClean` validation excludes draws, uniforms and state setters, so `gl.getError` follows them;
   Google Maps' two `getError`s per frame come through the untracked Java bindings (history, EGL/GLES).
-- **ARM JIT:** ARM32 regions still end at 4 KiB pages, so a call or return to another page spills and reloads (A64
-  regions span pages and ARM32 ones spill only the registers they name since 2026-10-16); CPU-bound games are unmeasured.
+- **ARM JIT:** ARM32 regions now cross pages at observed entries, avoiding transfers on direct branches;
+  calls and returns still spill and reload. Cross-page loop gains are large, Doodle Jump's frame rate unchanged
+  ([measurements and further designs](docs/performance-design.md)); broader CPU-bound games remain unmeasured.
 - **Native:** `AndroidBitmap_lockPixels` copies and converts the whole bitmap per lock; a file read compares a
   writable `MAP_SHARED` mapping whole; `fork`, `vfork` and non-thread `clone` return EAGAIN (exec ENOSYS), so `popen`,
   `system`, `Runtime.exec` and shelling out to `getprop` fail.

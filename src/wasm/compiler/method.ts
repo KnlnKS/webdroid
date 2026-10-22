@@ -1,4 +1,5 @@
 import { emitSymbolicSite, siteKey } from "./sites.ts";
+import { emitProfile } from "./profile.ts";
 import { STRING, stringSite } from "./strings.ts";
 import { Code, OP, inlineMark } from "./code.ts";
 import { T, ref, refNull, type VT } from "./wasmbin.ts";
@@ -92,6 +93,8 @@ export class MC {
   root!: Code;
   /** the loops and dispatch cycles that run in functions of their own (outline.ts), if the method has any to outline */
   private loops?: Outliner;
+  /** set in a first-tier activation that records its call targets (Compiler.emitCount) */
+  private sampled = -1;
   constructor(cx: Compiler, m: MethodInfo) {
     this.cx = cx; this.m = m;
     this.dex = m.dex; this.types = cx.prog.typesOf(m.dex); this.item = m.dex.code(m.codeOff);
@@ -197,7 +200,10 @@ export class MC {
     if (this.frame.whole) this.weights.push(...cx.emitEnter(c, this.entryDepth = c.newLocal(T.i32)));
     // a deferred loop's iterations count toward the method's budget when it returns
     if (this.loops?.deferred) this.fuelLocal = c.newLocal(T.i32);
-    if (cx.counting) cx.emitCount(c, m);
+    if (cx.counting) {
+      if (prepared.instructions.some((ins) => typing.reached(ins.pc) && this.profiles(ins))) this.sampled = c.newLocal(T.i32);
+      cx.emitCount(c, m, this.sampled);
+    }
     const regions = flow.regions;
     regions.forEach((r, i) => this.regionOfPc.set(prepared.start[r.entry], i));
     if (regions.length === 1 && !this.tries) {
@@ -288,11 +294,16 @@ export class MC {
     const s = t.steps.find((s) => "call" in s);
     return s && "call" in s && !isEmpty(this.bodyOf(s.call)) ? s.call : null;
   }
+  /** whether the first tier records the targets of call `ins` (profile.ts): a virtual call with more than one implementation */
+  private profiles(ins: Ins): boolean {
+    if (!isInvoke(ins.op) || ins.op >= 0xfa || this.deferredSite(ins)) return false;
+    const b = this.binding(ins);
+    return b?.k === "virtual" && !b.only;
+  }
   /** the implementations a virtual call tests for before it dispatches: the only one, else the unit's likely ones (Compiler.guards), if the unit has them */
   guards(ins: Ins, b: Extract<Binding, { k: "virtual" }>): MethodInfo[] {
     if (b.only) return this.cx.directFunc(b.only) === undefined ? [] : [b.only];
-    const { decl, name, desc } = this.invoke(ins);
-    return this.cx.guards(decl, name, desc);
+    return this.cx.guards(this.m, ins);
   }
   private invokes = new Map<number, InvokeSite>();
   /** the reference of an invoke other than invoke-polymorphic and invoke-custom, and what it resolves to, read once per site */
@@ -341,7 +352,7 @@ export class MC {
   }
   methodReturn(): void {
     if (this.loops?.ret()) return;
-    if (this.cx.counting && this.fuelLocal >= 0) this.cx.emitCount(this.code, this.m, this.fuelLocal);
+    if (this.cx.counting && this.fuelLocal >= 0) this.cx.emitLoopCount(this.code, this.m, this.fuelLocal);
     this.leave(); this.code.ret();
   }
   emitBlock(b: number) {
@@ -716,7 +727,10 @@ export class MC {
         for (const g of guards) { c.lget(slot).i32(cx.w.slotOf(g)).raw(OP.i32_eq).ifType(type); wrap(mid(g), () => cx.callMethod(c, g)); c.else_(); }
         c.lget(slot); wrap("f", () => c.callIndirect(type));
         for (const _ of guards) c.end();
-      } else c.callIndirect(type);
+      } else {
+        if (this.sampled >= 0 && this.profiles(ins)) emitProfile(cx, c, this.m, ins, this.sampled);
+        c.callIndirect(type);
+      }
     }
     if (site) this.leaveSite();
     this.finishResult(ins, retK);

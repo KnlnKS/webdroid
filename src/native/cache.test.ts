@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "vite-plus/test";
-import { codeStats, invalidateRange, setA64, SliceExit } from "./cpu.ts";
+import { codeStats, invalidateRange, setA64, SliceExit, type Cpu } from "./cpu.ts";
 import { mem } from "./mem.ts";
-import { finish, RET, run } from "./a64.testkit.ts";
+import { execute, finish, RET, run } from "./a64.testkit.ts";
 import { JIT_HEAT, jitEvict, jitStats } from "./core.ts";
 import { LOW, RET_SENTINEL } from "./abi.ts";
 
@@ -95,6 +95,20 @@ describe("the decode cache", () => {
     expect(jitStats.regions).toBeGreaterThan(compiled);
     mem.st32(callee, movW0(2));
     expect(execute()).toBe(2);
+  });
+
+  test.each([0, 4096 - 20])("a compiled return checks its modified continuation page at offset %i and keeps callee state", offset => {
+    const base = mem.reserve(8192, 4096), at = base + offset, leaf = at + 20;
+    [0xaa1e03f3, 0x94000004, 0x11000800, 0xaa1303fe, RET].forEach((word, i) => mem.st32(at + i * 4, word));
+    [0x34000042, 0xb9000123, 0x31000c04, RET].forEach((word, i) => mem.st32(leaf + i * 4, word));
+    const setup = (write: number) => (c: Cpu) => {
+      c.w[0] = 5; c.w[4] = write; c.w[6] = 0x11001000; c.w[18] = at + 8;
+    };
+    const before = jitStats.regions;
+    for (let i = 0; i <= JIT_HEAT + 1; i++) expect(execute(at, setup(0)).w[0]).toBe(7);
+    expect(jitStats.regions).toBeGreaterThan(before);
+    const c = execute(at, setup(1));
+    expect([c.w[0], c.w[8], c.cpsr >>> 28]).toEqual([9, 8, 0]);
   });
 
   test("a store into the page's data leaves its decoded code alone", () => {

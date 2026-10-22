@@ -8,6 +8,8 @@ import { insnLen, invokeKind, isInvoke } from "../../jvm/opcodes.ts";
 import { instructionClass } from "./resolution.ts";
 import type { Tiering } from "./tiering.ts";
 import type { World } from "./world.ts";
+import { siteKey } from "../compiler/sites.ts";
+import { siteProfile } from "../compiler/profile.ts";
 import { HOT_BUDGET } from "../compiler/consts.ts";
 
 /** the most methods a first-tier unit holds (Planner.batch) */
@@ -87,21 +89,23 @@ export class Planner {
     if (this.tiers.asked(slot) || this.w.opts.intrinsics.has(mid(t))) return HOT_BUDGET;
     return sl.done ? this.tiers.count(slot) : 0;
   }
-  /** a method's call sites, and the classes it allocates and refers to */
-  private planningSites = new Map<MethodInfo, { calls: PreparedInstruction[]; allocations: string[]; references: string[] }>();
+  /** a method's call sites (`invokes`) and its first call of each method reference (`calls`), and the classes it allocates and refers to */
+  private planningSites = new Map<MethodInfo, { invokes: PreparedInstruction[]; calls: PreparedInstruction[]; allocations: string[]; references: string[] }>();
   planning(m: MethodInfo) {
     let sites = this.planningSites.get(m);
     if (!sites) {
-      const seen = new Set<string>(), allocations = new Set<string>(), references = new Set<string>(), calls: PreparedInstruction[] = [], types = this.w.prog.typesOf(m.dex);
+      const seen = new Set<string>(), allocations = new Set<string>(), references = new Set<string>(), invokes: PreparedInstruction[] = [], calls: PreparedInstruction[] = [];
+      const types = this.w.prog.typesOf(m.dex);
       for (const ins of decodeInstructions(m.dex.code(m.codeOff).insns)) {
         const name = ins.op !== 0xfa && ins.op !== 0xfb && instructionClass(m, ins);
         if (name) references.add(name);
         if (ins.op === 0x22) allocations.add(types.typeName(ins.b));
         if (!isInvoke(ins.op) || ins.op >= 0xfa) continue;
+        invokes.push(ins);
         const key = `${ins.op}:${ins.b}`;
         if (!seen.has(key)) { seen.add(key); calls.push(ins); }
       }
-      this.planningSites.set(m, sites = { calls, allocations: [...allocations], references: [...references] });
+      this.planningSites.set(m, sites = { invokes, calls, allocations: [...allocations], references: [...references] });
     }
     return sites;
   }
@@ -120,29 +124,40 @@ export class Planner {
   }
   /** `m`'s calls as the compiler binds them (MC.binding): the method each one reaches when that is known (a call bound statically, or a virtual call with one
    *  implementation) and a virtual call's implementations. A call that does not link, or copies an array, calls no method. */
-  *calls(m: MethodInfo): Generator<{ t?: MethodInfo; targets?: MethodInfo[]; decl: string; name: string; desc: string }> {
-    // Cache bytecode references, not eligibility or targets: loader initiation can change both.
-    for (const ins of this.planning(m).calls) {
+  calls(m: MethodInfo) { return this.bind(m, this.planning(m).calls); }
+  // Cache bytecode references, not eligibility or targets: loader initiation can change both.
+  private *bind(m: MethodInfo, calls: PreparedInstruction[]): Generator<{ ins: PreparedInstruction; t?: MethodInfo; targets?: MethodInfo[]; decl: string; name: string; desc: string }> {
+    for (const ins of calls) {
       if (this.w.needsSymbolicSite(m, ins)) continue;
       const kind = invokeKind(ins.op), { decl, name, desc, target } = invokeSite(this.w.prog, m, ins.b, kind);
       if (target === "clone" || failed(target)) continue;
-      if (staticallyBound(this.w, kind, decl, target)) { yield { t: target, decl, name, desc }; continue; }
+      if (staticallyBound(this.w, kind, decl, target)) { yield { ins, t: target, decl, name, desc }; continue; }
       const targets = this.w.cha.targets(decl, name, desc);
-      yield { t: targets.length === 1 ? targets[0] : undefined, targets, decl, name, desc };
+      yield { ins, t: targets.length === 1 ? targets[0] : undefined, targets, decl, name, desc };
     }
   }
-  /** Direct callees followed by guarded implementations, preserving their planning order; `plan` gets the small implementations, among the allocated classes', each virtual call tests for first. */
+  /** Direct callees followed by guarded implementations, preserving their planning order; `plan` gets the implementations each virtual call tests for first. */
   private callees(m: MethodInfo, plan: Map<string, MethodInfo[]>): MethodInfo[] {
     const direct: MethodInfo[] = [], guarded: MethodInfo[] = [];
-    for (const { t, targets, decl, name, desc } of this.calls(m)) {
+    for (const { ins, t, targets, decl, name, desc } of this.bind(m, this.planning(m).invokes)) {
       if (t && t !== m && this.inlinable(t) && !direct.includes(t)) direct.push(t);
       if (!targets) continue;
-      const key = `${decl}.${name}${desc}`;
-      let choices = plan.get(key);
-      if (!choices) plan.set(key, choices = targets.length > 1 ? this.likely(decl, name, desc) : []);
+      const choices = this.siteGuards(m, ins, decl, name, desc, targets.length);
+      plan.set(siteKey(m, ins), choices);
       for (const choice of choices) if (!guarded.includes(choice)) guarded.push(choice);
     }
     return direct.concat(guarded);
+  }
+  /** the small implementations a virtual call tests for: those its first-tier runs reached, else the busiest among the allocated classes' */
+  private siteGuards(m: MethodInfo, ins: PreparedInstruction, decl: string, name: string, desc: string, implementations: number): MethodInfo[] {
+    const profile = siteProfile(this.w.mem.buffer, m, ins);
+    if (profile === "unseen") return implementations > 1 ? this.likely(decl, name, desc) : [];
+    if (profile === "broad") return [];
+    // a row another call collided into names that call's targets
+    return profile.flatMap((slot) => {
+      const t = this.w.slots.peekMethod(slot)?.m;
+      return t && !t.isStatic && t.name === name && t.desc === desc && this.inlinable(t) ? [t] : [];
+    });
   }
   /** the classes `m` allocates join the allocated set before its virtual calls are planned: it is about to run */
   private noteAllocations(m: MethodInfo): void {
