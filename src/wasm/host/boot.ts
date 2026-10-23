@@ -172,7 +172,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
       const early = BURN_AFTER_INPUT_MS - sinceInput();
       if (early > 0) await new Promise((resolve) => setTimeout(resolve, early + 1));
       // the build code earlier launches went on to run is linked before an interaction first calls it
-      try { if (code) while (quiet(BURN_AFTER_INPUT_MS) && world.aot?.linkAhead(code.recorded, performance.now() + AHEAD_SLICE_MS)) await turn(); }
+      try { if (code) while (quiet(BURN_AFTER_INPUT_MS) && world.aot?.linkAhead(performance.now() + AHEAD_SLICE_MS)) await turn(); }
       catch (e) { console.warn("[webdroid] linking ahead failed", e); return; }
       try { while (quiet(BURN_AFTER_INPUT_MS) && world.burner.burn(performance.now() + AHEAD_SLICE_MS)) await turn(); aheading = false; }
       catch (e) { console.warn("[webdroid] burning failed", e); }

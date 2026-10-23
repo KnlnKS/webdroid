@@ -373,13 +373,21 @@ export class AotRuntime {
   loaded: string[] = [];
   /** Files absent on first use. A preflight data miss can retry until World.link begins publishing fallback globals for its group. */
   missed = new Set<string>();
-  private ready(file: string): boolean {
+  /** whether `file` is here to load; `note` records one that is not as missed */
+  private ready(file: string, note = true): boolean {
     const missed = this.missed.has(file), f = parseAotFile(file);
     if (this.rejectedData.has(file) || f?.kind === "d" && this.fallbackD.has(f.n)) return false;
     if (missed && f?.kind !== "c" && f?.kind !== "d") return false;
     if (this.store!.get(file)) return true;
-    if (!missed) { this.missed.add(file); this.w.stats.aot.missed++; }
+    if (note && !missed) { this.missed.add(file); this.w.stats.aot.missed++; }
     return false;
+  }
+  /** whether the data modules code module `head` imports are here or stood in for. Noting misses looks at every one: stopping at the first would delay the
+   *  delivery of the rest */
+  private dataReady(head: CHeader, note = true): boolean {
+    let ready = true;
+    for (const g of head.mods) if (!this.fallbackD.has(g) && !this.ready(aotFile("d", g), note)) { ready = false; if (!note) break; }
+    return ready;
   }
   /** a file of the build as a compiled module, or undefined for a miss */
   private module(file: string): WebAssembly.Module | undefined {
@@ -482,24 +490,24 @@ export class AotRuntime {
     if (!loaded && this.cState[c] === DEAD) for (const p of this.app?.patchesOver.get(c) ?? []) loaded = this.loadC(p) || loaded;
     return loaded && !!this.w.slots.at(slot)?.done;
   }
-  /** the code modules linkAhead has yet to look at, the next last; made on its first call */
-  private ahead?: number[];
-  /** Idle time: links the code modules that earlier launches of the app loaded (`files`, the platform's in the order a launch wanted them) and ran build code of
-   *  (`slots`) until `until`, as the first call of one of their methods would, so that an interaction's first calls find their code in place rather than link it
-   *  on the way (the training run of ahead-of-time class loading and linking, JEP 483). Whether any is left. */
-  linkAhead(recorded: { files: readonly string[]; slots?: Int32Array }, until: number): boolean {
+  /** the code modules linkAhead links, the next last */
+  private linkQueue: number[] = [];
+  /** has linkAhead link the code modules that earlier launches of the app loaded (`files`, the platform's in the order a launch wanted them) and ran build code of (`slots`) */
+  planLinks(files: readonly string[], slots: Int32Array = new Int32Array()): void {
+    const order = new Set<number>();
+    for (const file of files) { const f = parseAotFile(file); if (f?.kind === "c") order.add(f.n); }
+    for (const slot of slots) { const b = this.w.slots.blockOf(slot), c = b < 0 ? -1 : this.cOf[b] ?? -1; if (c >= 0) order.add(c); }
+    this.linkQueue = [...order].reverse();
+  }
+  /** Idle time: links the planned code modules until `until`, as the first call of one of their methods would, so that an interaction's first calls find their
+   *  code in place rather than link it on the way (the training run of ahead-of-time class loading and linking, JEP 483). Whether any is left. */
+  linkAhead(until: number): boolean {
     if (!this.w.instantiates) return false;
-    if (!this.ahead) {
-      const order = new Set<number>();
-      for (const file of recorded.files) { const f = parseAotFile(file); if (f?.kind === "c") order.add(f.n); }
-      for (const slot of recorded.slots ?? []) { const b = this.w.slots.blockOf(slot), c = b < 0 ? -1 : this.cOf[b] ?? -1; if (c >= 0) order.add(c); }
-      this.ahead = [...order].reverse();
+    while (this.linkQueue.length && performance.now() < until) {
+      const c = this.linkQueue.pop()!;
+      if (!this.cState[c] && this.linkable(c) && this.loadC(c)) this.w.stats.aot.linkedAhead++;
     }
-    while (this.ahead.length && performance.now() < until) {
-      const c = this.ahead.pop()!;
-      if (!this.cState[c] && this.linkable(c) && this.loadC(c)) this.w.stats.aot.ahead++;
-    }
-    return this.ahead.length > 0;
+    return this.linkQueue.length > 0;
   }
   /** whether code module `c` links now with nothing to fetch, compile or wait for: compiled, its natives bound, its data here and, for the app build's, the root's
    *  libraries those it was compiled under. One that does not is left to the first call of one of its methods, which links or gives it up as before. */
@@ -508,8 +516,8 @@ export class AotRuntime {
     if (app && !this.boundAsBuilt()) return false;
     const mod = this.store?.get(app ? aotFile("a", c - this.appFrom) : aotFile("c", c));
     if (!mod || ArrayBuffer.isView(mod)) return false;
-    const head = header<CHeader>(mod), store = this.store!;
-    return this.w.units.admits(head) && head.mods.every((g) => this.fallbackD.has(g) || !!this.dExports[g] || !this.rejectedData.has(aotFile("d", g)) && !!store.get(aotFile("d", g)));
+    const head = header<CHeader>(mod);
+    return this.w.units.admits(head) && this.dataReady(head, false);
   }
   private loadC(c: number): boolean {
     if (this.cState[c]) return this.cState[c] === LIVE;
@@ -517,10 +525,7 @@ export class AotRuntime {
     if (!mod) { if (app) this.cState[c] = DEAD; return false; }
     const head = header<CHeader>(mod);
     if (!w.units.admits(head)) { this.cState[c] = DEAD; w.stats.aot.dead++; return false; }
-    // Request the whole dependency set now: stopping at the first miss delays delivery of the remaining original globals.
-    let dataReady = true;
-    for (const g of head.mods) if (!this.fallbackD.has(g) && !this.ready(aotFile("d", g))) dataReady = false;
-    if (!dataReady) return false;
+    if (!this.dataReady(head)) return false;
     if (!head.mods.every(g => this.fallbackD.has(g) || !!this.loadD(g))) { this.cState[c] = DEAD; w.stats.aot.dead++; return false; }
     const absent = new Set(head.absent), taken = w.hosts.taken();
     if (this.overriddenSeen !== taken.size) {

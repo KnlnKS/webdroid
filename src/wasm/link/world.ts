@@ -95,7 +95,7 @@ export type WorldStats = {
   phase: { prepare: number; flow: number; infer: number; facts: number; emit: number; encode: number; classBuild: number };
   /** the platform build's modules: data and code modules loaded, code modules dead, files missed, the time and bytes reading and loading them took, and the code
    *  modules linked ahead in idle time (AotRuntime.linkAhead) */
-  aot: { d: number; c: number; dead: number; missed: number; readMs: number; ms: number; bytes: number; ahead: number };
+  aot: { d: number; c: number; dead: number; missed: number; readMs: number; ms: number; bytes: number; linkedAhead: number };
   /** classes linked on demand, units and the methods in them, and the classes' time (ms) */
   classes: number; units: number; methods: number; classMs: number;
   /** callers' stacks captured at bridges that suspended */
@@ -121,7 +121,7 @@ export class World {
   /** the message the last implicit exception would carry; stored in the Throwable once Strings exist */
   lastMessage: string | null = null;
   stats: WorldStats = {
-    phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, missed: 0, readMs: 0, ms: 0, bytes: 0, ahead: 0 },
+    phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, missed: 0, readMs: 0, ms: 0, bytes: 0, linkedAhead: 0 },
     classes: 0, units: 0, methods: 0, classMs: 0, bridgeCallerCaptures: 0, bytes: 0, moduleMs: 0, instances: 0, instantiateMs: 0, compileMs: 0,
     invalidated: 0, upgrades: 0, merged: 0, retired: 0, collected: 0, ahead: 0, burned: 0,
   };
