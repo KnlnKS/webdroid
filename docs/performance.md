@@ -93,7 +93,22 @@ e2e has no profiling switch; use Chrome's remote debugging port:
 
 ## Current numbers
 
-With the build tier's direct calls, final binding and in-place bodies (`knlnks/perf-build-tier`, build `9a68aa31`,
+With idle burning, linking ahead and early frames (2026-10-22), against the starting commit `98707f3d` in its own
+worktree and platform build: `--gpu`, one job, Apple M4 Pro, 3 alternating first launches per side; warm from the
+three runs of the last matched A/B (`--warm --repeat 4`). First launches matched the base's on this host, which ran
+slower that day than for the tables below.
+
+| | First launch, branch | First launch, base | Warm, branch |
+|---|---|---|---|
+| Komikku launch | 6.38–6.47 s | 6.36–8.98 s | 2.31–2.37 s |
+| Komikku taps (medians) | `next` 12, `start` 40, `more` 47, `settings` 44, `appearance` 88 | `next` 27, `start` 56, `more` 56, `settings` 49, `appearance` 104 | `next` 12, `start` 52, `more` 44, `settings` 32–48, `appearance` 47–54 |
+| Calculator M launch / taps | 2.90–2.98 s / 4–14 ms | 2.92–3.00 s / 6–19 ms | 1.34–1.37 s / 4–17 ms |
+| FitNotes launch / taps | 2.64–2.65 s / 6–60 ms (`start` 60) | 2.60–2.66 s / 6–73 ms (`start` 73) | 1.33–1.35 s / 7–37 ms (`start` 37) |
+
+Sums of per-tap medians on first launches fell 21% (Komikku), 40% (Calculator M) and 15% (FitNotes); one base run
+failed the gate (Komikku `appearance` 154 ms).
+
+Earlier, with the build tier's direct calls, final binding and in-place bodies (`knlnks/perf-build-tier`, build `9a68aa31`,
 one cold and one warm `--gpu` run, 2026-10-20; not a matched comparison with the table below):
 
 | | First launch | Warm |
@@ -191,7 +206,19 @@ FitNotes launching in 3,366 ms cold and 2,427 ms warm, Calculator's taps at 60�
   and an empty, accessor, check or straight-line body runs in place (`inline.ts`). Komikku's repeat Appearance
   `doFrame` fell from about 37 to 32 ms with these. GC takes 2–4% of heavy frames; the rest is Java (62–66%) and
   display-list replay.
-- **First visits with a build** run compiled code; what remains is the app's Java and first uses. A platform font
+- **Baseline code that ran too little to tier up.** V8 optimizes a function once its calls and back-edges charge a
+  budget scaled by its size, so a screen's first-tier code, run a few hundred times, would stay Liftoff code for the
+  launch. From 250 ms after the last input the burner (`burn.ts`) calls each first-tier method that has run 64 calls
+  through its warm exit 32,768 times, so the engine optimizes it in the background with its real calls' feedback:
+  Komikku's repeat Appearance fell from 60–69 to 47–50 ms intended (history, "Burning first-tier code in idle time").
+- **Frame boundaries quantize a tap.** An answer takes two or three frames, and each began at the next virtual vsync.
+  The frame asked for within a period of a touch down or up or a key, or after a period without a vsync, now begins
+  as soon as no main-thread frame is open (`vsync.ts startEarly`), and so does a frame an animation asked for before
+  the input: sums of per-tap medians fell 10% (Komikku), 28% (Calculator M) and 17% (FitNotes), and starting the
+  already-asked frame took Calculator M's another 36% (history, "Early frames for input").
+- **First visits with a build** run compiled code; what remains is the app's Java and first uses. The platform code
+  modules earlier launches loaded are linked while idle (`AotRuntime.linkAhead`), so a first visit's first calls
+  find them in place: FitNotes' first `start` 48–57 → 39 ms (history, "Linking ahead what earlier launches loaded"). A platform font
   file loads whole on first shaping and its CSS face is validated on registration, so the large fallback files (CJK,
   color emoji, Tibetan) are read ahead while idle after the first frame; a small one costs a few ms on first use.
 - **Cold taps without a build** (a background process, code outside the build) are mostly on-demand compiling, one

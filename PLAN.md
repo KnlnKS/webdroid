@@ -1,4 +1,4 @@
-# Webdroid status — 2026-10-21
+# Webdroid status — 2026-10-22
 
 This file tracks where the work stands and what is open. [AGENTS.md](AGENTS.md) defines the working and
 verification rules, [docs/architecture.md](docs/architecture.md) the design, [docs/performance.md](docs/performance.md)
@@ -37,7 +37,15 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
   (2026-10-14). V8 inlines only calls within a module, and Liftoff none. Build code therefore calls a module's
   statically bound methods directly, binds calls of final classes and methods, and runs empty, accessor, check and
   straight-line bodies in place. Komikku's repeat Appearance `doFrame` fell from about 37 to 32–34 ms (history,
-  "Final binding and trivial inlining", "Straight-line bodies in place"). Measured and not levers: the engine code
+  "Final binding and trivial inlining", "Straight-line bodies in place"). In idle time from 250 ms after an
+  input the burner has the engine optimize first-tier code that ran 64 calls, which the engine's own budget would leave
+  baseline code (Komikku's repeat Appearance 60–69 → 47–50 ms), the platform code modules earlier launches loaded are
+  linked ahead of their first call (FitNotes' first `start` 48–57 → 39 ms), and the frame that answers an input
+  begins as soon as no frame is open rather than at the next refresh (sums of per-tap medians −10 to −28%, Calculator
+  M a further −36%; history, "Burning first-tier code in idle time", "Linking ahead what earlier launches loaded",
+  "Early frames for input"). Against the starting commit, first launches' sums of per-tap medians fell 21%
+  (Komikku), 40% (Calculator M) and 15% (FitNotes) with first frames unchanged ([performance.md](docs/performance.md),
+  2026-10-22). Measured and not levers: the engine code
   cache, GC (2–4% of heavy frames), nested inlining and guarded inlining of a virtual call's one loaded
   implementation. See [performance.md](docs/performance.md).
 - **Compatibility:** the original 20-APK scope and the 15-app open-source corpus all draw an initial frame; neither
@@ -169,6 +177,10 @@ Unranked; each needs a measurement or a check against the current code before wo
   served; A64 exclusive-monitor semantics are unverified.
 - **Harness:** the emulator recorder runs online, so re-recording Mihon's references would capture its update
   dialog.
+- **Tap candidates** (2026-10-22, from profiles; unmeasured as changes): YouTube's first RuntimeShader creates a
+  WebGL context in its tap (~9 ms), which could be made while idle; a caught exception captures its Java stack
+  eagerly whenever bridged callers exist (~1.5 ms a Komikku tap); a LaunchRecord's ran slots are keyed by the build
+  id, so after a rebuild they are not used.
 - **Maintainability:** shaping is cached for measurement but not for layout; two deflate libraries (fflate and pako).
 
 ## Verification for changed behavior
