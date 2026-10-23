@@ -56,7 +56,7 @@ let starting = typeof location !== "undefined";
 const START_MS = 15_000;
 /** a slice of idle time spent compiling ahead (AheadCompiler.compile): an input that arrives meanwhile waits no longer than this */
 const AHEAD_SLICE_MS = 4, AHEAD_AFTER_INPUT_MS = 1000;
-/** burning (link/burn.ts) makes no garbage and its compiles run on the engine's background threads: it begins sooner after an input, once the input's frames are drawn */
+/** linking ahead (AotRuntime.linkAhead) and burning (link/burn.ts) make little garbage, and burning's compiles run on the engine's background threads: they begin sooner after an input, once the input's frames are drawn */
 const BURN_AFTER_INPUT_MS = 250;
 let aheading = false;
 
@@ -171,6 +171,9 @@ export async function bootWasmTier(): Promise<TierBackend> {
       // the main thread's wait that began this may be its last until the next input
       const early = BURN_AFTER_INPUT_MS - sinceInput();
       if (early > 0) await new Promise((resolve) => setTimeout(resolve, early + 1));
+      // the build code earlier launches went on to run is linked before an interaction first calls it
+      try { if (code) while (quiet(BURN_AFTER_INPUT_MS) && world.aot?.linkAhead(code.recorded, performance.now() + AHEAD_SLICE_MS)) await turn(); }
+      catch (e) { console.warn("[webdroid] linking ahead failed", e); return; }
       try { while (quiet(BURN_AFTER_INPUT_MS) && world.burner.burn(performance.now() + AHEAD_SLICE_MS)) await turn(); aheading = false; }
       catch (e) { console.warn("[webdroid] burning failed", e); }
     },

@@ -56,6 +56,8 @@ export interface AppCode {
   persisted: Promise<boolean>;
   /** the saved build, for the World to attach */
   saved?: NonNullable<WorldOptions["app"]>;
+  /** the platform code modules earlier launches loaded, in the order a launch wanted them, and the slots of build code they ran: what to link ahead of use (AotRuntime.linkAhead) */
+  recorded: { files: readonly string[]; slots?: Int32Array };
   /** the worker for second-tier units; give it the World once it exists */
   start(world: World): void;
   compiler: CompileClient;
@@ -163,7 +165,8 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
   const merged = { methods: new Set(initial?.methods), classes: new Set(initial?.classes), synths: new Set(initial?.synths) };
   const size = () => merged.methods.size + merged.classes.size + merged.synths.size;
   let covered = size(), seen = { world: undefined as World | undefined, methods: 0, classes: 0, synths: 0 };
-  const code: AppCode = { hit: !!saved, launchReady, source, persisted, compiler, saved: saved ? { index: saved.index, store: saved } : undefined, start: (world) => { if (closed) return; hostClasses = world.hostClassNames(); compiler.start(world, req.aot.base, saved?.index); },
+  const code: AppCode = { hit: !!saved, launchReady, source, persisted, compiler, saved: saved ? { index: saved.index, store: saved } : undefined,
+    recorded: { files: record.files, slots: record.ran(saved?.index.id ?? 0) }, start: (world) => { if (closed) return; hostClasses = world.hostClassNames(); compiler.start(world, req.aot.base, saved?.index); },
     refine, watch: (world) => {
       if (closed || watching) return;
       watching = true;

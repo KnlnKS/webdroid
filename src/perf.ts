@@ -35,8 +35,8 @@ export const perf = {
   wasmWarmed: 0, wasmWarmSkipped: 0,
   // first-tier units merged away and dropped for collection a batch at a time (Tiering.retire), and those the collector has freed
   wasmRetired: 0, wasmCollected: 0,
-  // first-tier methods the burner had the engine optimize in idle time (link/burn.ts)
-  wasmBurned: 0,
+  // first-tier methods the burner had the engine optimize in idle time (link/burn.ts), and build code modules linked in idle time (AotRuntime.linkAhead)
+  wasmBurned: 0, wasmAotAhead: 0,
   wasmPrepareMs: 0, wasmFlowMs: 0, wasmInferMs: 0, wasmFactsMs: 0, wasmEmitMs: 0, wasmEncodeMs: 0, wasmClassBuildMs: 0,
   bootMs: 0,
 };

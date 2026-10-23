@@ -482,6 +482,35 @@ export class AotRuntime {
     if (!loaded && this.cState[c] === DEAD) for (const p of this.app?.patchesOver.get(c) ?? []) loaded = this.loadC(p) || loaded;
     return loaded && !!this.w.slots.at(slot)?.done;
   }
+  /** the code modules linkAhead has yet to look at, the next last; made on its first call */
+  private ahead?: number[];
+  /** Idle time: links the code modules that earlier launches of the app loaded (`files`, the platform's in the order a launch wanted them) and ran build code of
+   *  (`slots`) until `until`, as the first call of one of their methods would, so that an interaction's first calls find their code in place rather than link it
+   *  on the way (the training run of ahead-of-time class loading and linking, JEP 483). Whether any is left. */
+  linkAhead(recorded: { files: readonly string[]; slots?: Int32Array }, until: number): boolean {
+    if (!this.w.instantiates) return false;
+    if (!this.ahead) {
+      const order = new Set<number>();
+      for (const file of recorded.files) { const f = parseAotFile(file); if (f?.kind === "c") order.add(f.n); }
+      for (const slot of recorded.slots ?? []) { const b = this.w.slots.blockOf(slot), c = b < 0 ? -1 : this.cOf[b] ?? -1; if (c >= 0) order.add(c); }
+      this.ahead = [...order].reverse();
+    }
+    while (this.ahead.length && performance.now() < until) {
+      const c = this.ahead.pop()!;
+      if (!this.cState[c] && this.linkable(c) && this.loadC(c)) this.w.stats.aot.ahead++;
+    }
+    return this.ahead.length > 0;
+  }
+  /** whether code module `c` links now with nothing to fetch, compile or wait for: compiled, its natives bound, its data here and, for the app build's, the root's
+   *  libraries those it was compiled under. One that does not is left to the first call of one of its methods, which links or gives it up as before. */
+  private linkable(c: number): boolean {
+    const app = c >= this.appFrom;
+    if (app && !this.boundAsBuilt()) return false;
+    const mod = this.store?.get(app ? aotFile("a", c - this.appFrom) : aotFile("c", c));
+    if (!mod || ArrayBuffer.isView(mod)) return false;
+    const head = header<CHeader>(mod), store = this.store!;
+    return this.w.units.admits(head) && head.mods.every((g) => this.fallbackD.has(g) || !!this.dExports[g] || !this.rejectedData.has(aotFile("d", g)) && !!store.get(aotFile("d", g)));
+  }
   private loadC(c: number): boolean {
     if (this.cState[c]) return this.cState[c] === LIVE;
     const w = this.w, app = c >= this.appFrom, file = app ? aotFile("a", c - this.appFrom) : aotFile("c", c), mod = this.module(file);
