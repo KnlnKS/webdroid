@@ -54,10 +54,12 @@ declare global {
 /** until the app's first frame, or this long, the hot methods are compiled by the worker only: what runs hot while a process starts is mostly run-once code */
 let starting = typeof location !== "undefined";
 const START_MS = 15_000;
-/** a slice of idle time spent compiling ahead (AheadCompiler.compile): an input that arrives meanwhile waits no longer than this */
-const AHEAD_SLICE_MS = 4, AHEAD_AFTER_INPUT_MS = 1000;
-/** linking ahead (AotRuntime.linkAhead) and burning (link/burn.ts) make little garbage, and burning's compiles run on the engine's background threads: they begin sooner after an input, once the input's frames are drawn */
-const BURN_AFTER_INPUT_MS = 250;
+/** a slice of idle work: an input that arrives meanwhile waits no longer than this */
+const IDLE_SLICE_MS = 4;
+/** work done in idle time a slice at a time, from `afterInputMs` after an input; whether any is left */
+type IdleWork = { name: string; afterInputMs: number; step: (until: number) => boolean };
+/** the idle work that failed, which stays off for the rest of the process: its code is then made on demand as before */
+const failedWork = new Set<string>();
 let aheading = false;
 
 /** timers and turns of the event loop for threads that wait: the shell's own, so a thread's wait is a timed park an idle observer ignores and a yield keeps the main looper's order */
@@ -159,23 +161,25 @@ export async function bootWasmTier(): Promise<TierBackend> {
     launched,
     async ahead(idle) {
       if (aheading || starting || !world) return;
-      // a failure leaves it off for the rest of the process: the code is compiled on demand as before
       aheading = true;
-      // only while no other thread of the process has work to run (an app's main thread often waits for its background threads, which share this one), and not
-      // while the app may still be answering an input
-      const quiet = (after = AHEAD_AFTER_INPUT_MS) => idle() && !yieldStats.pending() && sinceInput() > after;
-      const turn = () => new Promise((resolve) => setTimeout(resolve));
-      // a launch from a saved build has the code that earlier launches ran: what it lacks is compiled as it runs, without the garbage of compiling more
-      try { if (appDexes.length && !code?.hit) while (quiet() && world.ahead.compile(performance.now() + AHEAD_SLICE_MS)) await turn(); }
-      catch (e) { console.warn("[webdroid] compiling ahead failed", e); return; }
+      const w = world, work: IdleWork[] = [
+        // linking makes little garbage, and burning's compiles run on the engine's background threads: they begin once an input's frames are drawn
+        { name: "linking ahead", afterInputMs: 250, step: (until) => !!w.aot?.linkAhead(until) },
+        { name: "burning", afterInputMs: 250, step: (until) => w.burner.burn(until) },
+        // a launch from a saved build has the code that earlier launches ran: what it lacks is compiled as it runs, without the garbage of compiling more
+        ...appDexes.length && !code?.hit ? [{ name: "compiling ahead", afterInputMs: 1000, step: (until: number) => w.ahead.compile(until) }] : [],
+      ];
       // the main thread's wait that began this may be its last until the next input
-      const early = BURN_AFTER_INPUT_MS - sinceInput();
+      const early = work[0].afterInputMs - sinceInput();
       if (early > 0) await new Promise((resolve) => setTimeout(resolve, early + 1));
-      // the build code earlier launches went on to run is linked before an interaction first calls it
-      try { if (code) while (quiet(BURN_AFTER_INPUT_MS) && world.aot?.linkAhead(performance.now() + AHEAD_SLICE_MS)) await turn(); }
-      catch (e) { console.warn("[webdroid] linking ahead failed", e); return; }
-      try { while (quiet(BURN_AFTER_INPUT_MS) && world.burner.burn(performance.now() + AHEAD_SLICE_MS)) await turn(); aheading = false; }
-      catch (e) { console.warn("[webdroid] burning failed", e); }
+      for (const { name, afterInputMs, step } of work) {
+        // only while no other thread of the process has work to run (an app's main thread often waits for its background threads, which share this one), and
+        // not while the app may still be answering an input
+        const quiet = () => idle() && !yieldStats.pending() && sinceInput() > afterInputMs;
+        try { if (!failedWork.has(name)) while (quiet() && step(performance.now() + IDLE_SLICE_MS)) await new Promise((resolve) => setTimeout(resolve)); }
+        catch (e) { failedWork.add(name); console.warn(`[webdroid] ${name} failed`, e); }
+      }
+      aheading = false;
     },
     beginAppCode(dexes, roots, shown) {
       asked = { roots, shown };
