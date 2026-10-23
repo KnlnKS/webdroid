@@ -10,6 +10,7 @@ import { device } from "../../shell/config.ts";
 import { uptimeMillis } from "../../guest-clock.ts";
 import { type Layer, displayLayer, removeLayer, javaSurfaceControl, scheduleComposite } from "../surfaceflinger.ts";
 import { type Channel, channelOf, sendFocus, publish } from "../inputchannel.ts";
+import { inputFrame } from "../vsync.ts";
 import { javaConfiguration, systemResource } from "../configuration.ts";
 import { edges } from "../graphics.ts";
 import { TOUCHSCREEN, TOUCH_SOURCE, VIRTUAL_KEYBOARD, touchPrecision } from "../inputdevices.ts";
@@ -302,7 +303,7 @@ export const dispatchKey = (keyCode: number): Promise<void> => onInputThread(fun
   for (const action of [KEY_ACTION_DOWN, KEY_ACTION_UP]) {
     const now = action === KEY_ACTION_DOWN ? down : BigInt(Math.floor(uptimeMillis()));
     const event = yield newObj("android/view/KeyEvent", "(JJIIIIIIII)V", down, now, action, keyCode, 0, 0, VIRTUAL_KEYBOARD, 0, KEY_FLAG_FROM_SYSTEM, SOURCE_KEYBOARD);
-    yield publish(ws.channel, event, true);
+    yield publish(ws.channel, event, inputFrame);
   }
 }());
 const PP = "android/view/MotionEvent$PointerProperties", PC = "android/view/MotionEvent$PointerCoords", TOOL_TYPE_FINGER = 1;
@@ -341,7 +342,7 @@ export const dispatchTouch = (action: number, pointers: readonly TouchPointer[],
   spare = pool;
   yield vcall(event, "offsetLocation", "(FF)V", -ws.frame.left, -ws.frame.top);
   // a move streams at the display's rate and is no event to answer at once
-  return yield* awaited(publish(ws.channel, event, masked !== ACTION_MOVE));
+  return yield* awaited(publish(ws.channel, event, masked === ACTION_MOVE ? undefined : inputFrame));
 }());
 
 const SESSION = "Landroid/view/IWindow;";
