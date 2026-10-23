@@ -48,9 +48,9 @@ const containsInstalled = (w: ReturnType<typeof world>) => installed(w, slotOf(w
   check("the warm shim mirrors every loaded code module", mirrored.filter((m) => typeof m === "string").join(), "");
   const [, method, args] = (mirrored as WarmCall[][]).flat()[0];
   // its function imports throw, so a body that ran would most likely fail
-  let returned: unknown = "threw";
-  try { returned = method(...args); } catch { /* checked below */ }
-  check("a warmed method returns zero as it is entered", [undefined, 0, 0n, null].includes(returned as never), true);
+  let returned: unknown;
+  try { returned = method(...args); } catch (e) { returned = e; }
+  check("a warmed method returns zero as it is entered", !returned, true);
   const library = w.prog.newLoader(w.prog.root, null);
   w.addDexes(loadDexes(join(out, "classes.dex")), library);
   w.namespaces.bindLibraries(library, [w.prog.newLoader(w.prog.boot, null)], []);

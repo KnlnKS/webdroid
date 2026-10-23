@@ -89,23 +89,6 @@ export type Built = { bytes: Uint8Array | WebAssembly.Module; traces: FnTrace[] 
 
 /** the classes (ids) and synthetic functions code names the table slots of */
 export interface Touched { touch: number[]; synth: string[] }
-/** what a World counts (host/stats.ts reports it) */
-export type WorldStats = {
-  /** compile time by phase (ms) */
-  phase: { prepare: number; flow: number; infer: number; facts: number; emit: number; encode: number; classBuild: number };
-  /** the platform build's modules: data and code modules loaded, code modules dead, files missed, the time and bytes reading and loading them took, and the code
-   *  modules linked ahead in idle time (AotRuntime.linkAhead) */
-  aot: { d: number; c: number; dead: number; missed: number; readMs: number; ms: number; bytes: number; linkedAhead: number };
-  /** classes linked on demand, units and the methods in them, and the classes' time (ms) */
-  classes: number; units: number; methods: number; classMs: number;
-  /** callers' stacks captured at bridges that suspended */
-  bridgeCallerCaptures: number;
-  /** modules compiled here (bytes, ms) and instantiated (count, ms), and the time compiling units took (ms) */
-  bytes: number; moduleMs: number; instances: number; instantiateMs: number; compileMs: number;
-  /** slots whose code was undone, second-tier units installed, first-tier methods merged, units retired and those collected since, methods compiled ahead, and
-   *  first-tier methods burned (burn.ts) */
-  invalidated: number; upgrades: number; merged: number; retired: number; collected: number; ahead: number; burned: number;
-};
 export class World {
   opts: WorldOptions;
   /** whether code is instantiated and runs here: a build's World and a compile worker's only number and name what code links */
@@ -120,9 +103,19 @@ export class World {
   onUnresolved: (message: string, cls: string | undefined) => void = () => {};
   /** the message the last implicit exception would carry; stored in the Throwable once Strings exist */
   lastMessage: string | null = null;
-  stats: WorldStats = {
-    phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, missed: 0, readMs: 0, ms: 0, bytes: 0, linkedAhead: 0 },
-    classes: 0, units: 0, methods: 0, classMs: 0, bridgeCallerCaptures: 0, bytes: 0, moduleMs: 0, instances: 0, instantiateMs: 0, compileMs: 0,
+  /** what the World counts (host/stats.ts reports it) */
+  stats = {
+    /** compile time by phase (ms) */
+    phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 },
+    /** the platform build's modules: data and code modules loaded, code modules dead, files missed, the time and bytes reading and loading them took, and the code
+     *  modules linked ahead in idle time (AotRuntime.linkAhead) */
+    aot: { d: 0, c: 0, dead: 0, missed: 0, readMs: 0, ms: 0, bytes: 0, linkedAhead: 0 },
+    /** classes linked on demand, units and the methods in them, and the classes' time (ms); callers' stacks captured at bridges that suspended */
+    classes: 0, units: 0, methods: 0, classMs: 0, bridgeCallerCaptures: 0,
+    /** modules compiled here (bytes, ms) and instantiated (count, ms), and the time compiling units took (ms) */
+    bytes: 0, moduleMs: 0, instances: 0, instantiateMs: 0, compileMs: 0,
+    /** slots whose code was undone, second-tier units installed, first-tier methods merged, units retired and those collected since, methods compiled ahead, and
+     *  first-tier methods burned (burn.ts) */
     invalidated: 0, upgrades: 0, merged: 0, retired: 0, collected: 0, ahead: 0, burned: 0,
   };
   readonly slots = new SlotTable(this, FIRST_FREE_SLOT);
