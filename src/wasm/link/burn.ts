@@ -5,7 +5,7 @@
 // returns at once through the end of its function, charging the whole function, so the engine optimizes it on a background thread with the feedback
 // of its real calls. Nothing of the method runs.
 import { COUNT_SLOTS, WARM_AT } from "../compiler/consts.ts";
-import { methodKinds } from "../compiler/program.ts";
+import { methodKinds, type Kind } from "../compiler/program.ts";
 import type { World } from "./world.ts";
 
 /** the calls and loop iterations a method has run before its feedback is worth optimizing with: an inlined call's count must outweigh its callee's size */
@@ -16,55 +16,45 @@ const BURN_CALLS = 1 << 15;
 /** calls between looks at the clock */
 const BURN_CHUNK = 4096;
 
-type Zero = 0 | 0n | null;
+const zero = (k: Kind): 0 | 0n | null => k === "J" ? 0n : k === "L" ? null : 0;
 
 export class Burner {
   private readonly w: World;
-  /** slots burned, so that each is burned once for the code in it */
-  private readonly burned = new Set<number>();
+  /** the code burned: a slot's new code is burned again */
+  private readonly burned = new WeakSet<Function>();
   /** slots to burn, the next last, and the calls the first still needs */
   private queue: number[] = [];
-  private left = 0;
-  /** stops burning for the rest of the process: a call that did not return at once means code without the warm exit */
-  private failed = false;
+  private left = BURN_CALLS;
   constructor(w: World) { this.w = w; }
-  /** whether `slot` holds first-tier code of a method, which has the warm exit */
-  private burnable(slot: number): boolean {
-    const s = this.w.slots.peekMethod(slot) ?? (this.w.aot?.installed(slot) ? this.w.slots.method(slot) : undefined);
-    return !!s?.done && !this.w.tiers.hot(slot);
+  /** the unburned first-tier code of `slot`'s method, which has the warm exit: second-tier code runs its method whatever the warm word says, and a stub compiles it */
+  private code(slot: number): Function | undefined {
+    if (!this.w.slots.method(slot)?.done || this.w.tiers.hot(slot)) return undefined;
+    const f = this.w.table.get(slot) as Function;
+    return this.burned.has(f) ? undefined : f;
   }
   /** the first-tier methods that have run BURN_AT calls or asked for the second tier, busiest first */
   private scan(): number[] {
     const counts = this.w.tiers.counts(), n = Math.min(COUNT_SLOTS, this.w.slots.made().length, this.w.table.length), found: number[] = [];
-    for (let slot = 0; slot < n; slot++) {
-      if ((counts[slot] >= BURN_AT || this.w.tiers.asked(slot)) && !this.burned.has(slot) && this.burnable(slot)) found.push(slot);
-    }
+    for (let slot = 0; slot < n; slot++) if ((counts[slot] >= BURN_AT || this.w.tiers.asked(slot)) && this.code(slot)) found.push(slot);
     return found.sort((a, b) => counts[a] - counts[b]);
   }
   /** Idle time: burns the busy first-tier methods until `until`. Whether any is left. */
   burn(until: number): boolean {
-    if (this.failed || !this.w.instantiates) return false;
-    if (!this.queue.length) { this.queue = this.scan(); this.left = BURN_CALLS; }
+    if (!this.w.instantiates) return false;
+    if (!this.queue.length) this.queue = this.scan();
     const warm = new Int32Array(this.w.mem.buffer, WARM_AT, 1);
     warm[0] = 1;
     try {
       while (this.queue.length && performance.now() < until) {
-        const slot = this.queue[this.queue.length - 1];
-        // what was installed since the scan may be second-tier code, which runs its method whatever the warm word says, and a slot whose code was undone
-        // holds its stub again, which would compile and run the method
-        if (!this.burnable(slot)) { this.queue.pop(); this.left = BURN_CALLS; continue; }
-        const f = this.w.table.get(slot) as (...args: Zero[]) => unknown, s = this.w.slots.peekMethod(slot)!;
-        const args: Zero[] = methodKinds(s.m).params.map((k) => k === "J" ? 0n : k === "L" ? null : 0);
-        const depth = this.w.rt.depth.value;
+        const slot = this.queue[this.queue.length - 1], f = this.code(slot);
+        if (!f) { this.queue.pop(); this.left = BURN_CALLS; continue; }
+        const { m } = this.w.slots.method(slot)!, args = methodKinds(m).params.map(zero), depth = this.w.rt.depth.value;
         for (let i = Math.min(this.left, BURN_CHUNK); i > 0; i--) f(...args);
-        if (this.w.rt.depth.value !== depth) throw new Error(`${s.m.cls}.${s.m.name} ran while burning`);
-        this.left -= BURN_CHUNK;
-        if (this.left <= 0) { this.queue.pop(); this.burned.add(slot); this.w.stats.burned++; this.left = BURN_CALLS; }
+        if (this.w.rt.depth.value !== depth) throw new Error(`${m.cls}.${m.name} ran while burning`);
+        if ((this.left -= BURN_CHUNK) > 0) continue;
+        this.queue.pop(); this.burned.add(f); this.w.stats.burned++; this.left = BURN_CALLS;
       }
-    } catch (e) { this.failed = true; throw e; }
-    finally { warm[0] = 0; }
+    } finally { warm[0] = 0; }
     return this.queue.length > 0;
   }
-  /** forgets that `slot` was burned: new code is in it */
-  installed(slot: number): void { this.burned.delete(slot); }
 }

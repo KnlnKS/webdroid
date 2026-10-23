@@ -337,7 +337,7 @@ export class Tiering {
         this.w.table.set(at, exports[name]);
       };
       if (s.k !== "method" && s.k !== "ensure") { set(slot, "m"); return true; }
-      for (const x of group) { set(x, "m" + x); this.groupOf.set(x, group); if (hot) this.set(x, HOT); else this.clear(x, HOT); if (x < COUNT_SLOTS) this.counts()[x] = 0; this.w.burner.installed(x); }
+      for (const x of group) { set(x, "m" + x); this.groupOf.set(x, group); if (hot) this.set(x, HOT); else this.clear(x, HOT); if (x < COUNT_SLOTS) this.counts()[x] = 0; }
       if (s.k === "ensure") { s.done = true; this.w.table.set(slot, exports["m" + slot]); }
       return true;
     };

@@ -94,7 +94,13 @@ for (const [hot, own] of [[false, false], [true, false], [true, true]]) {
   check("busy methods burned", w.stats.burned >= 4, true);
   check("burning ran none of their bodies", tick(1n, null), 100 * 101 + 1);
   check("burned methods answer the same", sum(100), total);
-  check("a method is burned once for its code", (w.burner.burn(performance.now() + 50), w.stats.burned) === (w.burner.burn(performance.now() + 50), w.stats.burned), true);
+  const burned = w.stats.burned;
+  while (w.burner.burn(performance.now() + 50));
+  check("burned code is not burned again", w.stats.burned, burned);
+  w.assumptions.undoCode(w.slotOf(w.prog.resolve("Lz", "bump", "()V")!));
+  for (let i = 0; i < 100; i++) bump();
+  while (w.burner.burn(performance.now() + 50));
+  check("a slot's new code is burned", w.stats.burned, burned + 1);
 }
 // ---- implicit exceptions: class (caught by Java code) and message (computed by the host)
 {
