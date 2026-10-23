@@ -9,7 +9,7 @@ import { handle, deref, FINALIZER } from "./handles.ts";
 import { type NativeLooper, mainLooper, postMain } from "./mainloop.ts";
 import { perf } from "../perf.ts";
 import { device } from "../shell/config.ts";
-import { uptimeMillis } from "../guest-clock.ts";
+import { guestClockControl, uptimeMillis } from "../guest-clock.ts";
 import { note, Ev } from "../timeline.ts";
 
 let nextVsync = 0, vsyncWaiters: (() => void)[] = [], vsyncWatchdog: ReturnType<typeof setTimeout> | undefined;
@@ -18,7 +18,7 @@ const vsyncIntervalMs = (): number => 1000 / device.refreshRate;
  *  for a display that falls behind its rate, as a software rasterizer's does, rather than outrun it and
  *  starve the GPU process's other contexts. */
 const STALLED_MS = 250;
-let hostFrameAt = -Infinity;
+let hostFrameAt = -Infinity, lastVsyncAt = -Infinity;
 function flushVsyncWaiters(): void {
   clearTimeout(vsyncWatchdog); vsyncWatchdog = undefined;
   const waiters = vsyncWaiters;
@@ -131,6 +131,7 @@ export function deliverVsync(): void { deliver(true); }
  *  (a ValueAnimator's every update invalidates) then waits for time to pass rather than redraw the
  *  same frame at every host refresh. A `stepped` vsync answers every receiver. */
 function deliver(stepped: boolean): void {
+  lastVsyncAt = performance.now();
   const at = uptimeMillis();
   latest = { at, nanos: BigInt(Math.floor(at * 1e6)), frame: ++frame };
   const { nanos, frame: count } = latest;
@@ -148,6 +149,7 @@ function deliver(stepped: boolean): void {
     scheduled.delete(r);
     if (r.looper !== mainLooper) { r.looper.post(() => dispatch(r)); continue; }
     mainFrame = true;
+    framesOpen++;
     // the main thread's frame is the Choreographer.doFrame this vsync starts, as a message the
     // receiver queues; it completes when the renderer draws it. Behind that message the frame
     // closes even when it drew nothing, and the renderer's own draws yield to the one it made.
@@ -158,12 +160,48 @@ function deliver(stepped: boolean): void {
       return after(dispatch(r), () => postMain(() => {
         note(Ev.FrameEnd, count);
         if (frameStart === opened) frameStart = null;
+        framesOpen--;
         for (const fn of hooks.splice(0)) fn();
+        if (mainScheduled()) startEarly();
       }));
     });
   }
   if (!mainFrame) for (const fn of hooks) fn();
   flushVsyncWaiters();
+}
+
+/** main-thread frames dispatched and not yet closed; an early frame is pending; until when an input's dispatch lets the next frame begin early */
+let framesOpen = 0, early = false, promptUntil = -Infinity;
+/** An input event (a touch down or up, a key) is being dispatched: the frame the main thread asks for next, if it asks within a refresh period, begins as soon as
+ *  no other frame is being made (startEarly), and so does one it already asked for, as a running animation (a press ripple) has: either is queued behind the input */
+export function inputFrame(): void {
+  promptUntil = performance.now() + vsyncIntervalMs();
+  if (mainScheduled()) startEarly();
+}
+const mainScheduled = (): boolean => { for (const r of scheduled) if (r.looper === mainLooper) return true; return false; };
+/** A frame the main thread asks for begins at once, rather than at the display's next refresh (on average half a period later), when it answers an input
+ *  or the latest vsync is a period old (an idle display, or a frame that overran its period), as a compositor that begins frames on demand does: a frame
+ *  that takes longer than a period, as one that answers a tap does, is then shown a period sooner whenever it would have finished just after a refresh. A frame being made defers it to that frame's
+ *  end, so frames never overlap, and an input allows one; the vsync phase re-anchors on it, so the frames that follow keep to the display's refreshes.
+ *  Under a controlled clock frames come only when time passes. */
+function startEarly(): void {
+  if (early || framesOpen || guestClockControl.controlled) return;
+  const due = () => {
+    const now = performance.now();
+    // the frame loop must be live (a shown display)
+    return now - hostFrameAt < STALLED_MS && (now < promptUntil || now - lastVsyncAt >= vsyncIntervalMs());
+  };
+  if (!due()) return;
+  early = true;
+  queueMicrotask(() => {
+    early = false;
+    if (framesOpen || !mainScheduled() || !due()) return;
+    promptUntil = -Infinity;
+    perf.earlyFrames++;
+    note(Ev.Raf, 2);
+    nextVsync = performance.now() + vsyncIntervalMs();
+    deliver(false);
+  });
 }
 
 const PTR = mangleField("android/os/MessageQueue", "mPtr");
@@ -180,6 +218,7 @@ rt.registerJnis("android/view/DisplayEventReceiver", {
     const r = deref<Receiver>(ptr);
     r.after = r.looper.frameAt;
     scheduled.add(r);
+    if (r.looper === mainLooper) startEarly();
   },
   "nativeGetLatestVsyncEventData(J)Landroid/view/DisplayEventReceiver$VsyncEventData;": async () => {
     const data = await newObj(DATA, "()V");

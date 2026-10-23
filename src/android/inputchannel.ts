@@ -8,6 +8,7 @@ import { handle, deref, release, FINALIZER } from "./handles.ts";
 import { nativeParcel, readInt, readLocalObject, writeInt, writeLocalObject } from "./parcel.ts";
 import type { NativeLooper } from "./mainloop.ts";
 import { note, Ev } from "../timeline.ts";
+import { inputFrame } from "./vsync.ts";
 
 interface Receiver { looper: NativeLooper; receiver: JObj }
 export class Channel {
@@ -21,15 +22,19 @@ export class Channel {
 }
 let nextSeq = 1;
 /** publish `event` on the server end: resolves with whether the window handled it, or false when no
- *  receiver listens on the client end */
-export function publish(server: Channel, event: JObj): Promise<boolean> {
+ *  receiver listens on the client end. A `prompt` event (a touch down or up, a key) lets the frame it asks for begin early (vsync.ts inputFrame) */
+export function publish(server: Channel, event: JObj, prompt = false): Promise<boolean> {
   const client = server.peer, r = client?.receiver;
   if (!client || !r) return Promise.resolve(false);
   const seq = nextSeq++;
   note(Ev.InputPublish, seq);
   return new Promise((resolve) => {
     client.pending.set(seq, (handled) => { note(Ev.InputDone, seq); resolve(handled); });
-    r.looper.post(() => { note(Ev.InputDispatch, seq); return vcall(r.receiver, "dispatchInputEvent", "(ILandroid/view/InputEvent;)V", seq, event); });
+    r.looper.post(() => {
+      note(Ev.InputDispatch, seq);
+      if (prompt) inputFrame();
+      return vcall(r.receiver, "dispatchInputEvent", "(ILandroid/view/InputEvent;)V", seq, event);
+    });
   });
 }
 /** tell the client end's window it gained or lost input focus (InputDispatcher's focus event) */

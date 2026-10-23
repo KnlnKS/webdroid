@@ -13,7 +13,7 @@ import { type Channel, channelOf, sendFocus, publish } from "../inputchannel.ts"
 import { javaConfiguration, systemResource } from "../configuration.ts";
 import { edges } from "../graphics.ts";
 import { TOUCHSCREEN, TOUCH_SOURCE, VIRTUAL_KEYBOARD, touchPrecision } from "../inputdevices.ts";
-import { ACTION_CANCEL, ACTION_DOWN, ACTION_UP, KEY_ACTION_DOWN, KEY_ACTION_UP, KEY_FLAG_FROM_SYSTEM, SOURCE_KEYBOARD } from "../input-codes.ts";
+import { ACTION_CANCEL, ACTION_DOWN, ACTION_MOVE, ACTION_UP, KEY_ACTION_DOWN, KEY_ACTION_UP, KEY_FLAG_FROM_SYSTEM, SOURCE_KEYBOARD } from "../input-codes.ts";
 import type { TouchPointer } from "../../shell/pointer-queue.ts";
 
 const VISIBLE = 0;
@@ -302,7 +302,7 @@ export const dispatchKey = (keyCode: number): Promise<void> => onInputThread(fun
   for (const action of [KEY_ACTION_DOWN, KEY_ACTION_UP]) {
     const now = action === KEY_ACTION_DOWN ? down : BigInt(Math.floor(uptimeMillis()));
     const event = yield newObj("android/view/KeyEvent", "(JJIIIIIIII)V", down, now, action, keyCode, 0, 0, VIRTUAL_KEYBOARD, 0, KEY_FLAG_FROM_SYSTEM, SOURCE_KEYBOARD);
-    yield publish(ws.channel, event);
+    yield publish(ws.channel, event, true);
   }
 }());
 const PP = "android/view/MotionEvent$PointerProperties", PC = "android/view/MotionEvent$PointerCoords", TOOL_TYPE_FINGER = 1;
@@ -340,7 +340,8 @@ export const dispatchTouch = (action: number, pointers: readonly TouchPointer[],
     action, pointers.length, pool.props, pool.coords, 0, 0, touchPrecision(device.width), touchPrecision(device.height), TOUCHSCREEN, 0, TOUCH_SOURCE, 0);
   spare = pool;
   yield vcall(event, "offsetLocation", "(FF)V", -ws.frame.left, -ws.frame.top);
-  return yield* awaited(publish(ws.channel, event));
+  // a move streams at the display's rate and is no event to answer at once
+  return yield* awaited(publish(ws.channel, event, masked !== ACTION_MOVE));
 }());
 
 const SESSION = "Landroid/view/IWindow;";

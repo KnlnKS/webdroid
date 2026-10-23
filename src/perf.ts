@@ -6,6 +6,8 @@ export const perf = {
   // wall time from a buffer's queueBuffer to the composite that shows it
   presentLagMs: 0,
   draws: 0, drawMs: 0,
+  // main-thread frames begun before the display's next refresh, answering an input or an idle display (vsync.ts startEarly)
+  earlyFrames: 0,
   measureText: 0, measureTextMiss: 0,
   rnRecord: 0, rnReplay: 0,
   // a frame phase that threw. Must stay 0 on a healthy app; non-zero names a real gap.

@@ -2,7 +2,7 @@
 // window of it after the window closes). Marks go into a fixed ring of numbers: no allocation,
 // about the cost of a performance.now(), so it is always on.
 export const Ev = {
-  /** the host's display frame (arg: 1 when it was a virtual vsync) */ Raf: 1,
+  /** the host's display frame (arg: 1 when it was a virtual vsync), or an early vsync (arg 2, vsync.ts startEarly) */ Raf: 1,
   /** a pointer reached the realm (arg: action) */ InputIn: 2,
   /** InputDispatcher published an event to a window */ InputPublish: 3,
   /** the window's looper began dispatching it */ InputDispatch: 4,
