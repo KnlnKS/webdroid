@@ -2,7 +2,7 @@
 // window of it after the window closes). Marks go into a fixed ring of numbers: no allocation,
 // about the cost of a performance.now(), so it is always on.
 export const Ev = {
-  /** the host's display frame (arg: 1 when it was a virtual vsync), or an early vsync (arg 2, vsync.ts startEarly) */ Raf: 1,
+  /** the host's display frame (arg: 1 when it was a virtual vsync) */ Raf: 1,
   /** a pointer reached the realm (arg: action) */ InputIn: 2,
   /** InputDispatcher published an event to a window */ InputPublish: 3,
   /** the window's looper began dispatching it */ InputDispatch: 4,
@@ -28,6 +28,7 @@ export const Ev = {
   /** the process became visible (1) or not (0) */ Visible: 24,
   /** a call from another realm arrived (arg: the method's index in the endpoint) */ Serve: 25,
   /** and its answer was sent (arg: the same) */ Served: 26,
+  /** a virtual vsync began the main thread's frame before the display's next refresh (vsync.ts startEarly) */ EarlyVsync: 27,
 } as const;
 type Ev = typeof Ev[keyof typeof Ev];
 const SIZE = 1 << 15, ring = new Float64Array(SIZE * 3);

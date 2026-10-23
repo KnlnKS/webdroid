@@ -246,8 +246,7 @@ async function run() {
       if (t > to) break;
       switch (e) {
         case E.Raf:
-          // an early vsync (2) is no display frame
-          if (a !== 1) break;
+          if (!a) break;
           vsyncs++;
           // a vsync passed without a presentation while frames were being made
           if (!presentedSince && drawing) { if (idle) missedIdle++; else { missedBusy++; spans.busyAtVsync.push(t - wake); } }

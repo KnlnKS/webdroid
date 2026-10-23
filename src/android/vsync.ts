@@ -18,7 +18,7 @@ const vsyncIntervalMs = (): number => 1000 / device.refreshRate;
  *  for a display that falls behind its rate, as a software rasterizer's does, rather than outrun it and
  *  starve the GPU process's other contexts. */
 const STALLED_MS = 250;
-let hostFrameAt = -Infinity, lastVsyncAt = -Infinity;
+let hostFrameAt = -Infinity;
 function flushVsyncWaiters(): void {
   clearTimeout(vsyncWatchdog); vsyncWatchdog = undefined;
   const waiters = vsyncWaiters;
@@ -131,7 +131,6 @@ export function deliverVsync(): void { deliver(true); }
  *  (a ValueAnimator's every update invalidates) then waits for time to pass rather than redraw the
  *  same frame at every host refresh. A `stepped` vsync answers every receiver. */
 function deliver(stepped: boolean): void {
-  lastVsyncAt = performance.now();
   const at = uptimeMillis();
   latest = { at, nanos: BigInt(Math.floor(at * 1e6)), frame: ++frame };
   const { nanos, frame: count } = latest;
@@ -162,7 +161,7 @@ function deliver(stepped: boolean): void {
         if (frameStart === opened) frameStart = null;
         framesOpen--;
         for (const fn of hooks.splice(0)) fn();
-        if (mainScheduled()) startEarly();
+        startEarly();
       }));
     });
   }
@@ -176,29 +175,31 @@ let framesOpen = 0, early = false, promptUntil = -Infinity;
  *  no other frame is being made (startEarly), and so does one it already asked for, as a running animation (a press ripple) has: either is queued behind the input */
 export function inputFrame(): void {
   promptUntil = performance.now() + vsyncIntervalMs();
-  if (mainScheduled()) startEarly();
+  startEarly();
 }
-const mainScheduled = (): boolean => { for (const r of scheduled) if (r.looper === mainLooper) return true; return false; };
+/** whether the main thread's frame may begin now: it asked for one, none is being made, the frame loop is live (a shown display), and an input prompts it or
+ *  the latest vsync is a period old */
+function earlyDue(): boolean {
+  if (framesOpen || guestClockControl.controlled) return false;
+  const now = performance.now();
+  if (now - hostFrameAt >= STALLED_MS || now >= promptUntil && uptimeMillis() - latest.at < vsyncIntervalMs()) return false;
+  for (const r of scheduled) if (r.looper === mainLooper) return true;
+  return false;
+}
 /** A frame the main thread asks for begins at once, rather than at the display's next refresh (on average half a period later), when it answers an input
  *  or the latest vsync is a period old (an idle display, or a frame that overran its period), as a compositor that begins frames on demand does: a frame
  *  that takes longer than a period, as one that answers a tap does, is then shown a period sooner whenever it would have finished just after a refresh. A frame being made defers it to that frame's
- *  end, so frames never overlap, and an input allows one; the vsync phase re-anchors on it, so the frames that follow keep to the display's refreshes.
- *  Under a controlled clock frames come only when time passes. */
+ *  end, so frames never overlap, and an input allows one. It is the display's vsync: its phase re-anchors on it, and what waits for a vsync goes on, so the
+ *  frames that follow keep to the display's refreshes. Under a controlled clock frames come only when time passes. */
 function startEarly(): void {
-  if (early || framesOpen || guestClockControl.controlled) return;
-  const due = () => {
-    const now = performance.now();
-    // the frame loop must be live (a shown display)
-    return now - hostFrameAt < STALLED_MS && (now < promptUntil || now - lastVsyncAt >= vsyncIntervalMs());
-  };
-  if (!due()) return;
+  if (early || !earlyDue()) return;
   early = true;
   queueMicrotask(() => {
     early = false;
-    if (framesOpen || !mainScheduled() || !due()) return;
+    if (!earlyDue()) return;
     promptUntil = -Infinity;
     perf.earlyFrames++;
-    note(Ev.Raf, 2);
+    note(Ev.EarlyVsync);
     nextVsync = performance.now() + vsyncIntervalMs();
     deliver(false);
   });
