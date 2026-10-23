@@ -70,8 +70,8 @@ export class UnitCompiler {
     for (const [key, sup, ifaces] of job.prepared ?? []) if (!hasHierarchy(w.prog.get(key), sup, ifaces)) return `mismatched prepared worker hierarchy ${key}`;
     for (const [referrer, name, key] of job.resolved ?? []) w.namespaces.initiateClass(w.prog.loaderOf(referrer), name, key);
     w.longLoops = new Set(job.long);
-    const cx = new Compiler(w), plan = new Map(job.plan.map(([key, ids]) => [key, ids.map(method)]));
-    const [{ bytes, traces }, touched] = w.touched(() => cx.buildUnit(job.installed.map(method), { copies: job.copies.map(method), hot: !job.merge, install: job.merge ? "merge" : undefined, plan, seq: job.unit }));
+    const cx = new Compiler(w, job.unit), plan = new Map(job.plan.map(([key, ids]) => [key, ids.map(method)]));
+    const [{ bytes, traces }, touched] = w.touched(() => cx.buildUnit(job.installed.map(method), { copies: job.copies.map(method), hot: !job.merge, install: job.merge ? "merge" : undefined, plan }));
     return { header: unitHeader(w, cx, touched), numbering: w.numbers.since(this.known), module: bytes,
       traces: traces.map((t) => ({ name: t.name, m: t.m ? mid(t.m) : "", offsets: t.offsets, pcs: t.pcs, inline: t.inline?.map(([m, pc, at]) => [mid(m), pc, at]) })) };
   }

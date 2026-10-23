@@ -119,6 +119,13 @@ export class Monitors {
     this.deflate(m);
     return St.Ok;
   }
+  /** every waiter notified and every entrant let in (Sched.close) */
+  wakeAll(): void {
+    for (const m of this.table) if (m) {
+      for (const w of m.waiters.splice(0)) w.notify();
+      for (const e of m.entrants.splice(0)) e.go();
+    }
+  }
   /** Object.wait (and Thread.sleep, which waits on its thread's lock and is never notified): releases the monitor, waits for a notification, the
    *  timeout (`ms` of 0 is none unless `timed`) or an interrupt, and gets the monitor back with its count */
   wait(obj: object, s: Strand, ms: number, timed: boolean): Promise<St> | St {

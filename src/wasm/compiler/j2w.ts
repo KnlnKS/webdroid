@@ -122,8 +122,6 @@ export interface UnitOptions {
   /** classes whose ensure() the unit also defines, exported as the methods are (World.ensureBody) */
   ensures?: string[];
   plan?: CallPlan;
-  /** the number a hot or merged unit's function names carry, apart from earlier units of the same methods */
-  seq?: number;
 }
 const NO_PLAN: CallPlan = new Map();
 /** whether a virtual call of `t` through class `decl` runs `t` whatever the receiver: ART links no subclass of a final class and no override of a final method */
@@ -190,8 +188,10 @@ export class Compiler implements Base {
   /** the helpers a first-tier unit shares with others (shareHelpers): those it imports, and those it exports for later units */
   private sharing?: { imports: Map<string, number>; out: [string, FunctionType][] };
   private baseTypes: number;
-  constructor(w: LinkEnv) {
-    this.w = w;
+  /** the number of the unit this Compiler builds: its functions' names carry it, apart from other units of the same methods (buildUnit) */
+  private readonly seq: number;
+  constructor(w: LinkEnv, seq = 0) {
+    this.w = w; this.seq = seq;
     const mb = this.mb;
     Object.assign(this, declareBase(mb));
     this.baseTypes = mb.types.length;
@@ -654,14 +654,15 @@ export class Compiler implements Base {
 
   // ---------- units
   /** compile `methods` into this module (the first is the one a lazy-link stub asks for); each is exported as "m<slot>" unless the unit installs them */
-  buildUnit(methods: MethodInfo[], { copies = [], hot = false, install, ensures = [], plan = NO_PLAN, seq = 0 }: UnitOptions = {}): { bytes: Uint8Array; traces: FnTrace[] } {
+  buildUnit(methods: MethodInfo[], { copies = [], hot = false, install, ensures = [], plan = NO_PLAN }: UnitOptions = {}): { bytes: Uint8Array; traces: FnTrace[] } {
     const { mb, w } = this, all = methods.concat(copies);
     this.counting = !hot; this.plan = plan;
     this.natives.declare(this, all);
     declareSymbolicSites(this, all);
-    // the second tier's names differ from the first's, and a copy's from the installed method's, so a stack frame finds its own offsets (traces are keyed by name)
-    const label = (m: MethodInfo, i: number) => (hot || install === "merge" || i >= methods.length ? `${mid(m)}#${seq}` : mid(m));
-    all.forEach((m, i) => { this.fn.set(mid(m), mb.reserveFunc(this.methodSig(m), label(m, i))); this.keys.add(m.key); });
+    // Traces are keyed by name, so a stack frame finds its own function's offsets only where no other function of the method shares it: a build's (which
+    // AotRuntime.trace finds by method id) installs over code compiled on demand before its module arrived, and a copy or a later tier runs beside the first.
+    const label = (m: MethodInfo) => (install === "build" ? mid(m) : `${mid(m)}#${this.seq}`);
+    all.forEach((m) => { this.fn.set(mid(m), mb.reserveFunc(this.methodSig(m), label(m))); this.keys.add(m.key); });
     const { phase } = w.stats, t0 = performance.now(), analysed = phase.prepare + phase.flow + phase.infer + phase.facts;
     this.install = install; this.head = methods[0];
     const codes = all.map((m) => this.compiled(m)!);
@@ -679,7 +680,7 @@ export class Compiler implements Base {
       mb.setBody(f, code.finish()); mb.export("m" + w.ensureSlot(cls), "func", f);
       return { name, f, code };
     });
-    return this.finishModule([...all.map((m, i) => ({ name: label(m, i), f: this.fn.get(mid(m))!, code: codes[i], m })), ...inits]);
+    return this.finishModule([...all.map((m, i) => ({ name: label(m), f: this.fn.get(mid(m))!, code: codes[i], m })), ...inits]);
   }
   /** functions installed in their table slots when the module is instantiated, consecutive slots as one segment */
   private installSlots(at: [slot: number, f: number][]): void {

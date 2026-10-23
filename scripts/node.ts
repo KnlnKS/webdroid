@@ -1,5 +1,5 @@
 // The node every script runs on: scripts/node starts package.json's scripts with these flags, and these start the scripts' children
-import { execFile, spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { text } from "node:stream/consumers";
 import { fileURLToPath } from "node:url";
 
@@ -10,12 +10,19 @@ export const NODE_ARGS = [...NODE_FLAGS, "--import", fileURLToPath(new URL("./pr
 /** the command that runs `script` with `args` on that node */
 export const nodeCommand = (script: string, ...args: string[]): [string, string[]] => [process.execPath, [...NODE_ARGS, script, ...args]];
 
-export interface Ran { code: number; signal: NodeJS.Signals | null; stdout: Buffer; stderr: string }
-/** `cmd args` run to completion with no input: its exit status, whatever it is (1 for a signal, which `signal` names), and its output. `timeout` kills it. */
-export const run = (cmd: string, args: string[], { timeout }: { timeout?: number } = {}): Promise<Ran> => new Promise((resolve, reject) => {
-  execFile(cmd, args, { encoding: "buffer", maxBuffer: 1 << 30, timeout }, (error, stdout, stderr) => typeof error?.code === "string" ? reject(error)
-    : resolve({ code: error ? error.code ?? 1 : 0, signal: error?.signal ?? null, stdout, stderr: stderr.toString() })).stdin?.end();
-});
+export interface Ran { status: number; stdout: string; stderr: string }
+export interface RunOptions { env?: NodeJS.ProcessEnv; show?: boolean; detached?: boolean; started?: (child: ChildProcess) => void }
+/** `cmd args` run to completion with no input: its exit status (1 for a signal) and its output, unless `show` passes that through. A `detached` child
+ *  leads a process group of its own, which `started`, given the child, can stop. */
+export function run(cmd: string, args: string[], { env = process.env, show = false, detached = false, started }: RunOptions = {}): Promise<Ran> {
+  const child = spawn(cmd, args, { env, detached, stdio: show ? ["ignore", "inherit", "inherit"] : ["ignore", "pipe", "pipe"] });
+  started?.(child);
+  const out = { stdout: "", stderr: "" };
+  for (const k of ["stdout", "stderr"] as const) child[k]?.setEncoding("utf8").on("data", (d: string) => { out[k] += d; });
+  return new Promise((resolve, reject) => child.once("error", reject).once("close", (code) => resolve({ status: code ?? 1, ...out })));
+}
+/** a run's output, stdout then stderr */
+export const output = ({ stdout, stderr }: Ran): string => (stdout + stderr).trimEnd();
 
 /** the output of `script` run on that node without its caller's NODE_ENV, whose log goes on to the caller's: a Vite build's
  *  "production" would have the runtime fetch its core as a page does */

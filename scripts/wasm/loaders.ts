@@ -122,7 +122,7 @@ for (const method of ["memberHostRetry", "memberHostWaitRetry"]) {
 }
 {
   javac(join(out, "witness"), [join(JAVA, "PackageLoaderControl.java")], { release: 11 });
-  const control = java(join(out, "witness"), "PackageLoaderControl", [join(out, "a"), join(out, "b")]).trim();
+  const control = java(join(out, "witness"), "PackageLoaderControl", { args: [join(out, "a"), join(out, "b")] }).trim();
   if (control !== "1122\n1122\n2222\n112222\n112222\n222222") fail(`package runtime-package JDK control: ${control}`);
   console.log(`package runtime-package JDK control: ${control.replaceAll("\n", ",")}`);
   for (const ownType of [true, false]) {

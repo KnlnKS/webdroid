@@ -3,7 +3,6 @@
 // wait (async, generator, one that enters Java again), 1,000 suspended stacks, deep recursion off the main stack, and what happens to a native that
 // answers a Promise or waits under a JS frame. Needs javac and java on PATH.
 // Run: pnpm wasm threads [case,case,... | substrate]
-import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { world } from "./lib.ts";
 import { cli } from "../args.ts";
@@ -27,7 +26,7 @@ import { classIntrinsics } from "../../src/wasm/link/classes.ts";
 
 import { CORE_PATHS, JAVA, ROOT } from "./paths.ts";
 import { checker } from "./tools.ts";
-import { fixture, jdkTool } from "../java.ts";
+import { fixture, java } from "../java.ts";
 import { ALLOC_WINDOW } from "../../src/wasm/compiler/consts.ts";
 import { deadline } from "../util.ts";
 
@@ -134,9 +133,7 @@ const CASES: [string, number][] = [
 ].filter(([n]) => !only || only.includes(n as string)) as [string, number][];
 if (!CASES.length) CASES.push(["reentrant", 3]);
 // a case that deadlocks the JDK is a bug in the case
-const ref = spawnSync(jdkTool("java"), ["-Xss512k", "-cp", out, "Ref"], { input: CASES.map(([n, a]) => `Th.${n} ${a}`).join("\n") + "\n", timeout: 120000, encoding: "utf8" });
-if (ref.status !== 0) throw new Error(`the JDK run failed (${ref.error ?? ref.stderr})`);
-const jdk = ref.stdout.trim().split("\n");
+const jdk = java(out, "Ref", { input: CASES.map(([n, a]) => `Th.${n} ${a}`).join("\n") + "\n", jvm: ["-Xss512k"], timeout: 120_000 }).trim().split("\n");
 for (const [i, [name, arg]] of CASES.entries()) {
   const gapsBefore = gaps.length, want = jdk[i] === "throw" ? "throw" : jdk[i];
   if (process.env.J2W_V) console.log("case", name, arg);

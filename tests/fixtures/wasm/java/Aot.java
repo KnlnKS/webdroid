@@ -1,4 +1,5 @@
 import java.util.ArrayList;
+import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 /** A platform method the build devirtualised (ArrayList.contains calls indexOf), and a later dex that falsifies it (Aot2). */
 public class Aot {
   public static class MyList extends ArrayList<Object> {}
@@ -27,4 +28,9 @@ public class Aot {
     Pair p = new Pair(3, 4L << 40);
     return r | (order == 12 ? 4 : 0) | (p.a == 3 && p.b == 4L << 40 ? 8 : 0);
   }
+  // updaters of private fields made by their own class's initializer, which Aot starts: newUpdater checks the access of its caller, a frame out through the
+  // Reflection.getCallerClass the build runs in place
+  static class Held1 { private volatile Object v; static final AtomicReferenceFieldUpdater<Held1, Object> U = AtomicReferenceFieldUpdater.newUpdater(Held1.class, Object.class, "v"); }
+  static class Held2 { private volatile Object v; static final AtomicReferenceFieldUpdater<Held2, Object> U = AtomicReferenceFieldUpdater.newUpdater(Held2.class, Object.class, "v"); }
+  public static int updater(int k) { return (k == 1 ? Held1.U : Held2.U) != null ? 1 : 0; }
 }

@@ -18,14 +18,14 @@ export const clockFree = (name: string) => name
     nearNow(CALENDARS[chronology]).includes(ymd) ? `${chronology} <now>` : date);
 export const hash = (name: string) => crc32(clockFree(name)).toString(16).padStart(8, "0");
 
-/** the tests of one class run, and the skipped ones (by name, with the reason when TestNG gives one) */
-export function parseLines(text: string): { tests: Map<string, Outcome>; skipped: Map<string, string> } {
-  const tests = new Map<string, Outcome>(), skipped = new Map<string, string>();
+/** the tests of one class run, the skipped ones (by name, with the reason when TestNG gives one) and how many lines of each kind it answered */
+export function parseLines(text: string): { tests: Map<string, Outcome>; skipped: Map<string, string>; executions: { pass: number; fail: number; skipped: number } } {
+  const tests = new Map<string, Outcome>(), skipped = new Map<string, string>(), executions = { pass: 0, fail: 0, skipped: 0 };
   for (const line of text.split("\n").filter(Boolean)) {
     const [status, name, message = ""] = line.split("\t");
-    if (status === "S") skipped.set(name, message); else tests.set(clockFree(name), { ok: status === "P", message });
+    if (status === "S") { skipped.set(name, message); executions.skipped++; } else { tests.set(clockFree(name), { ok: status === "P", message }); executions[status === "P" ? "pass" : "fail"]++; }
   }
-  return { tests, skipped };
+  return { tests, skipped, executions };
 }
 
 /** Array-provider setup failures lose rows even when the run emits none of the baseline names. */

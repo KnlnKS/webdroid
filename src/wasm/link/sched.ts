@@ -19,6 +19,8 @@ import type { World } from "./world.ts";
 const THREAD = "java/lang/Thread", LOADER = "java/lang/ClassLoader", GROUP = "java/lang/ThreadGroup", OBJECT = "java/lang/Object", NORM_PRIORITY = 5;
 export const SYSTEM_LOADER = "java/lang/ClassLoader$SystemClassLoader";
 const MILLION = 0x412e848000000000n;
+/** what a wait of a closed World resumes with: thrown into Wasm, which catches only Java's tag, it unwinds the strand's Java frames */
+const CLOSED = new Error("the World was closed");
 const threadField = (cx: Compiler, name: string, desc: string) => cx.fieldIndex(THREAD, { owner: THREAD, name, desc });
 /** stores the long `value` in the Thread on the stack's nativePeer, which Thread.isAlive reads */
 const setPeer = (cx: Compiler, c: Code, value: bigint) => { const st = cx.structFor(THREAD); c.refCast(st).i64(value).structSet(st, threadField(cx, "nativePeer", "J")); };
@@ -272,6 +274,13 @@ export class Sched {
     this.idle();
     return pending.then(() => { this.become(s, depth, thr); run(); }, error => { this.become(s, depth, thr); throw error; });
   }
+  private resumed = <R>(v: R): R => { if (this.w.closed) throw CLOSED; return v; };
+  /** ends every wait nothing else would (World.close): the engine holds a suspended stack, and all it reaches, until it resumes */
+  close(): void {
+    for (const s of this.strands) s?.thread.parked?.();
+    this.monitors.wakeAll();
+    for (const id of [...this.initWaiters.keys()]) this.initDone(id);
+  }
   /** the Promise a native answered where it could not wait, which the call site settles next (natives.ts park) */
   pending: Promise<unknown> | null = null;
   private main = new ThreadRec(null);
@@ -337,7 +346,7 @@ export class Sched {
       // an import that answers at once keeps its engine stacks: the quota clears only when it suspends
       s.nested = 0; this.suspensions++;
       // an exception after a wait reaches the strand's code through the call, which has not set the globals again
-      return r.then(undefined, (e) => { this.become(s, depth); throw e; });
+      return r.then(this.resumed, (e) => { this.become(s, depth); throw e; });
     }) as unknown as (...a: A) => R;
   }
   /** a new strand of `thread` (the main thread's when none), for a call into Java from the native `parent` runs, if any */
@@ -470,12 +479,8 @@ export class Sched {
       const m = w.prog.implFor(w.classNameOf(obj), name, desc)!;
       return call(`thr:${m.cls}.${name}${desc}`, ["L", ...m.params.map(() => "L" as const)], (cx, c, arg) => { arg(0); if (m.params.length) arg(1); cx.callMethod(c, m); }, obj, ...args);
     };
-    try { await virtual("run", "()V"); }
-    catch (e) {
-      const t = w.throwable(e);
-      if (!t) console.error("[wasm thread]", e);
-      else try { await virtual("dispatchUncaughtException", "(Ljava/lang/Throwable;)V", t); } catch { /* the handler's own failure ends the thread, as in ART */ }
-    } finally {
+    /** the thread's `exit`, then its peer cleared and the threads joined to it woken */
+    const exit = async () => {
       try { await call("thr:exit", ["L"], (cx, c, arg) => { arg(0); cx.callMethod(c, w.prog.resolve(THREAD, "exit", "()V")!); }, obj); } catch { /* a failing exit leaves the thread over all the same */ }
       // a thread that join wakes is TERMINATED when it asks: the flag goes before the peer is cleared and the joiners notified
       s.thread.alive = false; this.started.delete(s.thread);
@@ -489,6 +494,16 @@ export class Sched {
           c.lget(l).call(cx.helper("mexit"));
         }, obj);
       } catch (e) { console.error("[wasm thread exit]", e); }
+    };
+    try { await virtual("run", "()V"); }
+    catch (e) {
+      const t = w.throwable(e);
+      // a closed World's thread runs no more Java
+      if (w.closed) return;
+      if (!t) console.error("[wasm thread]", e);
+      else try { await virtual("dispatchUncaughtException", "(Ljava/lang/Throwable;)V", t); } catch { /* the handler's own failure ends the thread, as in ART */ }
+    } finally {
+      if (!w.closed) await exit();
       s.end();
       this.hooks.ended(s.thread);
     }

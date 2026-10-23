@@ -56,7 +56,7 @@ export class HostFunctions {
    *  that may block, since a thunk may wait (FileChannelImpl's Unmapper unmaps a file mapping). The Cleaner reports a failing thunk itself. */
   private clean?: (cleaner: object) => Promise<unknown>;
   cleaners = new FinalizationRegistry<object>((cleaner) => {
-    (this.clean ??= this.w.entryAsync("sun/misc/Cleaner", "clean", "()V"))(cleaner).catch(() => {});
+    if (!this.w.closed) (this.clean ??= this.w.entryAsync("sun/misc/Cleaner", "clean", "()V"))(cleaner).catch(() => {});
   });
   /** a function over Java values, generated once under `name` and callable from the host: an int is a number, a long a bigint, a reference an opaque value */
   hostFn(name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code) => void, prepare?: (cx: Compiler) => void): (...a: any[]) => any {

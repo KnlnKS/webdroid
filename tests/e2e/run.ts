@@ -1,6 +1,7 @@
 // pnpm e2e: the one command line of every lane (README.md), the quick gate by default.
+import { existsSync } from "node:fs";
 import { cpus } from "node:os";
-import { cli } from "../../scripts/args.ts";
+import { cli, jobsOf } from "../../scripts/args.ts";
 import { FLOWS } from "./flows/index.ts";
 import type { Flow } from "./types.ts";
 
@@ -36,9 +37,9 @@ if (o.jobs && mode === "record") usage("Android recording is sequential; --jobs 
 if (o.live && mode !== "fast") usage("--live selects flows for the quick gate");
 if (o.startup && mode !== "record") usage("--startup requires --record");
 if (o.json && mode !== "diff") usage("--json requires --diff");
-// Full live flows can saturate the renderer and native worker threads before CPU count does
-const jobs = o.jobs === undefined ? Math.max(1, Math.min(mode === "fast" ? 5 : 4, Math.floor(cpus().length / (mode === "fast" ? 2 : 3)))) : Math.floor(Number(o.jobs));
-if (!(jobs >= 1)) usage("--jobs needs a positive number");
+// Flows saturate the renderer and the processes' Workers before CPU count does: at 3 quick flows at once a GMS Worker
+// already misses its diagnostics now and then, and full live flows load more
+const jobs = jobsOf(o.jobs, Math.max(1, Math.min(mode === "fast" ? 2 : 4, Math.floor(cpus().length / (mode === "fast" ? 2 : 3)))));
 
 /** the flows a name selects: the one it names exactly, else those it is a prefix of */
 function resolve(name: string): Flow[] {
@@ -50,6 +51,9 @@ const named = [...o.test ?? [], ...positionals].flatMap((names) => names.split("
 const seen = new Set<string>();
 const flows = (named.length ? named : mode === "fast" && !o.live ? FLOWS.filter((flow) => flow.clock !== "live") : FLOWS)
   .filter((flow) => !seen.has(flow.app) && seen.add(flow.app));
+
+const absent = mode === "diff" ? [] : flows.filter((flow) => !existsSync(`apks/${flow.apk}`));
+if (absent.length) { console.error(absent.map((flow) => `${flow.app}: apks/${flow.apk} is missing`).join("\n")); process.exit(2); }
 
 if (mode === "fast") await (await import("./run-fast.ts")).runFast(flows, jobs);
 else if (mode === "full") await (await import("./run-full.ts")).runFull(flows, jobs, shots);

@@ -20,6 +20,6 @@ for (const name of positionals.length ? positionals : Object.keys(PROBES)) {
   if (!PROBES[name]) { console.error(`no probe ${name}: ${Object.keys(PROBES).join(", ")}\nusage: ${usage}`); process.exit(2); }
   const out = fixture({ sources: [`tests/fixtures/${name}.java`], ...PROBES[name] });
   copyFileSync(join(out, "classes.dex"), `tests/fixtures/${name}.dex`);
-  if (name === "SerializationProbe") writeFileSync("tests/fixtures/SerializationProbe.hex", java(out, name, ["graph"]));
+  if (name === "SerializationProbe") writeFileSync("tests/fixtures/SerializationProbe.hex", java(out, name, { args: ["graph"] }));
   console.log(`tests/fixtures/${name}.dex`);
 }

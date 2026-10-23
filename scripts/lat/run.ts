@@ -38,7 +38,7 @@ import type { Capture, Diagnostics, LatConfig, Tap } from "./page.ts";
 import { cli } from "../args.ts";
 import { Ev } from "../../src/timeline.ts";
 import { bundle } from "../bundle.ts";
-import { BASE_URL, CONTEXT_OPTS, SOFTWARE_GL, chromeArgs } from "../page.ts";
+import { BASE_URL, CONTEXT_OPTS, HOST_GL, SOFTWARE_GL, chromeArgs } from "../page.ts";
 import { diagnosticErrors } from "../../tests/e2e/lib/processes.ts";
 
 const LIMIT_MS = 150;
@@ -90,7 +90,7 @@ async function openChrome(profile: string): Promise<Browser> {
   const [command, ...argv] = [...ecores ? ["taskpolicy", "-c", "background"] : [], chromium.executablePath(), "--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`,
     ...chromeArgs(), "--autoplay-policy=no-user-gesture-required",
     `--window-size=${CONTEXT_OPTS.viewport.width},${CONTEXT_OPTS.viewport.height}`, "--no-first-run", "--no-default-browser-check",
-    ...(gpu ? ["--enable-gpu", "--use-angle=metal"] : SOFTWARE_GL), ...(process.env.WEBDROID_CHROME_ARGS?.split(" ").filter(Boolean) ?? []), "about:blank"];
+    ...(gpu ? HOST_GL : SOFTWARE_GL), ...(process.env.WEBDROID_CHROME_ARGS?.split(" ").filter(Boolean) ?? []), "about:blank"];
   // Chrome's own output (with WEBDROID_JS_FLAGS=--trace-gc, each V8 collection)
   const logs = chromeLog ? [openSync(chromeLog, "w"), openSync(chromeLog + ".err", "w")] : ["ignore", "ignore"] as const;
   const proc = spawn(command, argv, { stdio: ["ignore", ...logs] });

@@ -31,13 +31,15 @@ changed behavior; complete the broader matrix when required by PLAN or the task.
 run the entire suite solely for documentation edits.
 
 ```bash
+pnpm check       # the gate (~90 s): a stale platform build rebuilt, typecheck and test, wasm all, then e2e [flow ...]
 pnpm typecheck
 pnpm test
 pnpm fwtest
-pnpm wasm all    # src/wasm suites: diff classdiff … sweep (boot jars and FitNotes) aottest persist; `pnpm wasm` lists them
+pnpm wasm all    # src/wasm suites at once: diff classdiff … sweep (boot jars and FitNotes) aottest persist; `pnpm wasm` lists them
 PORT=4090 pnpm dev
-WEBDROID_URL=http://localhost:4090 pnpm textcmp FitNotes.apk
 WEBDROID_URL=http://localhost:4090 pnpm e2e
+# outside the gate: text layout parity, live content and measurement
+WEBDROID_URL=http://localhost:4090 pnpm textcmp FitNotes.apk
 WEBDROID_URL=http://localhost:4090 pnpm e2e --live
 WEBDROID_URL=http://localhost:4090 pnpm e2e --full --jobs 1
 WEBDROID_URL=http://localhost:4090 pnpm corpus
@@ -49,7 +51,9 @@ pnpm ts scripts/perfsum.ts tests/e2e/actual <baseline.json>
 - Use an unused port for this checkout; 4090 is an example. Serialize captures that share
   output directories and keep the code under capture stable. See the
   [harness guide](tests/e2e/README.md) for flow selection, output paths and recording.
-  `pnpm e2e` is the reproducible gate; `--live` adds flows that depend on network content.
+  `pnpm check` is the reproducible gate: it starts a dev server on a free port unless `WEBDROID_URL`
+  names one, stops at the first failing lane and shows its output. `--live` adds flows that depend
+  on network content; `lat`, `--full`, `corpus` and the conform suites measure and run on their own.
 - Typecheck includes `noUnusedLocals` and builds the Wasm core with Zig 0.16. Generated core
   blobs, the WebView page bundle and the sql.js build are not committed; the node preload
   (`scripts/preload.ts`) and the Vite config build them, and tests use ReleaseSafe.

@@ -41,6 +41,7 @@ for (const name of todo) {
   }
   const ms = performance.now() - t0;
   for (const k of Object.keys(total) as (keyof typeof total)[]) total[k] += w.stats[k];
+  w.close();
   const status = got === want ? "MATCH" : hit.length ? "BLOCKED" : "DIFF";
   tally[status]++;
   console.log(`${name.padEnd(15)} ${(status === "BLOCKED" ? "-" : got).padStart(10)} ${want.padStart(10)}  ${status.padEnd(7)} ${String(w.stats.methods).padStart(4)} methods ${ms.toFixed(0).padStart(5)} ms${status === "BLOCKED" ? `  first gap: ${hit[0]}` : ""}`);

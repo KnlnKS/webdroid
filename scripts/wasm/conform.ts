@@ -1,17 +1,18 @@
 // The conformance suites (scripts/conform) on the Wasm tier against their baselines tests/conformance/<suite>.json, which hold a hash of every passing test's name per class.
-// Each class runs in its own process (a class that never yields is killed, not waited for).
+// Each class runs in a World of its own, in one of --jobs worker processes (a class that never yields is killed with its worker, not waited for).
 //   pnpm conform <suite|quick> [class-substring | --test name-substring] [--update] [--jobs n] [--out directory]
 // A baseline test that fails or no longer runs is a regression, unless tests/conformance/wasm-pins.json pins it (a class regex, a test-name regex and a `why`).
 // A pin that matches no failure is stale, except a `flaky` one, whose result depends on timing. --update rewrites a whole suite's baseline from this run.
+import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { prepare } from "../conform/prepare.ts";
 import { arrayProviderFailures, classSetupFailures, hash, parseLines, type Outcome } from "../conform/results.ts";
 import { SUITES } from "../conform/suites.ts";
-import { cli } from "../args.ts";
-import { nodeCommand, run } from "../node.ts";
+import { HALF_CORES, cli, jobsOf } from "../args.ts";
+import { nodeCommand } from "../node.ts";
 import { checker } from "./tools.ts";
-import { runQueue } from "../util.ts";
+import { runQueue, timings } from "../util.ts";
 
 /** a few classes of each kind of suite, in seconds: collections, time, util, concurrency, io */
 const QUICK: [suite: string, classMatch: string][] = [
@@ -23,33 +24,43 @@ type Pins = Record<string, { class: string; test: string; flaky?: boolean; why: 
 
 const usage = `pnpm conform <${Object.keys(SUITES).join("|")}|quick> [class-substring] [--test name] [--update] [--jobs n] [--out directory]`;
 const { values: { update, jobs: jobsArg, test: testFilter, out: outputDir }, positionals: [target, match = ""] } = cli(usage,
-  { update: { type: "boolean" }, jobs: { type: "string", default: "4" }, test: { type: "string", default: "" }, out: { type: "string" } });
-const jobs = Number(jobsArg), plan: [string, string][] = target === "quick" ? QUICK : target in SUITES ? [[target, match]] : [];
+  { update: { type: "boolean" }, jobs: { type: "string" }, test: { type: "string", default: "" }, out: { type: "string" } });
+const jobs = jobsOf(jobsArg, HALF_CORES), plan: [string, string][] = target === "quick" ? QUICK : target in SUITES ? [[target, match]] : [];
 if (!plan.length) { console.error(`usage: ${usage}`); process.exit(2); }
 
-const [node, conformOne] = nodeCommand(join(import.meta.dirname, "conformone.ts"));
-
-/** one class: the lines it answers, or why it answered none */
-async function runClass(args: string[], cls: string): Promise<{ tests: Map<string, Outcome>; skipped: Map<string, string>; seconds: number; executions: { pass: number; fail: number; skipped: number } }> {
-  const t0 = performance.now();
-  // CONFORM_DEBUG asks the child for its gaps and the natives that waited
-  const { signal, stdout, stderr: err } = await run(node, [...conformOne, ...args, ...(testFilter ? [testFilter] : [])], { timeout: CLASS_TIMEOUT_MS });
-  const out = stdout.toString();
-  if (process.env.CONFORM_DEBUG && err) console.log([...new Set(err.split("\n"))].join("\n"));
-  if (outputDir) {
-    mkdirSync(outputDir, { recursive: true });
-    writeFileSync(join(outputDir, `${cls}.txt`), out);
-  }
-  const marker = out.indexOf("\u0001");
-  const why = signal ? `killed after ${CLASS_TIMEOUT_MS / 1000}s` : `no result: ${err.trim().split("\n").slice(-3).join(" | ").slice(0, 300)}`;
-  const lines = marker >= 0 ? out.slice(marker + 1) : `F\t${cls}\t${why}\n`;
-  const executions = { pass: 0, fail: 0, skipped: 0 };
-  for (const line of lines.split("\n")) {
-    if (line.startsWith("P\t")) executions.pass++;
-    else if (line.startsWith("F\t")) executions.fail++;
-    else if (line.startsWith("S\t")) executions.skipped++;
-  }
-  return { ...parseLines(lines), executions, seconds: (performance.now() - t0) / 1000 };
+/** worker processes over a suite's dex directory, each running a class at a time; one is ended when its class outlasts the timeout or it exits */
+function workers(dexDir: string, runner: string) {
+  const idle: ChildProcess[] = [];
+  const start = () => spawn(...nodeCommand(join(import.meta.dirname, "conformworker.ts"), dexDir, runner), { stdio: ["ignore", "pipe", "pipe", "ipc"] });
+  return {
+    /** one class: the lines it answers, or why it answered none */
+    async run(cls: string): Promise<ReturnType<typeof parseLines> & { seconds: number }> {
+      const t0 = performance.now(), child = idle.pop() ?? start();
+      let out = "", err = "", killed = false;
+      const onOut = (d: Buffer) => { out += d; }, onErr = (d: Buffer) => { err += d; };
+      child.stdout!.on("data", onOut);
+      child.stderr!.on("data", onErr);
+      const text = await new Promise<string | undefined>((done) => {
+        const timer = setTimeout(() => { killed = true; child.kill("SIGKILL"); }, CLASS_TIMEOUT_MS);
+        const answered = (m: string) => { clearTimeout(timer); child.off("exit", exited); done(m); };
+        const exited = () => { clearTimeout(timer); child.off("message", answered); done(undefined); };
+        child.once("message", answered).once("exit", exited);
+        child.send({ cls, filter: testFilter });
+      });
+      child.stdout!.off("data", onOut);
+      child.stderr!.off("data", onErr);
+      if (text !== undefined) idle.push(child);
+      // CONFORM_DEBUG asks the worker for its gaps and the natives that waited
+      if (process.env.CONFORM_DEBUG && err) console.log([...new Set(err.split("\n"))].join("\n"));
+      if (outputDir) {
+        mkdirSync(outputDir, { recursive: true });
+        writeFileSync(join(outputDir, `${cls}.txt`), out + (text ?? ""));
+      }
+      const why = killed ? `killed after ${CLASS_TIMEOUT_MS / 1000}s` : `no result: ${err.trim().split("\n").slice(-3).join(" | ").slice(0, 300)}`;
+      return { ...parseLines(text ?? `F\t${cls}\t${why}\n`), seconds: (performance.now() - t0) / 1000 };
+    },
+    close: () => { for (const c of idle.splice(0)) c.kill(); },
+  };
 }
 
 /** findings counted by test method and reason, with the first of each as the example (parameters and the numbers in a message vary within a group) */
@@ -74,8 +85,10 @@ for (const [suiteName, classMatch] of plan) {
   const executions = { pass: 0, fail: 0, skipped: 0 };
   let seconds = 0;
   const started = performance.now();
-  await runQueue(selected, jobs, () => 0, async (cls) => {
-    const r = await runClass([dexDir, runner, cls], cls);
+  const pool = workers(dexDir, runner), times = timings("conform-times");
+  await runQueue(selected, jobs, (cls) => times.weight(cls), async (cls) => {
+    const r = await pool.run(cls);
+    times.record(cls, r.seconds);
     results.set(cls, r.tests);
     skipped.set(cls, r.skipped);
     executions.pass += r.executions.pass;
@@ -85,6 +98,8 @@ for (const [suiteName, classMatch] of plan) {
     const note = r.executions.skipped ? `, ${r.executions.skipped} skipped: ${[...r.skipped.values()][0]}` : "";
     console.log(`  ${cls}: ${r.executions.pass} pass, ${r.executions.fail} fail${note} (${r.seconds.toFixed(1)}s)${r.tests.has(cls) ? ` class failed: ${r.tests.get(cls)!.message}` : ""}`);
   });
+  pool.close();
+  times.save();
 
   const rules = (pins[suiteName] ?? []).map((p) => ({ ...p, cls: new RegExp(p.class), test: new RegExp(p.test), hits: 0 }));
   let pass = 0, tests = 0, before = 0;

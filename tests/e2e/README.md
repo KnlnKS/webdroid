@@ -12,11 +12,13 @@ WEBDROID_URL=http://localhost:4090 pnpm e2e --full --jobs 1
 ```
 
 Use a private port and set `WEBDROID_URL` (default port 4080) on every capture; run captures
-serially, as they share output directories.
+serially, as they share output directories. `pnpm check [flow ...]` runs the quick gate after the
+other gates, on a dev server of its own unless `WEBDROID_URL` names one. A run whose flows' APKs
+are missing from `apks/` stops before launching any.
 
 | Mode (exclusive) | Does | Writes | Default `--jobs` |
 |---|---|---|---|
-| none | quick gate | `actual-fast/` | min(5, cpus/2) |
+| none | quick gate | `actual-fast/` | min(2, cpus/2) |
 | `--full` | capture and score | `actual/`, `report/` | min(4, cpus/3) |
 | `--diff` | rescore `actual/` | `report/` | min(4, cpus/3) |
 | `--record` | emulator pass | `golden/` | sequential |
@@ -68,7 +70,8 @@ over its limit, missing `privateStorage.expectedFiles`; for non-live flows also 
 (2026-01-02T12:00:00Z, then advancing), seed `Math.random`, run offline (`/dns` 404, `/proxy` 502,
 `/tcp`/`/udp` closed). Quick-lane `controlled` flows advance Android time logically
 (`?testClock=controlled`); `pinned` flows and `--full` use real time. Live flows: wall clock,
-network. Browser: SwiftShader, en-US, UTC, light, reduced motion.
+network. Browser: the host GPU on macOS (`WEBDROID_GL=swiftshader`: SwiftShader, as elsewhere), en-US, UTC, light,
+reduced motion.
 
 ## Full capture
 

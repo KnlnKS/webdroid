@@ -158,6 +158,8 @@ export class World {
   /** compiles second-tier units elsewhere (WorldOptions.compiler), from when the host has one */
   compiler?: CompileService;
   private touching: Set<string> | null = null;
+  /** whether close() ended this World */
+  closed = false;
 
   constructor(prog: Program, opts: WorldOptions) {
     this.opts = opts;
@@ -383,6 +385,10 @@ export class World {
     this.planner.forgetImplementations();
     if (rebound) { this.helpers.forgetFieldReaders(); PerWorld.rebound(this); }
   }
+
+  /** ends the World for a host done with it: its threads' waits end and their strands unwind without running more Java, its Cleaners no longer run and
+   *  its retired code is no longer waited on, so that nothing the engine or a timer holds keeps it */
+  close(): void { this.closed = true; this.sched.close(); this.tiers.close(); }
 
   // ---------- calling in from JS, and exceptions
   /** a JS function that calls the Java method; a Java exception arrives as a WebAssembly.Exception (see `throwable`) */

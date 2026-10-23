@@ -183,18 +183,18 @@ export class Tiering {
   }
   /** compiles and installs the second-tier unit of `m` in `slot` */
   private compileHot(slot: number, m: MethodInfo): void {
-    this.compileUnit(slot, true, (cx, seq) => {
+    this.compileUnit(slot, true, (cx) => {
       const { installed, copies, plan } = this.w.planner.group(m);
-      return { methods: installed, copies: copies.length, built: cx.buildUnit(installed, { copies, hot: true, plan, seq }) };
+      return { methods: installed, copies: copies.length, built: cx.buildUnit(installed, { copies, hot: true, plan }) };
     });
     this.w.stats.upgrades++;
   }
   /** compiles a unit with `build`, which names the methods it installs (none for a runtime function or a class's ensure()), and installs it: its functions go
    *  in their slots, or in `slot`; first-tier units share helpers. The slots it installed. */
-  compileUnit(slot: number, hot: boolean, build: (cx: Compiler, seq: number) => { methods: MethodInfo[]; copies?: number; built: Built }): number[] {
-    const clock = this.w.units.clock(), cx = new Compiler(this.w);
+  compileUnit(slot: number, hot: boolean, build: (cx: Compiler) => { methods: MethodInfo[]; copies?: number; built: Built }): number[] {
+    const clock = this.w.units.clock(), cx = new Compiler(this.w, this.unitSeq++);
     if (!hot) cx.shareHelpers();
-    const { methods, copies = 0, built } = build(cx, this.unitSeq++);
+    const { methods, copies = 0, built } = build(cx);
     this.w.stats.units++; this.w.stats.methods += methods.length + copies;
     const group = methods.map((m) => this.w.slotOf(m));
     this.install(group, hot, this.w.units.compiled(cx, this.w.units.of(cx), built, slot), slot, clock);
@@ -326,8 +326,11 @@ export class Tiering {
     if (!batch.length) return;
     for (const f of batch) this.retiredCollected.register(f, id);
     this.w.stats.retired += batch.length;
-    (this.w.opts.loop ?? defaultLoop).after(RETIRE_WAIT_MS, () => { if (this.retireBatch === id) this.dropRetired(); });
+    this.cancelRetire = (this.w.opts.loop ?? defaultLoop).after(RETIRE_WAIT_MS, () => { if (this.retireBatch === id) this.dropRetired(); });
   }
+  private cancelRetire = () => {};
+  /** stops waiting on retired code (World.close), whose timer would hold the World */
+  close(): void { this.retired.length = 0; this.cancelRetire(); }
   /** installs unit `u`, putting its functions (`group`, by slot) in the table; a slot already compiled keeps its original stub. Whether it was installed (Units.link) */
   install(group: number[], hot: boolean, u: LinkedUnit, slot: number, clock: Clock): boolean {
     const s = this.w.slots.at(slot)!;

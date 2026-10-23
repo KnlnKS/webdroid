@@ -70,6 +70,10 @@ Worker dry run. After `pnpm aot` the `--jobs 1` quick gate reaches 7 of 7 flows 
 and Komikku tap within 150 ms; Mihon's launch is unavailable because its live update check shows "New version
 available!" over the onboarding screen the scenario expects.
 
+`pnpm check` (2026-10-22) runs typecheck, the unit tests, `wasm all` and the quick e2e gate in 90 s on an M4 Pro
+with the five flows whose APKs this checkout has; the Mihon flows need `apks/mihon-v0.20.4.apk`. The quick gate runs
+two flows at once on the host GPU (45 s); five at once fails on the starting commit too.
+
 Not run since the JS tier was deleted: `e2e --live`, `e2e --full --jobs 1` and `corpus`. Before that,
 the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budget).
 

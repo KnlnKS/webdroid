@@ -1,14 +1,15 @@
 // Boot every apk in the tree headlessly and rank the gaps by how many apks they block.
-//   pnpm corpus [apk ...] [--json out.json] [--wait ms] [--observe ms]
+//   pnpm corpus [apk ...] [--json out.json] [--wait ms] [--observe ms] [--jobs n]
 import { writeFileSync } from "node:fs";
-import { cli } from "./args.ts";
+import { cli, jobsOf } from "./args.ts";
+import { runQueue } from "./util.ts";
 import type { Page } from "playwright";
 import { corpusApks } from "./apk-corpus.ts";
 import { CONTEXT_OPTS, bootApp, launchBrowser, openWebdroid, pageErrors, readProcesses } from "./page.ts";
 import { diagnosed, diagnosticErrors, type ProcessSnapshot } from "../tests/e2e/lib/processes.ts";
 
-const { values: { wait, observe, json: out }, positionals } = cli("pnpm corpus [apk ...] [--wait ms] [--observe ms] [--json out.json]",
-  { wait: { type: "string", default: "12000" }, observe: { type: "string", default: "1500" }, json: { type: "string" } });
+const { values: { wait, observe, json: out, jobs }, positionals } = cli("pnpm corpus [apk ...] [--wait ms] [--observe ms] [--jobs n] [--json out.json]",
+  { wait: { type: "string", default: "12000" }, observe: { type: "string", default: "1500" }, jobs: { type: "string" }, json: { type: "string" } });
 const waitMs = parseInt(wait), observeMs = parseInt(observe);
 const apks = positionals.length ? positionals : corpusApks();
 
@@ -29,7 +30,6 @@ interface Row {
 }
 
 const browser = await launchBrowser();
-const rows: Row[] = [];
 
 async function boot(page: Page, apk: string): Promise<Row> {
   const row: Row = { apk, ok: false, ticks: 0, bootMs: 0, classes: 0, missing: [], nativeRequired: [], errors: [], diagnostics: "unavailable", note: "" };
@@ -58,13 +58,13 @@ async function boot(page: Page, apk: string): Promise<Row> {
   return row;
 }
 
-for (const apk of apks) {
+const rows = await runQueue(apks, jobsOf(jobs, 2), () => 0, async (apk) => {
   const page = await browser.newPage(CONTEXT_OPTS);
   const row = await boot(page, apk);
   await page.close();
-  rows.push(row);
-  console.log(`${row.ok ? "draw" : "FAIL"} ${apk.padEnd(28)} ${String(row.classes).padStart(7)} classes  boot ${String(row.bootMs).padStart(5)}ms  ${row.missing.length} missing  ${row.nativeRequired.length} native  ${row.errors.length} errors  diagnostics ${row.diagnostics}${row.note ? "  " + row.note : ""}`);
-}
+  console.log(`${row.ok ? "draw" : "FAIL"} ${apk.padEnd(28)} ${String(row.classes).padStart(7)} classes  boot ${String(Math.round(row.bootMs)).padStart(5)}ms  ${row.missing.length} missing  ${row.nativeRequired.length} native  ${row.errors.length} errors  diagnostics ${row.diagnostics}${row.note ? "  " + row.note : ""}`);
+  return row;
+});
 await browser.close();
 
 const booted = rows.filter((r) => r.ok).length;

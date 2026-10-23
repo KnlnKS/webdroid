@@ -1,5 +1,6 @@
 // pnpm ts tests/fixtures/activity-manager.ts: what the activity manager asks of a
 // process's IApplicationThread as its services and receivers are driven, as one JSON object.
+// Each operation waits for the app thread's calls it makes, so they are all made when it returns.
 import "../../tests/platform.ts";
 import "../../src/natives.ts";
 import { rt, JObj, declaredField } from "../../src/jvm/runtime.ts";
@@ -65,7 +66,6 @@ rt.register({ name: "webdroid/test/Receiver", ctor: class extends JObj {}, sup: 
   "performReceive(Landroid/content/Intent;ILjava/lang/String;Landroid/os/Bundle;ZZI)V": () => {},
 } });
 const tagged = async (cls: string, tag: string) => { const o = await newObj(cls); Reflect.set(o, "tag", tag); return o; };
-const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
 const serviceIntent = async () => {
   const intent = await newIntent();
   await vcall(intent, "setComponent", `(Landroid/content/ComponentName;)${INTENT}`, await mkComponentName(PKG, SERVICE));
@@ -90,18 +90,14 @@ const name = await vcall(am, "startService", `(${APP}${INTENT}${S}Z${S}${S}I)Lan
 out.started = await vcall(name, "getClassName", `()${S}`);
 const first = await newObj("webdroid/test/Connection"), second = await newObj("webdroid/test/Connection");
 out.bound = await vcall(am, "bindServiceInstance", BIND, app, null, await serviceIntent(), null, first, 1n, null, PKG, 0);
-await settle();
 out.up = calls.splice(0);
 await vcall(am, "publishService", `(${BINDER}${INTENT}${BINDER})V`, token, await serviceIntent(), await tagged("webdroid/test/Binder", "published"));
 await vcall(am, "bindServiceInstance", BIND, app, null, await serviceIntent(), null, second, 1n, null, PKG, 0);
-await settle();
 out.connected = connected.splice(0);
 for (const conn of [first, second]) await vcall(am, "unbindService", "(Landroid/app/IServiceConnection;)Z", conn);
-await settle();
 out.unbound = calls.splice(0);
 out.staleStop = await vcall(am, "stopServiceToken", `(Landroid/content/ComponentName;${BINDER}I)Z`, name, token, 2);
 out.stop = await vcall(am, "stopServiceToken", `(Landroid/content/ComponentName;${BINDER}I)Z`, name, token, 1);
-await settle();
 out.down = calls.splice(0);
 
 // Two real Java bind chains wait for one delayed creation. The first caller then
@@ -131,7 +127,7 @@ try {
 await firstBind;
 creationGate = undefined;
 for (const conn of [ca, cb]) await vcall(am, "unbindService", "(Landroid/app/IServiceConnection;)Z", conn);
-await settle(); calls.splice(0);
+calls.splice(0);
 
 // an ordered broadcast reaches registered receivers by priority, each from the last one's result
 for (const [tag, priority] of [["b", 1], ["a", 2], ["abort", 0], ["never", -1]] as const) {
@@ -144,7 +140,6 @@ const result = await deliverBroadcast(await newIntent("org.webdroid.test.PING"),
 out.ordered = { calls: calls.splice(0), code: result.code, data: result.data, aborted: result.aborted };
 // another app's broadcast does not reach receivers registered RECEIVER_NOT_EXPORTED
 await deliverBroadcast(await newIntent("org.webdroid.test.PING"), null, false, { code: 0, data: null, extras: null, aborted: false }, { uid: 10999, pkg: "other" });
-await settle();
 out.foreign = calls.splice(0);
 
 // the app reaches the activity manager through a parcel, as it reaches system_server: the started
@@ -155,7 +150,6 @@ const list = await newObj("java/util/ArrayList"), withList = await serviceIntent
 await vcall(withList, "putStringArrayListExtra", `(${S}Ljava/util/ArrayList;)${INTENT}`, "list", list);
 await vcall(proxy, "startService", START, app, withList, null, 0, PKG, null, 0);
 await vcall(list, "add", "(Ljava/lang/Object;)Z", "late");
-await settle();
 const copy = await vcall(delivered!, "getStringArrayListExtra", `(${S})Ljava/util/ArrayList;`, "list") as JObj;
 out.copied = { proxy: classNameOf(proxy), same: copy === list, size: await vcall(copy, "size", "()I") };
 const big = await serviceIntent();

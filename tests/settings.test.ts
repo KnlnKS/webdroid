@@ -1,4 +1,4 @@
-import { expect, test, beforeAll, describe } from "vite-plus/test";
+import { expect, test, beforeAll, describe, vi } from "vite-plus/test";
 import "../src/natives.ts";
 import { rt, JObj, declaredField } from "../src/jvm/runtime.ts";
 import { newObj, vcall, scall } from "../src/jvm/natives/jentry.ts";
@@ -33,7 +33,8 @@ async function observer(tag: string): Promise<JObj> {
   Reflect.set(o, "tag", tag);
   return o;
 }
-const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+/** the changes observers have seen once they are `expected`: a change reaches them through the main looper and a binder call */
+const observed = (expected: string[]) => vi.waitFor(() => expect(changes.sort()).toEqual(expected), { timeout: 5000 });
 
 beforeAll(async () => {
   await install("org.webdroid.test.settings.twin", 35, [], 1);
@@ -179,13 +180,11 @@ describe("settings-provider", () => {
       uri, 0, await vcall(remote, "getContentObserver", "()Landroid/database/IContentObserver;"), 0, 35);
     changes.length = 0;
     settingsStore().put("secure", "ui_night_mode", "2");
-    await settle();
-    expect(changes.sort()).toEqual(["deep content://settings/secure/ui_night_mode", "item content://settings/secure/ui_night_mode", "remote content://settings/secure/ui_night_mode"]);
+    await observed(["deep content://settings/secure/ui_night_mode", "item content://settings/secure/ui_night_mode", "remote content://settings/secure/ui_night_mode"]);
     expect(await scall(SECURE, "getInt", `(${CR}${S})I`, cr, "ui_night_mode")).toBe(2);
     changes.length = 0;
     await vcall(cr, "notifyChange", "(Landroid/net/Uri;Landroid/database/ContentObserver;)V", table, null);
-    await settle();
-    expect(changes.sort()).toEqual(["deep content://settings/secure", "item content://settings/secure", "remote content://settings/secure", "shallow content://settings/secure"]);
+    await observed(["deep content://settings/secure", "item content://settings/secure", "remote content://settings/secure", "shallow content://settings/secure"]);
     settingsStore().put("secure", "ui_night_mode", null);
   });
 });

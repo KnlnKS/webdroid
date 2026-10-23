@@ -7,23 +7,25 @@ import { note, Ev } from "../timeline.ts";
 // which is what a computation that yields every few milliseconds would otherwise spend idle in.
 // Each turn resumes one yielded thread, after every thread woken since the last turn, so a wake
 // waits out one thread's slice rather than a round of every runnable thread's.
-type NodePort = MessagePort & { ref?(): void; unref?(): void };
-const chan = typeof MessageChannel !== "undefined" ? new MessageChannel() : null;
+// Node delivers up to 1000 queued port messages before it runs a timer, so a thread yielding every
+// turn would hold a sleeper's wake back 1000 turns: there a turn is a setImmediate, between which
+// timers run, and which holds the process open only while one is posted.
+type NodePort = MessagePort & { unref?(): void };
+const chan = typeof setImmediate === "function" ? null : new MessageChannel();
 const waiters: (() => void)[] = [], woken: (() => void)[] = [];
 let posted = false;
-// node: a posted turn holds the process open and an idle port does not, so a script awaiting a turn
-// runs on and one whose work is done exits
-const port = chan?.port1 as NodePort | undefined;
-const post = (): void => { if (!posted) { posted = true; port?.ref?.(); chan?.port2.postMessage(0); } };
-if (chan) {
-  chan.port1.onmessage = () => {
-    posted = false; port?.unref?.(); yieldStats.fires++; turnArmed = false; note(Ev.Turn);
-    for (const f of woken.splice(0)) f();
-    waiters.shift()?.();
-    if (waiters.length) post();
-  };
-  port?.unref?.();
-}
+const fire = (): void => {
+  posted = false; yieldStats.fires++; turnArmed = false; note(Ev.Turn);
+  for (const f of woken.splice(0)) f();
+  waiters.shift()?.();
+  if (waiters.length) post();
+};
+const post = (): void => {
+  if (posted) return;
+  posted = true;
+  if (chan) chan.port2.postMessage(0); else setImmediate(fire);
+};
+if (chan) chan.port1.onmessage = fire;
 /** How long the current macrotask has held the JS thread, from the first time this turn asked: a
  *  turn ends at its own message, or when the yield channel starts the next. */
 let turnStart = 0, turnArmed = false;
@@ -49,7 +51,6 @@ export const answeringFor = (now = performance.now()): number => Math.max(0, res
 /** a later turn, after what `queue` already holds */
 function turn(queue: (() => void)[]): Promise<void> {
   if (processExited()) return never();
-  if (!chan) return new Promise((r) => setTimeout(r, 0));
   return new Promise((r) => { yieldStats.pushes++; queue.push(r); post(); });
 }
 export const yieldToLoop = (): Promise<void> => turn(waiters);

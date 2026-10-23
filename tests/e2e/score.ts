@@ -126,9 +126,9 @@ const flowJson = (app: string) => `${E2E_DIR}report/${app}.json`;
 /** Score one flow in a subprocess — the pixel work is CPU-bound and must not stall the event
  *  loop the other flows' browsers are driven from — and return its printed summary. */
 export async function scoreFlow(app: string): Promise<string> {
-  const { code, stdout, stderr } = await run(...nodeCommand(`${E2E_DIR}run.ts`, "--diff", "--json", "--test", app));
-  if (code) throw new Error(`scoring ${app} failed: ${stderr || stdout}`);
-  return stdout.toString().trimEnd();
+  const { status, stdout, stderr } = await run(...nodeCommand(`${E2E_DIR}run.ts`, "--diff", "--json", "--test", app));
+  if (status) throw new Error(`scoring ${app} failed: ${stderr || stdout}`);
+  return stdout.trimEnd();
 }
 
 /** index.html + report.json from the per-flow JSON files the scoring passes wrote. */

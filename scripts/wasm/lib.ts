@@ -44,7 +44,8 @@ function vfsDexes(path: string): DexFile[] | undefined {
   const dexes = path.endsWith(".dex") ? dexesIn(bytes, path) : dexesOfZip(zipTree(bytes));
   return dexes.length ? dexes : undefined;
 }
-/** `w` made the realm's Java now and whenever its entries are called: the objects natives make are the current World's */
+/** `w` made the realm's Java now and whenever its entries are called: the objects natives make are the current World's. A harness that makes Worlds one
+ *  after another closes each it is done with (World.close), whose Cleaners would otherwise make it the realm's Java while a later World's natives wait. */
 export function current(w: World): World {
   useWorld(w);
   const { entry, entryAsync } = w;

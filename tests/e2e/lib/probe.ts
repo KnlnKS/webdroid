@@ -361,7 +361,8 @@ function installProbe(cfg: ProbeConfig): void {
     const hashes: number[] = [];
     let activeSince = 0;
     const seen: Record<string, number> = {};
-    let lastSample = horizonAt - q.intervalMs, interval = q.intervalMs;
+    // at a controlled clock only the app's real work can still change the screen, so samples need not be spaced in real time
+    let lastSample = horizonAt - q.intervalMs, interval = controlled ? Math.min(q.intervalMs, 50) : q.intervalMs;
     lastHash = -1;
     for (;;) {
       const now = performance.now();
@@ -375,7 +376,7 @@ function installProbe(cfg: ProbeConfig): void {
         // app's backlog of frames, on the page's thread, where the broker answers the app's IPC: what a
         // readback takes beyond a few frames is kept to a fifth of the thread. A screen whose every
         // sample differs (a spinner) is sampled less often until a frame repeats
-        interval = Math.max(4 * (readbackMs - 150), hashes.length === q.stableFrames * 2 && new Set(hashes).size === hashes.length ? Math.min(interval * 2, 1000) : q.intervalMs);
+        if (!controlled) interval = Math.max(4 * (readbackMs - 150), hashes.length === q.stableFrames * 2 && new Set(hashes).size === hashes.length ? Math.min(interval * 2, 1000) : q.intervalMs);
       }
       const b = await busy(dueBefore, q.stableMs);
       if (!b.length) return done("idle", seen);
@@ -385,8 +386,10 @@ function installProbe(cfg: ProbeConfig): void {
       // for, four display frames a sample, since only where the animation ends is captured. A
       // frame's request for the next waits for time, so past the bound this steps the frame, which
       // also draws what came in meanwhile
+      let advanced = false;
       if (controlled && b.includes("vsync")) {
-        if (g.wd.guestClock.now() < animationEnd) await g.wd.guestClock.advanceTo(Math.min(animationEnd, g.wd.guestClock.now() + 64));
+        advanced = g.wd.guestClock.now() < animationEnd;
+        if (advanced) await g.wd.guestClock.advanceTo(Math.min(animationEnd, g.wd.guestClock.now() + 64));
         await g.wd.testFrame();
       }
       // a still screen settles past timers and network, not past work under way: a main-thread job
@@ -401,7 +404,8 @@ function installProbe(cfg: ProbeConfig): void {
       const h = working ? undefined : stableFrame(hashes, q.stableFrames);
       if (h !== undefined && h >= 0) { captured = sampled.get(h) ?? null; return done("pixels", seen); }
       if (now - t0 >= timeoutMs + (controlled ? 0 : horizonMs)) return done("timeout", seen);
-      await sleep(25);
+      // a frame that moved the controlled clock waits only for its presentation; frames at a frozen clock are paced
+      if (advanced) await nextPresent(25); else await sleep(25);
     }
   };
   const capture = () => captured ? encode(captured) : screenPng();

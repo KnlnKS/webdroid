@@ -105,6 +105,16 @@ const modules = /^[cd]\d+\.wasm$/;
   check("publication after preflight keeps globals", published.link(cls.name).exports, globals);
   check("publication after preflight Java result", published.entry("Aot", "plain", "()I")(), 0);
 }
+// A code module that arrives after a method of it was compiled on demand installs over that code: frames of the build's code are read with the build's trace.
+{
+  let held = true;
+  const w = aotWorld({ get: (f) => held && /^c\d+\.wasm$/.test(f) ? undefined : fileOf(f) });
+  const updater = (k: number) => { try { return w.entry("Aot", "updater", "(I)I")(k); } catch (e) { return w.throwable(e) ? "a Java exception" : e; } };
+  check("a caller-sensitive method compiled on demand finds its caller", updater(1), 1);
+  held = false;
+  check("its module installs over it", w.aot!.provide(slotOf(w, "java/util/concurrent/atomic/AtomicReferenceFieldUpdater", "getAndSet", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;")), true);
+  check("the build's code finds the caller", updater(2), 1);
+}
 // Cached patches bind fallback globals and retain their invalidation owners even when the platform unit cannot load.
 {
   const app = loadDexes(join(out, "classes.dex")), platform = program(jars);

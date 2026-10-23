@@ -30,13 +30,15 @@ export const CONTEXT_OPTS = {
   geolocation: { latitude: 37.422, longitude: -122.084, accuracy: 20 },
   permissions: ["geolocation"],
 };
-/** Chrome's GL on the CPU, SwiftShader behind ANGLE */
-export const SOFTWARE_GL = ["--use-gl=angle", "--use-angle=swiftshader"];
-/** headless Chrome on software GL, rendering as the e2e goldens were recorded */
+/** Chrome's GL on the host's GPU (ANGLE's Metal backend), or on the CPU (SwiftShader behind ANGLE), which renders as fast as the host has cores */
+export const HOST_GL = ["--enable-gpu", "--use-angle=metal"], SOFTWARE_GL = ["--use-gl=angle", "--use-angle=swiftshader"];
+/** the GPU on macOS unless WEBDROID_GL=swiftshader asks for the CPU, as every other host gets */
+const GL = process.platform === "darwin" && process.env.WEBDROID_GL !== "swiftshader" ? HOST_GL : SOFTWARE_GL;
+/** headless Chrome as the harnesses run it */
 export const launchOptions = (jsFlags?: string) => ({
   headless: true,
   args: [...chromeArgs(jsFlags), "--font-render-hinting=none", "--disable-lcd-text",
-    ...SOFTWARE_GL, "--disable-partial-raster", "--disable-skia-runtime-opts"],
+    ...GL, "--disable-partial-raster", "--disable-skia-runtime-opts"],
   ignoreDefaultArgs: ISOLATED ? ["--disable-features=IsolateOrigins,site-per-process"] : [],
 });
 export const launchBrowser = (jsFlags?: string) => chromium.launch(launchOptions(jsFlags));
