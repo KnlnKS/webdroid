@@ -1,5 +1,5 @@
 import { T, sleb, uleb, vt, type VT, type FuncBytes, definedGlobal, functionIndex } from "./wasmbin.ts";
-import type { MethodInfo } from "./program.ts";
+import type { Kind, MethodInfo } from "./program.ts";
 /** The global a call through the slot table (table 0) first sets to the slot it calls, which a lazy-link stub serving every slot of its signature reads:
  *  global 0 of every module with such calls */
 export const CALLEE = 0;
@@ -90,6 +90,8 @@ export class Code {
   refNull(ht: number): this { this.b.push(0xd0); sleb(ht, this.b); return this; }
   /** ref.null any: the null of every Java reference slot */
   anyNull(): this { this.b.push(0xd0, 0x6e); return this; }
+  /** the zero of kind `k` */
+  zero(k: Kind): this { return k === "I" ? this.i32(0) : k === "J" ? this.i64(0n) : this.anyNull(); }
   tableGet(t: number): this { this.b.push(0x25); uleb(t, this.b); return this; }
   /** a JS value (a string) into a reference slot; externConvertAny is the way back */
   anyConvertExtern(): this { return this.gc(0x1a); }

@@ -2,7 +2,7 @@
 import { parseMethodDesc } from "../../jvm/abi.ts";
 import { HT, ModuleBuilder, T, ref, refNull, type VT, type FunctionType } from "./wasmbin.ts";
 import { Code, OP, type InlineFrame } from "./code.ts";
-import { ACC, kindOf, mid, type FieldInfo, type Program, type Kind, type MethodInfo } from "./program.ts";
+import { ACC, kindOf, methodKinds, mid, type FieldInfo, type Program, type Kind, type MethodInfo } from "./program.ts";
 import { H, ELEM, MATH_ARITY, elemKindOf, FUEL, INIT_DONE, MAX_DEPTH, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, SAMPLE_EVERY, WARM_AT, type ElemKind } from "./consts.ts";
 import { declareSymbolicSites, siteKey, type SymbolicSite } from "./sites.ts";
 import { prepareMethod, type PreparedMethod } from "../../jvm/prepared.ts";
@@ -401,23 +401,22 @@ export class Compiler implements Base {
    *  `sampled`, if given, when this activation records its call targets (profile.ts) */
   emitCount(c: Code, m: MethodInfo, sampled = -1): void {
     if (!this.pushCounter(c, m)) return;
-    const count = (b: Code) => {
-      return this.count(b, (b) => b.i32(1), (b, n) => b.lget(n).i32(HOT_BUDGET).raw(OP.i32_eq));
-    };
+    const count = (b: Code) => this.count(b, (b) => b.i32(1), (b, n) => b.lget(n).i32(HOT_BUDGET).raw(OP.i32_eq));
     if (sampled < 0) c.call(this.defineFn("count", [T.i32], [], count, true));
     else c.call(this.defineFn("countSampled", [T.i32], [T.i32], (b) => b.lget(count(b)).i32(SAMPLE_EVERY - 1).raw(OP.i32_and).i32(1).raw(OP.i32_eq), true)).lset(sampled);
   }
-  /** opens the block a counted method's body runs in, which an activation leaves at once, with its result zero, while the scratch memory's warm word
-   *  is set: the shim's Worker compiles code that way (warmshim.ts) and the burner runs it to have the engine optimize it with its feedback (burn.ts).
-   *  Leaving through the block's end has the engine charge the activation the whole function's size toward its upgrade. False if `m` has no counter */
-  emitWarmExit(c: Code, m: MethodInfo): boolean {
-    if (this.w.slotOf(m) >= COUNT_SLOTS) return false;
+  /** emits `body`, a counted method's, in a block that an activation leaves at once, with its result zero, while the scratch memory's warm word is set:
+   *  the shim's Worker compiles code that way (warmshim.ts) and the burner runs it to have the engine optimize it with its feedback (burn.ts). Leaving
+   *  through the block's end has the engine charge the activation the whole function's size toward its upgrade */
+  emitWarmExit(c: Code, m: MethodInfo, body: () => void): void {
+    if (!this.counting || this.w.slotOf(m) >= COUNT_SLOTS) { body(); return; }
     this.scratch();
-    const ret = m.ret === "V" ? "V" : kindOf(m.ret);
+    const { ret } = methodKinds(m);
     c.block(ret === "V" ? null : kindVT(ret)).i32(0).mem(OP.i32_load, 2, WARM_AT).if_();
-    if (ret === "L") c.anyNull(); else if (ret === "J") c.i64(0n); else if (ret === "I") c.i32(0);
+    if (ret !== "V") c.zero(ret);
     c.br(1).end();
-    return true;
+    body();
+    c.end();
   }
   /** counts a deferred loop's `iterations` toward `m`'s budget, which they reach when the count crosses it */
   emitLoopCount(c: Code, m: MethodInfo, iterations: number): void {
@@ -596,7 +595,7 @@ export class Compiler implements Base {
       const lay = this.prog.layout(cls);
       this.allocBytes(n, () => n.i32(12 + lay.reduce((b, f) => b + (f.kind === "J" ? 8 : 4), 0)));
       n.gget(this.vtGlobal(cls)).refAsNonNull().i64(0n);
-      for (const f of lay) { if (f.kind === "I") n.i32(0); else if (f.kind === "J") n.i64(0n); else n.anyNull(); }
+      for (const f of lay) n.zero(f.kind);
       n.structNew(this.structFor(cls));
     }));
   }
