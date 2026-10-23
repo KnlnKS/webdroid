@@ -43,13 +43,14 @@ const containsInstalled = (w: ReturnType<typeof world>) => installed(w, slotOf(w
   check("bodies run in place keep their frames, initialization order and stores", w.entry("Aot", "inlined", "()I")(), 31);
   w.assumptions.undoCode(slotOf(w, "Aot", "first", "(LAot$Pair;)I"));
   check("undoing a method undoes the code that runs its body in place", installed(w, slotOf(w, "Aot", "inlined", "()I")), false);
-  // the warm Worker mirrors a module's imports from its bytes and compiles its methods by calling them into the warm trap
+  // the warm Worker mirrors a module's imports from its bytes and compiles its methods by calling them into the warm exit
   const warm = new WarmWorld(), mirrored = w.aot!.loaded.filter((f) => /^c\d+\.wasm$/.test(f)).map((f) => warm.load(compileModule(fileOf(f)), fileOf(f)));
   check("the warm shim mirrors every loaded code module", mirrored.filter((m) => typeof m === "string").join(), "");
   const [, method, args] = (mirrored as WarmCall[][]).flat()[0];
-  let trapped = false;
-  try { method(...args); } catch (e) { trapped = e instanceof WebAssembly.RuntimeError; }
-  check("a warmed method traps as it is entered", trapped, true);
+  // its function imports throw, so a body that ran would most likely fail
+  let returned: unknown = "threw";
+  try { returned = method(...args); } catch { /* checked below */ }
+  check("a warmed method returns zero as it is entered", [undefined, 0, 0n, null].includes(returned as never), true);
   const library = w.prog.newLoader(w.prog.root, null);
   w.addDexes(loadDexes(join(out, "classes.dex")), library);
   w.namespaces.bindLibraries(library, [w.prog.newLoader(w.prog.boot, null)], []);

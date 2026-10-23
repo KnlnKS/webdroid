@@ -62,7 +62,7 @@ const names = args.length ? args : readdirSync(SCENARIOS).filter((f) => f.endsWi
 
 /** the wd.perf counters a tap's breakdown reports, as deltas from pointerup to the response */
 const COUNTERS = ["inputMs", "resParseMs", "drawMs", "frameMs", "presentations", "presentLagMs",
-  "nativeMs", "nativeInstr", "jitMs", "jitRegions", "wasmMethods", "wasmClassBuildMs", "wasmCompileMs", "wasmModules", "wasmModuleMs", "wasmBytes", "wasmAotLoaded", "wasmAotMissed", "wasmAotMs", "wasmClasses", "wasmSuspensions", "wasmCrossings", "wasmEntries", "wasmAhead", "wasmRetired", "wasmCollected"];
+  "nativeMs", "nativeInstr", "jitMs", "jitRegions", "wasmMethods", "wasmClassBuildMs", "wasmCompileMs", "wasmModules", "wasmModuleMs", "wasmBytes", "wasmAotLoaded", "wasmAotMissed", "wasmAotMs", "wasmClasses", "wasmSuspensions", "wasmCrossings", "wasmEntries", "wasmAhead", "wasmRetired", "wasmCollected", "wasmBurned"];
 
 
 type CdpEvent = { method: string; params: any; sessionId?: string };

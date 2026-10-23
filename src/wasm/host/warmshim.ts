@@ -1,6 +1,6 @@
 // A build module instantiated without its World, so that a Worker of its own has the engine compile the module's methods: V8 shares what it compiles
 // of a module between the Workers of a process (the same bytes or the posted Module), and a first-tier method called while the warm word is set
-// (exc.ts WARM_AT) traps as it is entered, once compiled. The imports come from the module's own bytes: its type section copied into a small module
+// (exc.ts WARM_AT) returns zero as it is entered, once compiled (Compiler.emitWarmExit). The imports come from the module's own bytes: its type section copied into a small module
 // that defines its tags and globals at their defaults, JS functions that throw for its function imports (the Math functions the World passes stay
 // themselves: V8 compiles calls of those differently), and one table and memory for every module of the warming World.
 import { MATH_ARITY, COUNT_SLOTS, WARM_AT } from "../compiler/consts.ts";

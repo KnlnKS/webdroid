@@ -14,4 +14,7 @@ public class Lz {
   public static native A late();
   public static int active() { return late().f(); }
   public static int sum(int n) { int s = 0; for (int i = 0; i < n; i++) s += call(new B()); return s; }
+  static int ticks;
+  public static int tick(long a, Fn f) { return ++ticks; }
+  public static void bump() { ticks += 100; }
 }

@@ -44,7 +44,7 @@ async function run(): Promise<void> {
     for (const [slot, f, args] of calls) {
       if (done.has(slot) || !job.all && !wanted.has(slot)) continue;
       done.add(slot); count.warmed++;
-      // the warm trap, or a call the defaults made fail
+      // a call the defaults made fail
       try { f(...args); } catch { /* compiled either way */ }
       if (performance.now() > until) { await turn(); until = performance.now() + SLICE_MS; }
     }

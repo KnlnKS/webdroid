@@ -197,6 +197,7 @@ export class MC {
     this.tmpL = c.newLocal(T.anyref);
     this.loops?.declare();
     if (!this.loops) this.frame = planDepth(this);
+    const warm = cx.counting && cx.emitWarmExit(c, m);
     if (this.frame.whole) this.weights.push(...cx.emitEnter(c, this.entryDepth = c.newLocal(T.i32)));
     // a deferred loop's iterations count toward the method's budget when it returns
     if (this.loops?.deferred) this.fuelLocal = c.newLocal(T.i32);
@@ -209,6 +210,7 @@ export class MC {
     if (regions.length === 1 && !this.tries) {
       this.emitRegion(0);
       c.unreachable();
+      if (warm) c.end();
       return;
     }
     this.regionLocal = c.newLocal(T.i32);
@@ -239,6 +241,7 @@ export class MC {
     }
     this.pop(); c.end();                            // $disp loop
     c.unreachable();
+    if (warm) c.end();
   }
   /** the local holding the depth before this method's frame, if it counts one */
   private entryDepth = -1;

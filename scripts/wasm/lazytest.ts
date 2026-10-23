@@ -85,6 +85,17 @@ for (const [hot, own] of [[false, false], [true, false], [true, true]]) {
   check("profiled guards fall back for changed receivers", call(z, x), 73);
 }
 
+// ---- burning: busy first-tier methods called with the warm word set return at once, running nothing of their bodies, and answer the same after
+{
+  const w = lz(), tick = w.entry("Lz", "tick", "(JLLz$Fn;)I"), bump = w.entry("Lz", "bump", "()V"), sum = w.entry("Lz", "sum", "(I)I");
+  for (let i = 0; i < 100; i++) { tick(1n, null); bump(); }
+  const total = sum(100);
+  while (w.burner.burn(performance.now() + 50));
+  check("busy methods burned", w.stats.burned >= 4, true);
+  check("burning ran none of their bodies", tick(1n, null), 100 * 101 + 1);
+  check("burned methods answer the same", sum(100), total);
+  check("a method is burned once for its code", (w.burner.burn(performance.now() + 50), w.stats.burned) === (w.burner.burn(performance.now() + 50), w.stats.burned), true);
+}
 // ---- implicit exceptions: class (caught by Java code) and message (computed by the host)
 {
   const w = lz({ heapUsed: () => 0 });

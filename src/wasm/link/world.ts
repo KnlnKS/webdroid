@@ -27,6 +27,7 @@ import { SlotTable } from "./slots.ts";
 import { Planner } from "./planning.ts";
 import { Tiering } from "./tiering.ts";
 import { AheadCompiler } from "./ahead.ts";
+import { Burner } from "./burn.ts";
 import { Dispatch } from "./dispatch.ts";
 import { ClassModules } from "./classmodule.ts";
 import { Stubs } from "./stubs.ts";
@@ -100,8 +101,9 @@ export type WorldStats = {
   bridgeCallerCaptures: number;
   /** modules compiled here (bytes, ms) and instantiated (count, ms), and the time compiling units took (ms) */
   bytes: number; moduleMs: number; instances: number; instantiateMs: number; compileMs: number;
-  /** slots whose code was undone, second-tier units installed, first-tier methods merged, units retired and those collected since, methods compiled ahead */
-  invalidated: number; upgrades: number; merged: number; retired: number; collected: number; ahead: number;
+  /** slots whose code was undone, second-tier units installed, first-tier methods merged, units retired and those collected since, methods compiled ahead, and
+   *  first-tier methods burned (burn.ts) */
+  invalidated: number; upgrades: number; merged: number; retired: number; collected: number; ahead: number; burned: number;
 };
 export class World {
   opts: WorldOptions;
@@ -120,12 +122,13 @@ export class World {
   stats: WorldStats = {
     phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, missed: 0, readMs: 0, ms: 0, bytes: 0 },
     classes: 0, units: 0, methods: 0, classMs: 0, bridgeCallerCaptures: 0, bytes: 0, moduleMs: 0, instances: 0, instantiateMs: 0, compileMs: 0,
-    invalidated: 0, upgrades: 0, merged: 0, retired: 0, collected: 0, ahead: 0,
+    invalidated: 0, upgrades: 0, merged: 0, retired: 0, collected: 0, ahead: 0, burned: 0,
   };
   readonly slots = new SlotTable(this, FIRST_FREE_SLOT);
   readonly tiers = new Tiering(this);
   readonly planner = new Planner(this, this.tiers);
   readonly ahead = new AheadCompiler(this, this.tiers);
+  readonly burner = new Burner(this);
   readonly dispatch = new Dispatch(this);
   readonly classModules = new ClassModules(this);
   readonly stubs = new Stubs(this);

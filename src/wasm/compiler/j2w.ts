@@ -402,11 +402,22 @@ export class Compiler implements Base {
   emitCount(c: Code, m: MethodInfo, sampled = -1): void {
     if (!this.pushCounter(c, m)) return;
     const count = (b: Code) => {
-      b.i32(0).mem(OP.i32_load, 2, WARM_AT).if_().unreachable().end();
       return this.count(b, (b) => b.i32(1), (b, n) => b.lget(n).i32(HOT_BUDGET).raw(OP.i32_eq));
     };
     if (sampled < 0) c.call(this.defineFn("count", [T.i32], [], count, true));
     else c.call(this.defineFn("countSampled", [T.i32], [T.i32], (b) => b.lget(count(b)).i32(SAMPLE_EVERY - 1).raw(OP.i32_and).i32(1).raw(OP.i32_eq), true)).lset(sampled);
+  }
+  /** opens the block a counted method's body runs in, which an activation leaves at once, with its result zero, while the scratch memory's warm word
+   *  is set: the shim's Worker compiles code that way (warmshim.ts) and the burner runs it to have the engine optimize it with its feedback (burn.ts).
+   *  Leaving through the block's end has the engine charge the activation the whole function's size toward its upgrade. False if `m` has no counter */
+  emitWarmExit(c: Code, m: MethodInfo): boolean {
+    if (this.w.slotOf(m) >= COUNT_SLOTS) return false;
+    this.scratch();
+    const ret = m.ret === "V" ? "V" : kindOf(m.ret);
+    c.block(ret === "V" ? null : kindVT(ret)).i32(0).mem(OP.i32_load, 2, WARM_AT).if_();
+    if (ret === "L") c.anyNull(); else if (ret === "J") c.i64(0n); else if (ret === "I") c.i32(0);
+    c.br(1).end();
+    return true;
   }
   /** counts a deferred loop's `iterations` toward `m`'s budget, which they reach when the count crosses it */
   emitLoopCount(c: Code, m: MethodInfo, iterations: number): void {

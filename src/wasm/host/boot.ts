@@ -56,6 +56,8 @@ let starting = typeof location !== "undefined";
 const START_MS = 15_000;
 /** a slice of idle time spent compiling ahead (AheadCompiler.compile): an input that arrives meanwhile waits no longer than this */
 const AHEAD_SLICE_MS = 4, AHEAD_AFTER_INPUT_MS = 1000;
+/** burning (link/burn.ts) makes no garbage and its compiles run on the engine's background threads: it begins sooner after an input, once the input's frames are drawn */
+const BURN_AFTER_INPUT_MS = 250;
 let aheading = false;
 
 /** timers and turns of the event loop for threads that wait: the shell's own, so a thread's wait is a timed park an idle observer ignores and a yield keeps the main looper's order */
@@ -156,15 +158,21 @@ export async function bootWasmTier(): Promise<TierBackend> {
     },
     launched,
     async ahead(idle) {
-      // a launch from a saved build has the code that earlier launches ran: what it lacks is compiled as it runs, without the garbage of compiling more
-      if (aheading || starting || !world || !appDexes.length || code?.hit) return;
+      if (aheading || starting || !world) return;
       // a failure leaves it off for the rest of the process: the code is compiled on demand as before
       aheading = true;
       // only while no other thread of the process has work to run (an app's main thread often waits for its background threads, which share this one), and not
       // while the app may still be answering an input
-      const quiet = () => idle() && !yieldStats.pending() && sinceInput() > AHEAD_AFTER_INPUT_MS;
-      try { while (quiet() && world.ahead.compile(performance.now() + AHEAD_SLICE_MS)) await new Promise((resolve) => setTimeout(resolve)); aheading = false; }
-      catch (e) { console.warn("[webdroid] compiling ahead failed", e); }
+      const quiet = (after = AHEAD_AFTER_INPUT_MS) => idle() && !yieldStats.pending() && sinceInput() > after;
+      const turn = () => new Promise((resolve) => setTimeout(resolve));
+      // a launch from a saved build has the code that earlier launches ran: what it lacks is compiled as it runs, without the garbage of compiling more
+      try { if (appDexes.length && !code?.hit) while (quiet() && world.ahead.compile(performance.now() + AHEAD_SLICE_MS)) await turn(); }
+      catch (e) { console.warn("[webdroid] compiling ahead failed", e); return; }
+      // the main thread's wait that began this may be its last until the next input
+      const early = BURN_AFTER_INPUT_MS - sinceInput();
+      if (early > 0) await new Promise((resolve) => setTimeout(resolve, early + 1));
+      try { while (quiet(BURN_AFTER_INPUT_MS) && world.burner.burn(performance.now() + AHEAD_SLICE_MS)) await turn(); aheading = false; }
+      catch (e) { console.warn("[webdroid] burning failed", e); }
     },
     beginAppCode(dexes, roots, shown) {
       asked = { roots, shown };
