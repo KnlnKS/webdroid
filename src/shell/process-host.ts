@@ -3,7 +3,7 @@
 // answers the host's bootstrap; the Worker itself is process-worker.ts.
 import { bootstrapTransfers, closeProcessBootstrap, type ProcessBootstrap } from "./process-bootstrap-data.ts";
 import { callProxy, methodsOf, type CallFailure } from "./rpc.ts";
-import type { WorkerControl } from "./worker-control.ts";
+import type { StartPhase, WorkerControl } from "./worker-control.ts";
 import type { ProcessRecord } from "./processes.ts";
 import { createGuestClockPort } from "../guest-clock.ts";
 import { serveTierPorts, type TierPorts } from "../jvm/tier.ts";
@@ -25,8 +25,8 @@ import { switches } from "../switches.ts";
  *  measured, and its one start */
 export type ProcessWorkerMessage = { kind: "prestart"; clock: ClockBootstrap; jars: MessagePort; tier: TierPorts }
   | { kind: "rate"; rate: number } | { kind: "start"; bootstrap: ProcessBootstrap; endpoint: MessagePort; control: MessagePort };
-/** what a process Worker posts the page once its start succeeds or fails */
-export type ProcessWorkerStatus = { kind: "ready" } | { kind: "failed"; error: CallFailure; logs: string[] };
+/** what a process Worker posts the page as its start passes each phase, or once it fails */
+export type ProcessWorkerStatus = { kind: "phase"; phase: StartPhase } | { kind: "failed"; error: CallFailure; logs: string[] };
 const post = (worker: Worker, message: ProcessWorkerMessage, transfer: Transferable[] = []) => worker.postMessage(message, transfer);
 export const workerControlMethods = methodsOf<WorkerControl>()(["snapshot", "aotProfile", "codeReadiness", "demandMark", "demandSince", "alive", "uiTree", "tap", "swipe", "type", "enter", "imeState", "back", "testFrame", "timeline"]);
 
@@ -96,6 +96,8 @@ export class ProcessHost {
   readonly canvas = document.createElement("canvas");
   /** settles once the process has presented a frame, or has died */
   readonly presented = Promise.withResolvers<void>();
+  /** called as the process's start passes each phase */
+  onPhase: ((phase: StartPhase) => void) | undefined;
   readonly control: WorkerControl;
   display: FrameReceiver | undefined;
   ime: ReturnType<typeof attachRealmInput> | undefined;
@@ -126,12 +128,15 @@ export class ProcessHost {
     worker.onmessage = ({ data }: MessageEvent<ProcessWorkerStatus>) => {
       // the endpoint is the Worker's to publish once, while its process starts
       if (this.record?.state.kind !== "starting") return;
-      if (data.kind === "ready") {
-        try { hosts.owner.ready(this.pid, this.endpoint.port2); }
-        catch (error) { this.fail(String(error)); }
-      } else if (data.kind === "failed") {
+      if (data.kind === "failed") {
         for (const log of data.logs) console.error("[process Worker]", log);
         this.fail(data.error.message ?? "Process Worker startup failed");
+        return;
+      }
+      this.onPhase?.(data.phase);
+      if (data.phase === "ready") {
+        try { hosts.owner.ready(this.pid, this.endpoint.port2); }
+        catch (error) { this.fail(String(error)); }
       }
     };
     hosts.live.add(this);

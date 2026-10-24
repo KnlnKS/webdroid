@@ -14,3 +14,10 @@ export const MIME_EXT: Record<string, string> = {};
 for (const [e, m] of Object.entries(EXT_MIME)) MIME_EXT[m] ??= e;
 /** a file name's MIME type by its extension, or null when it has none known */
 export const mimeOf = (name: string): string | null => EXT_MIME[name.slice(name.lastIndexOf(".") + 1).toLowerCase()] ?? null;
+
+/** the headers by which the browser inflates a microg .gz download, or null to serve the file as stored */
+export function gzipHeaders(url: URL): Record<string, string> | null {
+  if (!url.pathname.endsWith(".gz") || url.searchParams.has("raw")) return null;
+  // A .gz download filename makes WebKit retain the compressed transport body.
+  return { "content-encoding": "gzip", "content-type": "application/octet-stream", "content-disposition": "inline" };
+}

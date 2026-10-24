@@ -12,7 +12,7 @@ import { closeReason, MAX_PENDING_TCP_BYTES, TCP_CONNECT_FAILED, TCP_HANDSHAKE_F
 // TLS; native stacks pass their own TLS bytes through the same relay unchanged.
 //
 // Like /proxy, this is an outbound proxy for whatever the emulated app asks for, so the server opens it
-// only to its own origin's pages (ownPage) and listens on loopback. It reaches this machine's network,
+// only to its own origin's pages (fromApp) and listens on loopback. It reaches this machine's network,
 // as the developer's device would; the deployed Worker's relay (worker/tcp.ts) refuses private addresses.
 export function relayTcp(ws: WebSocket, { host, port, alpn, secure }: TcpTarget): void {
   let ready = false, connected = false, shut = false;

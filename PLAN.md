@@ -55,8 +55,9 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
   View. The `apks/new` XAPKs run on the Wasm tier (2026-10-16): Snapseed edits and exports, Yelp's onboarding, home,
   search, map and business page work, Walmart's flows and cart work, McDonald's reaches home, menu and the store
   locator, and Tubi plays non-DRM titles.
-- **Deployment:** Cloudflare Workers Builds deploys the main app and Pages the isolated WebView renderer from
-  `main`; both build paired previews for other branches. See [deployment.md](docs/deployment.md).
+- **Deployment:** one Workers Builds build deploys the page to Pages and the backend, which is also the isolated
+  WebView renderer's origin, to a Worker from `main`, and paired previews from other branches. Not yet deployed
+  from this layout. See [deployment.md](docs/deployment.md).
 
 ## Gate state
 
@@ -71,7 +72,8 @@ and Komikku tap within 150 ms; Mihon's launch is unavailable because its live up
 available!" over the onboarding screen the scenario expects.
 
 `pnpm check` (2026-10-22) runs typecheck, the unit tests, `wasm all` and the quick e2e gate in 90 s on an M4 Pro
-with the five flows whose APKs this checkout has; the Mihon flows need `apks/mihon-v0.20.4.apk`. The quick gate runs
+with the five flows whose APKs this checkout has. The Mihon flows now open `apks/mihon.apk` (0.21.2), whose screens
+stay within the 0.20.4 goldens' thresholds; with them all seven pass in 115 s (2026-10-23). The quick gate runs
 two flows at once on the host GPU (45 s); five at once fails on the starting commit too.
 
 Not run since the JS tier was deleted: `e2e --live`, `e2e --full --jobs 1` and `corpus`. Before that,

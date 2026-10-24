@@ -25,7 +25,7 @@ const warm = new Set<number>();
 /** what each launch's first process numbered before its app's code arrived: a device's first process numbers it ahead when every launch agreed (src/wasm/host/boot.ts) */
 const prefixes = new Set<string>();
 const failures: string[] = [];
-for (const apk of apks.length ? apks : ["FitNotes.apk", "calculatorm.apk", "mihon-v0.20.4.apk"]) {
+for (const apk of apks.length ? apks : ["FitNotes.apk", "calculatorm.apk", "mihon.apk"]) {
   const profile = mkdtempSync(join(tmpdir(), "wdprof-"));
   const context = await chromium.launchPersistentContext(profile, { ...launchOptions(), ...CONTEXT_OPTS });
   // every module is there to be asked for, so that a miss does not change what the launch goes on to want

@@ -38,7 +38,7 @@ export const mihonOnboarding: Flow = {
   app: "mihon-onboarding",
   pkg: PKG,
   activity: ACTIVITY,
-  apk: "mihon-v0.20.4.apk",
+  apk: "mihon.apk",
   crop: CROP,
   clock: "pinned",
   steps: [
@@ -60,7 +60,7 @@ export const mihonApp: Flow = {
   app: "mihon-app",
   pkg: PKG,
   activity: ACTIVITY,
-  apk: "mihon-v0.20.4.apk",
+  apk: "mihon.apk",
   crop: CROP,
   seedPrefs: SEED_PREFS,
   clock: "pinned",

@@ -15,21 +15,24 @@ export interface ServeHost {
   /** the WebView renderer origin, a "*" label standing for each partition (webrenderer.ts), for a
    *  shell page at `url`; null when there is none */
   webviewOrigin(url: URL): string | null;
+  /** the shell page's origin for a request to `url`: the request's own on the dev server, the Pages site's for the Worker */
+  appOrigin(url: URL): string;
   proxy?: Omit<ProxyOptions, "bridgeCall">;
 }
 type Route = (request: Request) => Response | Promise<Response>;
 
-/** whether a request comes from a page of `url`'s own origin, as the browser that sent it says: by the page's
- *  Origin (a WebSocket's, a POST's), or by Sec-Fetch-Site for a same-origin GET, which names none. A client
- *  outside a browser can claim either. */
-export function ownPage(url: URL, header: (name: string) => string | null | undefined): boolean {
-  const origin = header("origin");
-  return origin ? origin === url.origin : header("sec-fetch-site") === "same-origin";
+/** what the app's page asks of its backend, which Pages forwards to the Worker (scripts/build-prod.ts) */
+export const BACKEND_PATHS = ["/proxy", "/dns", "/dns-query", "/webview-origin", "/tcp", "/webview-socket"];
+
+type Header = (name: string) => string | null | undefined;
+/** the origin of the page a request comes from, as the browser that sent it says: the page's Origin (a WebSocket's, a POST's),
+ *  or for a same-origin GET, which names none, the origin it was sent to. A client outside a browser can claim either. */
+export function pageOrigin(url: URL, header: Header): string | null {
+  return header("origin") || (header("sec-fetch-site") === "same-origin" ? url.origin : null);
 }
+/** whether a request comes from the app's page: its sockets reach the network, which no other site's page, a renderer's included, may */
+export const fromApp = (url: URL, header: Header, host: ServeHost): boolean => pageOrigin(url, header) === host.appOrigin(url);
 const forbidden = () => new Response("forbidden", { status: 403 });
-/** what a renderer origin serves, which functions/[[path]].ts deploys there: its documents, its proxy worker, the bridge's calls and the proxy */
-const RENDERER_PATHS = new Set(["/webview", "/webview-worker.js", "/webview-call", "/proxy"]);
-export const rendererRoute = (url: URL): boolean => RENDERER_PATHS.has(url.pathname) || BRIDGE_ID.test(url.searchParams.get("__wd_bridge") ?? "");
 const frame = () => new Response(WEB_FRAME, { headers: { "content-type": "text/html", "cache-control": "no-store" } });
 const bridgeCall = async (request: Request, host: ServeHost): Promise<Response> => {
   const id = new URL(request.url).searchParams.get("id") ?? "";
@@ -44,9 +47,12 @@ export function sharedRoute(url: URL, host: ServeHost): Route | undefined {
     case "/webview": return frame;
     case "/webview-worker.js": return () => new Response(WEB_PROXY_WORKER, { headers: { "content-type": "text/javascript", "cache-control": "no-cache" } });
     case "/webview-call": return request => bridgeCall(request, host);
-    // the app's own HTTP: a page of another origin would make this an open proxy
-    case "/proxy": return request => ownPage(new URL(request.url), name => request.headers.get(name))
-      ? proxyRequest(request, { ...host.proxy, bridgeCall: call => bridgeCall(call, host) }) : forbidden();
+    // the app's and its renderers' own HTTP: a page of another origin would make this an open proxy
+    case "/proxy": return request => {
+      const url = new URL(request.url), from = pageOrigin(url, name => request.headers.get(name));
+      return from === url.origin || from === host.appOrigin(url)
+        ? proxyRequest(request, { ...host.proxy, bridgeCall: call => bridgeCall(call, host) }) : forbidden();
+    };
     case "/dns-query": return forwardDnsMessage;
     // Whether a name resolves: the guest's resolvers answer a synthetic address for every name (the relay
     // dials by name), so this is how a name that does not exist fails as it would on a device, instead of
@@ -61,21 +67,14 @@ export function sharedRoute(url: URL, host: ServeHost): Route | undefined {
     case "/webview-origin": return request => {
       const url = new URL(request.url), template = URL.parse(host.webviewOrigin(url) ?? "")?.origin;
       const origin = template && URL.parse(template.replace("*", "x"))?.origin;
-      return origin && origin !== "null" && origin !== url.origin ? Response.json(template)
+      return origin && origin !== "null" && origin !== host.appOrigin(url) ? Response.json(template)
         : new Response("Configure the WebView renderer origin on a separate site", { status: 503 });
     };
   }
 }
 
-/** the bridge a /webview-socket upgrade opens, or null when it names none or comes from another origin */
-export function bridgeSocket(url: URL, header: (name: string) => string | null | undefined): string | null {
+/** the bridge a /webview-socket upgrade opens, or null when it names none or comes from a page other than the app's */
+export function bridgeSocket(url: URL, header: Header, host: ServeHost): string | null {
   const id = url.searchParams.get("id") ?? "";
-  return BRIDGE_ID.test(id) && ownPage(url, header) ? id : null;
-}
-
-/** the headers by which the browser inflates a microg .gz download, or null to serve the file as stored */
-export function gzipHeaders(url: URL): Record<string, string> | null {
-  if (!url.pathname.endsWith(".gz") || url.searchParams.has("raw")) return null;
-  // A .gz download filename makes WebKit retain the compressed transport body.
-  return { "content-encoding": "gzip", "content-type": "application/octet-stream", "content-disposition": "inline" };
+  return BRIDGE_ID.test(id) && fromApp(url, header, host) ? id : null;
 }

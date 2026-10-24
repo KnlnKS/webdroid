@@ -125,9 +125,15 @@ const table = new WebAssembly.Table({ initial: JIT_SLOTS, element: "anyfunc" });
 let grown = (): void => {};
 export function onMemoryGrown(f: () => void): void { grown = f; }
 
+const CORE_PATH = "/native-core.wasm";
+/** The production core, for a realm that cannot fetch it by its path: the compile host's workers (compilehost.ts) run from blobs in an opaque origin, so
+ *  their host lends them the file as a blob URL of its own. Elsewhere the core is bundled, and there is nothing to lend. */
+export const lentCore = (): Promise<Blob | undefined> => process.env.NODE_ENV === "production"
+  ? fetch(CORE_PATH).then((r) => r.ok ? r.blob() : Promise.reject(new Error(`Native core unavailable: ${r.status}`))) : Promise.resolve(undefined);
+
 async function load(): Promise<WebAssembly.Module> {
   if (process.env.NODE_ENV === "production") {
-    const response = await fetch("/native-core.wasm");
+    const response = await fetch((globalThis as { lentCore?: string }).lentCore ?? CORE_PATH);
     if (!response.ok) throw new Error(`Native core unavailable: ${response.status}`);
     return WebAssembly.compile(imported(new Uint8Array(await response.arrayBuffer())));
   }

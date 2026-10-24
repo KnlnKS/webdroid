@@ -3,7 +3,7 @@ import "../src/natives.ts";
 import { rt, JObj } from "../src/jvm/runtime.ts";
 import { newObj, vcall, vcallAsync, iof } from "../src/jvm/natives/jentry.ts";
 import { dialName, isPublicHost, syntheticAddress } from "../src/native/net-address.ts";
-import { ownPage } from "../src/shell/serve-routes.ts";
+import { pageOrigin } from "../src/shell/serve-routes.ts";
 import { scall, mountApexData, thrown } from "./java.ts";
 import { startMainLooper } from "../src/android/mainloop.ts";
 import { vfs } from "../src/shell/vfs.ts";
@@ -178,9 +178,9 @@ describe("proxy-redirect", () => {
 
 describe("server-boundary", () => {
   test("the proxy and relays serve only their own origin's pages, and the deployed ones keep off private networks", () => {
-    const url = new URL("https://webdroid.example/proxy?url=x"), from = (headers: Record<string, string>) => ownPage(url, (name) => headers[name]);
+    const url = new URL("https://webdroid.example/proxy?url=x"), from = (headers: Record<string, string>) => pageOrigin(url, (name) => headers[name]);
     expect([from({ origin: "https://webdroid.example" }), from({ "sec-fetch-site": "same-origin" }), from({ origin: "https://evil.example", "sec-fetch-site": "same-origin" }),
-      from({ "sec-fetch-site": "same-site" }), from({ origin: "null" }), from({})]).toEqual([true, true, false, false, false, false]);
+      from({ "sec-fetch-site": "same-site" }), from({ origin: "null" }), from({})]).toEqual(["https://webdroid.example", "https://webdroid.example", "https://evil.example", null, "null", null]);
     const hosts = ["example.com", "93.184.216.34", "[2606:4700::1]", "localhost", "a.localhost", "127.0.0.1", "2130706433", "0x7f.1", "10.1.2.3", "172.16.0.1",
       "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "198.18.0.5", "224.0.0.1", "[::1]", "::", "[::ffff:10.0.0.1]", "fd00:ec2::254", "fe80::1",
       "fe80::1%eth0", "evil.example:22"];

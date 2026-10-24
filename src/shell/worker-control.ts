@@ -35,7 +35,9 @@ export function countVsyncs(frame?: () => void): () => number {
 }
 
 /** how far a process Worker's start has come (process-worker.ts) */
-export type WorkerPhase = "attaching" | "packages" | "platform" | "application" | "ready" | "failed";
+export type WorkerPhase = "attaching" | StartPhase | "failed";
+/** the phases a starting Worker reports to the page, the last once its endpoint is served */
+export type StartPhase = "packages" | "platform" | "application" | "ready";
 /** What the harness drives and reads of one process realm: the page's own (harness.ts's wd) and each Worker's
  *  through its control port. Copies only observable data; a page never receives this JVM's objects or callbacks. */
 export function workerControl(logs: string[], phase: () => WorkerPhase, ticks: () => number) {

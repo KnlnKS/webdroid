@@ -30,6 +30,7 @@ import type { WebCookies } from "./webcookies.ts";
 import { BrowserLocation } from "./geolocation.ts";
 import { FileDescriptors, type DescriptorRights } from "./file-descriptors.ts";
 import { ProcessHosts, type ProcessHost } from "./process-host.ts";
+import type { StartPhase } from "./worker-control.ts";
 import { PrivateFiles } from "./privatefiles.ts";
 import { packedArchives } from "./packedarchive.ts";
 import { serveFile } from "./remote-file.ts";
@@ -186,8 +187,9 @@ export class ProcessBroker {
   registerSystemServer(): ProcessRecord { return this.register("android", "system_server", procIdentity.pid); }
   /** the home screen opening `pkg` while no process of its runs: a new process, which starts the
    *  launcher activity and is shown, at the top app's priority while it starts */
-  launch(pkg: string, assetKey: string): { pid: number; shown: Promise<void> } {
+  launch(pkg: string, assetKey: string, onPhase: (phase: StartPhase) => void): { pid: number; shown: Promise<void> } {
     const entry = this.connect(pkg, pkg, { assetKey });
+    if (entry.host) entry.host.onPhase = onPhase;
     // the launch took the spare: the processes the app starts next (Google Play services, providers) start from a new one
     this.hosts.prestart();
     const shown = entry.ready.then(() => this.activities.bringToFront(entry.pid));

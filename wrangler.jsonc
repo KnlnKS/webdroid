@@ -1,26 +1,15 @@
 {
+  // the shell page, on Pages; the backend Worker is worker/wrangler.jsonc
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "webdroid",
-  "main": "worker/index.ts",
+  "pages_build_output_dir": "./dist",
   "compatibility_date": "2026-09-23",
-  "compatibility_flags": ["nodejs_compat"],
-  "workers_dev": true,
-  "preview_urls": true,
-  "assets": {
-    "directory": "./dist",
-    "binding": "ASSETS",
-    "run_worker_first": ["/proxy*", "/tcp*", "/dns*", "/webview*", "/vendor/aosp/*", "/vendor/android-cacerts.pem", "/vendor/microg/*.gz"]
-  },
-  "vars": { "WEBVIEW_ORIGIN": "https://webdroid-renderer.pages.dev", "PREVIEW_BRANCH": "" },
-  "previews": {
-    "vars": { "WEBVIEW_ORIGIN": "https://*.webdroid-renderer.pages.dev", "PREVIEW_BRANCH": "" },
-    "durable_objects": {
-      "bindings": [{ "name": "WEB_BRIDGES", "class_name": "WebBridgeSession" }]
+  "services": [{ "binding": "BACKEND", "service": "webdroid-backend" }],
+  "env": {
+    // a branch's Worker preview, which a static binding cannot select, takes the place of the binding's production Worker
+    "preview": {
+      "services": [{ "binding": "BACKEND", "service": "webdroid-backend" }],
+      "vars": { "BACKEND_ORIGIN": "https://*-webdroid-backend.kunalan-k-subagaran.workers.dev" }
     }
-  },
-  "durable_objects": {
-    "bindings": [{ "name": "WEB_BRIDGES", "class_name": "WebBridgeSession" }]
-  },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["WebBridgeSession"] }],
-  "observability": { "enabled": true, "head_sampling_rate": 0.1 }
+  }
 }

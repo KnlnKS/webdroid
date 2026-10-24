@@ -6,6 +6,7 @@
 import { startCompileWorker, type CompileWorkerRequest } from "./compiler.ts";
 import { WORKER_SCRIPTS } from "../../worker-scripts.ts";
 import { platformJarBlobs } from "../../android/framework.ts";
+import { lentCore } from "../../native/core.ts";
 
 const STALL_MS = 5000;
 /** The compile workers' script. Chrome sometimes stopped delivering this 8 MB body partway (in about 1 of 80 first launches text() never settled, and the build
@@ -29,20 +30,20 @@ async function workerScript(): Promise<Blob> {
 let host: Promise<(req: CompileWorkerRequest) => void> | undefined;
 function compileHost(): Promise<(req: CompileWorkerRequest) => void> {
   return host ??= (async () => {
-    const [source, jars] = await Promise.all([workerScript(), platformJarBlobs().catch(() => undefined)]);
+    const [source, core, jars] = await Promise.all([workerScript(), lentCore(), platformJarBlobs().catch(() => undefined)]);
     const frame = document.createElement("iframe");
     frame.sandbox.add("allow-scripts");
     frame.hidden = true;
     // An opaque origin starts a worker only from a blob of its own, and a module worker not even from that, but a classic one imports a module blob: it keeps
     // the messages that arrive meanwhile, reading the jars a message brings, for the module's handler, and reports a module that fails to load as the worker's error.
-    // The first message is the script and the jars, the others are its workers' requests.
-    const shim = (module: string) => `const early=[],bytes=(d)=>d.jars?Promise.all(d.jars.map(async(b)=>new Uint8Array(await b.arrayBuffer()))).then((jars)=>({...d,jars}),()=>({...d,jars:undefined})):d;
+    // The first message is the script, the core and the jars, the others are its workers' requests.
+    const shim = (module: string, core?: string) => `${core ? `globalThis.lentCore=${JSON.stringify(core)};` : ""}const early=[],bytes=(d)=>d.jars?Promise.all(d.jars.map(async(b)=>new Uint8Array(await b.arrayBuffer()))).then((jars)=>({...d,jars}),()=>({...d,jars:undefined})):d;
 onmessage=(e)=>early.push(bytes(e.data));import(${JSON.stringify(module)}).then(async()=>{for(const d of early)dispatchEvent(new MessageEvent("message",{data:await d}))},reportError)`;
     frame.srcdoc = `<script>let url,jars;const blob=(part)=>URL.createObjectURL(new Blob([part],{type:"text/javascript"}));
-onmessage=({data})=>{if(data.source){url=blob((${shim})(blob(data.source)));jars=data.jars}else(${startCompileWorker})(url,data,"classic",jars)}</script>`;
+onmessage=({data})=>{if(data.source){url=blob((${shim})(blob(data.source),data.core&&URL.createObjectURL(data.core)));jars=data.jars}else(${startCompileWorker})(url,data,"classic",jars)}</script>`;
     await new Promise((resolve) => { frame.onload = resolve; document.body.append(frame); });
     const window = frame.contentWindow!;
-    window.postMessage({ source, jars }, "*");
+    window.postMessage({ source, core, jars }, "*");
     return (req) => window.postMessage(req, "*", [req.port, req.fetcher, req.ctl]);
   })();
 }

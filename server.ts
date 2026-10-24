@@ -11,7 +11,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { webDocument } from "./src/shell/webhtml.ts";
 import { sandboxDocument } from "./src/shell/proxy.ts";
 import { openInstall } from "./src/shell/install.ts";
-import { mimeOf } from "./src/mime.ts";
+import { gzipHeaders, mimeOf } from "./src/mime.ts";
 import { WebRelay } from "./src/shell/webrelay.ts";
 import { prepareSystemPackages } from "./scripts/system-packages.ts";
 import { aotFile, aotManifest } from "./scripts/aot-serve.ts";
@@ -19,7 +19,7 @@ import { bundle } from "./scripts/bundle.ts";
 import { runNode } from "./scripts/node.ts";
 import { fileResponse, respond, toWeb } from "./scripts/serve.ts";
 import { WORKER_SCRIPTS } from "./src/worker-scripts.ts";
-import { bridgeSocket, gzipHeaders, ownPage, sharedRoute, type ServeHost } from "./src/shell/serve-routes.ts";
+import { bridgeSocket, fromApp, sharedRoute, type ServeHost } from "./src/shell/serve-routes.ts";
 import { tcpTarget } from "./src/shell/tcpwire.ts";
 import { relayTcp, relayUdp } from "./socket-relays.ts";
 
@@ -105,6 +105,7 @@ const host: ServeHost = {
   // a browser resolves every *.localhost name to this loopback server, each its own site
   webviewOrigin: (url) => process.env.WEBDROID_WEBVIEW_ORIGIN
     ?? (url.hostname === "localhost" || url.hostname === "127.0.0.1" ? `${url.protocol}//*.localhost:${url.port}` : null),
+  appOrigin: (url) => url.origin,
   proxy: { fetchEncoded },
 };
 export function devServer(): Plugin {
@@ -130,7 +131,7 @@ export function devServer(): Plugin {
         const upgrade = (use: (ws: WebSocket) => void) => sockets.handleUpgrade(req, socket, head, (ws) => { ws.on("error", () => ws.terminate()); use(ws); });
         const header = (name: string) => req.headers[name] as string | undefined;
         if (url.pathname === "/webview-socket") {
-          const id = bridgeSocket(url, header);
+          const id = bridgeSocket(url, header, host);
           if (id === null) return void socket.end("HTTP/1.1 403 Forbidden\r\n\r\nbad bridge");
           return upgrade((ws) => {
             webRelay.open(id, ws);
@@ -140,7 +141,7 @@ export function devServer(): Plugin {
         }
         if (url.pathname !== "/udp" && url.pathname !== "/tcp") return void socket.end("HTTP/1.1 404 Not Found\r\n\r\n");
         // a WebSocket skips CORS: a page of any site open in the browser could otherwise use this machine's network
-        if (!ownPage(url, header)) return void socket.end("HTTP/1.1 403 Forbidden\r\n\r\n");
+        if (!fromApp(url, header, host)) return void socket.end("HTTP/1.1 403 Forbidden\r\n\r\n");
         if (url.pathname === "/udp") return upgrade(relayUdp);
         const target = tcpTarget(url);
         if (typeof target === "string") return void socket.end(`HTTP/1.1 400 Bad Request\r\n\r\n${target}`);

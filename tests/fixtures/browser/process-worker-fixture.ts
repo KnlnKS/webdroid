@@ -208,7 +208,7 @@ async function clockProcess({ bootstrap: data, endpoint }: Start) {
     setGuestTimeout(() => post({ tick: "dead" }), 5);
   }, 10);
   const commands = { cookies: await broker.cookieHas() };
-  post({ kind: "ready" } satisfies ProcessWorkerStatus);
+  post({ kind: "phase", phase: "ready" } satisfies ProcessWorkerStatus);
   post({ report: { display: !!data.display, archive, controlled: guestClockControl.controlled, bootTime, identity: [procIdentity.pid, procIdentity.uid, procIdentity.name], commands } });
 }
 

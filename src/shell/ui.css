@@ -67,6 +67,9 @@ input { display: block; width: 100%; margin-top: 6px; padding: 8px; font-family:
 #package-name { min-width: 0; font-size: 14px; }
 #state-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
 #status, #recovery-hint { margin-top: 8px; font-size: 13px; color: var(--muted); }
+#progress { height: 4px; margin-top: 12px; border-radius: 2px; background: var(--line); overflow: hidden; }
+#progress > span { display: block; height: 100%; background: var(--accent); transform-origin: left; }
+@starting-style { #progress > span { transform: scaleX(0); } }
 #recovery { margin-top: 14px; }
 #recovery button { font-size: 13px; }
 #notice { color: #f2bdb7; border-left: 2px solid #e3968e; padding: 0 0 0 12px; margin-bottom: 20px; font-size: 14px; overflow-wrap: anywhere; }

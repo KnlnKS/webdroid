@@ -1,7 +1,24 @@
 import { device, parseScreen, storeScreen, type Screen } from "./config.ts";
 
+/** Each step of opening an app until its first frame, as the page says it, the share of the bar done when it begins and about how
+ *  long it lasts (cold launches of FitNotes, Lichess, Komikku and Reddit took 4-13 s); the app process's steps are its Worker's phases. */
+const STAGES = {
+  runtime: { text: "Loading Webdroid…", at: 0, ms: 1500 },
+  download: { text: "Downloading package…", at: 0.03, ms: 300 },
+  open: { text: "Opening package…", at: 0.03, ms: 300 },
+  assets: { text: "Preparing local app assets…", at: 0.07, ms: 50 },
+  system: { text: "Starting system services…", at: 0.08, ms: 100 },
+  attaching: { text: "Starting app process…", at: 0.09, ms: 200 },
+  packages: { text: "Installing app…", at: 0.11, ms: 100 },
+  platform: { text: "Loading Android…", at: 0.12, ms: 100 },
+  application: { text: "Compiling app…", at: 0.13, ms: 1500 },
+  ready: { text: "Compiling its first screen…", at: 0.35, ms: 6000 },
+} satisfies Record<string, { text: string; at: number; ms: number }>;
+type Stage = keyof typeof STAGES;
+const stageEnd = (stage: Stage) => Object.values(STAGES).find(({ at }) => at > STAGES[stage].at)?.at ?? 1;
+
 type SessionState =
-  | { kind: "loading"; file: string; stage: string }
+  | { kind: "loading"; file: string; stage: Stage }
   | { kind: "running"; file: string; label: string }
   | { kind: "failed"; file: string; error: unknown; retry: (() => void) | null }
   /** the app's process ended: on a device the launcher returns, and opening the app starts a new one */
@@ -15,6 +32,7 @@ export function errorText(error: unknown): string {
   return String(error);
 }
 
+export type Shell = ReturnType<typeof createShell>;
 export function createShell(actions: { launch: (name: string, file?: File) => void; back: () => void }) {
   const root = document.querySelector<HTMLElement>("#root")!;
   const canvas = document.querySelector<HTMLCanvasElement>("#screen")!;
@@ -31,7 +49,18 @@ export function createShell(actions: { launch: (name: string, file?: File) => vo
   const status = document.querySelector<HTMLElement>("#status")!;
   const retry = document.querySelector<HTMLButtonElement>("#retry")!;
   const reload = document.querySelector<HTMLButtonElement>("#reload")!;
+  const progress = document.querySelector<HTMLElement>("#progress")!, fill = progress.firstElementChild as HTMLElement;
   let session: SessionState | null = null;
+
+  /** The bar shows the steps done, and eases on toward the next step's start over about three times the step's usual length: a
+   *  compositor transition, which moves while the page's thread is busy. */
+  function showStage(stage: Stage) {
+    const { text, at, ms } = STAGES[stage];
+    status.textContent = text;
+    progress.setAttribute("aria-valuenow", String(Math.round(at * 100)));
+    fill.style.transition = `transform ${ms * 3}ms ease-out`;
+    fill.style.transform = `scaleX(${stageEnd(stage)})`;
+  }
 
   function updateAvailability() {
     const busy = session?.kind === "loading";
@@ -104,13 +133,13 @@ export function createShell(actions: { launch: (name: string, file?: File) => vo
     kbd: document.querySelector<HTMLTextAreaElement>("#kbd")!,
     resizeDisplay,
     setState(next: SessionState) {
-      if (session?.kind === "loading" && next.kind === "loading") {
-        session = next;
-        status.textContent = next.stage;
-        return;
-      }
-      if (next.kind === "loading") announce("");
+      const loading = session?.kind === "loading";
       session = next;
+      if (next.kind === "loading") {
+        showStage(next.stage);
+        if (loading) return;
+        announce("");
+      }
       root.dataset.state = next.kind;
       updateAvailability();
       document.querySelector<HTMLElement>("#session")!.hidden = next.kind === "running";
@@ -124,7 +153,9 @@ export function createShell(actions: { launch: (name: string, file?: File) => vo
       details.open = false;
       retry.hidden = !ended || !next.retry;
       retry.textContent = next.kind === "exited" ? "Open again" : "Try again";
-      status.textContent = next.kind === "loading" ? next.stage : next.kind === "running" ? "Running"
+      progress.hidden = next.kind !== "loading";
+      if (next.kind === "loading") return;
+      status.textContent = next.kind === "running" ? "Running"
         : next.kind === "exited" ? (next.crashDialog ? `${next.label} keeps stopping` : next.crashed ? "The app stopped" : "The app closed") : "Couldn’t open this app";
       if (next.kind === "exited") hint.textContent = next.retry ? "Its process ended. Open it again to start a new one." : "Its process ended. Reload to start a fresh session, then choose your package again.";
       if (failed) {

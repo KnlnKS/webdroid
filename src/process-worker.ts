@@ -2,7 +2,7 @@ import { captureLogs } from "./shell/logs.ts";
 import { attachWorkerBootstrap, serveWorkerEndpoint } from "./shell/worker-bootstrap.ts";
 import { closeProcessBootstrap } from "./shell/process-bootstrap-data.ts";
 import type { ProcessWorkerMessage, ProcessWorkerStatus } from "./shell/process-host.ts";
-import type { WorkerPhase } from "./shell/worker-control.ts";
+import type { StartPhase, WorkerPhase } from "./shell/worker-control.ts";
 import { switchOn, switchValue } from "./switches.ts";
 
 // The page spawns this Worker before it knows the package, as a zygote forks an unspecialized child: the
@@ -38,6 +38,8 @@ globalThis.onmessage = async ({ data }: MessageEvent<ProcessWorkerMessage>) => {
   if (data.kind === "prestart") { prepared ??= prepare(data); void prepared.catch(() => {}); return; }
   if (data.kind === "rate") { rateKnown(data.rate); return; }
   let phase: WorkerPhase = "attaching", closeControl: (() => void) | undefined;
+  // the page shows a launch's progress by them
+  const enter = (next: StartPhase) => { phase = next; post({ kind: "phase", phase: next }); };
   try {
     if (!prepared || started) throw new Error("Process Worker started without its prestart, or twice");
     started = true;
@@ -47,16 +49,15 @@ globalThis.onmessage = async ({ data }: MessageEvent<ProcessWorkerMessage>) => {
     processPresentation.visible = false;
     closeControl = p.rpc.serveCalls(data.control, p.control.workerControl(logs, () => phase, p.control.countVsyncs()));
     p.core.jitStats.on = switchOn("jit", true);
-    phase = "packages";
+    enter("packages");
     const boot = await p.packages.loadProcessPackages(data.bootstrap);
     if (!boot) throw new Error("Process package unavailable");
-    phase = "platform";
+    enter("platform");
     await p.runtime;
-    phase = "application";
+    enter("application");
     await p.device.bootApk(boot, data.bootstrap.launcher?.assetKey ?? "", data.bootstrap.launcher ? null : data.bootstrap.process);
     await serveWorkerEndpoint(data.endpoint);
-    phase = "ready";
-    post({ kind: "ready" });
+    enter("ready");
   } catch (error) {
     phase = "failed";
     console.error("[process Worker]", data.bootstrap.pid, error);
