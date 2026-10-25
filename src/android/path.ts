@@ -12,6 +12,7 @@ import { deref, handle, release, FINALIZER } from "./handles.ts";
 import { type Mat, mapPoint, matrixAt, snap } from "./matrix.ts";
 import { setEdges, type Box } from "./graphics.ts";
 import type { Ctx2D } from "./recording.ts";
+import { conicToQuads } from "./scan.ts";
 
 /** SkPath::Verb, which PathIterator reports; a path's ops extend them with the compound shapes:
  *  RECT l t r b dir start, RRECT l t r b (8 radii) dir, OVAL l t r b dir start, ARC l t r b start sweep forceMoveTo */
@@ -346,23 +347,14 @@ export class NativePath {
   cubicTo(x1: number, y1: number, x2: number, y2: number, x3: number, y3: number) {
     this.begin(); this.ops.push(CUBIC, x1, y1, x2, y2, x3, y3); this.pen.cubic(x1, y1, x2, y2, x3, y3); this.changed();
   }
-  /** SkPath::conicTo, with the rational quadratic subdivided into quadratics by Skia's error estimate */
+  /** SkPath::conicTo, the rational quadratic kept as the quadratics SkAutoConicToQuads makes of it */
   conicTo(x1: number, y1: number, x2: number, y2: number, w: number) {
     if (!(w > 0)) return this.lineTo(x2, y2);
     if (!Number.isFinite(w)) { this.lineTo(x1, y1); return this.lineTo(x2, y2); }
     if (w === 1) return this.quadTo(x1, y1, x2, y2);
     this.begin();
-    const chop = (a: number, b: number, c: number, d: number, e: number, f: number, weight: number, depth: number) => {
-      const error = Math.abs((weight - 1) / (4 * (weight + 1))) * Math.hypot(a - 2 * c + e, b - 2 * d + f);
-      if (!(error > 0.25) || depth === 5) { this.quadTo(c, d, e, f); return; }
-      const s = 1 / (1 + weight), ws = weight * s;
-      const ax = a * s + c * ws, ay = b * s + d * ws;
-      const bx = e * s + c * ws, by = f * s + d * ws;
-      const mx = (ax + bx) / 2, my = (ay + by) / 2, next = Math.sqrt((1 + weight) / 2);
-      chop(a, b, ax, ay, mx, my, next, depth + 1);
-      chop(mx, my, bx, by, e, f, next, depth + 1);
-    };
-    chop(this.pen.x, this.pen.y, x1, y1, x2, y2, w, 0);
+    const q = conicToQuads(this.pen.x, this.pen.y, x1, y1, x2, y2, w);
+    for (let i = 0; i < q.length; i += 4) this.quadTo(q[i], q[i + 1], q[i + 2], q[i + 3]);
   }
   close() {
     if (this.pen.open) { this.ops.push(CLOSE); this.changed(); }
