@@ -14,18 +14,17 @@ import type { StorageOp } from "../shell/webpage/protocol.ts";
 import type { PackageState } from "../shell/packagedata.ts";
 import { persisted } from "../shell/device-storage.ts";
 
-/** kept with the install */
-const savedOrigins = persisted("wd:install:", (saved) => Array.isArray(saved) ? saved.filter((o): o is string => typeof o === "string") : null);
-const originsKey = (pkg: string) => pkg + ":webview";
+/** the broker's, by package */
+const savedOrigins = persisted("wd:web-origins:", (saved) => Array.isArray(saved) ? saved.filter((o): o is string => typeof o === "string") : null);
 /** the web origins `pkg`'s WebViews have rendered */
-export const webOrigins = (pkg: string): string[] => savedOrigins.get(originsKey(pkg)) ?? [];
+export const webOrigins = (pkg: string): string[] => savedOrigins.get(pkg) ?? [];
 /** the renderer origin `pkg`'s pages of `webOrigin` render on. The install time is part of it, so a
  *  reinstall starts on origins of its own. */
 const rendererOf = (pkg: string, webOrigin: string) => rendererOrigin(`${pkg} ${installTime(pkg)} ${webOrigin}`);
 /** the renderer origin of `pkg`'s pages of `webOrigin`, noted among those its data holds */
 function localWebRenderer(pkg: string, webOrigin: string): Promise<string> {
   const known = webOrigins(pkg);
-  if (!known.includes(webOrigin)) savedOrigins.set(originsKey(pkg), [...known, webOrigin]);
+  if (!known.includes(webOrigin)) savedOrigins.set(pkg, [...known, webOrigin]);
   return rendererOf(pkg, webOrigin);
 }
 
@@ -68,8 +67,9 @@ const storageOf = (pkg: string, webOrigin: string, op: StorageOp) => rendererOf(
 export const webData: PackageState = {
   clear: (pkg) => inOrder(async () => {
     await Promise.all(webOrigins(pkg).map((o) => storageOf(pkg, o, "all")));
-    savedOrigins.remove(originsKey(pkg));
+    savedOrigins.remove(pkg);
   }),
+  packages: () => savedOrigins.packages(),
 };
 
 // ── WebStorage, as AwQuotaManagerBridge answers it over the noted origins

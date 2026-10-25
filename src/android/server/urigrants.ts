@@ -18,21 +18,21 @@ import type { PackageState } from "../../shell/packagedata.ts";
 import { persisted } from "../../shell/device-storage.ts";
 type PersistedUriGrant = { uri: string; flags: number; time: number };
 const READ_WRITE = 3, PERSISTABLE_GRANT = 0x40, PREFIX_GRANT = 0x80;
-/** A persistable grant is app state that survives a reboot, so it lives with the install. */
-const savedGrants = persisted("wd:install:", (saved) => Array.isArray(saved) ? saved.flatMap((entry): PersistedUriGrant[] => {
+/** the grants each package took as persistable, which survive a reboot */
+const savedGrants = persisted("wd:uri-grants:", (saved) => Array.isArray(saved) ? saved.flatMap((entry): PersistedUriGrant[] => {
   if (typeof entry === "string") return [{ uri: entry, flags: 3 | (entry.includes("/tree/") ? PREFIX_GRANT : 0), time: 0 }];
   if (entry && typeof entry === "object" && "uri" in entry && typeof entry.uri === "string" &&
     "flags" in entry && typeof entry.flags === "number")
     return [{ uri: entry.uri, flags: entry.flags, time: "time" in entry && typeof entry.time === "number" ? entry.time : 0 }];
   return [];
 }) : null);
-const grantsKey = (pkg: string) => pkg + ":uriperms";
 /** removeUriPermissionsForPackage's persisted share: the grants the package holds, which a clear
  *  that keeps the package's state keeps */
 export const uriGrantData: PackageState = {
-  clear(pkg, _uid, how) { if (!how.keepState) savedGrants.remove(grantsKey(pkg)); },
+  clear(pkg, _uid, how) { if (!how.keepState) savedGrants.remove(pkg); },
+  packages: () => savedGrants.packages(),
 };
-const persistedGrants = (pkg: string): PersistedUriGrant[] => savedGrants.get(grantsKey(pkg)) ?? [];
+const persistedGrants = (pkg: string): PersistedUriGrant[] => savedGrants.get(pkg) ?? [];
 
 /** the grants made to each uid: by uri, the package each was made to and its modes */
 const granted = new Map<number, Map<string, { pkg: string; modes: number }>>();
@@ -145,10 +145,10 @@ function takePersistable(u: string, modes: number, uid: number): void {
   if (!pkg) throw rt.mkThrowable("java/lang/SecurityException", "No persistable URI permission for " + u);
   const all = persistedGrants(pkg), old = all.find((grant) => grant.uri === u);
   const flags = (old?.flags ?? 0) | requested | (offered & PREFIX_GRANT);
-  savedGrants.set(grantsKey(pkg), [...all.filter((grant) => grant.uri !== u), { uri: u, flags, time: Date.now() }]);
+  savedGrants.set(pkg, [...all.filter((grant) => grant.uri !== u), { uri: u, flags, time: Date.now() }]);
 }
 function releasePersistable(u: string, modes: number, uid: number): void {
-  for (const { pkg } of uidPackages(uid)) savedGrants.set(grantsKey(pkg), persistedGrants(pkg).flatMap((grant) => {
+  for (const { pkg } of uidPackages(uid)) savedGrants.set(pkg, persistedGrants(pkg).flatMap((grant) => {
     if (grant.uri !== u) return [grant];
     const flags = grant.flags & ~(modes & READ_WRITE);
     return flags & READ_WRITE ? [{ ...grant, flags }] : [];

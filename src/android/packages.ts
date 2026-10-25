@@ -122,15 +122,16 @@ export class PackageRecord {
 
 export const packages = new Map<string, PackageRecord>();
 export const installedPath = (pkg: string): string => `/data/app/${pkg}/base.apk`;
-/** the uids packages were given (wd:package-uids) */
-const savedUids = persisted("wd:", (saved) => Array.isArray(saved) ? saved.filter((entry): entry is [string, number] =>
-  Array.isArray(entry) && typeof entry[0] === "string" && Number.isInteger(entry[1]) && entry[1] >= 10001) : null);
+/** the uids packages were given, which every process reads */
+const savedUids = persisted("wd:package-uids", (saved) => Array.isArray(saved) ? saved.filter((entry): entry is [string, number] =>
+  Array.isArray(entry) && typeof entry[0] === "string" && Number.isInteger(entry[1]) && entry[1] >= 10001) : null, { scope: "device-read" });
 const uids = new Map<string, number>();
 let nextUid = 10001;
-for (const [pkg, uid] of savedUids.get("package-uids") ?? []) { uids.set(pkg, uid); nextUid = Math.max(nextUid, uid + 1); }
+for (const [pkg, uid] of savedUids.get("") ?? []) { uids.set(pkg, uid); nextUid = Math.max(nextUid, uid + 1); }
 
-/** what is kept with an install, by pkg (+ ":" + more): its install time and component states */
-const install = persisted("wd:install:", (saved) => typeof saved === "number" ? saved : null);
+/** what is kept with an install, by pkg (+ ":" + more): its install time and component states, which
+ *  every process reads */
+const install = persisted("wd:install:", (saved) => typeof saved === "number" ? saved : null, { scope: "device-read" });
 /** PackageManager component enabled states an app set (none, DEFAULT, until then); part of the
  *  install like firstInstallTime, so they survive a reboot and go with wd.reset */
 type Component = { pkg: string; cls: string };
@@ -159,8 +160,8 @@ export const ownedBy = (pkg: string | null, uid: number): boolean => pkg !== nul
 export const uidPackages = (uid: number): PackageRecord[] => [...packages.values()].filter((p) => p.uid === uid);
 /** the uid a package was given, without assigning one */
 export const knownUid = (pkg: string): number | undefined => packages.get(pkg)?.uid ?? uids.get(pkg);
-/** the packages installed or with an install kept, whose removal drops the install state (its
- *  install time and what is kept with it) */
+/** the packages installed or with an install kept, whose removal drops its install time and
+ *  component states */
 export const installData: PackageState = {
   remove(pkg) { for (const key of install.keys(pkg)) if (key === pkg || key.startsWith(pkg + ":")) install.remove(key); },
   packages: () => [...packages.keys(), ...install.packages()],
@@ -170,6 +171,6 @@ export function packageUid(pkg: string): number {
   if (old !== undefined) return old;
   const uid = nextUid++;
   uids.set(pkg, uid);
-  savedUids.set("package-uids", [...uids]);
+  savedUids.set("", [...uids]);
   return uid;
 }

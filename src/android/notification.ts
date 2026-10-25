@@ -61,7 +61,7 @@ function brokerScope() {
 /** each package's PreferencesHelper record, by key: a channel or group as its parcel in base64, the delegate's package */
 const savedPolicies = persisted<Map<string, string>>("wd:notification-policy:", (saved) =>
   saved && typeof saved === "object" && !Array.isArray(saved) && Object.values(saved).every((value) => typeof value === "string")
-    ? new Map(Object.entries(saved as Record<string, string>)) : null, (policy) => Object.fromEntries(policy));
+    ? new Map(Object.entries(saved as Record<string, string>)) : null, { encode: (policy) => Object.fromEntries(policy) });
 /** NotificationManagerService's notification list, the state its posting rules keep and each
  *  package's channels, groups and delegate, shared by every process through the broker */
 export class NotificationStore {
