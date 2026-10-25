@@ -1,9 +1,8 @@
 // android.os.* + android.util.* natives.
-import { readFully } from "../shell/lazyfile.ts";
 import { processEnv } from "../shell/environment.ts";
 import { appUserName, procIdentity, processTid, sysconf, uname } from "../shell/procfs.ts";
-import { guestAt, mem } from "../native/mem.ts";
-import { syncShared, trackSharedMap, trackPrivateMap } from "../native/mappings.ts";
+import { mem } from "../native/mem.ts";
+import { mmap, munmap } from "../native/vm.ts";
 import { awaited, rt, type JObj, noops, noEffect, driven, getDeclared, setDeclared, waits, type Gen } from "../jvm/runtime.ts";
 import { i8, jarray, utf8 } from "../jvm/abi.ts";
 import { once } from "../jvm/suspend.ts";
@@ -23,8 +22,8 @@ import { OS_CONSTANTS } from "./os-constants.ts";
 import { pathOf, fdInt, setFdInt, mkFd } from "../jvm/natives/jio.ts";
 import { vfs } from "../shell/vfs.ts";
 import { filePaths, type AttributeChange } from "../shell/file-path.ts";
-import { processOpenFd, processAshmemCreate, processAshmemSize, processAshmemProtect, remoteOf } from "../native/process-fd.ts";
-import { localOpen, bytesFd, fdFile, readlinkAt, resolveAt, statAt, statFd, storageStat } from "../native/fs.ts";
+import { processOpenFd, processAshmemCreate, processAshmemSize, processAshmemProtect } from "../native/process-fd.ts";
+import { localOpen, bytesFd, readlinkAt, resolveAt, statAt, statFd, storageStat } from "../native/fs.ts";
 import { openFd, whenLastClosed, closeFd, dupFd, fdSource, fdStat, localFdStat, readFd, preadFd, writeFd, pwriteFd,
   seekFd, truncateFd, syncFd, fcntlFd, ioctlIntFd, changeFdAttributes, fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag,
   fdsanTagType, fdsanTagValue } from "../native/fd.ts";
@@ -32,7 +31,6 @@ import { pipeFds } from "../native/pipe.ts";
 import { inotifyAddWatch, inotifyInit, inotifyRmWatch } from "../native/inotify.ts";
 import type { Stat } from "../native/kernel.ts";
 import { type JBuffer, isBuffer, readBufferBytes, writeBufferBytes, capacity, elementShift } from "../jvm/natives/jnio.ts";
-import { isExternal, mapRemote, unmapExternal } from "../jvm/natives/jmemory.ts";
 import { uptimeMillis, wallMillis } from "../guest-clock.ts";
 
 // APerformanceHint as the reference AVD's power HAL answers it (dumpsys performance_hint: HAL
@@ -374,46 +372,9 @@ const linux: Record<string, (...args: never[]) => unknown> = {
       if (fd < 0) throw errno("dup", -fd);
       return mkFd(fd);
     }),
-    [`mmap(JJII${FD}J)J`]: driven(function* (hint: bigint, count: bigint, prot: number, flags: number, d: JObj | null, offset: bigint): Gen {
-      const size = Number(count);
-      if (!Number.isSafeInteger(size) || size <= 0 || offset < 0n || offset > BigInt(Number.MAX_SAFE_INTEGER) || (offset & 4095n) !== 0n ||
-          (prot & ~7) !== 0 || ((flags & 3) !== 1 && (flags & 3) !== 2) || (flags & 0x10) !== 0 && (hint & 4095n) !== 0n)
-        throw errno("mmap", E.INVAL);
-      if (flags & 0x10) throw errno("mmap", E.NOTSUP);
-      const anonymous = !!(flags & 0x20), fd = anonymous ? -1 : fdInt(d);
-      const remote = anonymous ? undefined : remoteOf(fd);
-      if (remote) {
-        if (!(flags & 1)) throw errno("mmap",E.NOTSUP);
-        const address = yield* awaited(mapRemote(remote,Number(offset),size,prot));
-        if (typeof address === "number") throw errno("mmap",-address);
-        return address;
-      }
-      const source = anonymous ? null : yield* awaited(fdSource(fd));
-      if (!anonymous && !source) throw errno("mmap", E.BADF);
-      if (source && prot === 0) throw errno("mmap", E.NOTSUP);
-      // ashmem refuses a mapping beyond its region's protection
-      if (prot & ~(ashmemProt(fd) ?? 7)) throw errno("mmap", E.PERM);
-      const file = anonymous ? null : fdFile(fd);
-      if (flags & 1 && prot & 2 && !file) throw errno("mmap", E.NOTSUP);
-      const address = mem.mapVa(size, prot === 0);
-      if (!address) throw errno("mmap", E.NOMEM);
-      try {
-        if (source && prot) { const bytes = yield* awaited(readFully(source, Number(offset), size)); mem.write(guestAt(address), bytes); }
-      } catch {
-        mem.unmapVa(BigInt(address), size);
-        throw errno("mmap", E.IO);
-      }
-      if (file && flags & 1) trackSharedMap(BigInt(address), size, Number(offset), file, (prot & 2) !== 0);
-      else if (file) trackPrivateMap(BigInt(address), size, Number(offset), file);
-      return BigInt(address);
-    }),
-    "munmap(JJ)V": waits((address: bigint, count: bigint) => {
-      const size = Number(count);
-      if (!Number.isSafeInteger(size) || size <= 0 || address & 4095n) throw errno("munmap", E.INVAL);
-      if (isExternal(address)) return unmapExternal(address);
-      syncShared(address, size, true);
-      if (!mem.unmapVa(address, size)) throw errno("munmap", E.INVAL);
-    }),
+    [`mmap(JJII${FD}J)J`]: waits((hint: bigint, count: bigint, prot: number, flags: number, d: JObj | null, offset: bigint) =>
+      after(mmap(hint, Number(count), prot, flags, fdInt(d), Number(offset)), (r) => { if (typeof r === "number" && r < 0) throw errno("mmap", -r); return BigInt(r); })),
+    "munmap(JJ)V": (address: bigint, count: bigint) => sys("munmap", munmap(address, Number(count))),
     "gettid()I": () => threadTid(curThread),
     "getenv(Ljava/lang/String;)Ljava/lang/String;": (key: string) => {
       if (key === null) rt.npe();

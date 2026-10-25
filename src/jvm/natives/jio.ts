@@ -4,15 +4,14 @@ import { awaited, rt, type JObj, driven, instanceField, getDeclared, setDeclared
 import { concat } from "../abi.ts";
 import { vcall, after, newObj } from "./jentry.ts";
 import { E, ERRSTR } from "../../native/abi.ts";
-import { readFully, writable } from "../../shell/lazyfile.ts";
+import { writable } from "../../shell/lazyfile.ts";
 import { vfs } from "../../shell/vfs.ts";
 import { isExternal, mapRemote, mapExternal, memoryAt, memorySync, unmapExternal, writeAt } from "./jmemory.ts";
 import { addressSize } from "./jvmruntime.ts";
-import { mem } from "../../native/mem.ts";
-import { syncShared, trackSharedMap } from "../../native/mappings.ts";
+import { mmap, munmap, MAP_PRIVATE, MAP_SHARED, PROT_READ, PROT_WRITE } from "../../native/vm.ts";
 import { fdFile } from "../../native/fs.ts";
 import { remoteOf } from "../../native/process-fd.ts";
-import { fdSource, isSocketFd, closeFd, seekFd, readFd, preadFd, writeFd,
+import { isSocketFd, closeFd, seekFd, readFd, preadFd, writeFd,
   pwriteFd, truncateFd, fcntlFd, syncFd, fdStat, ioctlIntFd } from "../../native/fd.ts";
 import { inoOf } from "../../native/kernel.ts";
 import { fdLease, guardJavaDescriptor, unguardJavaDescriptor } from "../../android/fd-scope.ts";
@@ -220,19 +219,12 @@ rt.registerJnis("sun/nio/ch/FileChannelImpl", {
     }
     const file = fdFile(fd);
     if (prot === MAP_RO && file?.source && !writable(file.source)) return mapExternal(file.source, start, n);
-    return after(file?.source ?? fdSource(fd), source => !source ? BigInt(lastError(-E.INVAL, "Map failed")) : after(readFully(source, start, n), (bytes) => {
-      const va = mem.mapVa(n, false);
-      if (!va) throw rt.mkThrowable("java/lang/OutOfMemoryError", "Map failed");
-      mem.write(mem.txVa(BigInt(va)), bytes);
-      if (file && prot !== MAP_PV) trackSharedMap(BigInt(va), n, start, file, prot !== MAP_RO);
-      return BigInt(va);
-    }));
+    return after(mmap(0n, n, prot === MAP_RO ? PROT_READ : PROT_READ | PROT_WRITE, prot === MAP_PV ? MAP_PRIVATE : MAP_SHARED, fd, start), (r) => {
+      if (r === -E.NOMEM) throw rt.mkThrowable("java/lang/OutOfMemoryError", "Map failed");
+      return BigInt(typeof r === "number" ? lastError(r, "Map failed") : r);
+    });
   }),
-  "unmap0(JJ)I": waits((address: bigint, length: bigint) => {
-    if (isExternal(address)) return after(unmapExternal(address),() => 0);
-    else { syncShared(address, Number(length), true); mem.unmapVa(address, Number(length)); }
-    return 0;
-  }),
+  "unmap0(JJ)I": waits((address: bigint, length: bigint) => isExternal(address) ? after(unmapExternal(address), () => 0) : (munmap(address, Number(length)), 0)),
 });
 rt.registerJni("sun/nio/ch/FileKey", "init(Ljava/io/FileDescriptor;)V", driven(function* (this: JObj, d: JObj): Gen {
   const st = yield* awaited(fdStat(openFd(d)));

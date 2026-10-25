@@ -15,7 +15,7 @@ import { stdioLibc } from "./stdio.ts";
 import { PTHREAD_LIBC, bindThread, endThread } from "./pthread.ts";
 import { KERNEL_SYSCALLS, rawSyscall } from "../syscall.ts";
 import { asWrappers, fail, fillRandom, kernelResult, logLine, wrapped } from "../kernel.ts";
-import { mmapWith } from "../vm.ts";
+import { mmap } from "../vm.ts";
 import { zlibLibc } from "./zlib.ts";
 import { libmLibc } from "./libm.ts";
 import { localeLibc, mbLen, wlen, wstr, WCTEST, WCTYPES } from "./locale.ts";
@@ -279,7 +279,7 @@ export function libcInit(): void {
     },
     setlocale: (_c, a) => { a.i(); const l = a.p(); return l && mem.cstr(l) !== "" && mem.cstr(l) !== "C" && mem.cstr(l) !== "POSIX" ? 0 : cLocale; },
     localeconv: () => localeConv,
-    mmap64: wrapped(mmapWith((a) => Number(a.l()))),
+    mmap64: wrapped((_c, a) => mmap(a.va(), Number(a.va()), a.i(), a.i(), a.i(), Number(a.l()))),
     // the raw syscalls a runtime issues past libc: futex is the one that must block
     // syscall(2), -1 with errno set on failure
     syscall: (cpu, a) => kernelResult(cpu, rawSyscall(cpu, a.i(), a)),
