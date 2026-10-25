@@ -4,7 +4,8 @@
 // which the handler may rewrite before rt_sigreturn loads them back.
 
 import { mem } from "./mem.ts";
-import { PTR, ldWord, stWord } from "./host.ts";
+import { ldWord, stWord } from "./host.ts";
+import { KLAYOUT } from "./kernel.ts";
 import type { Cpu } from "./cpu.ts";
 import { BLOCKABLE } from "./signals.ts";
 
@@ -20,11 +21,11 @@ export function writeSiginfo(p: number, sig: number, info: SigInfo | null): void
   mem.st32(p, sig);
   mem.st32(p + 8, info ? info.code : SI_TKILL);
   if (!info) return;
-  const union = p + (PTR === 8 ? 16 : 12), timer = info.timer;
+  const union = p + KLAYOUT.SI_UNION, timer = info.timer;
   if (!timer) { stWord(union, info.addr); return; }
   mem.st32(union, timer.id); mem.st32(union + 4, timer.overrun); stWord(union + 8, timer.value);
 }
-export const readSiginfo = (p: number): SigInfo => ({ code: mem.ld32(p + 8), addr: ldWord(p + (PTR === 8 ? 16 : 12)) });
+export const readSiginfo = (p: number): SigInfo => ({ code: mem.ld32(p + 8), addr: ldWord(p + KLAYOUT.SI_UNION) });
 
 /** an ABI's frame: its size, and its ucontext's writing and loading */
 interface FrameLayout { size: number; write(cpu: Cpu, context: number, info: SigInfo | null, mask: bigint): void; load(cpu: Cpu, context: number): void }

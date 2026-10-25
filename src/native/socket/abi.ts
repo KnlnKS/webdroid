@@ -4,6 +4,7 @@
 
 import { mem, anchor } from "../mem.ts";
 import { PTR, ldp, ldLong, stLong } from "../host.ts";
+import { KLAYOUT } from "../kernel.ts";
 import { E } from "../abi.ts";
 import { concat, utf8 } from "../../jvm/abi.ts";
 import { AF_UNIX, AF_INET, AF_INET6, endpointOf, type Endpoint } from "../net-address.ts";
@@ -93,13 +94,12 @@ export function readMsghdr(msg: number) {
 }
 
 /** struct cmsghdr's size (cmsg_len is a size_t) and CMSG_ALIGN */
-const cmsgHeader = () => PTR === 8 ? 16 : 12;
 const cmsgAlign = (n: number) => (n + PTR - 1) & -PTR;
 /** one ancillary data object: its level, type and payload */
 export interface Cmsg { level: number; type: number; data: Uint8Array }
 /** sendmsg's msg_control as its objects; -EINVAL for one that overruns it */
 export function readCmsgs(control: number, length: number): Cmsg[] | number {
-  const header = cmsgHeader(), out: Cmsg[] = [];
+  const header = KLAYOUT.CMSG_HDR, out: Cmsg[] = [];
   for (let off = 0; off + header <= length;) {
     const at = control + off, len = ldLong(at);
     if (len < header || off + len > length) return -E.INVAL;
@@ -114,7 +114,7 @@ export const scmRights = (data: Uint8Array): Int32Array => new Int32Array(data.s
  *  with as many of `rights` descriptors as fit, which `install` makes (releasing the rest). What is
  *  cut is MSG_CTRUNC's, as put_cmsg shortens a message. */
 export function writeControl(at: number, capacity: number, credentials: Ucred | null, rights: number, install: (fit: number) => ArrayLike<number>): { used: number; truncated: boolean } {
-  const header = cmsgHeader();
+  const header = KLAYOUT.CMSG_HDR;
   let used = 0, truncated = false;
   const cmsg = (type: number, data: Uint8Array) => {
     const room = at ? capacity - used : 0;

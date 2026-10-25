@@ -1,5 +1,5 @@
-// The kernel's ABI as its modules share it: the process ABI's struct layouts (stat, statfs, dirent)
-// and timespecs, off_t arguments, clocks, the log, and results. A kernel body answers -errno; the ARM32 libc's wrappers of
+// The kernel's ABI as its modules share it: the process ABI's struct layouts (stat, statfs, dirent,
+// siginfo, cmsghdr, stack_t, sysinfo and libc's dl_phdr_info) and timespecs, off_t arguments, clocks, the log, and results. A kernel body answers -errno; the ARM32 libc's wrappers of
 // the same names (asWrappers) answer -1 with errno set, as bionic's syscall stubs do.
 
 import { mem, wrote } from "./mem.ts";
@@ -9,14 +9,18 @@ import type { FileStat } from "./fd.ts";
 import { guestNow, wallMillis } from "../guest-clock.ts";
 import { MONOTONIC_BASE_MS, WALL_CLOCKS } from "./core-abi.gen.ts";
 
-/** the structs the kernel fills, as each ABI lays them out (stat64 and statfs64 on ILP32) */
+/** the structs the kernel fills, as each ABI lays them out (stat64 and statfs64 on ILP32; a timeval
+ *  is a timespec's shape): siginfo's union, cmsghdr's header, stack_t's ss_size, struct sysinfo's
+ *  size and mem_unit, and dl_phdr_info's size */
 const KERNEL32 = {
   STAT_SIZE: 104, ST_INO32: 12, ST_MODE: 16, ST_NLINK: 20, ST_UID: 24, ST_GID: 28, ST_SIZE: 48, ST_BLKSIZE: 56, ST_BLOCKS: 64,
   ST_ATIME: 72, ST_MTIME: 80, ST_CTIME: 88, ST_INO: 96, TS_SEC: 0, TS_NSEC: 4, TS_SIZE: 8, STATFS_SIZE: 88,
+  SI_UNION: 12, CMSG_HDR: 12, SS_SIZE: 8, SYSINFO_SIZE: 64, SYSINFO_UNIT: 52, DL_PHDR_INFO: 32,
 };
 const KERNEL64: typeof KERNEL32 = {
   STAT_SIZE: 128, ST_INO32: 8, ST_MODE: 16, ST_NLINK: 20, ST_UID: 24, ST_GID: 28, ST_SIZE: 48, ST_BLKSIZE: 56, ST_BLOCKS: 64,
   ST_ATIME: 72, ST_MTIME: 88, ST_CTIME: 104, ST_INO: 8, TS_SEC: 0, TS_NSEC: 8, TS_SIZE: 16, STATFS_SIZE: 120,
+  SI_UNION: 16, CMSG_HDR: 16, SS_SIZE: 16, SYSINFO_SIZE: 112, SYSINFO_UNIT: 104, DL_PHDR_INFO: 64,
 };
 /** the process ABI's kernel structs (setA64) */
 export let KLAYOUT = KERNEL32;

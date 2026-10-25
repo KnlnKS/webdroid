@@ -3,11 +3,11 @@
 // __memcpy_chk falls back on.
 
 import { mem } from "./mem.ts";
-import { type HostFn, PTR, ldWord, stLong, ARG0 } from "./host.ts";
+import { type HostFn, PTR, ldWord, stWord, stLong, ARG0 } from "./host.ts";
 import { E, PAGE_SIZE } from "./abi.ts";
-import { type Cpu, cpuByOsTid, nameThread } from "./cpu.ts";
+import { type Cpu, cpuByOsTid, isA64, nameThread } from "./cpu.ts";
 import { exitGroup } from "./crash.ts";
-import { fillRandom } from "./kernel.ts";
+import { fillRandom, KLAYOUT } from "./kernel.ts";
 import { device } from "../shell/config.ts";
 import { procIdentity, uname } from "../shell/procfs.ts";
 import { guestNow } from "../guest-clock.ts";
@@ -17,11 +17,8 @@ const capWords = (version: number) => version === CAP_VERSION_1 ? 1 : version ==
 const resourceLimits = new Map<number, { soft: bigint; hard: bigint }>();
 /** RLIMIT_STACK is Android's 8 MiB, the main thread's stack; the rest keep 1 MiB */
 const limit = (resource: number) => resourceLimits.get(resource) ?? (resource === 3 ? { soft: 0x800000n, hard: 0x800000n } : { soft: 0x100000n, hard: 0x100000n });
-const writeLimit = (p: number, value: bigint) => {
-  if (PTR === 8) mem.st64(p, value);
-  else mem.st32(p, Number(value > 0xffffffffn ? 0xffffffffn : value));
-};
-const readLimit = (p: number) => PTR === 8 ? BigInt.asUintN(64, mem.ld64(p)) : BigInt(mem.ld32(p) >>> 0);
+/** a limit as an rlim_t word: one past the word's range is RLIM_INFINITY, all ones */
+const limitWord = (value: bigint) => { const infinity = (1n << BigInt(8 * PTR)) - 1n; return value > infinity ? infinity : value; };
 const setLimit = (resource: number, soft: bigint, hard: bigint) => {
   if (soft > hard) return -E.INVAL;
   if (hard > limit(resource).hard) return -E.PERM;
@@ -36,20 +33,20 @@ let atRandom = 0;
  *  features stay unadvertised, steering libraries away from paths the emitter lacks. */
 export function auxv(): [number, number][] {
   if (!atRandom) { atRandom = mem.hostAlloc(16); fillRandom(atRandom, 16); }
-  return [[6, 4096], [16, PTR === 8 ? 1 << 7 : 0], [26, 0], [23, 0], [25, atRandom]];
+  return [[6, 4096], [16, isA64() ? 1 << 7 : 0], [26, 0], [23, 0], [25, atRandom]];
 }
 /** struct sysinfo: uptime, loads[3], totalram, freeram, sharedram, bufferram, totalswap, freeswap
  *  at the long stride, then procs (u16), totalhigh, freehigh, mem_unit (u32); a 32-bit build
  *  scales by mem_unit where the byte counts would not fit */
 function fillSysinfo(p: number): void {
-  const L = PTR, unit = L === 8 ? 1 : 4096;
+  const L = PTR, unit = isA64() ? 1 : 4096;
   const totalRam = device.cpu.memKb * 1024;
-  mem.memset(p, 0, L === 8 ? 112 : 64);
+  mem.memset(p, 0, KLAYOUT.SYSINFO_SIZE);
   const put = (off: number, v: number) => stLong(p + off, v);
   put(0, Math.floor(guestNow() / 1000));
   put(L * 4, totalRam / unit); put(L * 5, totalRam / (2 * unit));
   mem.st16(p + L * 10, 1);
-  mem.st32(p + (L === 8 ? 104 : 52), unit);
+  mem.st32(p + KLAYOUT.SYSINFO_UNIT, unit);
 }
 /** each thread's nice value, which setpriority(PRIO_PROCESS) sets (init allows every app any, RLIMIT_NICE 40) */
 const niceness = new Map<number, number>();
@@ -127,7 +124,7 @@ export const PROC_SYSCALLS: Record<string, HostFn> = {
   getpriority: (cpu, a) => { const which = a.i(), who = a.i(); return which < 0 || which > 2 ? -E.INVAL : 20 - (which ? 0 : niceOf(cpu, who)); },
   uname: (_c, a) => {
     const p = a.p();
-    const u = uname(PTR === 8), f = [u.sysname, u.nodename, u.release, u.version, u.machine, u.domainname];
+    const u = uname(isA64()), f = [u.sysname, u.nodename, u.release, u.version, u.machine, u.domainname];
     for (let i = 0; i < f.length; i++) mem.putCstr(p + i * UTSNAME_FIELD, f[i], UTSNAME_FIELD);
     return 0;
   },
@@ -154,12 +151,12 @@ export const PROC_SYSCALLS: Record<string, HostFn> = {
   },
   getrlimit: (_cpu, a) => {
     const current = limit(a.i()), out = a.p();
-    writeLimit(out, current.soft); writeLimit(out + PTR, current.hard);
+    stWord(out, limitWord(current.soft)); stWord(out + PTR, limitWord(current.hard));
     return 0;
   },
   setrlimit: (_c, a) => {
     const resource = a.i(), next = a.p();
-    return setLimit(resource, readLimit(next), readLimit(next + PTR));
+    return setLimit(resource, ldWord(next), ldWord(next + PTR));
   },
   prlimit64: (cpu, a) => {
     const pid = a.i(), resource = a.i(), next = a.p(), old = a.p();

@@ -3,7 +3,7 @@
 // mappings (mappings.ts).
 
 import { mem, guestAt } from "./mem.ts";
-import { PTR, type HostFn } from "./host.ts";
+import type { HostFn } from "./host.ts";
 import { E, PAGE_SIZE } from "./abi.ts";
 import { invalidateRange } from "./cpu.ts";
 import { offArg } from "./kernel.ts";
@@ -59,14 +59,14 @@ export const VM_SYSCALLS: Record<string, HostFn> = {
   // and page cache wherever it lands, and its new pages hold the file's bytes.
   mremap: (_c, a) => {
     const old = a.va(), oldSize = Number(a.va()), size = Number(a.va()), flags = a.i(), fixed = flags & MREMAP_FIXED ? a.va() : 0n;
-    const mask = BigInt(PAGE_SIZE - 1), result = (va: bigint) => PTR === 8 ? va : Number(va);
+    const mask = BigInt(PAGE_SIZE - 1);
     if (old & mask || fixed & mask || !size || flags & ~(MREMAP_MAYMOVE | MREMAP_FIXED) || (flags & MREMAP_FIXED && !(flags & MREMAP_MAYMOVE))) return -E.INVAL;
     if (flags & MREMAP_FIXED && fixed < old + BigInt(pages(oldSize)) && old < fixed + BigInt(pages(size))) return -E.INVAL;
     if (pages(size) < pages(oldSize)) {
       const tail = pages(oldSize) - pages(size);
       syncShared(old + BigInt(pages(size)), tail, true); mem.unmapVa(old + BigInt(pages(size)), tail);
     }
-    if (!(flags & MREMAP_FIXED) && pages(size) <= pages(oldSize)) return result(old);
+    if (!(flags & MREMAP_FIXED) && pages(size) <= pages(oldSize)) return old;
     const have = Math.min(oldSize, size);
     let to = old;
     if (flags & MREMAP_FIXED || !mem.extendVa(old, oldSize, size)) {
@@ -86,9 +86,9 @@ export const VM_SYSCALLS: Record<string, HostFn> = {
       mem.unmapVa(old, pages(have));
     }
     const mapping = size > have ? fileMapAt(to) : null;
-    if (!mapping) return result(to);
+    if (!mapping) return to;
     const tail = contentAt(mapping.file, mapping.off + have, size - have);
-    const fill = (bytes: Uint8Array) => { mem.write(mem.txVa(to + BigInt(have)), bytes); growMap(to, size); return result(to); };
+    const fill = (bytes: Uint8Array) => { mem.write(mem.txVa(to + BigInt(have)), bytes); growMap(to, size); return to; };
     return tail instanceof Promise ? tail.then(fill, () => -E.IO) : fill(tail);
   },
   // MADV_DONTNEED zero-fills anonymous memory; a shared file mapping refaults from the page

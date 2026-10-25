@@ -319,10 +319,7 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
   },
   pread64: (_c, a) => preadFd(a.i(), a.p(), a.u(), Number(a.l())),
   pwrite64: (_c, a) => { const fd = a.i(), p = a.p(), n = a.u(); return pwriteFd(fd, mem.u8.subarray(p, p + n), Number(a.l())); },
-  lseek: (_c, a) => {
-    const wide = PTR === 8, fd = a.i(), offset = wide ? Number(a.l()) : a.i(), whence = a.i();
-    return complete(seekFd(fd, offset, whence), result => wide ? BigInt(result) : result);
-  },
+  lseek: (_c, a) => seekFd(a.i(), offArg(a), a.i()),
   fstat: (_c, a) => statFd(a.i(), a.p()),
   fstatat: (_c, a) => {
     const fd = a.i(), name = a.str(), buf = a.p(), flags = a.i();

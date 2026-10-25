@@ -7,7 +7,7 @@
 import { mem, anchor } from "./mem.ts";
 import { stp, ldp, ldWord, stWord, PTR, type HostFn, type ArgReader } from "./host.ts";
 import { E } from "./abi.ts";
-import { readTimeout } from "./kernel.ts";
+import { readTimeout, KLAYOUT } from "./kernel.ts";
 import { type Cpu, cpuByOsTid } from "./cpu.ts";
 import { dieOfSignal } from "./crash.ts";
 import { writeSiginfo } from "./sigframe.ts";
@@ -89,18 +89,17 @@ export function abortThread(cpu: Cpu): Promise<never> {
 function sigaltstack(cpu: Cpu, a: ArgReader): number {
   const next = a.p(), old = a.p();
   const previous = cpu.alternateStack ?? { sp: 0n, size: 0n, flags: SS_DISABLE };
-  const sizeAt = PTR === 8 ? 16 : 8;
   if (old) {
     stWord(old, previous.sp);
     mem.st32(old + PTR, previous.flags | (cpu.alternateActive ? SS_ONSTACK : 0));
-    stWord(old + sizeAt, previous.size);
+    stWord(old + KLAYOUT.SS_SIZE, previous.size);
   }
   if (!next) return 0;
   if (cpu.alternateActive) return -E.PERM;
   const flags = mem.ld32(next + PTR) >>> 0;
   if (flags !== 0 && flags !== SS_DISABLE && flags !== SS_AUTODISARM) return -E.INVAL;
   if (flags === SS_DISABLE) { cpu.alternateStack = { sp: 0n, size: 0n, flags }; return 0; }
-  const size = ldWord(next + sizeAt);
+  const size = ldWord(next + KLAYOUT.SS_SIZE);
   if (size < 2048n) return -E.NOMEM;
   const sp = ldWord(next);
   cpu.alternateStack = { sp, size, flags };
