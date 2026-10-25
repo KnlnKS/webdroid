@@ -3,10 +3,10 @@
 // widened here; anything else, and every argument the constructors reject, is the production implementation (natives.ts).
 import { Code, OP } from "./code.ts";
 import { T, ref } from "./wasmbin.ts";
-import { kindOf } from "./program.ts";
 import { parseMethodDesc } from "../../jvm/abi.ts";
 import type { Compiler } from "./j2w.ts";
 import type { StructStrings } from "./strings.ts";
+import { kindOf } from "./kinds.ts";
 
 const CHARSET = "java/nio/charset/Charset";
 

@@ -1,9 +1,8 @@
 // Functions the generated code calls through table slots like any method: the class model's runtime (classes.ts) and the per-class allocators.
 // A definition is registered by name; World.synthSlot gives it a slot with a lazy-link stub and compiles it with Compiler.buildSynthetic on first call.
 import type { Code } from "./code.ts";
-import type { Kind } from "./program.ts";
+import type { ElemKind, Kind } from "./kinds.ts";
 import type { Compiler } from "./j2w.ts";
-import type { ElemKind } from "./consts.ts";
 
 export interface Synth { params: Kind[]; ret: Kind | "V"; body: (cx: Compiler, c: Code) => void; pure?: boolean }
 /** the runtime functions, which link's modules register as they load: the class model's (classes.ts, members.ts, fields.ts, reflect.ts, signatures.ts), the

@@ -2,7 +2,7 @@
 // invoke-polymorphic and invoke-custom sites, which box their arguments into an Object[] for the host dispatcher (link/mhandles.ts)
 // and unbox or cast its answer.
 import { T } from "./wasmbin.ts";
-import { ACC, javaName, kindOf, descOf, typeName, mid, type FieldInfo, type MethodInfo, type Program } from "./program.ts";
+import { ACC, javaName, descOf, typeName, mid, type FieldInfo, type MethodInfo, type Program } from "./program.ts";
 import { descToName, parseMethodDesc } from "../../jvm/abi.ts";
 import { BOX, box, unbox } from "./primitives.ts";
 import type { Code } from "./code.ts";
@@ -14,6 +14,7 @@ import { MethodHandleType, type DexFile } from "../../jvm/dex.ts";
 import { Invoke } from "../../jvm/opcodes.ts";
 import { emitRestored, emitSettled } from "./hostcalls.ts";
 import { FIELD_INDEX_MAX, fieldIdOf } from "./fieldid.ts";
+import { kindOf } from "./kinds.ts";
 
 export const MH = "java/lang/invoke/MethodHandle", MT = "java/lang/invoke/MethodType", CLASS = "java/lang/Class", OBJECTS = "[Ljava/lang/Object;";
 /** what host.mhInvoke dispatches: a handle with the site's type, an EmulatedStackFrame, an invoke-custom site, a VarHandle accessor */

@@ -1,4 +1,4 @@
-// Loop outlining (G4): loops and dispatch cycles (strong components of the regions) run in functions of their own, chunks, re-entered every
+// Loop outlining: loops and dispatch cycles (strong components of the regions) run in functions of their own, chunks, re-entered every
 // CHUNK iterations, so a long activation reaches the engine's optimized code. A chunk takes and leaves the method's locals in a state struct
 // and answers a ChunkStatus; each chunk has a dispatcher that calls it until it is done and charges its iterations to the activation's fuel.
 // The first tier starts a loop in the method and moves it to its chunks at a fuel tick (and the loops around it at their next iteration), so
@@ -6,11 +6,12 @@
 // already been hot: its loops stay in the method, unless the first tier saw one run LONG_ROUNDS chunks in one entry (World.longLoops).
 import { Code, OP } from "./code.ts";
 import { T, ref, refNull, uleb, type VT } from "./wasmbin.ts";
-import { kindOf, mid } from "./program.ts";
+import { mid } from "./program.ts";
 import { type Flow, Go } from "./structure.ts";
 import { CHUNK_MARK } from "./exc.ts";
 import type { MC } from "./method.ts";
 import { COUNT_SLOTS, FUEL } from "./consts.ts";
+import { kindOf, kindVT } from "./kinds.ts";
 
 /** iterations of an outlined loop per call of its function; its dispatcher charges them to the activation's fuel */
 const CHUNK = 1024;
@@ -83,7 +84,7 @@ export class Outliner {
   declare(): void {
     const mc = this.mc, c = mc.code;
     this.controlLocal = c.newLocal(T.i32);
-    if (mc.m.ret !== "V") this.resultLocal = c.newLocal(mc.cx.vtOf(kindOf(mc.m.ret)));
+    if (mc.m.ret !== "V") this.resultLocal = c.newLocal(kindVT(kindOf(mc.m.ret)));
     if (!mc.tries) mc.excLocal = c.newLocal(T.anyref);
   }
 

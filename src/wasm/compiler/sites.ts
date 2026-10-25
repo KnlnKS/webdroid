@@ -1,11 +1,12 @@
 import { invokeProto, registersOf, type PreparedInstruction } from "../../jvm/prepared.ts";
 import { Family, Invoke, Pool, familyOf, invokeKind, isInvoke, referenceIndex, referenceOf } from "../../jvm/opcodes.ts";
-import { kindOf, type Kind, type MethodInfo } from "./program.ts";
-import { KINDS, type Typing } from "./infer.ts";
+import { type MethodInfo } from "./program.ts";
+import { type Typing } from "./infer.ts";
 import type { Compiler } from "./j2w.ts";
 import { T } from "./wasmbin.ts";
 import type { MC } from "./method.ts";
 import { stringSite } from "./strings.ts";
+import { KINDS, kindOf, type Kind } from "./kinds.ts";
 
 export type SymbolicSite = [name: string, cls: string, method: number, pc: number, inputs: [reg: number, kind: Kind][], ret: Kind | "V"];
 /** the name of the symbolic site of `ins` in `m` */

@@ -3,9 +3,9 @@ import { emitProfile } from "./profile.ts";
 import { STRING } from "./strings.ts";
 import { Code, OP, inlineMark } from "./code.ts";
 import { T, ref, refNull, type VT } from "./wasmbin.ts";
-import { kindOf, mid, type FieldInfo, type Kind, type MethodInfo } from "./program.ts";
+import { mid, type FieldInfo, type MethodInfo } from "./program.ts";
 import type { Compiler } from "./j2w.ts";
-import { ELEM_KINDS, elemKindOf, type ElemKind } from "./consts.ts";
+import { ELEM_KINDS } from "./consts.ts";
 import { isWide } from "../../jvm/abi.ts";
 import type { DexTypes } from "../../jvm/dex.ts";
 import { argRegisters, ifTarget, switchCases, type PreparedInstruction as Ins, type PreparedMethod } from "../../jvm/prepared.ts";
@@ -20,7 +20,8 @@ import { BINOPS, Family, Invoke, endsBlock, familyOf, invokeKind, isIf, isInvoke
 import { emitRestored } from "./hostcalls.ts";
 import { OutlinedCode, Outliner } from "./outline.ts";
 import { isEmpty, trivialOf, type Seq, type Trivial, type Val } from "./inline.ts";
-import { KINDS, UNARY, uninitAliases, valueKind, I as KI, F as KF, R as KR, J as KJ, D as KD, type Typing } from "./infer.ts";
+import { UNARY, uninitAliases, type Typing } from "./infer.ts";
+import { KINDS, elemKindOf, kindOf, kindVT, valueKind, I as KI, F as KF, R as KR, J as KJ, D as KD, type ElemKind, type Kind } from "./kinds.ts";
 
 /** how an invoke reaches the Java method it calls: a fixed one, whose body may run in place; a dispatch, through the only implementation the class hierarchy has if
  *  it has one (Compiler.devirt); String's constructor, which makes the string */
@@ -250,7 +251,7 @@ export class MC {
   private leave() { if (this.entryDepth >= 0) this.cx.emitLeave(this.code, this.entryDepth, false); }
   /** gives the frame the weight of its parameters and locals */
   weigh(): Code {
-    const types = [...(this.m.isStatic ? [] : [T.anyref]), ...this.m.params.map((p) => this.cx.vtOf(kindOf(p))), ...this.root.localTypes];
+    const types = [...(this.m.isStatic ? [] : [T.anyref]), ...this.m.params.map((p) => kindVT(kindOf(p))), ...this.root.localTypes];
     const own = (this.loops?.build(types) ? 5 : 4) + types.length;
     for (const at of this.weights) this.code.patch(at, own);
     if (this.entryDepth < 0 && this.frame.boundable) this.cx.bound.set(mid(this.m), own + this.frame.calleeWeight);
@@ -784,7 +785,7 @@ export class MC {
         return u.ret === "V" ? "V" : kindOf(u.ret);
       });
       if (kind === "V" || onStack && i === steps.length - 1) return;
-      if (used.has(i)) c.lset(locals[i] = local(cx.vtOf(kind))); else c.drop();
+      if (used.has(i)) c.lset(locals[i] = local(kindVT(kind))); else c.drop();
     });
     if (ret && !onStack) push(ret, kindOf(m.ret));
   }

@@ -1,5 +1,6 @@
 import { T, sleb, uleb, vt, type VT, type FuncBytes, definedGlobal, functionIndex } from "./wasmbin.ts";
-import type { Kind, MethodInfo } from "./program.ts";
+import type { MethodInfo } from "./program.ts";
+import type { Kind } from "./kinds.ts";
 /** The global a call through the slot table (table 0) first sets to the slot it calls, which a lazy-link stub serving every slot of its signature reads:
  *  global 0 of every module with such calls */
 export const CALLEE = 0;

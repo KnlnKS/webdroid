@@ -2,8 +2,8 @@
 import { parseMethodDesc } from "../../jvm/abi.ts";
 import { HT, ModuleBuilder, T, ref, refNull, type VT, type FunctionType } from "./wasmbin.ts";
 import { Code, OP, type InlineFrame } from "./code.ts";
-import { kindOf, methodKinds, mid, type FieldInfo, type Program, type Kind, type MethodInfo } from "./program.ts";
-import { H, ELEM, MATH_ARITY, elemKindOf, FUEL, INIT_DONE, MAX_DEPTH, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, SAMPLE_EVERY, WARM_AT, type ElemKind } from "./consts.ts";
+import { methodKinds, mid, type FieldInfo, type Program, type MethodInfo } from "./program.ts";
+import { H, ELEM, MATH_ARITY, FUEL, INIT_DONE, MAX_DEPTH, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, SAMPLE_EVERY, WARM_AT } from "./consts.ts";
 import { declareSymbolicSites, siteKey, type SymbolicSite } from "./sites.ts";
 import { prepareMethod, type PreparedMethod } from "../../jvm/prepared.ts";
 import { inferTyping, type Typing } from "./infer.ts";
@@ -15,6 +15,7 @@ import { SLOT, THROWERS, type Thrower } from "./exc.ts";
 import { STRING, StructStrings, stringSites } from "./strings.ts";
 import { helpers as HELPERS, type HelperName } from "./helpers.ts";
 import type { NativeBinder } from "../link/hostapi.ts";
+import { elemKindOf, kindOf, kindVT, type ElemKind, type Kind } from "./kinds.ts";
 
 export interface Intrinsic { (cx: Compiler, m: MethodInfo, c: Code): void }
 /** a String constructor is never called: each call site makes the String with its factory (Compiler.construct) */
@@ -39,8 +40,7 @@ export function declareBase(mb: ModuleBuilder): Base {
   const tStr = mb.addType({ k: "struct", fields: [{ t: ref(tVT), mut: false }, { t: T.i64, mut: true }, { t: ref(tData.i16), mut: false }, { t: T.i32, mut: true }, { t: T.externref, mut: true }], sup: tObj, final: true });
   return { tVT, tObj, tStr, tData, tArr, tTagFn: mb.addFuncType([T.anyref], []) };
 }
-/** every reference slot is an anyref: a Java object is a struct subtype of $Obj, a String the JS string behind any.convert_extern (strings.ts) */
-export const kindVT = (k: Kind): VT => (k === "I" ? T.i32 : k === "J" ? T.i64 : T.anyref);
+export { kindVT } from "./kinds.ts";
 
 export const MATH_IMPORTS = Object.fromEntries(Object.entries(MATH_ARITY).map(([f, n]): [string, FunctionType] => [f, { params: Array(n).fill(T.f64), results: [T.f64] }])) as Record<keyof typeof MATH_ARITY, FunctionType>;
 const HOST_IMPORTS = {
@@ -256,11 +256,10 @@ export class Compiler implements Base {
   get prog(): Program { return this.w.prog; }
 
   // ---------- types
-  vtOf(k: Kind): VT { return kindVT(k); }
   sig(params: Kind[], ret: Kind | "V"): number {
     const key = params.join("") + ">" + ret;
     let s = this.sigType.get(key);
-    if (s === undefined) this.sigType.set(key, s = this.mb.addFuncType(params.map((k) => this.vtOf(k)), ret === "V" ? [] : [this.vtOf(ret)]));
+    if (s === undefined) this.sigType.set(key, s = this.mb.addFuncType(params.map((k) => kindVT(k)), ret === "V" ? [] : [kindVT(ret)]));
     return s;
   }
   private descSigs = [new Map<string, number>(), new Map<string, number>()];
@@ -283,7 +282,7 @@ export class Compiler implements Base {
     const sup = this.structFor(c.sup ?? "java/lang/Object");
     // a class with no own fields shares its super's struct type
     if (!c.fields.some(f => !f.isStatic)) { this.classStruct.set(cls, sup); return sup; }
-    const fields = [{ t: ref(this.tVT) as VT, mut: false }, { t: T.i64 as VT, mut: true }, ...this.prog.layout(cls).map((f) => ({ t: this.vtOf(f.kind), mut: true }))];
+    const fields = [{ t: ref(this.tVT) as VT, mut: false }, { t: T.i64 as VT, mut: true }, ...this.prog.layout(cls).map((f) => ({ t: kindVT(f.kind), mut: true }))];
     t = this.mb.addType({ k: "struct", fields, sup, final: false });
     this.classStruct.set(cls, t); return t;
   }
@@ -317,7 +316,7 @@ export class Compiler implements Base {
   staticGlobal(owner: string, name: string, desc?: string): number {
     const f = this.prog.get(owner)?.fields.find((x) => x.isStatic && x.name === name && (desc === undefined || x.desc === desc));
     if (!f) throw new Error(`static ${owner}.${name} not found`);
-    return this.classGlobal(owner, "s:" + name + ":" + f.desc, this.vtOf(f.kind));
+    return this.classGlobal(owner, "s:" + name + ":" + f.desc, kindVT(f.kind));
   }
   /** the frame weight of `m` and what it calls, if it is a direct call of this unit and counts no depth. A method is compiled before its first caller finishes
    *  its prologue; a method that is being compiled (a cycle) has no bound */

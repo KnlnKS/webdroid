@@ -4,12 +4,12 @@
 // cached on first use; a JS string a native answers is copied into an array once.
 import { Code, OP } from "./code.ts";
 import { HT, T, ref, refNull, type VT } from "./wasmbin.ts";
-import { kindOf } from "./program.ts";
 import { parseMethodDesc } from "../../jvm/abi.ts";
 import type { Compiler } from "./j2w.ts";
 import { bytesFactory } from "./strfactory.ts";
 import type { DexFile } from "../../jvm/dex.ts";
 import type { PreparedInstruction, PreparedMethod } from "../../jvm/prepared.ts";
+import { kindOf } from "./kinds.ts";
 
 export const STRING = "java/lang/String";
 /** field indices of the struct after the Object header (0, 1) */

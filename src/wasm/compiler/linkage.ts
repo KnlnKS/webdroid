@@ -6,7 +6,7 @@ import type { PreparedInstruction } from "../../jvm/prepared.ts";
 import type { LinkEnv } from "./j2w.ts";
 import { stringSite } from "./strings.ts";
 import { PRIMS, descToName, dotName } from "../../jvm/abi.ts";
-import { ACC, javaName, sameRuntimePackage, selectDefault, type DispatchTarget, type FieldInfo, type JClass, type MethodInfo, type Program } from "./program.ts";
+import { ACC, descOf, javaName, sameRuntimePackage, selectDefault, type DispatchTarget, type FieldInfo, type JClass, type MethodInfo, type Program } from "./program.ts";
 import type { Thrower } from "./exc.ts";
 import { Invoke, invokeKind } from "../../jvm/opcodes.ts";
 
@@ -20,7 +20,6 @@ export interface LinkFailure {
 const dotted = (n: string) => dotName(javaName(n));
 /** a descriptor as ART's PrettyDescriptor prints it */
 export const prettyType = (d: string): string => (d[0] === "[" ? prettyType(d.slice(1)) + "[]" : d[0] === "L" ? dotted(d.slice(1, -1)) : PRIMS[d]?.name ?? "void");
-const descriptor = (cls: string) => (cls[0] === "[" ? cls : `L${cls};`);
 /** ART appends where the referring class was declared */
 const declared = (prog: Program, cls: string, extra?: DexFile) => ` (declaration of '${dotted(cls)}' appears in ${prog.get(cls)?.dex?.name ?? extra?.name ?? "?"})`;
 const fail = (thrower: LinkFailure["thrower"], message: string, absent?: string): LinkFailure => ({ thrower, message, absent });
@@ -111,13 +110,13 @@ function interfaceSuper(prog: Program, cls: string, name: string, desc: string):
 /** the method an invoke names, or why it does not resolve. `referrer` is the class of the calling method. */
 export function resolveInvoke(prog: Program, kind: Invoke, declaredCls: string, name: string, desc: string, referrer: string): MethodInfo | LinkFailure {
   const cls = declaredCls[0] === "[" ? "java/lang/Object" : declaredCls, c = prog.get(cls), at = () => declared(prog, referrer);
-  if (!c) return fail("ncdfr", UNRESOLVED + descriptor(declaredCls), declaredCls);
+  if (!c) return fail("ncdfr", UNRESOLVED + descOf(declaredCls), declaredCls);
   if (kind === Invoke.Interface && !c.isInterface) return fail("icce", `Found class ${dotted(cls)}, but interface was expected${at()}`);
   if (kind === Invoke.Virtual && c.isInterface) return fail("icce", `Found interface ${dotted(cls)}, but class was expected${at()}`);
   const expected = INVOKE_TYPE[kind];
   const owner = kind === Invoke.Super && !c.isInterface ? prog.get(referrer)?.sup ?? cls : cls;
   const m = kind === Invoke.Super && c.isInterface ? interfaceSuper(prog, cls, name, desc) : resolveSymbolicMethod(prog, owner, name, desc);
-  if (!m) return fail("nsme", `No ${expected} method ${name}${desc} in class ${descriptor(cls)} or its super classes${declared(prog, cls)}`);
+  if (!m) return fail("nsme", `No ${expected} method ${name}${desc} in class ${descOf(cls)} or its super classes${declared(prog, cls)}`);
   if (failed(m)) return m;
   if (m.isStatic !== (kind === Invoke.Static)) {
     const found = invokeType(m, prog);
@@ -169,7 +168,7 @@ function fieldRef(prog: Program, dex: DexFile, idx: number, isStatic: boolean, r
   const fr = dex.field(idx), types = prog.typesOf(dex), decl = types.typeName(fr.cls), type = dex.rawType(fr.type);
   if (!prog.get(decl)) return fail("ncdfr", UNRESOLVED + types.type(fr.cls), decl);
   const raw = javaName(type), f = prog.resolveFieldBy(decl, (x) => x.name === fr.name && javaName(x.desc) === raw);
-  if (!f) return fail("nsfer", `No ${isStatic ? "static " : "instance "}field ${fr.name} of type ${type} in class ${descriptor(decl)} or its superclasses${declared(prog, decl)}`);
+  if (!f) return fail("nsfer", `No ${isStatic ? "static " : "instance "}field ${fr.name} of type ${type} in class ${descOf(decl)} or its superclasses${declared(prog, decl)}`);
   if (f.isStatic !== isStatic) {
     return fail("icce", `Expected '${prettyType(f.desc)} ${dotted(f.owner)}.${f.name}' to be a ${isStatic ? "static" : "instance"} field rather than a ${isStatic ? "instance" : "static"} field${declared(prog, referrer)}`);
   }

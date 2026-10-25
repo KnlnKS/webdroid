@@ -9,6 +9,7 @@ import { failed, invokeSite, resolveFieldRef } from "./linkage.ts";
 import { Family, Invoke, familyOf, invokeKind, narrowBits, typeLetter, variantOf, wideBits } from "../../jvm/opcodes.ts";
 import { STRING } from "./strings.ts";
 import type { FieldInfo, MethodInfo, Program } from "./program.ts";
+import { isRef } from "./kinds.ts";
 
 type Field = { decl: string; f: FieldInfo };
 /** what a body passes on: its `p`th parameter (the receiver is 0), a constant's bits, or the value its `t`th step read or returned */
@@ -18,7 +19,6 @@ export type Val = { p: number } | { bits: number | bigint } | { t: number };
 export type Step = { pc: number } & ({ sget: Field } | { get: Field; obj: number } | { put: Field; obj: number; v: Val } | { call: MethodInfo; args: Val[] });
 export type Seq = { k: "seq"; steps: Step[]; ret?: Val };
 export type Trivial = Seq | { k: "check" };
-const isRef = (desc: string) => desc[0] === "L" || desc[0] === "[";
 
 /** what a call of `m` reduces to, if its code is trivial and its references link as the Program resolves them */
 export function trivialOf(prog: Program, m: MethodInfo): Trivial | undefined {

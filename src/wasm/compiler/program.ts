@@ -7,8 +7,8 @@ import { LoaderGraph, type Loader, type LoaderTypes } from "./loadergraph.ts";
 export type { Loader, LoaderId, LoaderParent, LoaderSnapshot } from "./loadergraph.ts";
 
 export { ACC };
-export type Kind = "I" | "J" | "L";               // wasm-level kinds: i32 (int,float bits,small ints), i64 (long,double bits), ref
-export const kindOf = (desc: string): Kind => desc[0] === "J" || desc[0] === "D" ? "J" : desc[0] === "L" || desc[0] === "[" ? "L" : "I";
+import { kindOf, type Kind } from "./kinds.ts";
+export { kindOf, type Kind };
 export type Kinds = { params: Kind[]; ret: Kind | "V" };
 /** the kinds of the parameters (the receiver first) and result of `m` */
 export const methodKinds = (m: MethodInfo): Kinds =>

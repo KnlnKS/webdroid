@@ -16,6 +16,7 @@ import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
 import type { World } from "./world.ts";
 import { memberArg, synthFamily } from "./synths.ts";
 import { PerWorld } from "./perworld.ts";
+import { kindVT } from "../compiler/kinds.ts";
 
 const EXEC = "java/lang/reflect/Executable", METHOD = "java/lang/reflect/Method", CTOR = "java/lang/reflect/Constructor";
 const CLASS_ARRAY = "[Ljava/lang/Class;";
@@ -110,7 +111,7 @@ function invokeBody(cx: Compiler, c: Code, m: MethodInfo, wrap: boolean, direct:
     if (wrap) { c.lget(0); cx.emitInstanceOf(c, m.cls); c.raw(OP.i32_eqz).if_().i32(cx.idOf(m.cls)).lget(0); cx.vtId(c); cx.callThrower(c, "recv"); c.end(); }
   }
   const values = m.params.map((p, i) => {
-    const v = c.newLocal(cx.vtOf(kindOf(p))), ty = cx.idOf(typeName(p));
+    const v = c.newLocal(kindVT(kindOf(p))), ty = cx.idOf(typeName(p));
     c.lget(args).refAsNonNull().i32(i).arrayGet(cx.tData.ref);
     if (BOX[p]) { c.i32(p.charCodeAt(0)).i32(i).i32(ty); cx.callRt(c, "argp"); if (kindOf(p) === "I") c.raw(OP.i32_wrap_i64); }
     else if (wrap && p !== "Ljava/lang/Object;") {

@@ -10,20 +10,9 @@ import { parseMethodDesc } from "../../jvm/abi.ts";
 import type { CodeItem, DexFile } from "../../jvm/dex.ts";
 import { argRegisters, invokeProto, type PreparedInstruction, type PreparedMethod } from "../../jvm/prepared.ts";
 import { BINOPS, Family, familyOf, isInstanceInvoke, isInvoke, typeLetter, variantOf } from "../../jvm/opcodes.ts";
-import { OP } from "./code.ts";
-import { T, type VT } from "./wasmbin.ts";
-import type { Kind } from "./program.ts";
+import { I, F, R, J, D, valueKind } from "./kinds.ts";
 
-export const I = 1, F = 2, R = 4, J = 8, D = 16;
 const N32 = I | F | R, WIDE = J | D;
-/** the kind of a value of type `desc` */
-export const valueKind = (desc: string) => { const c = desc[0]; return c === "L" || c === "[" ? R : c === "J" ? J : c === "D" ? D : c === "F" ? F : I; };
-/** by kind: the Wasm type a value is held in, its kind in the bits ABI, and for F and D the reinterpretations to and from those bits */
-export const KINDS: { readonly [k: number]: { vt: VT; abi: Kind; toBits?: number; fromBits?: number } } = {
-  [I]: { vt: T.i32, abi: "I" }, [R]: { vt: T.anyref, abi: "L" }, [J]: { vt: T.i64, abi: "J" },
-  [F]: { vt: T.f32, abi: "I", toBits: OP.i32_reinterpret_f32, fromBits: OP.f32_reinterpret_i32 },
-  [D]: { vt: T.f64, abi: "J", toBits: OP.i64_reinterpret_f64, fromBits: OP.f64_reinterpret_i64 },
-};
 
 interface Eff { u: number[]; d: number; dm: number; link: number }
 const NOEFF: Eff = { u: [], d: -1, dm: 0, link: 0 };

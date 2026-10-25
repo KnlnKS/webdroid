@@ -9,6 +9,7 @@ import { handleThunk } from "./mhandles.ts";
 import type { World } from "./world.ts";
 import type { Strand } from "./sched.ts";
 import { box, unbox } from "../compiler/primitives.ts";
+import { kindVT } from "../compiler/kinds.ts";
 
 export function invokeVarHandleView(w: World, handle: object, args: object, storage: string, mode: string, params: string[], ret: string, parent: Strand): object | null | Promise<object | null> {
   const BB = "java/nio/ByteBuffer", array = storage === "java/lang/invoke/ByteArrayViewVarHandle";
@@ -60,7 +61,7 @@ export function invokeVarHandleView(w: World, handle: object, args: object, stor
       guestRange(c, () => memoryAddress(0), width); c.raw(OP.i32_or);
     };
     const reverse = () => {
-      const value = c.newLocal(cx.vtOf(K)), result = c.newLocal(cx.vtOf(K)); c.lset(value);
+      const value = c.newLocal(kindVT(K)), result = c.newLocal(kindVT(K)); c.lset(value);
       for (let i = 0; i < width; i++) {
         c.lget(value);
         if (K === "J") c.i64(BigInt(i * 8)).raw(OP.i64_shr_u).i64(255n).raw(OP.i64_and).i64(BigInt((width - 1 - i) * 8)).raw(OP.i64_shl).lget(result).raw(OP.i64_or);
@@ -69,10 +70,10 @@ export function invokeVarHandleView(w: World, handle: object, args: object, stor
       }
       c.lget(result);
     };
-    const values = params.slice(2).map((p, i) => { const local = c.newLocal(cx.vtOf(kindOf(p))); value(i + 3); unbox(cx, c, p); c.lset(local); return local; });
+    const values = params.slice(2).map((p, i) => { const local = c.newLocal(kindVT(kindOf(p))); value(i + 3); unbox(cx, c, p); c.lset(local); return local; });
     emitVarHandleOperation(cx, c, mode, element, {
       load: () => {
-        inline(); c.if_(cx.vtOf(K));
+        inline(); c.if_(kindVT(K));
         for (let i = 0; i < width; i++) {
           readByte(i); if (K === "J") c.raw(OP.i64_extend_i32_u);
           const shift = 8 * (nativeOrder ? i : width - 1 - i);
