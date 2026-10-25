@@ -81,7 +81,7 @@ async function chromeRun() {
     if (installedDir && p === "/app/files.json") return Response.json(readdirSync(installedDir), { headers: iso });
     if (installedDir && p.startsWith("/app/")) return fileResponse(join(installedDir, p.split("/").pop()!), req, iso);
     if (worker && p === WORKER_SCRIPTS.compile.url) return new Response(worker, { headers: { "content-type": "text/javascript", ...iso } });
-    const file = p === "/f" ? u.searchParams.get("p")! : p.startsWith("/vendor/aosp/") ? join(ROOT, p) : null;
+    const file = p === "/f" ? preload.find((f) => f === u.searchParams.get("p")) : p.startsWith("/vendor/aosp/") ? join(ROOT, p) : null;
     return file ? fileResponse(file, req, iso) : new Response("", { status: 404 });
   } });
   const browser = await launchBrowser(`--expose-gc ${v8Flags}`);
