@@ -166,7 +166,7 @@ export function dup2Fd(fd: number, to: number, cloexec = false): number {
   f.references++;
   placeFile(to, f, cloexec);
   fdEvents.duplicated?.(fd, to);
-  if (tag) fdsanExchangeOwnerTag(to, 0n, tag);
+  if (tag) ownerTags.set(to, tag);
   return to;
 }
 /** fcntl(2): descriptor flags and duplicates belong to this table, status flags to the open file */
@@ -314,13 +314,13 @@ export function fdsanExchangeOwnerTag(fd: number, expected: bigint, tag: bigint)
   } else if (tag) ownerTags.set(fd, tag);
   else ownerTags.delete(fd);
 }
-/** android_fdsan_close_with_tag: `close` closes the descriptor and answers -errno */
-export function fdsanClose(fd: number, expected: bigint, close: (fd: number) => number): number {
+/** android_fdsan_close_with_tag */
+export function fdsanClose(fd: number, expected: bigint): number | Promise<number> {
   const actual = fdsanOwnerTag(fd);
   if (fd >= 0 && actual !== expected) {
     fdsanError(`attempted to close file descriptor ${fd}, expected to be ${owner(expected)}, actually ${owner(actual)}`);
   }
-  const result = close(fd);
+  const result = closeFd(fd);
   if (expected && result === -E.BADF) fdsanError(`double-close of file descriptor ${fd} detected`);
   return result;
 }

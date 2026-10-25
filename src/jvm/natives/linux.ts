@@ -17,7 +17,7 @@ import { E, ERRSTR, POLLIN, POLLERR, strerror } from "../../native/abi.ts";
 import { mmap, munmap } from "../../native/vm.ts";
 import { processOpenFd } from "../../native/process-fd.ts";
 import { readlinkAt, statAt, statFd, storageStat } from "../../native/fs.ts";
-import { openFd, closeFd, dupFd, dup2Fd, dropFile, readFd, preadFd, writeFd, pwriteFd, seekFd, truncateFd, syncFd, fcntlFd, ioctlIntFd,
+import { openFd, dupFd, dup2Fd, dropFile, readFd, preadFd, writeFd, pwriteFd, seekFd, truncateFd, syncFd, fcntlFd, ioctlIntFd,
   fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag, fdsanTagType, fdsanTagValue } from "../../native/fd.ts";
 import { pipeFds } from "../../native/pipe.ts";
 import type { Stat } from "../../native/kernel.ts";
@@ -109,12 +109,7 @@ const files: Record<string, (...args: never[]) => unknown> = {
       if (d === null) return rt.npe();
       const fd = fdInt(d), owner = getDeclared<bigint | undefined>(d, "java/io/FileDescriptor", "ownerId");
       setFdInt(d, -1);
-      let pending: number | Promise<number> | undefined;
-      const immediate = fdsanClose(fd, owner ?? 0n, fd => {
-        pending = closeFd(fd);
-        return pending instanceof Promise ? 0 : pending;
-      });
-      return after(pending ?? immediate, n => sys("close", n));
+      return after(fdsanClose(fd, owner ?? 0n), n => sys("close", n));
     }),
     [`dup(${FD})${FD}`]: waits((d: JObj | null) => {
       const fd = dupFd(fdInt(d));
