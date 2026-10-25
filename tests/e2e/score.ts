@@ -2,7 +2,7 @@
 // Reads only from disk — no emulator, no browser. (lib/diff.ts is the pixel math.)
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { nodeCommand, run } from "../../scripts/node.ts";
+import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
 import { loadPng, savePng, hconcat } from "./lib/png.ts";
 import { diffImages } from "./lib/diff.ts";
 import { html, printFlow, type FlowReport, type StepReport } from "./lib/report.ts";
@@ -11,6 +11,7 @@ import { diffTrees } from "./lib/tree.ts";
 import type { FlowRun } from "./capture-webdroid.ts";
 import { E2E_DIR, readJson, sha1 } from "./lib/util.ts";
 import { runQueue } from "../../scripts/util.ts";
+import { FLOWS } from "./flows/index.ts";
 
 /**
  * The device half of the structural comparison. A full hierarchy if the recorder captured one;
@@ -121,15 +122,14 @@ async function diffFlow(flow: Flow): Promise<FlowReport> {
   };
 }
 
-const flowJson = (app: string) => `${E2E_DIR}report/${app}.json`;
-
-/** Score one flow in a subprocess — the pixel work is CPU-bound and must not stall the event
+/** Score one flow on a thread of its own — the pixel work is CPU-bound and must not stall the event
  *  loop the other flows' browsers are driven from — and return its report. */
-export async function scoreFlow(app: string): Promise<FlowReport> {
-  const { status, stdout, stderr } = await run(...nodeCommand(`${E2E_DIR}run.ts`, "--diff", "--json", "--test", app));
-  if (status) throw new Error(`scoring ${app} failed: ${(stderr || stdout).trim().split("\n").at(-1)}`);
-  return readJson(flowJson(app));
-}
+export const scoreFlow = (app: string): Promise<FlowReport> => new Promise((resolve, reject) => {
+  const failed = (why: string) => reject(new Error(`scoring ${app} failed: ${why}`));
+  new Worker(new URL(import.meta.url), { workerData: { score: app } }).once("message", resolve)
+    .once("error", (error) => failed(error.message)).once("exit", (code) => failed(`exited with ${code}`));
+});
+if (!isMainThread && workerData?.score) parentPort!.postMessage(await diffFlow(FLOWS.find((flow) => flow.app === workerData.score)!));
 
 /** writes report/index.html and report/report.json of `reports`, and answers the page's path */
 export async function assembleReport(reports: FlowReport[]): Promise<string> {
@@ -139,16 +139,10 @@ export async function assembleReport(reports: FlowReport[]): Promise<string> {
   return `${dir}/index.html`;
 }
 
-/** rescores `flows`' captures, `jobs` at a time, and writes the report; `json`, scores the first in this process and writes its report as JSON */
-export async function score(flows: Flow[], jobs: number, json: boolean): Promise<void> {
+/** rescores `flows`' captures, `jobs` at a time, and writes the report */
+export async function score(flows: Flow[], jobs: number): Promise<void> {
   await mkdir(`${E2E_DIR}report`, { recursive: true });
-  if (json) {
-    const r = await diffFlow(flows[0]);
-    await writeFile(flowJson(flows[0].app), JSON.stringify(r));
-    printFlow(r);
-  } else {
-    const reports = await runQueue(flows.map((f) => f.app), jobs, () => 0, scoreFlow);
-    reports.forEach(printFlow);
-    console.log(`\nreport: ${await assembleReport(reports)}`);
-  }
+  const reports = await runQueue(flows.map((f) => f.app), jobs, () => 0, scoreFlow);
+  reports.forEach(printFlow);
+  console.log(`\nreport: ${await assembleReport(reports)}`);
 }
