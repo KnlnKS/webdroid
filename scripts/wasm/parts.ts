@@ -23,7 +23,7 @@ export const SUITES: Record<string, Suite> = {
   threads: { all: true, doc: "threads, monitors, parking, class initialization waits and natives that wait, on JSPI strands (Java cases against the JDK)" },
   nested: { all: true, doc: "natives that enter Java, a thousand times in one entry (the engine's stacks)" },
   "conform-quick": { all: true, jobs: true, doc: "conform quick: a few classes of each kind", parts: () => [["conform", ["quick"]]] },
-  sweep: { all: true, jobs: true, doc: "every method of the boot jars and FitNotes compiled alone, failures by cause (`pnpm smoke <apk>` sweeps others)" },
+  sweep: { all: true, jobs: true, doc: "every method of the boot jars and FitNotes compiled alone, failures by cause (`pnpm wasm sweep <apk>` sweeps others)" },
   aottest: { all: true, aot: "need", doc: "precompiled platform code stays sound as classes arrive" },
   persist: { all: true, aot: "need", doc: "the compile worker (second-tier units made elsewhere, adopted while the numbering holds), the app build attached to the platform build and the bounded store for it" },
   conform: { doc: "the scripts/conform suites against their baselines: conform <suite|quick> [class] [--update]" },

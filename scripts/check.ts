@@ -12,6 +12,7 @@ import { cli } from "./args.ts";
 import { output, run, type Ran } from "./node.ts";
 import { pool, timings, type PoolJob } from "./util.ts";
 import { allParts, label, runPart } from "./wasm/parts.ts";
+import type { Flow } from "../tests/e2e/types.ts";
 
 const { values: { "no-e2e": noE2e, corpus }, positionals: named } = cli("pnpm check [--no-e2e | --corpus] [flow ...]", { "no-e2e": { type: "boolean" }, corpus: { type: "boolean" } });
 const children: ChildProcess[] = [], started = (c: ChildProcess) => children.push(c), t0 = performance.now();
@@ -69,10 +70,9 @@ let summary: (() => Promise<string>) | undefined;
 const newly: string[] = [];
 if (url) {
   process.env.WEBDROID_URL = await url;
-  const [{ FLOWS, flowsNamed }, { flowEstimate, runFlow, summarize }] = await Promise.all([import("../tests/e2e/flows/index.ts"), import("../tests/e2e/run-flows.ts")]);
-  const unknown = named.filter((name) => !flowsNamed(name).length);
-  if (unknown.length) { console.log(`no flow is named ${unknown.join(", ")}`); stop(2); }
-  const flows = named.length ? [...new Set(named.flatMap(flowsNamed))] : FLOWS.filter((flow) => flow.clock !== "live");
+  const [{ selectFlows }, { flowEstimate, runFlow, summarize }] = await Promise.all([import("../tests/e2e/flows/index.ts"), import("../tests/e2e/run-flows.ts")]);
+  let flows: Flow[] = [];
+  try { flows = selectFlows(named, { apks: true }); } catch (error) { console.log((error as Error).message); stop(2); }
   const outcomes: Awaited<ReturnType<typeof runFlow>>[] = [];
   const ready = answering(process.env.WEBDROID_URL);
   for (const flow of flows) {

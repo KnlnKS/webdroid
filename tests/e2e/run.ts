@@ -1,9 +1,7 @@
 // pnpm e2e: the one command line of the harness (README.md): a run of the flows by default.
-import { existsSync } from "node:fs";
 import { cpus } from "node:os";
 import { cli, jobsOf } from "../../scripts/args.ts";
-import { FLOWS, flowsNamed } from "./flows/index.ts";
-import type { Flow } from "./types.ts";
+import { FLOWS, selectFlows } from "./flows/index.ts";
 
 const USAGE = `pnpm e2e [--diff | --record] [--test <flow>]... [flow ...] [options]
 
@@ -38,18 +36,11 @@ if (o.startup && mode !== "record") usage("--startup requires --record");
 // already misses its diagnostics now and then
 const jobs = jobsOf(o.jobs, Math.max(1, Math.min(mode === "run" ? 2 : 4, Math.floor(cpus().length / (mode === "run" ? 2 : 3)))));
 
-const resolve = (name: string): Flow[] => {
-  const flows = flowsNamed(name);
-  return flows.length ? flows : usage(name ? `unknown flow "${name}"` : "empty flow name");
-};
 // live flows depend on upstream content and networks, so a run takes them only when named or with --live
-const named = [...o.test ?? [], ...positionals].flatMap((names) => names.split(",")).flatMap((name) => resolve(name.trim()));
-const seen = new Set<string>();
-const flows = (named.length ? named : mode === "run" && !o.live ? FLOWS.filter((flow) => flow.clock !== "live") : FLOWS)
-  .filter((flow) => !seen.has(flow.app) && seen.add(flow.app));
-
-const absent = mode === "diff" ? [] : flows.filter((flow) => !existsSync(`apks/${flow.apk}`));
-if (absent.length) { console.error(absent.map((flow) => `${flow.app}: apks/${flow.apk} is missing`).join("\n")); process.exit(2); }
+const flows = (() => {
+  try { return selectFlows([...o.test ?? [], ...positionals], { live: mode !== "run" || o.live, apks: mode !== "diff" }); }
+  catch (error) { return usage((error as Error).message); }
+})();
 
 if (mode === "run") await (await import("./run-flows.ts")).runFlows(flows, jobs, shots);
 else if (mode === "diff") await (await import("./score.ts")).score(flows, jobs);

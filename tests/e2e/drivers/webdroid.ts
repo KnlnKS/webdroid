@@ -2,7 +2,7 @@
 // one page.evaluate against the probe in lib/probe.ts; nothing here polls the page.
 // Deliberately free of any Android/adb dependency: `pnpm e2e` must run with no SDK present.
 import { readFile } from "node:fs/promises";
-import { chromium, type Browser, type BrowserServer, type CDPSession, type Page } from "playwright";
+import { chromium, type BrowserServer, type CDPSession, type Page } from "playwright";
 import { PINNED_CLOCK_MS, deviceScreen, screenParam, type CaptureScreen, type WaitPolicy } from "../types.ts";
 import { CONTEXT_OPTS, launchOptions, openWebdroid, pageErrors, webdroidUrl } from "../../../scripts/page.ts";
 import { deadline } from "../../../scripts/util.ts";
@@ -59,10 +59,10 @@ type StepOptions = {
 };
 
 export class WebdroidDriver {
-  private browser: Browser; page: Page; readonly screen: CaptureScreen; private server?: BrowserServer;
+  page: Page; readonly screen: CaptureScreen; private server: BrowserServer;
   readonly errors: string[];
   private closing?: Promise<void>;
-  constructor(browser: Browser, page: Page, screen: CaptureScreen, errors: string[], server?: BrowserServer) { this.browser = browser; this.page = page; this.screen = screen; this.errors = errors; this.server = server; }
+  constructor(page: Page, screen: CaptureScreen, errors: string[], server: BrowserServer) { this.page = page; this.screen = screen; this.errors = errors; this.server = server; }
 
   static async launch(opts: LaunchOpts = {}): Promise<WebdroidDriver> {
     const screen = opts.screen ?? deviceScreen();
@@ -82,7 +82,7 @@ export class WebdroidDriver {
       if (process.env.WEBDROID_CPU_THROTTLE) await (await ctx.newCDPSession(page)).send("Emulation.setCPUThrottlingRate", { rate: Number(process.env.WEBDROID_CPU_THROTTLE) });
       if (opts.cores) await emulateCores(await ctx.newCDPSession(page), opts.cores);
       // offline, what the network serves fails to load, as on a device without one
-      const drv = new WebdroidDriver(browser, page, screen, pageErrors(page, { offline: opts.offline }), server);
+      const drv = new WebdroidDriver(page, screen, pageErrors(page, { offline: opts.offline }), server);
       page.on("pageerror", (e) => console.error("  [page error]", String(e).slice(0, 200)));
       // Compose the query rather than concatenating it: `?bytecode=x` + `?screen=y` silently drops
       // the second parameter, and the run then measures the wrong geometry against the right pixels.
@@ -146,6 +146,6 @@ export class WebdroidDriver {
   }
 
   close(): Promise<void> {
-    return this.closing ??= this.server ? closeOwned(this.server) : deadline(this.browser.close(), 3000, "browser close deadline (no owned process)");
+    return this.closing ??= closeOwned(this.server);
   }
 }

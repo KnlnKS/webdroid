@@ -167,7 +167,7 @@ Path ops use Skia through CanvasKit (decision below). Resources drive widget def
 - **Recorded device answers:** reference-AVD results checked into fixtures and replayed in `pnpm test`
   (`scripts/simd-oracle.ts` for SIMD, `pnpm textcmp` for text layout).
 - **Flows:** `pnpm e2e` against device goldens ([tests/e2e/README.md](../tests/e2e/README.md)), `pnpm corpus`
-  over the APK corpus, `pnpm fwtest` for framework delegates, `pnpm smoke` compiling an APK's every method.
+  over the APK corpus, `pnpm fwtest` for framework delegates, `pnpm wasm sweep <apk>` compiling an APK's every method.
 - **Telemetry for silent failures:** `run.json` records `newMissing`, `newErrors`, `nativeRequired`,
   `newPlaceholders` and the Java callers of missing entries, from every process.
 - Not built: a boundary-trace differential against the device (JVMTI or Frida on the reference AVD), which would
