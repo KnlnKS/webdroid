@@ -1,6 +1,7 @@
 // The kernel's ABI as its modules share it: the process ABI's struct layouts (stat, statfs, dirent,
-// siginfo, cmsghdr, stack_t, sysinfo and libc's dl_phdr_info) and timespecs, off_t arguments, clocks, the log, and results. A kernel body answers -errno; the ARM32 libc's wrappers of
-// the same names (asWrappers) answer -1 with errno set, as bionic's syscall stubs do.
+// siginfo, cmsghdr, stack_t, sysinfo and libc's dl_phdr_info), timespecs, off_t arguments, clocks,
+// the log and results. A kernel body answers -errno; the ARM32 libc's wrappers of the same names
+// (asWrappers) answer -1 with errno set, as bionic's syscall stubs do.
 
 import { mem, wrote } from "./mem.ts";
 import { PTR, ldLong, stLong, type HostFn, type HostRet } from "./host.ts";
