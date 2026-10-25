@@ -11,7 +11,7 @@ import { loadDexes } from "./dexes.ts";
 import { AOSP } from "./aosp.ts";
 import { dexesOfZip, type DexFile } from "../src/jvm/dex.ts";
 import { cli } from "./args.ts";
-import { Program, reach } from "../src/jvm/reach.ts";
+import { Program, reach } from "./reach.ts";
 import { rt } from "../src/jvm/runtime.ts";
 import "../src/natives.ts";
 import { FRAMEWORK_RE, nativeClassSupport, nativeFieldSupport, nativeMethodSupport, rankCalls } from "./native-surface.ts";

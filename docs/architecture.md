@@ -103,7 +103,7 @@ is how host code calls Java.
   (`host/warm-worker.ts` over `host/warmshim.ts`), and a spare process Worker stands ready for the next launch
   (`src/shell/process-host.ts`).
 - **App:** after a first launch, a compile Worker builds the methods the app ran, ordered by the APK's own ART
-  baseline profile (`src/jvm/baselineprof.ts`) and then their call closure (`src/jvm/reach.ts`), and persists the
+  baseline profile (`src/jvm/baselineprof.ts`) and then their call closure (`host/compile-serve.ts`), and persists the
   build (`host/appcode.ts`, `host/persist.ts`); the first process of an app to launch makes it. Bundled builds cover the gate apps
   (`vendor/wasm-aot/*/apps.json`). The build is refined once new demand reaches `REFINE_SHARE` (an eighth) of
   what it covers. A warm launch links the app's default namespace statically under a standard app loader.

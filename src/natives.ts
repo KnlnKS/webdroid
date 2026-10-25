@@ -1,7 +1,6 @@
-// Every native module, in dependency order. The browser shell and scripts/audit.ts import
+// Every native module, in dependency order. The tier, the workers and the scripts import
 // THIS, never their own copy of the list — a drifted copy makes audit report implemented
-// classes as missing. nrun.ts loads java.lang's and java.io's alone: it runs an app's own
-// bytecode, whose methods a spec (rt.register) of the same class would replace.
+// classes as missing.
 import "./jvm/natives/jstring.ts";
 import "./jvm/natives/jlang.ts";
 import "./jvm/natives/fdlibm.ts";
