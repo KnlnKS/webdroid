@@ -64,6 +64,7 @@ const HOST_IMPORTS = {
   info: { params: [T.i32, T.i32, T.i32], results: [T.i32] },
   stackClass: { params: [T.i32], results: [T.i32] },
   classByName: { params: [T.externref, T.externref, T.i32], results: [T.i32] },
+  findMember: { params: [T.i32, T.externref, T.i32, T.i32, T.i32], results: [T.i32] },
   dexOpen: { params: [T.externref, T.externref], results: [T.externref] },
   dexOpenMemory: { params: [T.externref, T.externref, T.externref, T.externref, T.externref], results: [T.externref] },
   galloc: { params: [T.externref, T.i32], results: [T.i64] },

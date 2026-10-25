@@ -6,7 +6,7 @@ import { unresolvedClass } from "../compiler/linkage.ts";
 import type { InvokeMode } from "../compiler/handles.ts";
 import { HEAP_LIMIT } from "../../jvm/abi.ts";
 import { NO_INDEX } from "../../jvm/dex.ts";
-import { className, hostInfo } from "./classes.ts";
+import { className, findMember, hostInfo } from "./classes.ts";
 import { hostMembers, hostText } from "./members.ts";
 import { hostReflect } from "./reflect.ts";
 import { hostUnsafe } from "./unsafe.ts";
@@ -90,6 +90,7 @@ export function hostImports(w: World): HostImports {
       const text = w.hostString(name) as string;
       return park(mode === Lookup.ForName ? resolveForName(w, text, scope as object | null, sched.current()) : classByName(w, text, scope, mode), 0);
     },
+    findMember: (cid: number, name: unknown, kind: number, n: number, from: number) => findMember(w, cid, w.hostString(name) as string | null, kind, n, from),
     dexOpen: (path: unknown, loader: object | null) => park(dexOpen(w, path, loader), null),
     dexOpenMemory: (buffers: object, arrays: object, starts: object, ends: object, loader: object | null) => park(dexOpenMemory(w, buffers, arrays, starts, ends, loader), null),
     // the class `n` frames out from the caller of the native; 0 when the stack is not that deep

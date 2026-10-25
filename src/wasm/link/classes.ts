@@ -68,8 +68,6 @@ export function hostInfo(w: World, kind: number, a: number, b: number): number {
       if (b > FIELD_INDEX_MAX) throw w.exception(w.helpers.makeThrowable("java/lang/InternalError", `${className(name)} declares field ${b}, past the ${FIELD_INDEX_MAX + 1} a field id can name`));
       return fieldCookie(w, fieldIdOf(a, b));
     case Info.NFields: return fields.length;
-    case Info.FieldNameLen: return fields[b].name.length;
-    case Info.FieldNameChar: return fields[b >> 16].name.charCodeAt(b & 0xffff);
     case Info.FieldType: return w.idOf(typeName(fields[b].desc));
     case Info.FieldFlags: return fields[b].flags;
     case Info.FieldDesc: return fields[b].desc.charCodeAt(0);
@@ -80,6 +78,18 @@ export function hostInfo(w: World, kind: number, a: number, b: number): number {
     case Info.ArrayOf: return b ? w.idOf("[".repeat(b) + descOf(name)) : a;      // the class of the b-fold array of a
     case Info.ArraySlot: return w.synthSlot("newarray:[" + descOf(name));      // a = the component class: the array allocator for it
   }
+}
+/** what host.findMember looks for: a method, a constructor or a field */
+export const Member = { Method: 0, Ctor: 1, Field: 2 } as const;
+const ACC_BRIDGE = 0x40;
+/** host.findMember(cid, name, kind, n, from): the index of the first declared member of class `cid` from `from` on that is field `name`, method `name` or a
+ *  constructor (name null) with `n` parameters and not a bridge; -1 if none */
+export function findMember(w: World, cid: number, name: string | null, kind: number, n: number, from: number): number {
+  const jc = w.prog.get(w.nameOf(cid));
+  if (kind === Member.Field) return jc?.def ? jc.fields.findIndex((f) => f.name === name) : -1;
+  const want = kind === Member.Ctor ? "<init>" : name === "<init>" || name === "<clinit>" ? undefined : name, methods = jc?.methods ?? [];
+  for (let k = from; k < methods.length; k++) { const m = methods[k]; if (m.name === want && m.params.length === n && !(m.flags & ACC_BRIDGE)) return k; }
+  return -1;
 }
 synthFamily("new", (w, name) => {
   const ctor = w.prog.get(name)?.byKey.get("<init>()V");
@@ -235,19 +245,6 @@ rt("declFields", ["I", "I"], "L", (cx, c) => {
   each(() => { keep(); c.if_().lget(data).refAsNonNull().lget(i).lget(0).lget(k); cx.callRt(c, "mkField"); c.arraySet(tData.ref).lget(i).i32(1).raw(OP.i32_add).lset(i).end(); });
   c.gget(cx.vtGlobal(FIELD_ARRAY)).refAsNonNull().i64(0n).lget(data).refAsNonNull().structNew(tArr.ref);
 });
-/** the body of a function (cid, k, name, len) -> whether the String `name` of length `len` spells the name of member k of class cid, whose characters
- *  host.info `nameChar` answers (b: k << 16 | j) */
-export function emitNameEq(cx: Compiler, c: Code, nameChar: number): void {
-  const j = c.newLocal(T.i32);
-  c.block().loop().lget(j).lget(3).raw(OP.i32_ge_s).brIf(1);
-  c.lget(2).lget(j); cx.callNamed(c, "java/lang/String", "charAt", "(I)C");
-  cx.info(c, nameChar, () => c.lget(0), () => c.lget(1).i32(16).raw(OP.i32_shl).lget(j).raw(OP.i32_or));
-  c.raw(OP.i32_ne).if_().i32(0).ret().end();
-  c.lget(j).i32(1).raw(OP.i32_add).lset(j).br(0).end().end().i32(1);
-}
-// nameEq(cid, k, name, len): of the k-th declared field
-rt("nameEq", ["I", "I", "L", "I"], "I", (cx, c) => emitNameEq(cx, c, Info.FieldNameChar));
-
 // ---------- intrinsics
 /** the intrinsics of this file, added to the table by intrinsics.ts */
 export const classIntrinsics = new Map<string, Intrinsic>();
@@ -361,16 +358,11 @@ def("java/lang/Object.internalClone()Ljava/lang/Object;", (cx, c) => {
 });
 
 def("java/lang/Class.getDeclaredField(Ljava/lang/String;)Ljava/lang/reflect/Field;", (cx, c) => {
-  const id = c.newLocal(T.i32), n = c.newLocal(T.i32), len = c.newLocal(T.i32), k = c.newLocal(T.i32);
+  const id = c.newLocal(T.i32), k = c.newLocal(T.i32);
   c.lget(1); cx.nullCheck(c);
-  c.lget(0); idOfClass(cx, c); c.lset(id);
-  cx.info(c, Info.NFields, () => c.lget(id)); c.lset(n);
-  c.lget(1); cx.callNamed(c, "java/lang/String", "length", "()I"); c.lset(len);
-  c.block().loop().lget(k).lget(n).raw(OP.i32_ge_s).brIf(1);
-  cx.info(c, Info.FieldNameLen, () => c.lget(id), () => c.lget(k)); c.lget(len).raw(OP.i32_eq).if_();
-  c.lget(id).lget(k).lget(1).lget(len); cx.callRt(c, "nameEq"); c.if_().lget(id).lget(k); cx.callRt(c, "mkField"); c.ret().end().end();
-  c.lget(k).i32(1).raw(OP.i32_add).lset(k).br(0).end().end();
-  cx.callThrower(c, "nsfe");
+  c.lget(0); idOfClass(cx, c); c.ltee(id).lget(1); cx.str.toHost(c); c.i32(Member.Field).i32(0).i32(0).call(cx.imp.findMember).ltee(k);
+  c.i32(0).raw(OP.i32_lt_s).if_(); cx.callThrower(c, "nsfe"); c.end();
+  c.lget(id).lget(k); cx.callRt(c, "mkField");
 });
 def("java/lang/Class.getDeclaredFields()[Ljava/lang/reflect/Field;", (cx, c) => { c.lget(0); idOfClass(cx, c); c.i32(0); cx.callRt(c, "declFields"); });
 def("java/lang/Class.getPublicDeclaredFields()[Ljava/lang/reflect/Field;", (cx, c) => { c.lget(0); idOfClass(cx, c); c.i32(1); cx.callRt(c, "declFields"); });

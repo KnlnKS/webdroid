@@ -265,6 +265,8 @@ public class C {
     try { A.class.getMethod("nope"); } catch (NoSuchMethodException e) { r += 10000; }
     // an interface method Object declares dispatches through Object's slot
     if ((Boolean) java.util.Comparator.class.getMethod("equals", Object.class).invoke(String.CASE_INSENSITIVE_ORDER, String.CASE_INSENSITIVE_ORDER)) r += 200000000;
+    // an overload found past others of its name and arity
+    if ("hi".equals(String.class.getDeclaredMethod("valueOf", char[].class).invoke(null, (Object) new char[] {'h', 'i'}))) r += 400000000;
     return r + (o instanceof A ? 100000 : 0) + (m.getDeclaringClass() == A.class ? 1000000 : 0) + I.class.getMethod("g").getName().length() * 10000000;
   }
   enum Color { RED, GREEN, BLUE }
