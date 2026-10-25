@@ -6,7 +6,7 @@ import { isFifo, moveRemoteFifo, nameFifo } from "../native/pipe.ts";
 import { utf8 } from "../jvm/abi.ts";
 import type { DescriptorCalls } from "./file-descriptors.ts";
 import { broker, remoteSystem } from "./broker-access.ts";
-export type PathReply<T> = { errno: number; value: T };
+type PathReply<T> = { errno: number; value: T };
 /** a change to a file's owner, group (-1 keeps either), permission bits or modification time (epoch ms) */
 export type AttributeChange = Partial<FileAttributes> & { mtime?: number };
 export type FilePathCalls = {
@@ -45,7 +45,7 @@ export type PathOwner = { files: FilePaths; descriptors: DescriptorCalls };
 export const pathOwner = (path?: string): PathOwner | null => remoteSystem() && (path === undefined || isMutablePath(path)) ? broker() : null;
 /** chmod, chown and utimes of `path` as process `uid` may make them: an owner changes its file's mode and times, and
  *  gives it to a group it is in (its own, or the cache and shared application gids ProcessList gives every app process) */
-export function changeFileAttributes(path: string, change: AttributeChange, uid = procIdentity.uid): number {
+function changeFileAttributes(path: string, change: AttributeChange, uid = procIdentity.uid): number {
   for (const value of [change.uid,change.gid]) if (value !== undefined && (!Number.isInteger(value) || value < -1 || value > 0xffffffff)) return -E.INVAL;
   if (change.mode !== undefined && !Number.isInteger(change.mode) || change.mtime !== undefined && !Number.isFinite(change.mtime)) return -E.INVAL;
   const p = vfs.norm(path);

@@ -2,7 +2,7 @@ import { loopbackFetch } from "./devicefetch.ts";
 import { decodeFrame, encodeFrame, parseBridgeCall, type BridgeCall, type BridgeReply, type Invoke, type WebRequest, type WebResponse } from "./webpage/protocol.ts";
 
 /** a JavaScript interface method; `returns`: the Java method returns a value */
-export type WebMethod = ((...args: unknown[]) => Promise<unknown>) & { returns: boolean };
+type WebMethod = ((...args: unknown[]) => Promise<unknown>) & { returns: boolean };
 /** each interface's methods */
 export type WebInterfaces = Record<string, Record<string, WebMethod>>;
 

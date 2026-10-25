@@ -18,7 +18,7 @@ import { harfBuzz } from "./harfbuzz.ts";
 import { type FaceMetrics, type FaceInfo, type FvarAxis, faceInfo, faceCount, sfntTables, T_CMAP, fontRevision, postScriptName, isPostScriptType1 } from "./sfnt.ts";
 
 /** minikin's FontVariation: an OpenType axis tag and its value */
-export interface Axis { tag: number; value: number }
+interface Axis { tag: number; value: number }
 // ── font files
 /** A font whose bytes are not in memory yet. Text natives run synchronously over loaded fonts and
  *  throw this to wait for one, then run again (withFonts). */
@@ -73,7 +73,7 @@ export async function platformFontBytes(path: string): Promise<Uint8Array> {
   return file.bytes;
 }
 /** Typeface's nativeWarmUpCache: a system font read ahead, as the device pages its file in */
-export const warmUpCache = (path: string): Promise<void> | void => isPlatformFont(path) ? platformFile(path).load() : undefined;
+const warmUpCache = (path: string): Promise<void> | void => isPlatformFont(path) ? platformFile(path).load() : undefined;
 
 // The device's system server hands apps a serialized font map holding each font's style and
 // coverage, so a process finds a family for a character without reading its fonts or parsing the
@@ -81,7 +81,7 @@ export const warmUpCache = (path: string): Promise<void> | void => isPlatformFon
 // face's FaceInfo (platformFontIndex) and Typeface.serializeFontMap's bytes (scripts/font-index.ts).
 type IndexedFace = Omit<FaceInfo, "coverage"> & { coverage: number[] };
 /** the faces by "path#ttcIndex", and the serialized system font map in base64 */
-export interface FontIndex { faces: Record<string, IndexedFace>; fontMap?: string }
+interface FontIndex { faces: Record<string, IndexedFace>; fontMap?: string }
 let indexed: Promise<FontIndex> | undefined;
 let fontIndex: FontIndex | null = null;
 /** every reference-build face's FaceInfo by "path#ttcIndex", its coverage pairs delta-encoded */
@@ -226,16 +226,16 @@ const BOLD = 1, ITALIC = 2, RESOLVE_BY_FONT_TABLE = -1;
 /** computeMinikinStyle's weight */
 const minikinWeight = (weight: number) => Math.min(1000, Math.max(1, weight));
 /** Typeface::createRelative: the base weight 300 bolder for BOLD */
-export const createRelative = (src: NativeTypeface, style: number) => new NativeTypeface(src.collection, src.baseWeight, style,
+const createRelative = (src: NativeTypeface, style: number) => new NativeTypeface(src.collection, src.baseWeight, style,
   minikinWeight(src.baseWeight + (style & BOLD ? 300 : 0)), (style & ITALIC) !== 0);
 /** Typeface::createAbsolute: bold from semi-bold, as SkTypeface counts it */
-export const createAbsolute = (src: NativeTypeface, weight: number, italic: boolean) => new NativeTypeface(src.collection, src.baseWeight,
+const createAbsolute = (src: NativeTypeface, weight: number, italic: boolean) => new NativeTypeface(src.collection, src.baseWeight,
   (weight >= 600 ? BOLD : 0) | (italic ? ITALIC : 0), minikinWeight(weight), italic);
 /** Typeface::createWithDifferentBaseWeight, which a weight alias of fonts.xml is */
-export const createWithBaseWeight = (src: NativeTypeface, weight: number) => createRelative(new NativeTypeface(src.collection, weight, 0, 0, false), src.apiStyle);
+const createWithBaseWeight = (src: NativeTypeface, weight: number) => createRelative(new NativeTypeface(src.collection, weight, 0, 0, false), src.apiStyle);
 /** Typeface::createFromFamilies: the families, then the fallback's; a weight or slant left to the
  *  font table is the first family's regular face's */
-export function createFromFamilies(families: NativeFamily[], weight: number, italic: number, fallback: NativeTypeface | null): NativeTypeface {
+function createFromFamilies(families: NativeFamily[], weight: number, italic: number, fallback: NativeTypeface | null): NativeTypeface {
   const collection = new FontCollection(fallback ? families.concat(fallback.collection.families) : families);
   if (weight === RESOLVE_BY_FONT_TABLE || italic === RESOLVE_BY_FONT_TABLE) {
     const table = families[0]?.closest(400, false).style;
@@ -247,7 +247,7 @@ export function createFromFamilies(families: NativeFamily[], weight: number, ita
 }
 /** Typeface::createFromTypefaceWithVariation: the style kept, each family supporting one of the
  *  axes rebuilt with them, the same collection when none does */
-export function createWithVariation(src: NativeTypeface, list: object): NativeTypeface | Promise<NativeTypeface> {
+function createWithVariation(src: NativeTypeface, list: object): NativeTypeface | Promise<NativeTypeface> {
   return after(vcall(list, "toArray", "()[Ljava/lang/Object;"), (array: object[]) => {
     const axes = axesOf(array), families = src.collection.families;
     const varies = (tags: readonly number[]) => axes.some((a) => tags.includes(a.tag));
@@ -261,7 +261,7 @@ export function createWithVariation(src: NativeTypeface, list: object): NativeTy
 
 let systemDefault: NativeTypeface | undefined;
 /** Typeface::setDefault */
-export const setDefaultTypeface = (t: NativeTypeface) => { systemDefault = t; };
+const setDefaultTypeface = (t: NativeTypeface) => { systemDefault = t; };
 /** Typeface::resolveDefault: null is the default */
 export const resolveDefault = (t: NativeTypeface | null): NativeTypeface => t ?? systemDefault!;
 const typefaceInstance = peerField<bigint>("android/graphics/Typeface", "native_instance");
@@ -312,7 +312,7 @@ interface SerializedTypefaces {
   typefaces: [collection: number, baseWeight: number, apiStyle: number, weight: number, italic: boolean][];
 }
 /** Typeface.nativeWriteTypefaces' bytes */
-export function writeTypefaces(typefaces: readonly NativeTypeface[]): Uint8Array {
+function writeTypefaces(typefaces: readonly NativeTypeface[]): Uint8Array {
   const out: SerializedTypefaces = { fonts: [], families: [], collections: [], typefaces: [] }, ids = new Map<object, number>();
   const id = <T extends object, V>(o: T, list: V[], write: (o: T) => V): number => {
     let i = ids.get(o);
@@ -332,7 +332,7 @@ export function writeTypefaces(typefaces: readonly NativeTypeface[]): Uint8Array
   return bytes;
 }
 /** Typeface.nativeReadTypefaces: the typefaces `bytes` begins with */
-export function readTypefaces(bytes: Uint8Array): NativeTypeface[] {
+function readTypefaces(bytes: Uint8Array): NativeTypeface[] {
   const n = new DataView(bytes.buffer, bytes.byteOffset).getUint32(0);
   const s: SerializedTypefaces = JSON.parse(new TextDecoder().decode(bytes.subarray(4, 4 + n)));
   const fonts = s.fonts.map(([path, ttc, weight, italic, axes, locales]) =>
@@ -345,9 +345,9 @@ export function readTypefaces(bytes: Uint8Array): NativeTypeface[] {
 const fontSet = new Set<NativeFont>();
 /** the system collections' fonts join the available font set (Typeface's registerGenericFamily and
  *  addFontCollections) */
-export const addFontCollections = (t: NativeTypeface) => { for (const f of t.collection.families) for (const font of f.fonts) fontSet.add(font); };
+const addFontCollections = (t: NativeTypeface) => { for (const f of t.collection.families) for (const font of f.fonts) fontSet.add(font); };
 /** SystemFonts::getAvailableFonts: the fonts of the system font map */
-export const availableFonts = (): NativeFont[] => [...fontSet];
+const availableFonts = (): NativeFont[] => [...fontSet];
 
 // ── android.graphics.Typeface ──────────────────────────────────────────────────────────
 // hwui's Typeface over the collections above; a null handle is the default, as resolveDefault has it

@@ -20,7 +20,7 @@ function fingerprint(m: MethodInfo, ins: { pc: number }): number {
 }
 
 /** the dispatch slots a call reached, busiest first; "broad" when they spread beyond the two recorded */
-export type SiteProfile = "unseen" | "broad" | number[];
+type SiteProfile = "unseen" | "broad" | number[];
 export function siteProfile(buffer: ArrayBuffer, m: MethodInfo, ins: { pc: number }): SiteProfile {
   const key = fingerprint(m, ins), row = new Uint32Array(buffer, PROFILE_BASE + (key & (PROFILE_ROWS - 1)) * PROFILE_WORDS * 4, PROFILE_WORDS);
   if (row[TAG] !== key || row[TOTAL] < MIN_OBSERVED) return "unseen";

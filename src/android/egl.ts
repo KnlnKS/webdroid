@@ -128,7 +128,7 @@ export function terminate(t: object, dpy: number): boolean {
   return true;
 }
 /** EGLImpl.getInitCount */
-export const initCount = (dpy: number): number => (dpy === DISPLAY ? refs : 0);
+const initCount = (dpy: number): number => (dpy === DISPLAY ? refs : 0);
 const STRINGS: Record<number, string> = { 0x3053: "webdroid", 0x3054: "1.5", 0x308d: "OpenGL_ES",
   0x3055: "EGL_ANDROID_presentation_time EGL_KHR_create_context EGL_KHR_fence_sync EGL_KHR_surfaceless_context" };
 export function queryString(t: object, dpy: number, n: number): string | null {

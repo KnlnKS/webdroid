@@ -254,7 +254,7 @@ export function pieceOf(style: ShapeStyle, text: string, start: number, end: num
 }
 /** minikin's LayoutPiece: a piece's glyphs in visual order from its origin, each cluster's advance
  *  on its first code unit, and the extent of the fonts it used */
-export interface Piece {
+interface Piece {
   readonly ids: Uint32Array; readonly x: Float32Array; readonly y: Float32Array; readonly fonts: readonly FakedFont[];
   readonly advance: number; readonly advances: Float32Array; readonly ascent: number; readonly descent: number;
 }

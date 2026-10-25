@@ -21,13 +21,13 @@ export interface MethodInfo {
   /** position in its class's `methods`, which is also the offset of its table slot from the class's block */
   index: number;
 }
-export interface DefaultConflict extends LinkFailure {
+interface DefaultConflict extends LinkFailure {
   thrower: "icce";
   candidates: readonly MethodInfo[];
 }
 export type DispatchTarget = MethodInfo | DefaultConflict | undefined;
 /** what resolved of a dex's references, while the Program's classes hold: invokes by 8 * method_id + Invoke, fields by 2 * field_id + whether static */
-export interface ResolvedRefs { invokes: Map<number, MethodInfo>; fields: Map<number, { decl: string; f: FieldInfo }> }
+interface ResolvedRefs { invokes: Map<number, MethodInfo>; fields: Map<number, { decl: string; f: FieldInfo }> }
 
 /** Conflict is an invocation error, not an abstract or missing declaration. */
 export function selectDefault(maximal: readonly MethodInfo[], includeAbstract = false): DispatchTarget {

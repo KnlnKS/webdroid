@@ -339,11 +339,6 @@ export function resString(res: Resources, id: number): string {
   if (v.t === TV.FLOAT) return String(intBitsToFloat(v.d));
   return v.t >= TV.INT_DEC && v.t <= TV.COLOR_RGB4 ? String(v.d) : "";
 }
-/** the AssetManager2 behind AOSP's Resources */
-export function nativeRes(jres: unknown): Resources {
-  const impl = getDeclared<object>(jres, "android/content/res/Resources", "mResourcesImpl");
-  return nativeAssets(getDeclared(impl, "android/content/res/ResourcesImpl", "mAssets"));
-}
 /** the AssetManager2 behind AOSP's AssetManager */
 export function nativeAssets(am: unknown): Resources {
   return deref<Resources>(getDeclared(am, "android/content/res/AssetManager", "mObject"));

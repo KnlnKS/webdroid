@@ -196,7 +196,7 @@ export function tbsWithout(x: X509, oid: string): Uint8Array {
 
 // ── issuing
 /** UTCTime through 2049 and GeneralizedTime after (RFC 5280 §4.1.2.5) */
-export function derTime(ms: number): Uint8Array {
+function derTime(ms: number): Uint8Array {
   const d = new Date(ms), p = (n: number) => String(n).padStart(2, "0"), y = d.getUTCFullYear();
   const rest = `${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}Z`;
   return y >= 1950 && y < 2050 ? tlv(0x17, utf8.enc.encode(p(y % 100) + rest)) : tlv(0x18, utf8.enc.encode(String(y).padStart(4, "0") + rest));

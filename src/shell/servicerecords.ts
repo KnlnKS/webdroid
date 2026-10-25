@@ -30,7 +30,7 @@ export type ServiceRequest = { kind: "bind"; cls: string; intent: ParcelData; ke
 /** how the records reach processes: `send` a request from `client` (null for the system) to
  *  `process`, starting it when `start` and otherwise only while it runs (null when it does not);
  *  `connected` tells a client's binding of its binder; `persistent` is ApplicationInfo.FLAG_PERSISTENT */
-export type ServicePort = {
+type ServicePort = {
   send(client: number | null, pkg: string, process: string, request: ServiceRequest, start: boolean): Promise<BinderHandle | null> | null;
   connected(client: number, key: string, binder: BinderHandle | null, dead: boolean): void;
   persistent(pkg: string): boolean;
@@ -280,5 +280,3 @@ export class ServiceRecords {
 }
 export type ServiceStarts = ReturnType<ServiceRecords["starts"]>;
 
-/** Remote start state is acknowledged by the owner before Java lifecycle decisions continue. */
-export type ServiceStartAccess = { [K in keyof ServiceStarts]: (...args: Parameters<ServiceStarts[K]>) => ReturnType<ServiceStarts[K]> | Promise<ReturnType<ServiceStarts[K]>> };

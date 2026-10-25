@@ -142,7 +142,7 @@ export class NativeGradient extends NativeShader {
 }
 let scratch: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null = null;
 /** a 2D context that makes gradients for any canvas */
-export function scratch2d(): CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D {
+function scratch2d(): CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D {
   return scratch ??= (typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(1, 1) : document.createElement("canvas")).getContext("2d") as OffscreenCanvasRenderingContext2D;
 }
 /** a gradient's native instance: its sRGB ARGB colours at `positions` (evenly spaced when null),

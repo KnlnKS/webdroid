@@ -30,7 +30,7 @@ export type ProcessWorkerStatus = { kind: "phase"; phase: StartPhase } | { kind:
 const post = (worker: Worker, message: ProcessWorkerMessage, transfer: Transferable[] = []) => worker.postMessage(message, transfer);
 export const workerControlMethods = methodsOf<WorkerControl>()(["snapshot", "aotProfile", "codeReadiness", "demandMark", "demandSince", "alive", "uiTree", "tap", "swipe", "type", "enter", "imeState", "back", "testFrame", "timeline"]);
 
-export type SpareWorker = { pid: number; url: string; worker: Worker; release(): void; error?: string };
+type SpareWorker = { pid: number; url: string; worker: Worker; release(): void; error?: string };
 /** the URL of a process Worker; `wide` picks the bitness of the zygote it runs (process-worker.ts) */
 function workerUrl(pid: number, wide: boolean): string {
   const params = switches();
@@ -54,7 +54,7 @@ function spawn(pid: number, wide: boolean): SpareWorker {
 
 /** what a host asks of the broker: its process's bootstrap, the endpoint its Worker serves once
  *  ready, and its failure */
-export type HostOwner = {
+type HostOwner = {
   bootstrap(pid: number): Promise<ProcessBootstrap>;
   ready(pid: number, endpoint: MessagePort): void;
   failed(pid: number, message: string): void;

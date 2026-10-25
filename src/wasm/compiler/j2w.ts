@@ -106,13 +106,13 @@ export type LinkEnv = Pick<World, "prog" | "natives" | "intrinsic" | "link" | "c
   classModules: Pick<World["classModules"], "ensureBody">; units: Pick<World["units"], "sharedHelpers">;
 };
 /** what compiling a method reads of its code (Compiler.analysis) */
-export interface Analysis { prepared: PreparedMethod; typing: Typing; strings: ReadonlyMap<number, "alloc" | "init"> }
+interface Analysis { prepared: PreparedMethod; typing: Typing; strings: ReadonlyMap<number, "alloc" | "init"> }
 /** per call site (caller and DEX pc): the implementations worth a guarded direct call (Planner.group) */
 export type CallPlan = ReadonlyMap<string, readonly MethodInfo[]>;
 /** a function of Compiler.buildSynthetics */
-export interface SyntheticFn { name: string; params: Kind[]; ret: Kind | "V"; body: (c: Code) => void; slot?: number; exportAs?: string }
+interface SyntheticFn { name: string; params: Kind[]; ret: Kind | "V"; body: (c: Code) => void; slot?: number; exportAs?: string }
 /** how Compiler.buildUnit compiles its methods */
-export interface UnitOptions {
+interface UnitOptions {
   /** compiled beside the methods for the unit's own calls and not exported; what they assume about the class hierarchy counts against the first method */
   copies?: MethodInfo[];
   /** the second tier: its methods do not count */

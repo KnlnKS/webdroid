@@ -6,7 +6,7 @@ import { persisted } from "../shell/device-storage.ts";
 import type { PackageState } from "../shell/packagedata.ts";
 
 /** MODE_NIGHT_NO (1) or MODE_NIGHT_YES (2), and the locales' language tags joined by commas */
-export type PackageConfig = { night?: number; locales?: string };
+type PackageConfig = { night?: number; locales?: string };
 const saved = persisted<PackageConfig>("wd:package-config:", (value) => {
   if (!value || typeof value !== "object") return null;
   const { night, locales } = value as Record<string, unknown>;

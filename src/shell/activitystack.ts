@@ -12,7 +12,7 @@ const PAUSE_TIMEOUT_MS = 500, STOP_TIMEOUT_MS = 11_000;
 /** an activity a process launched in another: `previous` was in front, `request` is the caller's */
 type Activity = { id: number; pid: number; caller: number; previous: number; request: number };
 /** the broker's processes: `entry` throws for a dead one; `activity` sends one a request */
-export type StackPort = {
+type StackPort = {
   entry(pid: number): ProcessRecord;
   alive(pid: number): boolean;
   entries(): Iterable<ProcessRecord>;

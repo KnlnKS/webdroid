@@ -182,7 +182,7 @@ export class ThreadRec {
 }
 
 /** what the host hears of Java threads (host/entry.ts) */
-export interface ThreadHooks {
+interface ThreadHooks {
   /** the thread whose code runs changed; `idle`: no strand runs, the host's top level does */
   switched(t: ThreadRec, idle: boolean): void;
   /** a Java thread's body has run and it has exited */

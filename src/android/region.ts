@@ -196,7 +196,7 @@ function findLink(edges: Edge[], i: number) {
 
 const mNativeRegion = peerField<bigint>("android/graphics/Region", "mNativeRegion");
 /** the area behind a Java Region */
-export const nativeRegionOf = (r: object): NativeRegion => deref<NativeRegion>(mNativeRegion(r));
+const nativeRegionOf = (r: object): NativeRegion => deref<NativeRegion>(mNativeRegion(r));
 
 // ── android.graphics.Region and RegionIterator ─────────────────────────────────────────
 // Both free their native state from finalize(), which never runs here.

@@ -11,7 +11,7 @@ import type { Tail } from "./numbers.ts";
 import type { World } from "./world.ts";
 
 /** what a slot stands for: a method of its class's block, the class's ensure(), a runtime function or a thrower */
-export type Slot = { k: "method"; m: MethodInfo } | { k: "ensure" } | { k: "synth"; name: string; d: Synth } | { k: "thrower"; name: Thrower };
+type Slot = { k: "method"; m: MethodInfo } | { k: "ensure" } | { k: "synth"; name: string; d: Synth } | { k: "thrower"; name: Thrower };
 /** a slot's state, by bit: first-tier or second-tier (HOT) code is in it, the first-tier code is a build's (BUILT); the build whose loaded module holds code
  *  for it, whatever is in it now (PLATFORM or APP); a compile worker has the second-tier compile of its method (PENDING) */
 export const FIRST = 1, HOT = 2, BUILT = 4, PLATFORM = 8, APP = 16, PENDING = 32;

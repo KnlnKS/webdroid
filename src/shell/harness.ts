@@ -25,7 +25,7 @@ import { foregroundWorkerSnapshot, visibleWorkersAlive, workerAotProfiles, worke
 import { within } from "./rpc.ts";
 import { hasFocusedWindow, hasTouchWindow } from "../android/server/wm.ts";
 
-export type Wd = ReturnType<typeof harness>;
+type Wd = ReturnType<typeof harness>;
 declare global { var wd: Wd; }
 
 /** `ticks` counts the page's display frames; `boot` and `back` are its own */

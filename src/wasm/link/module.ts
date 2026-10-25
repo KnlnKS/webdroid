@@ -1,5 +1,5 @@
 // Compiling with the JS String builtins and String constants imported by their text, which the TypeScript lib does not declare.
-export type CompileOptions = { builtins: string[]; importedStringConstants: string };
+type CompileOptions = { builtins: string[]; importedStringConstants: string };
 type ModuleWithOptions = new (bytes: BufferSource, options: CompileOptions) => WebAssembly.Module;
 type StreamWithOptions = (source: Promise<Response>, options: CompileOptions) => Promise<WebAssembly.Module>;
 

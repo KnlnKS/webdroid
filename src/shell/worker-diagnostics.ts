@@ -9,7 +9,7 @@ import { within } from "./rpc.ts";
 export type WorkerTerminal = { expected: boolean; cause: string; record: ExitRecord | null };
 type WorkerIdentity = { pid: number; pkg: string; process: string; url: string };
 type Snapshot = Awaited<ReturnType<WorkerControl["snapshot"]>>;
-export type WorkerDiagnosticRow = WorkerIdentity & (
+type WorkerDiagnosticRow = WorkerIdentity & (
   { snapshot: Snapshot; terminal?: never; error?: never } |
   { error: string; terminal?: WorkerTerminal; snapshot?: never } | { terminal: WorkerTerminal; error?: never; snapshot?: never });
 

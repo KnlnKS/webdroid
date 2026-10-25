@@ -185,7 +185,7 @@ export const ioResult = (fn: string, result: number): number => { sys(fn, result
 /** sendfile moves at most this much a call, which its callers loop over as Linux allows */
 const SENDFILE_CHUNK = 1 << 20;
 /** the Object readBytes and its kin take: a byte[], or a direct ByteBuffer addressed from its start */
-export type IoBuffer = Int8Array | JBuffer | null;
+type IoBuffer = Int8Array | JBuffer | null;
 function ioRegion(buffer: Int8Array | null, offset: number, count: number): Uint8Array {
   if (buffer === null) return rt.npe();
   checkFromIndexSize(offset, count, buffer.byteLength, "java/lang/ArrayIndexOutOfBoundsException");

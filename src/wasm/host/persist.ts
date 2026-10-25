@@ -9,7 +9,7 @@ import { COMPILED_CODE_DIR } from "../../shell/hostfs.ts";
 import { decodeJson } from "./aotstore.ts";
 
 /** where the files live; paths are "<key>/<file>" and "meta.json" */
-export interface FileBackend {
+interface FileBackend {
   read(path: string): Promise<Uint8Array | undefined>;
   write(path: string, bytes: Uint8Array): Promise<void>;
   remove(path: string): Promise<void>;

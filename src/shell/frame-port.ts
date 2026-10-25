@@ -7,7 +7,7 @@ import { note, Ev } from "../timeline.ts";
 import { shownFrameAt } from "../android/vsync.ts";
 import { duplex, methodsOf } from "./rpc.ts";
 /** screen regions [left,top,right,bottom], each sent scaled to fit `max` px on its long side */
-export type MirrorCrops = {regions:[number,number,number,number][];max:number};
+type MirrorCrops = {regions:[number,number,number,number][];max:number};
 export type Mirror = boolean | MirrorCrops;
 /** a frame shown: when it was presented and when the display frame that shows it began, on the page's clock, with a copy of its
  *  pixels or the mirrored regions' crops, transferred with it and closed by whoever drops them. `still` marks the crops of what
@@ -21,12 +21,12 @@ const bitmaps=(copy:ImageBitmap|null,crops?:ImageBitmap[])=>copy?[copy]:crops??[
 /** mirrored frames the page has yet to take: a page thread held up (a readback waiting on a GPU
  *  backlog) would otherwise queue a full-screen copy for every frame presented meanwhile */
 const MIRRORED_IN_FLIGHT=3;
-export type FrameSender = {present(bitmap:ImageBitmap):void;close():void};
+type FrameSender = {present(bitmap:ImageBitmap):void;close():void};
 
 /** whoever reads presented frames (lat, the e2e probe): `copy` is a frame's pixels, or `crops` the
  *  mirrored regions' (each the observer's to close), `at` when it was presented, and `frame` when the display frame that shows it
  *  began, both on the page's clock. `still` marks the crops of what was already shown when region mirroring began, not a new frame. */
-export type DisplayObserver = (canvas:HTMLCanvasElement,copy:ImageBitmap|null,at:number,crops?:ImageBitmap[],still?:boolean,frame?:number)=>void;
+type DisplayObserver = (canvas:HTMLCanvasElement,copy:ImageBitmap|null,at:number,crops?:ImageBitmap[],still?:boolean,frame?:number)=>void;
 declare global { var __wdPresented: DisplayObserver | undefined; }
 
 export function sendFrames(port:MessagePort,screen:OffscreenCanvas):FrameSender {

@@ -1,6 +1,6 @@
 import { switchOn } from "../switches.ts";
 
-export type CounterReceipt = { at: number; sequence: number; resets: number; initial: Readonly<Record<string, number>>; counters: Readonly<Record<string, number>> };
+type CounterReceipt = { at: number; sequence: number; resets: number; initial: Readonly<Record<string, number>>; counters: Readonly<Record<string, number>> };
 export const COMPILE_COUNTERS = ["wasmCompileMs", "wasmModuleMs", "wasmMethods", "wasmClassBuildMs"] as const;
 declare global { interface Window { readonly __wdCounterReceipt?: () => Readonly<CounterReceipt> } }
 

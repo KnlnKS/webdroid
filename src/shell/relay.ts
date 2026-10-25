@@ -61,7 +61,7 @@ export class DatagramRelay {
 }
 
 /** received bytes in arrival order, drained from the front without copying the rest */
-export class ByteQueue {
+class ByteQueue {
   private q: Uint8Array[] = [];
   private head = 0;
   length = 0;

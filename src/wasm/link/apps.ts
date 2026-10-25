@@ -17,11 +17,11 @@ const MODULE_BYTES = 1 << 20;
 const D_MODULE_BYTES = 128 << 10;
 /** the code bytes whose compile takes as long as building a class's data (measured over a whole app) */
 const D_COST_PER_CLASS = 350;
-export interface AppBuild { index: AppIndex; files: [name: string, bytes: Uint8Array][] }
+interface AppBuild { index: AppIndex; files: [name: string, bytes: Uint8Array][] }
 /** what a shard made: its modules, where they put classes, and the link errors it numbered after the prefix, with their ids */
-export interface ShardPart { files: AppBuild["files"]; cOf: AppIndex["cOf"]; patches: AppIndex["patches"]; links: [message: string, id: number][] }
+interface ShardPart { files: AppBuild["files"]; cOf: AppIndex["cOf"]; patches: AppIndex["patches"]; links: [message: string, id: number][] }
 /** the first shard's part, which also has the build's index but for what `mergeApp` adds */
-export interface LeadPart extends ShardPart { index: Omit<AppIndex, "id" | "cOf" | "patches"> }
+interface LeadPart extends ShardPart { index: Omit<AppIndex, "id" | "cOf" | "patches"> }
 export type AppPart = ShardPart | LeadPart;
 
 /** Numbers what the code of `methods` names, in the same order in every World at the same state: their classes first (so that the likely ones have the low slots, which count

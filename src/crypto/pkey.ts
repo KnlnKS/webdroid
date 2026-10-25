@@ -169,7 +169,7 @@ export const onCurve = (c: Curve, [X, Y]: [bigint, bigint]) =>
 export const G = (c: Curve): Point => [c.gx, c.gy];
 
 /** a scalar uniformly in [1, n) */
-export function randomScalar(n: bigint): bigint {
+function randomScalar(n: bigint): bigint {
   const len = Math.ceil(bitLength(n) / 8) + 8;
   for (;;) {
     const k = bytesToBig(crypto.getRandomValues(new Uint8Array(len))) % n;
@@ -428,7 +428,7 @@ export function pkcs1Unpad(em: Uint8Array, type: 1 | 2): Uint8Array | null {
 }
 
 // ── keys and their encodings
-export type EcKey = { curve: Curve; pub: [bigint, bigint]; priv?: bigint };
+type EcKey = { curve: Curve; pub: [bigint, bigint]; priv?: bigint };
 export type PKey =
   | { type: typeof EVP_PKEY_RSA; rsa: Rsa }
   | { type: typeof EVP_PKEY_EC; ec: EcKey }

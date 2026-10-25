@@ -39,7 +39,7 @@ export function fromProxyHeaders(headers: Headers): Headers {
 }
 
 /** what an answer carries past the upstream response's own headers */
-export type ProxyAnswer = {
+type ProxyAnswer = {
   /** where the request landed */
   finalUrl: string;
   /** the Set-Cookie values, which a browser hides from fetch */

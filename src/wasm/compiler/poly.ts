@@ -20,7 +20,7 @@ const opOf = (mode: string): Op => mode.startsWith("getAnd") ? mode.replace(/(Ac
 const ARITH = { Add: [OP.i32_add, OP.i64_add], BitwiseAnd: [OP.i32_and, OP.i64_and], BitwiseOr: [OP.i32_or, OP.i64_or], BitwiseXor: [OP.i32_xor, OP.i64_xor] } as Record<string, number[]>;
 
 /** where a handle's variable lives, as struct or array operations on locals */
-export interface Place { load(): void; store(v: number): void; /** brings the int on the stack into the range of a byte, short or char variable */ narrow?(): void }
+interface Place { load(): void; store(v: number): void; /** brings the int on the stack into the range of a byte, short or char variable */ narrow?(): void }
 const narrowTo = (c: Code, letter: string) => { if (letter === "B") c.raw(OP.i32_extend8_s); else if (letter === "S") c.raw(OP.i32_extend16_s); else if (letter === "C") c.i32(0xffff).raw(OP.i32_and); };
 
 /** Read-modify-write operations stay synchronous between their load and store. */

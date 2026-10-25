@@ -1,5 +1,5 @@
 /** MIME types by file extension; the first extension listed for a type is the one MIME_EXT names */
-export const EXT_MIME: Record<string, string> = {
+const EXT_MIME: Record<string, string> = {
   png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", svg: "image/svg+xml",
   bmp: "image/bmp", heic: "image/heic", heif: "image/heif", avif: "image/avif",
   html: "text/html", htm: "text/html", css: "text/css", js: "text/javascript", json: "application/json", xml: "text/xml",

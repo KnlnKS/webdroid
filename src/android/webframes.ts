@@ -95,7 +95,7 @@ export function webViewInfo(): { url: string | null; title: string; loaded: bool
 /** a document a renderer frame is to load: its entry, the renderer origin, and a redirect's document */
 export interface FrameLoad { entry: Entry; origin: string; prefetched?: string }
 /** what routing a page's subframes reads of its WebView */
-export interface FrameOwner {
+interface FrameOwner {
   readonly client: JObj; readonly view: JObj; readonly host: PageHost; readonly intercepting: boolean;
   intercept(request: WebRequest): Promise<WebResponse | null>;
 }

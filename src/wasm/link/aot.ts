@@ -90,7 +90,7 @@ export interface CHeader extends UnitHeader {
 export const VERSION = 23;
 
 /** the module files of a build: the platform build's code (c), data (d) and runtime-function (y) modules, and an app build's code (a), data (e) and runtime-function (s) ones */
-export type AotKind = "c" | "d" | "y" | "a" | "e" | "s";
+type AotKind = "c" | "d" | "y" | "a" | "e" | "s";
 /** the loaders the root namespace's libraries reach, theirs too, in the order a walk of its graph first meets them */
 export function libraryLoaders(prog: World["prog"]): Set<Loader> {
   const seen = new Set<Loader>(), walk = (l: Loader) => { if (seen.has(l)) return; seen.add(l); l.before?.forEach(walk); l.after?.forEach(walk); };

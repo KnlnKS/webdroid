@@ -73,7 +73,7 @@ export function setProcessStateSummary(state: Uint8Array | null): void { stateSu
 /** the bound application's ApplicationInfo.flags, which am_crash records (-1 with none bound) */
 let appFlags = -1;
 export function noteApplicationFlags(flags: number): void { appFlags = flags; }
-export type CrashInfo = { exceptionClassName: string | null; exceptionMessage: string | null; throwFileName: string | null; throwLineNumber: number; stackTrace?: string | null };
+type CrashInfo = { exceptionClassName: string | null; exceptionMessage: string | null; throwFileName: string | null; throwLineNumber: number; stackTrace?: string | null };
 const crashText = (value: string | null | undefined, limit: number): string | null => typeof value === "string" ? value.slice(0,limit) : null;
 function copyCrashInfo(info: CrashInfo): CrashInfo {
   return {exceptionClassName:crashText(info.exceptionClassName,512),exceptionMessage:crashText(info.exceptionMessage,8192),

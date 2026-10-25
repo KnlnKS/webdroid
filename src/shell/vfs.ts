@@ -18,7 +18,7 @@ export type FileAttributes = { uid: number; gid: number; mode: number };
 export interface VfsFile { path: string | null; data: Uint8Array; len: number; source?: FileSource; sharedMaps?: SharedMaps; attributes?: FileAttributes; ashmem?: { prot: number } }
 /** one path of the tree: a file's bytes or lazy source, or (content null) a directory. A directory
  *  without a node is implicit: it has entries under it. */
-export interface VfsNode {
+interface VfsNode {
   content: Uint8Array | FileSource | null;
   /** the last modification, epoch ms: when its bytes last changed or it appeared */
   mtime: number;
@@ -29,9 +29,9 @@ export interface VfsNode {
   /** the one open file of its name, which every descriptor on it shares */
   open?: VfsFile;
 }
-export type VfsChange = "modify" | "write" | "create" | "delete";
+type VfsChange = "modify" | "write" | "create" | "delete";
 /** what persists the tree's changes: it loads a package's data before the package runs, and flushes on fsync */
-export type FileOwner = { prepare(pkg: string): Promise<void>; flush(): Promise<void> };
+type FileOwner = { prepare(pkg: string): Promise<void>; flush(): Promise<void> };
 export const EMPTY = new Uint8Array(0);
 export const contentSize = (content: Uint8Array | FileSource): number => content instanceof Uint8Array ? content.length : content.size;
 /** room for `size` bytes, doubling so appends stay linear */

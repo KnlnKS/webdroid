@@ -126,7 +126,7 @@ export function localBounds(m: Mat2D, w: number, h: number, x = 0, y = 0, out = 
   return out.every(Number.isFinite) ? out : null;
 }
 /** how far a recording's drawing reaches: replay may place a display list anywhere on its target */
-export const PLANE = 1e5;
+const PLANE = 1e5;
 /** the target's whole area in the context's local coordinates (a recording's, whose mirror is one pixel, is the plane),
  *  null under a singular transform */
 export function canvasLocalBounds(ctx: Ctx2D): Float64Array | null {

@@ -8,13 +8,13 @@ import { mkUri } from "./net.ts";
 import type { WebRequest, WebResponse } from "../shell/webpage/protocol.ts";
 
 const inst = <T = JObj>(cls: string): T => rt.make(cls);
-export class JReq extends JObj { url = ""; main = true; gesture = false; method = "GET"; headers: unknown = null; }
+class JReq extends JObj { url = ""; main = true; gesture = false; method = "GET"; headers: unknown = null; }
 export function mkRequest(url: string, gesture = false): JReq {
   const r = inst<JReq>("webdroid/WebResourceRequest");
   r.url = url; r.gesture = gesture;
   return r;
 }
-export class JWebErr extends JObj { code = -1; desc = ""; }
+class JWebErr extends JObj { code = -1; desc = ""; }
 /** a WebResourceError of Chromium's net error `code` */
 export function mkError(code: number, desc: string): JWebErr {
   const error = inst<JWebErr>("webdroid/WebResourceError");

@@ -7,7 +7,7 @@ import { holdFrames } from "./holdframes.ts";
 import { FRAME_BOOTSTRAP, type FrameInit } from "./protocol.ts";
 
 /** what a form submits: a GET's URL, or a POST's body as the browser encodes it */
-export type FormRequest = { url: string; method: "GET" } | { url: string; method: "POST"; body: ArrayBuffer; contentType?: string };
+type FormRequest = { url: string; method: "GET" } | { url: string; method: "POST"; body: ArrayBuffer; contentType?: string };
 /** the request a form (with its submitter) submits from a document at `page` */
 async function webFormRequest(form: HTMLFormElement, submitter: HTMLElement | null, page: string | null): Promise<FormRequest | null> {
   const method = (submitter?.getAttribute("formmethod") || form.method).toUpperCase();
