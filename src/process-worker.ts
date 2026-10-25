@@ -20,7 +20,7 @@ async function prepare({ clock, jars, tier: ports }: Extract<ProcessWorkerMessag
   await import("./natives.ts");
   (await import("./android/framework.ts")).receivePlatformJars(jars);
   const [control, rpc, core, apex, cacerts, packages, device, skia, tier, config, jvmruntime] = await Promise.all([
-    import("./shell/worker-control.ts"), import("./shell/rpc.ts"), import("./native/core.ts"), import("./shell/apex.ts"), import("./shell/cacerts.ts"), import("./shell/process-bootstrap.ts"),
+    import("./shell/worker-control.ts"), import("./shell/rpc.ts"), import("./native/core.ts"), import("./shell/apex.ts"), import("./shell/cacerts.ts"), import("./shell/process-packages.ts"),
     import("./shell/device.ts"), import("./android/skia.ts"), import("./jvm/tier.ts"), import("./shell/config.ts"), import("./jvm/natives/jvmruntime.ts"),
   ]);
   apex.mountPlatformData(); cacerts.mountSystemCertificates(); packages.prepareSystemPackages();
