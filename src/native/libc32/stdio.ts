@@ -15,6 +15,7 @@ import { FS_SYSCALLS, fallocate, fdWrite, statAt, putStat, readlinkAt, storageSt
   getdents64 } from "../fs.ts";
 import { openFd, closeFd, dup2Fd, seekFd, readFd, preadFd, pwriteFd, truncateFd, allocateFd, changeFdAttributes } from "../fd.ts";
 import { processOpenFd } from "../process-fd.ts";
+import { chk } from "../proc.ts";
 import { POLL_SYSCALLS, epollCreate } from "../poll.ts";
 const utf8 = (s: string) => codec.enc.encode(s);
 
@@ -102,7 +103,6 @@ function fwriteStr(cpu: Cpu, fp: number, s: string): number | Promise<number> {
   mem.free(tmp);
   return complete(r, written => written < b.length ? -1 : b.length);
 }
-const chk = (cpu: Cpu, n: number, size: number, what: string) => { if (n > size) cpu.fault(`fortify: ${what} past the buffer`); };
 /** a stream over the directory descriptor `fd` (or -errno), which closedir closes */
 function openDir(cpu: Cpu, fd: number | Promise<number>): number | Promise<number> {
   return complete(fd, (n) => {
@@ -257,14 +257,14 @@ export function stdioLibc(): Record<string, HostFn> {
     pipe: (_c, a) => makePipe(a.p(), 0),
     epoll_create: () => epollCreate(false),
     epoll_wait: POLL_SYSCALLS.epoll_pwait,
-    __read_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(); chk(cpu, n, a.u(), "read"); return readFd(fd, p, n); },
+    __read_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(); chk(n, a.u(), cpu); return readFd(fd, p, n); },
     __write_chk: (cpu, a) => {
       const fd = a.i(), p = a.p(), n = a.va(), size = a.va();
       if (n > size || n > 0x7fffffffn) cpu.fault("fortify: write past the buffer");
       return fdWrite(cpu, fd, p, Number(n));
     },
-    __pread64_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(), off = Number(a.l()); chk(cpu, n, a.u(), "pread"); return preadFd(fd, p, n, off); },
-    __pread_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(), off = a.i(); chk(cpu, n, a.u(), "pread"); return preadFd(fd, p, n, off); },
+    __pread64_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(), off = Number(a.l()); chk(n, a.u(), cpu); return preadFd(fd, p, n, off); },
+    __pread_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(), off = a.i(); chk(n, a.u(), cpu); return preadFd(fd, p, n, off); },
     futimens: (_c, a) => changeFdAttributes(a.i(), modifiedTime(a.p())),
     statvfs: (_c, a) => { a.str(); return fillStatvfs(a.p()); },
     fstatvfs: (_c, a) => { a.i(); return fillStatvfs(a.p()); },
