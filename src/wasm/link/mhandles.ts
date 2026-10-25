@@ -7,7 +7,7 @@
 import { T } from "../compiler/wasmbin.ts";
 import { descOf, javaName, type FieldInfo, type Kind, type MethodInfo, typeName } from "../compiler/program.ts";
 import { PRIMS, parseMethodDesc } from "../../jvm/abi.ts";
-import { hostReflect } from "./reflect.ts";
+import { RInfo, hostReflect } from "./reflect.ts";
 import { BOX, box, unbox } from "../compiler/primitives.ts";
 import { CLASS, InvokeMode, MH, MT, OBJECTS, emitInvokeImport, emitMethodType, handleKinds } from "../compiler/handles.ts";
 import type { Code } from "../compiler/code.ts";
@@ -19,7 +19,6 @@ import { type Strand } from "./sched.ts";
 import { emitVarHandleAccess } from "../compiler/poly.ts";
 import { invokeVarHandleView } from "./vhandleviews.ts";
 import { invokeCustom } from "./callsites.ts";
-import { RInfo } from "../compiler/info.ts";
 import { MethodHandleType } from "../../jvm/dex.ts";
 import { chain } from "./maybe.ts";
 import { fieldClass, fieldIndex } from "../compiler/fieldid.ts";

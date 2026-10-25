@@ -91,7 +91,7 @@ export class StructStrings {
   /** mk(chars) -> String */
   mk(): number {
     return this.fn("mk", [ref(this.chars)], [ref(this.st)], (c) => {
-      this.cx.w.allocated.add(STRING);
+      this.cx.allocs.add(STRING);
       c.gget(this.cx.vtGlobal(STRING)).refAsNonNull().i64(0n).lget(0).i32(0).refNull(HT.extern).structNew(this.st);
     });
   }

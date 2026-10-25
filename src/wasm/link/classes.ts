@@ -22,7 +22,7 @@ import { PerWorld } from "./perworld.ts";
 import { fieldCookie } from "./unsafe.ts";
 import { Lookup, LOADER_OF_CLASS, emitClassAnswer } from "./loaders.ts";
 import { emitRestored } from "../compiler/hostcalls.ts";
-import { Info, TextKind } from "../compiler/info.ts";
+import { Info } from "../compiler/info.ts";
 import { FIELD_INDEX_MAX, emitFieldId, fieldClass, fieldIdOf, fieldIndex, splitFieldId } from "../compiler/fieldid.ts";
 import { kindVT } from "../compiler/kinds.ts";
 
@@ -254,6 +254,9 @@ rt("nameEq", ["I", "I", "L", "I"], "I", (cx, c) => emitNameEq(cx, c, Info.FieldN
 export const classIntrinsics = new Map<string, Intrinsic>();
 const def = (key: string, f: (cx: Compiler, c: Code) => void) => classIntrinsics.set(key, (cx, m, c) => f(cx, c));
 export const idOfClass = (cx: Compiler, c: Code) => { const cs = cx.structFor(CLASS); c.refCast(cs).structGet(cs, field(cx, "dexTypeIndex", "I")); };
+/** host.text(kind, a, b): the simple name of class a, or the name of class a, of its method b or of its field b (members.ts) */
+export const TextKind = { SimpleName: 0, ClassName: 1, MethodName: 2, FieldName: 3 } as const;
+export type TextKind = (typeof TextKind)[keyof typeof TextKind];
 /** the String of the name host.text answers (TextKind), interned: ART interns the names of classes and members, which Method.equals compares by identity */
 export function emitName(cx: Compiler, c: Code, kind: TextKind, a: () => void, b: () => void): void {
   c.i32(kind); a(); b(); c.call(cx.imp.text); cx.str.fromHost(c); c.call(cx.str.intern());

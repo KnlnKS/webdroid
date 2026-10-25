@@ -7,8 +7,8 @@ import { OP } from "../compiler/code.ts";
 import { T, refNull } from "../compiler/wasmbin.ts";
 import { ACC, kindOf, type JClass, type MethodInfo, typeName } from "../compiler/program.ts";
 import { descToName } from "../../jvm/abi.ts";
-import { idOfClass, emitName, emitNameEq } from "./classes.ts";
-import { UInfo, RInfo, TextKind } from "../compiler/info.ts";
+import { idOfClass, emitName, emitNameEq, TextKind } from "./classes.ts";
+import { UInfo } from "../compiler/info.ts";
 import { WIDEN, BOX, box } from "../compiler/primitives.ts";
 import { rt, type Synth } from "../compiler/rtfns.ts";
 import type { Code } from "../compiler/code.ts";
@@ -41,6 +41,9 @@ function sigOf(w: World, m: MethodInfo) {
 /** String.hashCode of a name */
 function nameHash(name: string): number { let h = 0; for (let i = 0; i < name.length; i++) h = (Math.imul(h, 31) + name.charCodeAt(i)) | 0; return h; }
 const byName = new WeakMap<JClass, Map<number, number[]>>();
+/** host.info kinds about Method and Constructor */
+export const RInfo = { MethodCount: 200, MethodNameLen: 201, MethodNameChar: 202, MethodKind: 203, MethodParams: 204, MethodParamType: 205, MethodRet: 206, MethodFlags: 207, MethodInvoke: 208, MethodCall: 209, MethodCallDirect: 210, IfaceCount: 211, Iface: 212, MemberCount: 213, Member: 214, MethodsNamed: 215, MethodNamedAt: 216, SerialInit: 217, MethodSlot: 218 } as const;
+export type RInfo = (typeof RInfo)[keyof typeof RInfo];
 /** the methods of the class `MethodsNamed` last counted, which `MethodNamedAt` indexes */
 let named: number[] = [];
 

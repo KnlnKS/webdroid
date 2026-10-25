@@ -98,7 +98,7 @@ const MAX_NESTING = 64;
 /** what a frozen numbering (Numbers.frozen) would have had to number, and the method whose compile asked for it (the innermost, when compiling it compiled others) */
 export class NeedsNumber extends Error { method?: MethodInfo }
 /** the linker state a Compiler reads and records into */
-export type LinkEnv = Pick<World, "prog" | "natives" | "intrinsic" | "link" | "claims" | "allocated" | "longLoops" | "idOf" | "slotOf" | "selectorId" | "ensureSlot"
+export type LinkEnv = Pick<World, "prog" | "natives" | "intrinsic" | "link" | "claims" | "longLoops" | "idOf" | "slotOf" | "selectorId" | "ensureSlot"
   | "synthSlot" | "gapId" | "linkId" | "needsInit" | "initialized" | "needsSymbolicSite" | "guestShared"> & {
   opts: Pick<World["opts"], "build" | "guest" | "intrinsics">; hosts: Pick<World["hosts"], "mayReach" | "takes">;
   stats: Pick<World["stats"], "phase">; cha: Pick<World["cha"], "targets">; dispatch: Pick<World["dispatch"], "vslot">;
@@ -579,7 +579,7 @@ export class Compiler implements Base {
   emitNew(c: Code, cls: string): void {
     // a String is not an object with fields: ART's Unsafe.allocateInstance(String.class) is the empty string
     if (cls === STRING) { this.str.literal(c, ""); return; }
-    this.w.allocated.add(cls); this.allocs.add(cls);
+    this.allocs.add(cls);
     c.call(this.defineFn("new:" + cls, [], [ref(this.structFor(cls))], (n) => {
       const lay = this.prog.layout(cls);
       this.allocBytes(n, () => n.i32(12 + lay.reduce((b, f) => b + (f.kind === "J" ? 8 : 4), 0)));
