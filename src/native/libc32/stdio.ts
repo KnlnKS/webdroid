@@ -7,13 +7,13 @@ import { hostData, vaList, type HostFn, PTR, stp, ldp, ldLong, stLong, ARG0, ptr
 import { E, AT_FDCWD, O_ACCMODE, O_APPEND, O_CLOEXEC, O_CREAT, O_DIRECTORY, O_EXCL, O_TRUNC, S_IFDIR, S_IFMT, S_IFREG } from "../abi.ts";
 import { utf8 as codec } from "../../jvm/abi.ts";
 import type { Cpu } from "../cpu.ts";
-import { asWrappers, fail, kernelResult, logLine, readTs, DIRENT64, fillStat, inoOf, KLAYOUT } from "../kernel.ts";
+import { asWrappers, fail, kernelResult, logLine, readTs, DIRENT64, fillStat, inoOf, KLAYOUT, type Stat } from "../kernel.ts";
 import { format, scan, scanSink } from "./printf.ts";
-import { vfs, storageEstimate } from "../../shell/vfs.ts";
+import { vfs } from "../../shell/vfs.ts";
 import { filePaths } from "../../shell/file-path.ts";
-import { FS_SYSCALLS, fallocate, fdWrite, statProcess, faccessatPath, renameProcess, mkdirProcess, removeProcess, mknodProcess, changeProcess,
-  modifiedTime, makePipe, getdents64 } from "../fs.ts";
-import { type FileStat, openFd, closeFd, dup2Fd, seekFd, readFd, preadFd, pwriteFd, truncateFd, allocateFd, changeFdAttributes } from "../fd.ts";
+import { FS_SYSCALLS, fallocate, fdWrite, statAt, putStat, readlinkAt, storageStat, faccessatPath, mknodAt, modifiedTime, makePipe,
+  getdents64 } from "../fs.ts";
+import { openFd, closeFd, dup2Fd, seekFd, readFd, preadFd, pwriteFd, truncateFd, allocateFd, changeFdAttributes } from "../fd.ts";
 import { processOpenFd } from "../process-fd.ts";
 import { POLL_SYSCALLS, epollCreate } from "../poll.ts";
 const utf8 = (s: string) => codec.enc.encode(s);
@@ -36,7 +36,7 @@ function fdTemp(tpl: number, flags: number, dir: boolean): number | Promise<numb
     if (count === 100) return -E.EXIST;
     let name = t.slice(0,-6);
     for (let i=0;i<6;i++) name += chars[(Math.random()*chars.length)|0];
-    const pending = dir ? mkdirProcess(name) : processOpenFd(name,(flags & ~O_ACCMODE)|2|O_CREAT|O_EXCL);
+    const pending = dir ? filePaths(name).fileMkdir(name) : processOpenFd(name,(flags & ~O_ACCMODE)|2|O_CREAT|O_EXCL);
     return complete(pending,result => { if(result>=0){mem.write(destination(),utf8(name));return result;}return attempt(count+1); });
   };
   return attempt(0);
@@ -46,8 +46,9 @@ const pathconfOf = (n: number) => (n === 4 ? 255 : n === 5 ? 4096 : n === 6 ? 40
 /** struct statvfs: the storage estimate in 4K blocks, as eleven unsigned longs (bsize, frsize, blocks, bfree, bavail,
  *  files, ffree, favail, fsid, flag, namemax) */
 function fillStatvfs(b: number): Promise<number> {
-  return storageEstimate().then(({ total, free }) => {
-    [4096, 4096, total / 4096, free / 4096, free / 4096, 0x10000, 0x8000, 0x8000, 0, 0, 255].forEach((v, i) => stLong(b + i * PTR, Math.floor(v)));
+  const at = anchor(b);
+  return storageStat().then((s) => {
+    [s.bsize, s.bsize, s.blocks, s.bfree, s.bfree, s.files, s.ffree, s.ffree, 0, 0, s.namemax].forEach((v, i) => stLong(at() + i * PTR, v));
     return 0;
   });
 }
@@ -146,7 +147,7 @@ const FTS = { parent: 4, link: 8, accpath: 20, path: 24, errno: 28, pathlen: 36,
 
 /** fts_info: a directory before and after its children, one it could not list, a regular file, anything else, and a path stat failed on */
 const FTS_D = 1, FTS_DNR = 4, FTS_DP = 6, FTS_F = 8, FTS_DEFAULT = 3, FTS_NS = 10;
-function ftsEntry(walk: FtsWalk, path: string, level: number, parent: number, info: number, stat: FileStat | null, errno: number): number {
+function ftsEntry(walk: FtsWalk, path: string, level: number, parent: number, info: number, stat: Stat | null, errno: number): number {
   const name = path === "/" ? "/" : path.slice(path.lastIndexOf("/") + 1);
   const pathlen = utf8(path).length, namelen = utf8(name).length;
   const entry = mem.malloc(FTS.name + namelen + 1), pathp = mem.strdup(path), statp = mem.malloc(KLAYOUT.STAT_SIZE);
@@ -156,7 +157,7 @@ function ftsEntry(walk: FtsWalk, path: string, level: number, parent: number, in
   mem.st32(entry + FTS.errno, errno); mem.st32(entry + FTS.pathlen, pathlen); mem.st32(entry + FTS.namelen, namelen);
   mem.st32(entry + FTS.ino, inoOf(path)); mem.st32(entry + FTS.dev, 1); mem.st32(entry + FTS.nlink, 1);
   mem.st16(entry + FTS.level, level); mem.st16(entry + FTS.info, info); stp(entry + FTS.statp, statp);
-  if (stat) fillStat(statp, path, stat); else mem.memset(statp, 0, KLAYOUT.STAT_SIZE);
+  if (stat) fillStat(statp, stat); else mem.memset(statp, 0, KLAYOUT.STAT_SIZE);
   mem.putCstr(entry + FTS.name, name);
   return entry;
 }
@@ -164,7 +165,7 @@ function ftsEntry(walk: FtsWalk, path: string, level: number, parent: number, in
 /** the tree under `path` as its owning realm stats and lists it; an unlistable directory's
  *  postorder entry is FTS_DNR, as fts_read answers when fts_build fails */
 async function ftsTree(walk: FtsWalk, path: string, level: number, parent: number): Promise<FtsNode> {
-  const { errno, value: stat } = await filePaths(path).fileStat(path);
+  const result = await statAt(path), stat = typeof result === "number" ? null : result, errno = typeof result === "number" ? -result : 0;
   const type = stat ? stat.mode & S_IFMT : 0;
   const pre = ftsEntry(walk, path, level, parent, !stat ? FTS_NS : type === S_IFDIR ? FTS_D : type === S_IFREG ? FTS_F : FTS_DEFAULT, stat, errno);
   const node: FtsNode = { pre, post: 0, children: [], first: 0, end: 0 };
@@ -237,17 +238,17 @@ export function stdioLibc(): Record<string, HostFn> {
     pread: (_c, a) => preadFd(a.i(), a.p(), a.u(), a.i()),
     pwrite: (_c, a) => { const fd = a.i(), p = a.p(), n = a.u(); return pwriteFd(fd, mem.u8.subarray(p, p + n), a.i()); },
     lseek64: (_c, a) => complete(seekFd(a.i(),Number(a.l()),a.i()),n => BigInt(n)),
-    stat: (_c, a) => statProcess(a.str(), a.p()),
+    stat: (_c, a) => { const path = a.str(); return putStat(a.p(), statAt(path)); },
     access: (_c, a) => faccessatPath(AT_FDCWD, a.str(), a.i(), 0),
     faccessat: (_c, a) => faccessatPath(a.i(), a.str(), a.i(), a.i()),
-    chmod: (_c, a) => changeProcess(a.str(), { mode: a.i() }),
-    chown: (_c, a) => changeProcess(a.str(), { uid: a.i(), gid: a.i() }),
-    unlink: (_c, a) => removeProcess(a.str(), false),
-    mkfifo: (_c, a) => mknodProcess(a.str(), 0x1000 | a.i()),
-    remove: (_c, a) => removeProcess(a.str()),
-    rename: (_c, a) => renameProcess(a.str(), a.str()),
-    mkdir: (_c, a) => mkdirProcess(a.str()),
-    rmdir: (_c, a) => removeProcess(a.str(), true),
+    chmod: (_c, a) => { const path = a.str(); return filePaths(path).fileSetAttributes(path, { mode: a.i() }); },
+    chown: (_c, a) => { const path = a.str(); return filePaths(path).fileSetAttributes(path, { uid: a.i(), gid: a.i() }); },
+    unlink: (_c, a) => { const path = a.str(); return filePaths(path).fileRemove(path, false); },
+    mkfifo: (_c, a) => mknodAt(a.str(), 0x1000 | a.i()),
+    remove: (_c, a) => { const path = a.str(); return filePaths(path).fileRemove(path); },
+    rename: (_c, a) => { const from = a.str(), to = a.str(); return filePaths(from, to).fileRename(from, to); },
+    mkdir: (_c, a) => { const path = a.str(); return filePaths(path).fileMkdir(path); },
+    rmdir: (_c, a) => { const path = a.str(); return filePaths(path).fileRemove(path, true); },
     ftruncate64: (_c, a) => truncateFd(a.i(), Number(a.l())),
     // a 32-bit off_t, where fallocate64's is the kernel's
     fallocate: (_c, a) => { const fd = a.i(), mode = a.i(), off = a.i(); return fallocate(fd, mode, off, a.i()); },
@@ -269,11 +270,11 @@ export function stdioLibc(): Record<string, HostFn> {
     fstatvfs: (_c, a) => { a.i(); return fillStatvfs(a.p()); },
     statvfs64: (_c, a) => { a.str(); return fillStatvfs(a.p()); },
     fstatvfs64: (_c, a) => { a.i(); return fillStatvfs(a.p()); },
-    readlink: () => -E.INVAL,
+    readlink: (_c, a) => readlinkAt(a.str()),
     symlink: () => -E.PERM, link: () => -E.PERM,
     // struct timeval[2], whose second is the modification time, and struct utimbuf { actime, modtime }
-    utimes: (_c, a) => { const path = a.str(), times = a.p(); return changeProcess(path, { mtime: times ? readTs(times + KLAYOUT.TS_SIZE, 1e3) : Date.now() }); },
-    utime: (_c, a) => { const path = a.str(), times = a.p(); return changeProcess(path, { mtime: times ? ldLong(times + PTR) * 1000 : Date.now() }); },
+    utimes: (_c, a) => { const path = a.str(), times = a.p(); return filePaths(path).fileSetAttributes(path, { mtime: times ? readTs(times + KLAYOUT.TS_SIZE, 1e3) : Date.now() }); },
+    utime: (_c, a) => { const path = a.str(), times = a.p(); return filePaths(path).fileSetAttributes(path, { mtime: times ? ldLong(times + PTR) * 1000 : Date.now() }); },
   };
   for (const [alias, name] of [["__open_2", "open"], ["lstat", "stat"]]) K[alias] = K[name];
   Object.assign(K, { __openat_2: FS_SYSCALLS.openat, stat64: K.stat, lstat64: K.stat, fstat64: FS_SYSCALLS.fstat, fstatat64: FS_SYSCALLS.fstatat });

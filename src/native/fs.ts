@@ -1,13 +1,14 @@
 // The files the kernel's descriptors (fd.ts) open by path: regular files over the JVM vfs,
-// directories, procfs snapshots and devices; the path calls, each where its path lives
-// (file-path.ts); and the read/write family over guest memory.
+// directories, procfs snapshots and devices; the path operations, each where its path lives
+// (file-path.ts), as JS values or -errno for the guest's calls here and libcore's natives alike;
+// and the guest's calls over guest memory.
 
 import { mem, anchor } from "./mem.ts";
-import { type HostFn, PTR, ldp, ldLong, complete } from "./host.ts";
+import { type HostFn, PTR, ldp, ldLong, stLong, complete } from "./host.ts";
 import { E, AT_FDCWD, O_ACCMODE, O_APPEND, O_CLOEXEC, O_CREAT, O_DIRECTORY, O_EXCL, O_NONBLOCK, O_RDONLY, O_RDWR, O_TRUNC, O_WRONLY,
   POLLERR, POLLHUP, POLLIN, S_IFCHR, S_IFDIR, S_IFIFO, S_IFREG } from "./abi.ts";
 import type { Cpu } from "./cpu.ts";
-import { DIRENT64, fillStat, fillStatfs, logLine, offArg, putDirent, randomBytes, readTs, KLAYOUT } from "./kernel.ts";
+import { DIRENT64, fillStat, fullStat, logLine, offArg, putDirent, randomBytes, readTs, KLAYOUT, type Stat } from "./kernel.ts";
 import { vfs, EMPTY, storageEstimate, type VfsFile } from "../shell/vfs.ts";
 import { filePaths, changeOpenFile, isRandomDevice, openFileStat, type AttributeChange } from "../shell/file-path.ts";
 import { procMemory, procText, procWritable, procWrite } from "../shell/procfs.ts";
@@ -208,14 +209,16 @@ function readWouldWait(fd: number): boolean {
   const f = openFd(fd);
   return !!f && !(f.ops.poll(f, POLLIN) & (POLLIN | POLLHUP | POLLERR));
 }
-/** fstat(2) */
-function statFd(fd: number, buf: number): number | Promise<number> {
+/** fstat(2): the descriptor's record, or -errno */
+export function statFd(fd: number): Stat | number | Promise<Stat | number> {
   const f = openFd(fd);
-  if (!f) return -E.BADF;
-  const stat = f.ops.stat(f);
-  if (!(stat instanceof Promise)) { fillStat(buf, stat.path ?? f.path, stat); return 0; }
+  return f ? complete(f.ops.stat(f), (s) => s ? fullStat(s.path ?? f.path, s) : -E.BADF) : -E.BADF;
+}
+/** a stat call's record into the struct stat at `buf` */
+export function putStat(buf: number, stat: Stat | number | Promise<Stat | number>): number | Promise<number> {
+  if (!(stat instanceof Promise)) { if (typeof stat !== "number") { fillStat(buf, stat); return 0; } return stat; }
   const at = anchor(buf);
-  return stat.then((s) => { if (!s) return -E.BADF; fillStat(at(), s.path ?? f.path, s); return 0; });
+  return stat.then((s) => { if (typeof s === "number") return s; fillStat(at(), s); return 0; });
 }
 /** getdents64: linux_dirent64 records from the fd's position on */
 export function getdents64(fd: number, buf: number, size: number): number | Promise<number> {
@@ -243,47 +246,60 @@ export function makePipe(out: number, flags: number): number {
   mem.st32(out, read); mem.st32(out + 4, write);
   return 0;
 }
+/** statfs and statvfs of the one filesystem: the storage estimate in 4K blocks, 0x10000 inodes and
+ *  half of them free, 255-byte names */
+export type StorageStat = { bsize: number; blocks: number; bfree: number; files: number; ffree: number; namemax: number };
+export const storageStat = (): Promise<StorageStat> => storageEstimate().then(({ total, free }) =>
+  ({ bsize: 4096, blocks: Math.floor(total / 4096), bfree: Math.floor(free / 4096), files: 0x10000, ffree: 0x8000, namemax: 255 }));
+/** statfs(2) into `buf`: f_type and f_bsize are longs; the counts after them are 64-bit on both ABIs
+ *  (the ILP32 struct is the kernel's statfs64), then fsid, f_namelen and f_frsize */
 function statfs(buf: number): Promise<number> {
   const at = anchor(buf);
-  return storageEstimate().then((estimate) => fillStatfs(at(), estimate));
+  return storageStat().then((s) => {
+    const b = at(), counts = b + 2 * PTR;
+    mem.memset(b, 0, KLAYOUT.STATFS_SIZE);
+    stLong(b + PTR, s.bsize);
+    [s.blocks, s.bfree, s.bfree, s.files, s.ffree].forEach((n, i) => mem.st64(counts + i * 8, BigInt(n)));
+    stLong(counts + 48, s.namemax); stLong(counts + 48 + PTR, s.bsize);
+    return 0;
+  });
 }
 
-// The path calls, where each path lives
-function atPath(dirfd: number, path: string): string | number {
-  if (path.startsWith("/") || dirfd === AT_FDCWD) return path;
+// The path operations, where each path lives
+/** a name relative to directory descriptor `dirfd`, as the *at calls resolve it, or -errno */
+export function resolveAt(dirfd: number, name: string): string | number {
+  if (name.startsWith("/") || dirfd === AT_FDCWD) return name;
   const dir = openFd(dirfd);
   if (!dir) return -E.BADF;
-  return dir.dir ? dir.path + "/" + path : -E.NOTDIR;
+  return dir.dir ? dir.path + "/" + name : -E.NOTDIR;
 }
+/** stat(2) of a path: its record, or -errno */
+export function statAt(path: string): Stat | number | Promise<Stat | number> {
+  const p = vfs.norm(path);
+  return complete(filePaths(p).fileStat(p), ({ errno, value }) => value ? fullStat(p, value) : -(errno || E.NOENT));
+}
+/** readlink(2): no path here is a symbolic link */
+export const readlinkAt = (path: string): number | Promise<number> => complete(statAt(path), (s) => typeof s === "number" ? s : -E.INVAL);
 export function faccessatPath(dirfd: number, name: string, mode: number, flags: number): number | Promise<number> {
-  const path = atPath(dirfd, name);
+  const path = resolveAt(dirfd, name);
   if (flags & ~(0x100 | 0x200) || mode & ~7) return -E.INVAL;
   return typeof path === "string" ? filePaths(path).fileAccess(path, mode) : path;
 }
-export const mkdirProcess = (path: string): number | Promise<number> => filePaths(path).fileMkdir(path);
-export const renameProcess = (from: string, to: string): number | Promise<number> => filePaths(from, to).fileRename(from, to);
-export const removeProcess = (path: string, directory?: boolean): number | Promise<number> => filePaths(path).fileRemove(path, directory);
 /** mknod(2) unprivileged: a fifo or an empty regular file; device nodes need CAP_MKNOD */
-export function mknodProcess(path: string, mode: number): number | Promise<number> {
+export function mknodAt(path: string, mode: number): number | Promise<number> {
   const type = mode & 0xf000;
   if (type === S_IFIFO) return filePaths(path).fileFifo(path);
   if (type === 0 || type === S_IFREG) return filePaths(path).fileCreate(path);
   return -(type === S_IFCHR || type === 0x6000 ? E.PERM : E.INVAL);
 }
-export function statProcess(path: string, buf: number): number | Promise<number> {
-  const p = vfs.norm(path), destination = anchor(buf);
-  return complete(filePaths(p).fileStat(p), ({ errno, value }) => {
-    if (!value) return -(errno || E.NOENT);
-    fillStat(destination(), p, value);
-    return 0;
-  });
-}
-/** a directory's entries as readdir lists them, or a negative errno */
-export const listProcess = (path: string): string[] | number | Promise<string[] | number> =>
+/** a directory's entries as readdir lists them, or -errno */
+export const listAt = (path: string): string[] | number | Promise<string[] | number> =>
   complete(filePaths(path).fileList(path), ({ errno, value }) => value ? [".", "..", ...value] : -(errno || E.NOENT));
-/** chmod, chown and utimes of a path */
-export const changeProcess = (path: string, change: AttributeChange): number | Promise<number> =>
-  filePaths(path).fileSetAttributes(path, change);
+/** the *at calls' path, resolved: `op`'s answer, or the resolution's -errno */
+const inDir = <T>(dirfd: number, name: string, op: (path: string) => T): T | number => {
+  const path = resolveAt(dirfd, name);
+  return typeof path === "string" ? op(path) : path;
+};
 const UTIME_NOW = 0x3fffffff, UTIME_OMIT = 0x3ffffffe;
 /** the modification time utimensat's `times` (struct timespec[2]) sets: now without them, none when omitted */
 export function modifiedTime(times: number): AttributeChange {
@@ -303,11 +319,7 @@ export function fsInit(): void {
 }
 
 export const FS_SYSCALLS: Record<string, HostFn> = {
-  openat: (_c, a) => {
-    const dirfd = a.i(), path = a.str(), flags = a.i();
-    const resolved = atPath(dirfd, path);
-    return typeof resolved === "string" ? processOpenFd(resolved, flags) : resolved;
-  },
+  openat: (_c, a) => { const dirfd = a.i(), name = a.str(), flags = a.i(); return inDir(dirfd, name, (path) => processOpenFd(path, flags)); },
   close: (_c, a) => closeFd(a.i()),
   read: (_c, a) => readFd(a.i(), a.p(), a.u()),
   write: (cpu, a) => fdWrite(cpu, a.i(), a.p(), a.u()),
@@ -320,25 +332,23 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
   pread64: (_c, a) => preadFd(a.i(), a.p(), a.u(), Number(a.l())),
   pwrite64: (_c, a) => { const fd = a.i(), p = a.p(), n = a.u(); return pwriteFd(fd, mem.u8.subarray(p, p + n), Number(a.l())); },
   lseek: (_c, a) => seekFd(a.i(), offArg(a), a.i()),
-  fstat: (_c, a) => statFd(a.i(), a.p()),
+  fstat: (_c, a) => { const fd = a.i(); return putStat(a.p(), statFd(fd)); },
   fstatat: (_c, a) => {
     const fd = a.i(), name = a.str(), buf = a.p(), flags = a.i();
     if (flags & ~(0x100 | 0x1000)) return -E.INVAL;
-    if (!name) return flags & 0x1000 ? statFd(fd, buf) : -E.NOENT;
-    const path = atPath(fd, name);
-    return typeof path === "string" ? statProcess(path, buf) : path;
+    if (!name) return flags & 0x1000 ? putStat(buf, statFd(fd)) : -E.NOENT;
+    return inDir(fd, name, (path) => putStat(buf, statAt(path)));
   },
   fchmod: (_c, a) => changeFdAttributes(a.i(), { mode: a.i() }),
   fchown: (_c, a) => changeFdAttributes(a.i(), { uid: a.i(), gid: a.i() }),
   umask: () => 0o22,
   renameat: (_c, a) => {
-    const from = atPath(a.i(), a.str());
+    const from = resolveAt(a.i(), a.str());
     if (typeof from !== "string") return from;
-    const to = atPath(a.i(), a.str());
-    return typeof to !== "string" ? to : renameProcess(from, to);
+    return inDir(a.i(), a.str(), (to) => filePaths(from, to).fileRename(from, to));
   },
-  mkdirat: (_c, a) => { const path = atPath(a.i(), a.str()); return typeof path === "string" ? mkdirProcess(path) : path; },
-  mknodat: (_c, a) => { const path = atPath(a.i(), a.str()); return typeof path === "string" ? mknodProcess(path, a.i()) : path; },
+  mkdirat: (_c, a) => inDir(a.i(), a.str(), (path) => filePaths(path).fileMkdir(path)),
+  mknodat: (_c, a) => { const dirfd = a.i(), name = a.str(), mode = a.i(); return inDir(dirfd, name, (path) => mknodAt(path, mode)); },
   ftruncate: (_c, a) => truncateFd(a.i(), offArg(a)),
   fallocate: (_c, a) => { const fd = a.i(), mode = a.i(), off = Number(a.l()); return fallocate(fd, mode, off, Number(a.l())); },
   // the raw call has no flags, libc's (libc32/stdio.ts) has
@@ -369,14 +379,13 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
   pipe2: (_c, a) => makePipe(a.p(), a.i()),
   sendfile: () => -E.NOSYS,
   flock: () => 0,
-  unlinkat: (_c, a) => { const path = atPath(a.i(), a.str()), flags = a.i(); return typeof path === "string" ? removeProcess(path, !!(flags & 0x200)) : path; },
+  unlinkat: (_c, a) => { const dirfd = a.i(), name = a.str(), flags = a.i(); return inDir(dirfd, name, (path) => filePaths(path).fileRemove(path, !!(flags & 0x200))); },
   // no links to follow, so fchmodat's flags change nothing
-  fchmodat: (_c, a) => { const path = atPath(a.i(), a.str()), mode = a.i(); return typeof path === "string" ? changeProcess(path, { mode }) : path; },
+  fchmodat: (_c, a) => { const dirfd = a.i(), name = a.str(), mode = a.i(); return inDir(dirfd, name, (path) => filePaths(path).fileSetAttributes(path, { mode })); },
   utimensat: (_c, a) => {
     const dirfd = a.i(), name = a.p(), change = modifiedTime(a.p());
     if (!name) return changeFdAttributes(dirfd, change);
-    const path = atPath(dirfd, mem.cstr(name));
-    return typeof path === "string" ? changeProcess(path, change) : path;
+    return inDir(dirfd, mem.cstr(name), (path) => filePaths(path).fileSetAttributes(path, change));
   },
   // the int a request answers into its argument: FIONREAD's, the one request files take
   ioctl: (_c, a) => {
@@ -394,5 +403,5 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
   // the length with its NUL
   getcwd: (_c, a) => { const b = a.p(), n = a.u(); return n < 2 ? -E.RANGE : mem.putCstr(b, "/", n) + 1; },
   chdir: () => 0,
-  readlinkat: () => -E.INVAL,
+  readlinkat: (_c, a) => inDir(a.i(), a.str(), readlinkAt),
 };

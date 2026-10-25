@@ -2,7 +2,7 @@
 // whose position, flags and bytes live with their owner, so every operation is a request to it.
 import { E, O_CLOEXEC, S_IFMT, S_IFDIR, S_IFREG } from "./abi.ts";
 import { ANON, installFile, isKind, newFile, openFd, closeFd, readRest, type FdStat, type FileOps } from "./fd.ts";
-import { localOpen, listProcess } from "./fs.ts";
+import { localOpen, listAt } from "./fs.ts";
 import { openRemoteFifo } from "./pipe.ts";
 import type { FileSource } from "../shell/lazyfile.ts";
 import { pathOwner } from "../shell/file-path.ts";
@@ -85,7 +85,7 @@ const REMOTE: FileOps<Remote> = {
   entries(f) {
     if (!f.dir) return -E.NOTDIR;
     if (f.pos && f.state.entries) return f.state.entries;
-    return Promise.resolve(listProcess(f.path)).then(entries => typeof entries === "number" ? entries : f.state.entries = entries);
+    return Promise.resolve(listAt(f.path)).then(entries => typeof entries === "number" ? entries : f.state.entries = entries);
   },
   close(f) {
     const closing = f.state.remote.request("close", {});

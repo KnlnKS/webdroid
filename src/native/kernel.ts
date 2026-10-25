@@ -57,28 +57,22 @@ export function writeTs(p: number, ms: number, unit = 1e6): void {
 }
 /** an inode per path: a runtime's own share table keys on st_dev/st_ino */
 export function inoOf(path: string): number { let h = 0x811c9dc5; for (let i = 0; i < path.length; i++) h = Math.imul(h ^ path.charCodeAt(i), 0x01000193); return (h >>> 0) || 1; }
-export function fillStat(buf: number, path: string, { mode, size, mtime, uid, gid }: FileStat): void {
+/** a file's stat as every stat call reports it: one device, an inode per path, one link, 4K blocks
+ *  for I/O and the size in 512-byte units */
+export type Stat = FileStat & { dev: number; ino: number; nlink: number; blksize: number; blocks: number };
+export const fullStat = (path: string, st: FileStat): Stat => ({ ...st, dev: 1, ino: inoOf(path), nlink: 1, blksize: 4096, blocks: Math.ceil(st.size / 512) });
+export function fillStat(buf: number, s: Stat): void {
   mem.memset(buf, 0, KLAYOUT.STAT_SIZE);
-  mem.st32(buf, 1);                                                                  // st_dev
-  mem.st32(buf + KLAYOUT.ST_MODE, mode);
-  mem.st32(buf + KLAYOUT.ST_NLINK, 1);
-  mem.st32(buf + KLAYOUT.ST_UID, uid); mem.st32(buf + KLAYOUT.ST_GID, gid);
-  mem.st32(buf + KLAYOUT.ST_SIZE, size); mem.st32(buf + KLAYOUT.ST_SIZE + 4, 0);
-  mem.st32(buf + KLAYOUT.ST_BLKSIZE, 4096);
-  mem.st32(buf + KLAYOUT.ST_BLOCKS, (size + 511) >> 9);
-  const sec = Math.floor(mtime / 1000);
-  for (const o of [KLAYOUT.ST_ATIME, KLAYOUT.ST_MTIME, KLAYOUT.ST_CTIME]) stLong(buf + o, sec);
-  mem.st32(buf + KLAYOUT.ST_INO32, inoOf(path)); mem.st32(buf + KLAYOUT.ST_INO, inoOf(path));
-}
-/** statfs of a filesystem of `total` bytes, `free` of them free, in 4K blocks. f_type and f_bsize are longs; the counts
- *  after them are 64-bit on both ABIs (the ILP32 struct is the kernel's statfs64), then fsid, f_namelen and f_frsize */
-export function fillStatfs(b: number, { total, free }: { total: number; free: number }): number {
-  mem.memset(b, 0, KLAYOUT.STATFS_SIZE);
-  const counts = b + 2 * PTR;
-  stLong(b + PTR, 4096);
-  [total / 4096, free / 4096, free / 4096, 0x10000, 0x8000].forEach((n, i) => mem.st64(counts + i * 8, BigInt(Math.floor(n))));
-  stLong(counts + 48, 255); stLong(counts + 48 + PTR, 4096);
-  return 0;
+  mem.st32(buf, s.dev);
+  mem.st32(buf + KLAYOUT.ST_MODE, s.mode);
+  mem.st32(buf + KLAYOUT.ST_NLINK, s.nlink);
+  mem.st32(buf + KLAYOUT.ST_UID, s.uid); mem.st32(buf + KLAYOUT.ST_GID, s.gid);
+  mem.st32(buf + KLAYOUT.ST_SIZE, s.size); mem.st32(buf + KLAYOUT.ST_SIZE + 4, 0);
+  mem.st32(buf + KLAYOUT.ST_BLKSIZE, s.blksize);
+  mem.st32(buf + KLAYOUT.ST_BLOCKS, s.blocks);
+  const sec = Math.floor(s.mtime / 1000);
+  stLong(buf + KLAYOUT.ST_ATIME, sec); stLong(buf + KLAYOUT.ST_MTIME, sec); stLong(buf + KLAYOUT.ST_CTIME, sec);
+  mem.st32(buf + KLAYOUT.ST_INO32, s.ino); mem.st32(buf + KLAYOUT.ST_INO, s.ino);
 }
 /** linux_dirent64, which is also bionic's struct dirent */
 export const DIRENT64 = { ino: 0, off: 8, reclen: 16, type: 18, name: 19 };
