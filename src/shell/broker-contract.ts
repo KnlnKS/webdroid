@@ -39,7 +39,7 @@ export type PackageSnapshot = ProcessBootstrap["registry"][number];
 export type Receiver = { pkg: string; cls: string; priority: number };
 export type BroadcastData = { code: number; data: string | null; extras: ParcelData | null; aborted: boolean };
 /** ActivityTaskManager's starts in other processes and their results */
-export type ActivityCalls = {
+type ActivityCalls = {
   launch(pkg: string, process: string, component: string, intent: ParcelData, request: number, callingClass: string | null): Promise<void>;
   finish(id: number, code: number, data: ParcelData | null): Promise<void>;
   presentation(translucent: boolean): Promise<void>;

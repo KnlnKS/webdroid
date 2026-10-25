@@ -50,7 +50,7 @@ async function someDenied(permissions: string[], pkg: string): Promise<boolean> 
   return false;
 }
 /** a process booting until it serves its endpoint, then serving it, until it ends */
-export type ProcessState = { kind: "starting"; ready: PromiseWithResolvers<ProcessEndpoint> }
+type ProcessState = { kind: "starting"; ready: PromiseWithResolvers<ProcessEndpoint> }
   | { kind: "ready"; endpoint: ProcessEndpoint; close: () => void }
   | { kind: "dead"; death: Death; record: ExitRecord | null; message: string };
 /** ActivityManagerService's ProcessRecord: one process and what the broker holds for it, which its death releases */

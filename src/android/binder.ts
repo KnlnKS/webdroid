@@ -28,7 +28,7 @@ export type BinderHandle = { pid: number; id: number };
  *  for a writable one the binder that writes them back to the descriptor it came from, and for an
  *  ashmem region its protection */
 type FileHandle = { bytes: Uint8Array; writer: BinderHandle | null; prot?: number };
-export type DescriptorHandle = { descriptor: number };
+type DescriptorHandle = { descriptor: number };
 export type ParcelData = { bytes: Uint8Array; objects: [number, BinderHandle | FileHandle | DescriptorHandle | null][] };
 export type Transaction = { handle: BinderHandle; code: number; flags: number; data: ParcelData };
 export type TransactionReply = { handled: number; data: ParcelData };

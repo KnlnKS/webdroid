@@ -28,7 +28,7 @@ const CT = "android/app/servertransaction/";
 const PROCESS_STATE_TOP = 2, START_SUCCESS = 0, START_INTENT_NOT_RESOLVED = -1;
 
 /** a start in another process, and the result target there when it asked for one */
-export type ResultDelivery = { caller: ComponentRef; deliver: (resultCode: number, data: JIntent | null) => void };
+type ResultDelivery = { caller: ComponentRef; deliver: (resultCode: number, data: JIntent | null) => void };
 /** each remote start's result delivery, by request */
 const remoteResults = new Map<number, ResultDelivery["deliver"]>();
 let nextRequest = 1;

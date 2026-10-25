@@ -16,7 +16,7 @@ import { scheduleOnApp, compatInfo, thisApp, pms, STOCK_PM_FLAGS } from "./proce
 import { processState, PROCESS_STATE_RECEIVER } from "./atm.ts";
 import { procIdentity } from "../../shell/procfs.ts";
 
-export type BroadcastResult = { code: number; data: string | null; extras: JObj | null; aborted: boolean };
+type BroadcastResult = { code: number; data: string | null; extras: JObj | null; aborted: boolean };
 /** a result as it crosses processes, its extras parcelled */
 export const resultData = (result: BroadcastResult): BroadcastData | Promise<BroadcastData> =>
   after(result.extras && parcelled(result.extras), (extras) => ({ ...result, extras }));

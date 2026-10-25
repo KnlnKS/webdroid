@@ -2,12 +2,12 @@
 // lacks. A Worker reads a replica of the entries its package may see, taken at bootstrap and kept
 // current by the page, and the page keeps only the writes to entries the package owns.
 
-export type StorageOwner = { pkg: string; uid: number };
+type StorageOwner = { pkg: string; uid: number };
 /** who besides system_server sees a store's entries, each keyed by the package or uid it belongs to
  *  (+ ":" + more): that package's processes ("package"), that uid's ("uid"), every process reading
  *  and the named package writing ("device-read"), or every process reading and writing
  *  ("device-write"). A store with no scope is system_server's alone. */
-export type StorageScope = "package" | "uid" | "device-read" | "device-write";
+type StorageScope = "package" | "uid" | "device-read" | "device-write";
 const scopes = new Map<string, StorageScope>();
 export function storageAccess(key: string, { pkg, uid }: StorageOwner): "read" | "write" | null {
   for (const [prefix, scope] of scopes) {

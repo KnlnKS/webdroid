@@ -1,8 +1,6 @@
 import { releaseRights, type ParcelData } from "../android/binder.ts";
 import { mapRights, type DescriptorRights, type FileDescriptors, type RetainedDescriptor } from "./file-descriptors.ts";
 
-export class StoredParcelError extends Error {}
-
 /** Broker-local descriptor ownership; no retained right is exposed as a wire token. */
 export class StoredParcel {
   private kernel: FileDescriptors; private data: ParcelData;
@@ -14,12 +12,12 @@ export class StoredParcel {
     const stored=new StoredParcel(kernel,data),positions=new Set<number>();
     try {
       stored.data=await mapRights(data,async (object,at)=>{
-        if (positions.has(at)) throw new StoredParcelError("Duplicate retained Parcel object position");
+        if (positions.has(at)) throw new Error("Duplicate retained Parcel object position");
         positions.add(at);
-        if (object && "bytes" in object) throw new StoredParcelError("Snapshot descriptors cannot be retained as shared rights");
+        if (object && "bytes" in object) throw new Error("Snapshot descriptors cannot be retained as shared rights");
         if (!object || !("descriptor" in object)) return object && {...object};
         const right=await kernel.retain(pid,object.descriptor);
-        if (!right) throw new StoredParcelError("Invalid retained Parcel descriptor");
+        if (!right) throw new Error("Invalid retained Parcel descriptor");
         stored.rights.set(at,right);
         return null;
       },()=>stored.close());

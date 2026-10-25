@@ -65,7 +65,7 @@ const savedPolicies = persisted<Map<string, string>>("wd:notification-policy:", 
     ? new Map(Object.entries(saved as Record<string, string>)) : null, { encode: (policy) => Object.fromEntries(policy) });
 /** NotificationManagerService's notification list, the state its posting rules keep and each
  *  package's channels, groups and delegate, shared by every process through the broker */
-export class NotificationStore {
+class NotificationStore {
   private kernel = new FileDescriptors();
   private epochs = new Map<string, number>();
   private policies = new Map<string, Map<string, string>>();
