@@ -5,7 +5,7 @@ import { createCodec, type Codec, type Info } from "../android/media-codec.ts";
 import { capacity, directAddress, directCopy, directReady } from "../jvm/natives/jnio.ts";
 import { after } from "../jvm/natives/jentry.ts";
 import type { FileSource } from "../shell/lazyfile.ts";
-import { javaCloseFd, javaDupFd } from "./fd.ts";
+import { closeFd, dupFd } from "./fd.ts";
 import { processOpenFd } from "./process-fd.ts";
 import { windowOf } from "./libandroid.ts";
 import { mem, anchor } from "./mem.ts";
@@ -54,9 +54,9 @@ async function openExtractor(cpu: Cpu, handle: number, source: (cpu: Cpu) => Fil
   } catch (error) { console.warn("[media extractor]", error); await close(cpu); return UNSUPPORTED; }
 }
 async function openFd(cpu: Cpu, handle: number, fd: number, offset: bigint, length: bigint): Promise<number> {
-  const copy = javaDupFd(fd), source = await fdSlice(copy, offset, length);
-  if (!source) { if (copy >= 0) await javaCloseFd(copy); return INVALID; }
-  return openExtractor(cpu, handle, () => source, () => after(javaCloseFd(copy), () => {}));
+  const copy = dupFd(fd), source = await fdSlice(copy, offset, length);
+  if (!source) { if (copy >= 0) await closeFd(copy); return INVALID; }
+  return openExtractor(cpu, handle, () => source, () => after(closeFd(copy), () => {}));
 }
 export function mediaInit(): void {
   const api: Record<string, HostFn> = {
@@ -88,7 +88,7 @@ export function mediaInit(): void {
       const handle = a.p(), path = a.str(), fd = await processOpenFd(path.startsWith("file://") ? decodeURI(path.slice(7)) : path, 0);
       if (fd < 0) return IO;
       // the whole file: fdSlice bounds a slice by the file's size
-      try { return await openFd(cpu, handle, fd, 0n, BigInt(Number.MAX_SAFE_INTEGER)); } finally { await javaCloseFd(fd); }
+      try { return await openFd(cpu, handle, fd, 0n, BigInt(Number.MAX_SAFE_INTEGER)); } finally { await closeFd(fd); }
     },
     AMediaExtractor_setDataSourceCustom: async (cpu, a) => {
       const handle = a.p(), source = sources.get(a.p());

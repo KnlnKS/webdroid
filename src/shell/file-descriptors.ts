@@ -1,7 +1,7 @@
 import { E, O_ACCMODE, O_CREAT, O_TRUNC, S_IFMT, S_IFREG } from "../native/abi.ts";
-import { javaCloseFd, javaDupFd, javaFcntlFd, localFdStat, javaPreadFd, javaPwriteFd, javaReadFd, javaLseekFd, javaSyncFd,
-  javaTruncateFd, javaAllocateFd, javaWriteFd, openFd, javaChangeFdAttributes, type FdStat, type OpenFile } from "../native/fd.ts";
-import { javaAnonymousFd, javaOpenFd } from "../native/fs.ts";
+import { closeFd, dupFd, fcntlFd, localFdStat, preadFd, pwriteFd, readFd, seekFd, syncFd,
+  truncateFd, allocateFd, writeFd, openFd, changeFdAttributes, type FdStat, type OpenFile } from "../native/fd.ts";
+import { anonymousFd, localOpen } from "../native/fs.ts";
 import { detachFdScope } from "../android/fd-scope.ts";
 import type { AttributeChange } from "./file-path.ts";
 import { fifoOf, holdFifo, type Pipe } from "../native/pipe.ts";
@@ -88,7 +88,7 @@ export class FileDescriptors {
     if (!session || session.dead || !descriptor?.staged) return null;
     session.descriptors.delete(token);
     return this.ordered(descriptor.file,()=>{
-      if (session.dead) {javaCloseFd(descriptor.fd);return null;}
+      if (session.dead) {closeFd(descriptor.fd);return null;}
       return {fd:descriptor.fd,file:descriptor.file,closed:false};
     });
   }
@@ -97,7 +97,7 @@ export class FileDescriptors {
     if (!target || target.dead || right.closed) return -E.BADF;
     return this.ordered(right.file,()=>{
       if (right.closed || target.dead) return -E.BADF;
-      const token=this.put(target,javaDupFd(right.fd,true));
+      const token=this.put(target,dupFd(right.fd,true));
       if (token >= 0) target.descriptors.get(token)!.incoming=true;
       return token;
     });
@@ -105,7 +105,7 @@ export class FileDescriptors {
   release(right:RetainedDescriptor): Promise<void> {
     if (right.closing) return right.closing;
     right.closed=true;
-    return right.closing=this.ordered(right.file,()=>{javaCloseFd(right.fd);});
+    return right.closing=this.ordered(right.file,()=>{closeFd(right.fd);});
   }
   /** `use` with `data`'s descriptor rights moved from `from` to `to`, which gives them back unless `use` succeeds;
    *  `from`'s staged rights are discarded either way. `check` throws once either process may not take part. */
@@ -142,7 +142,7 @@ export class FileDescriptors {
     const file = openFd(fd)!;
     // Pipes/sockets must not wait behind their own blocking read. They require their
     // existing independent readiness protocol, not this regular-file operation queue.
-    if (!file.dir && (localFdStat(fd)!.mode & S_IFMT) !== S_IFREG) { javaCloseFd(fd); return -E.NOTSUP; }
+    if (!file.dir && (localFdStat(fd)!.mode & S_IFMT) !== S_IFREG) { closeFd(fd); return -E.NOTSUP; }
     const token = this.next++;
     session.descriptors.set(token, {fd,file});
     return token;
@@ -168,16 +168,16 @@ export class FileDescriptors {
     const descriptor = session.descriptors.get(token);
     if (!descriptor || staged && !descriptor.staged) return -E.BADF;
     session.descriptors.delete(token);
-    return this.ordered(descriptor.file, () => javaCloseFd(descriptor.fd));
+    return this.ordered(descriptor.file, () => closeFd(descriptor.fd));
   }
   private stageIn(session: Session, fd: number): number {
-    const token = this.put(session,javaDupFd(fd));
+    const token = this.put(session,dupFd(fd));
     if (token >= 0) session.descriptors.get(token)!.staged = true;
     return token;
   }
   /** fsync, and then the storage under the file system */
   private async synced(fd: number): Promise<number> {
-    const result = await javaSyncFd(fd);
+    const result = await syncFd(fd);
     if (result === 0) await vfs.flush();
     return result;
   }
@@ -191,7 +191,7 @@ export class FileDescriptors {
       let data: Uint8Array;
       try { data = new Uint8Array(size); }
       catch { return -E.NOMEM; }
-      return this.put(session,javaAnonymousFd({path:null,data,len:size,ashmem:{prot:7}}));
+      return this.put(session,anonymousFd({path:null,data,len:size,ashmem:{prot:7}}));
     },
     open: (session, request) => {
       const path = vfs.norm(request.path), flags = request.flags;
@@ -203,23 +203,23 @@ export class FileDescriptors {
         session.fifos.add(fifo);
         return "fifo";
       }
-      const existed = vfs.exists(path), fd = javaOpenFd(path,flags);
+      const existed = vfs.exists(path), fd = localOpen(path,flags);
       if (fd >= 0 && !existed && session.uid !== undefined) vfs.setAttributes(path,{uid:session.uid,gid:session.uid});
       const dir = fd >= 0 && openFd(fd)!.dir, token = this.put(session,fd);
       return token < 0 ? token : {token,dir};
     },
     read: (session, {fd, length, offset}) => this.inOrder(session, session.descriptors.get(fd), async descriptor => {
       if (!Number.isSafeInteger(length) || length < 0) return -E.INVAL;
-      const target = new Uint8Array(length), n = await (offset === undefined ? javaReadFd(descriptor.fd,target) : javaPreadFd(descriptor.fd,target,offset));
+      const target = new Uint8Array(length), n = await (offset === undefined ? readFd(descriptor.fd,target,length) : preadFd(descriptor.fd,target,length,offset));
       return n < 0 ? n : target.slice(0,n);
     }),
     write: (session, {fd, bytes, offset}) => this.inOrder(session, session.descriptors.get(fd), descriptor =>
-      offset === undefined ? javaWriteFd(descriptor.fd,bytes) : javaPwriteFd(descriptor.fd,bytes,offset)),
-    seek: (session, {fd, offset, whence}) => this.inOrder(session, session.descriptors.get(fd), descriptor => javaLseekFd(descriptor.fd,offset,whence)),
-    truncate: (session, {fd, length}) => this.inOrder(session, session.descriptors.get(fd), descriptor => javaTruncateFd(descriptor.fd,length)),
-    allocate: (session, {fd, offset, length}) => this.inOrder(session, session.descriptors.get(fd), descriptor => javaAllocateFd(descriptor.fd,offset,length)),
+      offset === undefined ? writeFd(descriptor.fd,bytes) : pwriteFd(descriptor.fd,bytes,offset)),
+    seek: (session, {fd, offset, whence}) => this.inOrder(session, session.descriptors.get(fd), descriptor => seekFd(descriptor.fd,offset,whence)),
+    truncate: (session, {fd, length}) => this.inOrder(session, session.descriptors.get(fd), descriptor => truncateFd(descriptor.fd,length)),
+    allocate: (session, {fd, offset, length}) => this.inOrder(session, session.descriptors.get(fd), descriptor => allocateFd(descriptor.fd,offset,length)),
     fcntl: (session, {fd, command, arg}) => this.inOrder(session, session.descriptors.get(fd), descriptor =>
-      command >= 1 && command <= 4 ? javaFcntlFd(descriptor.fd,command,arg) : -E.INVAL),
+      command >= 1 && command <= 4 ? fcntlFd(descriptor.fd,command,arg) : -E.INVAL),
     stat: (session, {fd}) => this.inOrder(session, session.descriptors.get(fd), descriptor => {
       const stat = localFdStat(descriptor.fd);
       return stat ? {...stat,ashmemProt:descriptor.file.content.ashmem?.prot} : -E.BADF;
@@ -234,7 +234,7 @@ export class FileDescriptors {
       descriptor.incoming = false;
       return 0;
     },
-    changeAttributes: (session, {fd, change}) => this.inOrder(session, session.descriptors.get(fd), descriptor => javaChangeFdAttributes(descriptor.fd, change, session.uid)),
+    changeAttributes: (session, {fd, change}) => this.inOrder(session, session.descriptors.get(fd), descriptor => changeFdAttributes(descriptor.fd, change, session.uid)),
     ashmemProtect: (session, {fd, prot}) => this.inOrder(session, session.descriptors.get(fd), ({file}) => {
       const region = file.content.ashmem;
       if (!region) return -E.NOTTY;
@@ -248,7 +248,7 @@ export class FileDescriptors {
       if (mode === 1 || prot & 2 && mode !== 2) return -E.ACCES;
       if (prot & ~(file.content.ashmem?.prot ?? 7)) return -E.PERM;
       if (offset + length > file.content.len) return -E.NOTSUP;
-      const retained = javaDupFd(local,true);
+      const retained = dupFd(local,true);
       if (retained < 0) return retained;
       detachFdScope(retained);
       const lease = this.next++;
@@ -261,18 +261,18 @@ export class FileDescriptors {
     mappingRead: (session, {lease, offset, length}) => this.inOrder(session, session.mappings.get(lease), async mapping => {
       const error = rangeError(mapping, offset, length, 1);
       if (error) return -error;
-      const target = new Uint8Array(length), n = await javaPreadFd(mapping.fd,target,mapping.offset + offset);
+      const target = new Uint8Array(length), n = await preadFd(mapping.fd,target,length,mapping.offset + offset);
       return n < 0 ? n : target.slice(0,n);
     }),
     mappingWrite: (session, {lease, offset, bytes}) => this.inOrder(session, session.mappings.get(lease), mapping => {
       const error = rangeError(mapping, offset, bytes.length, 2);
-      return error ? -error : javaPwriteFd(mapping.fd,bytes,mapping.offset + offset);
+      return error ? -error : pwriteFd(mapping.fd,bytes,mapping.offset + offset);
     }),
     mappingRelease: (session, {lease}) => {
       const mapping = session.mappings.get(lease);
       if (!mapping) return -E.BADF;
       session.mappings.delete(lease);
-      return this.ordered(mapping.file, async () => { await javaCloseFd(mapping.fd); return 0; });
+      return this.ordered(mapping.file, async () => { await closeFd(mapping.fd); return 0; });
     },
   };
 
@@ -285,11 +285,11 @@ export class FileDescriptors {
     return this.ordered(descriptor.file, () => {
       try {
         if (source.dead || target.dead) return -E.BADF;
-        const received = this.put(target,javaDupFd(descriptor.fd,true));
+        const received = this.put(target,dupFd(descriptor.fd,true));
         if (received >= 0) target.descriptors.get(received)!.incoming = true;
         return received;
       }
-      finally { javaCloseFd(descriptor.fd); }
+      finally { closeFd(descriptor.fd); }
     });
   }
 
@@ -320,7 +320,7 @@ export class FileDescriptors {
     for (const fifo of session.fifos) fifo.holder = undefined;
     for (const table of [session.descriptors,session.mappings]) {
       for (const resource of table.values())
-        void this.ordered(resource.file, () => javaCloseFd(resource.fd)).catch(error => console.error("[descriptor cleanup]",error));
+        void this.ordered(resource.file, () => closeFd(resource.fd)).catch(error => console.error("[descriptor cleanup]",error));
       table.clear();
     }
   }

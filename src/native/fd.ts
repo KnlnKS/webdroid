@@ -2,10 +2,11 @@
 // share, with close-on-exec and bionic's fdsan owner tags. An open file's kind (FileOps) answers the
 // calls on it: files, directories and devices (fs.ts), pipes and fifos (pipe.ts), eventfd and timerfd
 // (eventfd.ts), inotify (inotify.ts), epoll (poll.ts), sockets (socket/core.ts) and the open files
-// another realm owns (process-fd.ts). The java* calls are libcore's; each answers -errno on failure.
+// another realm owns (process-fd.ts). Each call answers -errno on failure.
 
 import { E, O_ACCMODE, O_APPEND, O_NONBLOCK, O_RDONLY, O_WRONLY, POLLIN, POLLNVAL, POLLOUT, S_IFMT, S_IFSOCK } from "./abi.ts";
 import { logLine } from "./kernel.ts";
+import { mem, anchor, wrote } from "./mem.ts";
 import { procIdentity } from "../shell/procfs.ts";
 import { concat } from "../jvm/abi.ts";
 import type { VfsFile } from "../shell/vfs.ts";
@@ -132,9 +133,9 @@ export function dropFile(f: OpenFile): void | Promise<number> {
   f.onLastClose?.();
   return f.ops.close(f);
 }
-export function javaOnLastClose(fd: number, hook: () => void): void { const f = fds.get(fd); if (f) f.onLastClose = hook; }
+export function whenLastClosed(fd: number, hook: () => void): void { const f = fds.get(fd); if (f) f.onLastClose = hook; }
 /** close(2); the last close of a remote open file answers once its owner has closed it */
-export function javaCloseFd(fd: number): number | Promise<number> {
+export function closeFd(fd: number): number | Promise<number> {
   const f = fds.get(fd);
   if (!f) return -E.BADF;
   fds.delete(fd); closeOnExec.delete(fd); ownerTags.delete(fd);
@@ -145,7 +146,7 @@ export function javaCloseFd(fd: number): number | Promise<number> {
   return closing ?? 0;
 }
 /** dup(2) and F_DUPFD: the lowest free descriptor at or above `min`, sharing fd's open file */
-function dupFd(fd: number, min: number, cloexec: boolean): number {
+function dupAbove(fd: number, min: number, cloexec: boolean): number {
   const f = fds.get(fd);
   if (!f) return -E.BADF;
   f.references++;
@@ -153,15 +154,15 @@ function dupFd(fd: number, min: number, cloexec: boolean): number {
   fdEvents.duplicated?.(fd, copy);
   return copy;
 }
-export const javaDupFd = (fd: number, cloexec = false): number => dupFd(fd, 0, cloexec);
+export const dupFd = (fd: number, cloexec = false): number => dupAbove(fd, 0, cloexec);
 /** dup2(2) and dup3(2); the implicit close of `to` (unlike close) leaves its fdsan owner tag in place */
-export function javaDup2Fd(fd: number, to: number, cloexec = false): number {
+export function dup2Fd(fd: number, to: number, cloexec = false): number {
   if (to < 0) return -E.BADF;
   if (fd === to) return fds.has(fd) ? fd : -E.BADF;
   const f = fds.get(fd);
   if (!f) return -E.BADF;
   const tag = fdsanOwnerTag(to);
-  if (fds.has(to)) javaCloseFd(to);
+  if (fds.has(to)) closeFd(to);
   f.references++;
   placeFile(to, f, cloexec);
   fdEvents.duplicated?.(fd, to);
@@ -169,8 +170,8 @@ export function javaDup2Fd(fd: number, to: number, cloexec = false): number {
   return to;
 }
 /** fcntl(2): descriptor flags and duplicates belong to this table, status flags to the open file */
-export function javaFcntlFd(fd: number, cmd: number, arg: number): number | Promise<number> {
-  if (cmd === F_DUPFD || cmd === F_DUPFD_CLOEXEC) return arg < 0 ? -E.INVAL : dupFd(fd, arg, cmd === F_DUPFD_CLOEXEC);
+export function fcntlFd(fd: number, cmd: number, arg: number): number | Promise<number> {
+  if (cmd === F_DUPFD || cmd === F_DUPFD_CLOEXEC) return arg < 0 ? -E.INVAL : dupAbove(fd, arg, cmd === F_DUPFD_CLOEXEC);
   const f = fds.get(fd);
   if (!f) return -E.BADF;
   if (cmd === F_GETFD) return closeOnExec.has(fd) ? 1 : 0;
@@ -186,28 +187,39 @@ export function refused(f: OpenFile | undefined, off: number, write: boolean): n
 }
 /** once `f` may be ready: what a read that would wait waits for */
 export const woken = (f: OpenFile): Promise<void> => new Promise((resolve) => { const stop = f.ops.watch(f, () => { stop(); resolve(); }); });
-/** read(2), or pread(2) at `off`, into `target`, which a Promise fills once the bytes come */
-export function javaReadFd(fd: number, target: Uint8Array, off = -1): number | Promise<number> {
+/** read(2), or pread(2) at `off`: up to `n` bytes into `into`, a byte array or guest memory at that
+ *  address (resolved again if the bytes come once memory has grown), in place or once they come */
+export function readFd(fd: number, into: Uint8Array | number, n: number, off = -1): number | Promise<number> {
   const f = fds.get(fd), error = refused(f, off, false);
   if (error) return error;
-  const r = f!.ops.read(f!, target, 0, target.length, off, fd);
-  if (typeof r !== "number") return r.then((v) => typeof v === "number" ? v : (target.set(v), v.length));
-  return r === -E.AGAIN && !(f!.statusFlags & O_NONBLOCK) ? woken(f!).then(() => javaReadFd(fd, target, off)) : r;
+  const guest = typeof into === "number";
+  const r = f!.ops.read(f!, guest ? mem.u8 : into, guest ? mem.reach(into, n) : 0, n, off, fd);
+  if (typeof r !== "number") {
+    if (!guest) return r.then((v) => typeof v === "number" ? v : (into.set(v), v.length));
+    const at = anchor(into);
+    return r.then((v) => typeof v === "number" ? v : (mem.write(at(), v), v.length));
+  }
+  if (r > 0) { if (guest) wrote(into, r); }
+  else if (r === -E.AGAIN && !(f!.statusFlags & O_NONBLOCK)) {
+    const at = guest ? anchor(into) : null;
+    return woken(f!).then(() => readFd(fd, at ? at() : into, n, off));
+  }
+  return r;
 }
-export const javaPreadFd = (fd: number, target: Uint8Array, off: number): number | Promise<number> => off < 0 ? -E.INVAL : javaReadFd(fd, target, off);
-export function javaWriteFd(fd: number, bytes: Uint8Array, off = -1): number | Promise<number> {
+export const preadFd = (fd: number, into: Uint8Array | number, n: number, off: number): number | Promise<number> => off < 0 ? -E.INVAL : readFd(fd, into, n, off);
+export function writeFd(fd: number, bytes: Uint8Array, off = -1): number | Promise<number> {
   const f = fds.get(fd), error = refused(f, off, true);
   return error || f!.ops.write(f!, bytes, off);
 }
-export const javaPwriteFd = (fd: number, bytes: Uint8Array, off: number): number | Promise<number> => off < 0 ? -E.INVAL : javaWriteFd(fd, bytes, off);
+export const pwriteFd = (fd: number, bytes: Uint8Array, off: number): number | Promise<number> => off < 0 ? -E.INVAL : writeFd(fd, bytes, off);
 /** the rest of an open file from its position: a file's, which keeps it, or a stream's, which it consumes */
-export async function javaFdBytes(fd: number): Promise<Uint8Array | null> {
+export async function readRest(fd: number): Promise<Uint8Array | null> {
   const f = fds.get(fd);
   if (!f || (f.statusFlags & O_ACCMODE) === O_WRONLY) return null;
   if (!f.ops.positional) {
     const chunks: Uint8Array[] = [];
     for (;;) {
-      const chunk = new Uint8Array(65536), n = await javaReadFd(fd, chunk);
+      const chunk = new Uint8Array(65536), n = await readFd(fd, chunk, chunk.length);
       if (n < 0) return null;
       if (!n) return concat(chunks);
       chunks.push(chunk.subarray(0, n));
@@ -215,34 +227,34 @@ export async function javaFdBytes(fd: number): Promise<Uint8Array | null> {
   }
   const [stat, position] = await Promise.all([f.ops.stat(f), f.ops.seek(f, 0, 1)]);
   if (!stat || position < 0) return null;
-  const bytes = new Uint8Array(Math.max(0, stat.size - position)), n = await javaReadFd(fd, bytes, position);
+  const bytes = new Uint8Array(Math.max(0, stat.size - position)), n = await readFd(fd, bytes, bytes.length, position);
   return n < 0 ? null : bytes.subarray(0, n);
 }
-export function javaLseekFd(fd: number, off: number, whence: number): number | Promise<number> {
+export function seekFd(fd: number, off: number, whence: number): number | Promise<number> {
   const f = fds.get(fd);
   return f ? f.ops.seek(f, off, whence) : -E.BADF;
 }
-export function javaTruncateFd(fd: number, length: number): number | Promise<number> {
+export function truncateFd(fd: number, length: number): number | Promise<number> {
   const f = fds.get(fd);
   return f ? f.ops.truncate(f, length) : -E.BADF;
 }
 /** fsync and fdatasync */
-export function javaSyncFd(fd: number): number | Promise<number> {
+export function syncFd(fd: number): number | Promise<number> {
   const f = fds.get(fd);
   return f ? f.ops.sync(f) : -E.BADF;
 }
 /** fallocate's mode 0: the file grown to cover the range */
-export function javaAllocateFd(fd: number, off: number, length: number): number | Promise<number> {
+export function allocateFd(fd: number, off: number, length: number): number | Promise<number> {
   const f = fds.get(fd);
   if (!f || (f.statusFlags & O_ACCMODE) === O_RDONLY) return -E.BADF;
   return off < 0 || length <= 0 ? -E.INVAL : f.ops.allocate(f, off, length);
 }
 /** ioctl(2) requests with an int result; FIONREAD is the one files answer */
-export function javaIoctlIntFd(fd: number, request: number): number | Promise<number> {
+export function ioctlIntFd(fd: number, request: number): number | Promise<number> {
   const f = fds.get(fd);
   return !f ? -E.BADF : request === FIONREAD ? f.ops.available(f) : -E.NOTTY;
 }
-export function javaFdStat(fd: number): FdStat | null | Promise<FdStat | null> {
+export function fdStat(fd: number): FdStat | null | Promise<FdStat | null> {
   const f = fds.get(fd);
   return f ? f.ops.stat(f) : null;
 }
@@ -251,16 +263,16 @@ export function localFdStat(fd: number): FdStat | null {
   const f = fds.get(fd), stat = f && f.ops.stat(f);
   return !stat || stat instanceof Promise ? null : stat;
 }
-export function javaFdSource(fd: number): FileSource | null | Promise<FileSource | null> {
+export function fdSource(fd: number): FileSource | null | Promise<FileSource | null> {
   const f = fds.get(fd);
   return f ? f.ops.source(f, fd) : null;
 }
 /** fchmod, fchown and futimens: a change to the file open on `fd`, which its owner (by `uid`) makes */
-export function javaChangeFdAttributes(fd: number, change: AttributeChange, uid?: number): number | Promise<number> {
+export function changeFdAttributes(fd: number, change: AttributeChange, uid?: number): number | Promise<number> {
   const f = fds.get(fd);
   return f ? f.ops.change(f, change, uid) : -E.BADF;
 }
-export const javaIsSocketFd = (fd: number): boolean => ((fds.get(fd)?.ops.mode ?? 0) & S_IFMT) === S_IFSOCK;
+export const isSocketFd = (fd: number): boolean => ((fds.get(fd)?.ops.mode ?? 0) & S_IFMT) === S_IFSOCK;
 /** poll(2)'s answer for one descriptor: which of `events` it is ready for, with POLLERR and POLLHUP */
 export function pollEvents(fd: number, events: number): number {
   const f = fds.get(fd);

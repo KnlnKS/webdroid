@@ -10,8 +10,8 @@ import { ownedSystemService, useSystemServiceAccess, parcelled, type BinderHandl
 import { NotificationStore, notificationStore, useNotificationStore, notificationTransport, receiveForegroundNotification, startForegroundNotification, stopForegroundNotification, type ForegroundNotificationRequest } from "../src/android/notification.ts";
 import { vfs } from "../src/shell/vfs.ts";
 import { fdInt, mkFd } from "../src/jvm/natives/jio.ts";
-import { javaOpenFd } from "../src/native/fs.ts";
-import { javaReadFd, openFd } from "../src/native/fd.ts";
+import { localOpen } from "../src/native/fs.ts";
+import { readFd, openFd } from "../src/native/fd.ts";
 import { ProcessBroker } from "../src/shell/processes.ts";
 import { brokerMethods, type BrokerCalls } from "../src/shell/broker-contract.ts";
 import { descriptorTransport, processRights } from "../src/native/process-fd.ts";
@@ -125,7 +125,7 @@ test("stored notification descriptors share offsets and release on replacement, 
   await vcall(manager, "createNotificationChannel", "(Landroid/app/NotificationChannel;)V", await channel("fd", "FD", 3));
   const path = "/data/data/" + pkg + "/notification-fd.bin";
   vfs.write(path, Uint8Array.of(1, 2, 3, 4));
-  const source = javaOpenFd(path, 2), file = openFd(source)!;
+  const source = localOpen(path, 2), file = openFd(source)!;
   const pfd = await newObj("android/os/ParcelFileDescriptor", "(Ljava/io/FileDescriptor;)V", await mkFd(source));
   const copies: JObj[] = [];
   const make = async () => {
@@ -143,7 +143,7 @@ test("stored notification descriptors share offsets and release on replacement, 
     await vcall(extras, "clear", "()V");
     copies.push(copy);
     const one = new Uint8Array(1);
-    expect(javaReadFd(fdInt(await vcall(copy, "getFileDescriptor", "()Ljava/io/FileDescriptor;")), one)).toBe(1);
+    expect(readFd(fdInt(await vcall(copy, "getFileDescriptor", "()Ljava/io/FileDescriptor;")), one, 1)).toBe(1);
     return one[0];
   };
   try {
@@ -185,7 +185,7 @@ test("stored notification descriptors share offsets and release on replacement, 
       expect(file.references).toBe(1);
       expect(await read(99)).toBe(3);
       await stopForegroundNotification(99, true);
-      expect(javaReadFd(fdInt(await vcall(copies[0], "getFileDescriptor", "()Ljava/io/FileDescriptor;")), new Uint8Array(1))).toBe(1);
+      expect(readFd(fdInt(await vcall(copies[0], "getFileDescriptor", "()Ljava/io/FileDescriptor;")), new Uint8Array(1), 1)).toBe(1);
     } finally { notificationTransport.foreground = transport; }
   } finally {
     for (const copy of copies) await vcall(copy, "close", "()V");
@@ -202,7 +202,7 @@ test("foreground broker retains transferred rights after sender death and reject
   const client = callProxy<BrokerCalls>(broker.brokerPort(7701), brokerMethods);
   const path = "/data/data/" + pkg + "/foreground-fd.bin";
   vfs.write(path, Uint8Array.of(7, 8));
-  const source = javaOpenFd(path, 2), file = openFd(source)!;
+  const source = localOpen(path, 2), file = openFd(source)!;
   const pfd = await newObj("android/os/ParcelFileDescriptor", "(Ljava/io/FileDescriptor;)V", await mkFd(source));
   let recipient: JObj | undefined;
   try {
@@ -232,7 +232,7 @@ test("foreground broker retains transferred rights after sender death and reject
     await vcall(extras, "clear", "()V");
     await receiveForegroundNotification(pkg, {pid:7702,uid:packageUid(pkg)}, {kind:"stop",id:100,remove:true});
     const byte = new Uint8Array(1);
-    expect(javaReadFd(fdInt(await vcall(recipient, "getFileDescriptor", "()Ljava/io/FileDescriptor;")), byte)).toBe(1);
+    expect(readFd(fdInt(await vcall(recipient, "getFileDescriptor", "()Ljava/io/FileDescriptor;")), byte, 1)).toBe(1);
     expect([...byte]).toEqual([7]);
   } finally {
     if (recipient) await vcall(recipient, "close", "()V");

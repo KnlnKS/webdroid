@@ -7,7 +7,7 @@ import { exitProcess, processExited } from "../process-exit.ts";
 import { newArrayList } from "../jvm/natives/jcoll.ts";
 import { SYSTEM_SERVER_PID, ashmemFd, ashmemProt, fdOverBytes, fdContents } from "./os.ts";
 import { O_ACCMODE } from "../native/abi.ts";
-import { javaCloseFd, javaDupFd, javaFcntlFd, javaPwriteFd, javaTruncateFd } from "../native/fd.ts";
+import { closeFd, dupFd, fcntlFd, pwriteFd, truncateFd } from "../native/fd.ts";
 import { FdScope, detachFdScope } from "./fd-scope.ts";
 import { processRights } from "../native/process-fd.ts";
 import type { DescriptorRights } from "../shell/file-descriptors.ts";
@@ -136,9 +136,9 @@ function* exportObject(o: unknown, rights: DescriptorRights | undefined, strict:
   // implement shared FD backing; the current importer only writes back on last close.
   const bytes = new Uint8Array(contents);
   const prot = ashmemProt(o.fd), region = prot === undefined ? {} : { prot };
-  if (((yield* awaited(javaFcntlFd(o.fd, F_GETFL, 0))) & O_ACCMODE) === O_RDONLY) return { bytes, writer: null, ...region };
+  if (((yield* awaited(fcntlFd(o.fd, F_GETFL, 0))) & O_ACCMODE) === O_RDONLY) return { bytes, writer: null, ...region };
   linkClass("webdroid/FileWriter");
-  const writer = new JFileWriter(); writer.fd = javaDupFd(o.fd);
+  const writer = new JFileWriter(); writer.fd = dupFd(o.fd);
   return { bytes, writer: exportBinder(writer), ...region };
 }
 function importObject(o: BinderHandle | FileHandle | DescriptorHandle | null, rights: DescriptorRights, scope?: FdScope): unknown {
@@ -182,7 +182,7 @@ const fillParcel = driven(function* fillParcel(p: NativeParcel, data: ParcelData
     for (const [at, o] of data.objects) objects.push([at, yield importObject(o, rights, scope)]);
     setParcelBytes(p, data.bytes, objects);
   } catch (error) {
-    for (const [,o] of objects) if (o instanceof OwnedFd) javaCloseFd(o.fd);
+    for (const [,o] of objects) if (o instanceof OwnedFd) closeFd(o.fd);
     try { yield* awaited(releaseRights(data, rights, false)); } catch (cleanup) { logUncaught(cleanup); }
     throw error;
   }
@@ -417,7 +417,7 @@ rt.register({ name: "webdroid/FileWriter", ctor: JFileWriter, sup: "android/os/B
     if (code !== 1 || this.fd < 0) return 0;
     const bytes = u8(createByteArray(nativeParcel(data))!), fd = this.fd;
     this.fd = -1;
-    return after(javaTruncateFd(fd, 0), () => after(javaPwriteFd(fd, bytes, 0), () => after(javaCloseFd(fd), () => 1)));
+    return after(truncateFd(fd, 0), () => after(pwriteFd(fd, bytes, 0), () => after(closeFd(fd), () => 1)));
   },
 } });
 
@@ -438,11 +438,11 @@ const copyParcel = driven(function* copyParcel(from: NativeParcel, to: NativePar
   try {
     for (const [at, o] of from.objects) {
       if (!(o instanceof OwnedFd)) { objects.push([at, yield view(o)]); continue; }
-      const fd = javaDupFd(o.fd); detachFdScope(fd);
+      const fd = dupFd(o.fd); detachFdScope(fd);
       objects.push([at, new OwnedFd(fd, to.fdScope)]);
     }
     setParcelBytes(to, from.buf.subarray(0, from.size), objects);
-  } catch (error) { for (const [,o] of objects) if (o instanceof OwnedFd) javaCloseFd(o.fd); throw error; }
+  } catch (error) { for (const [,o] of objects) if (o instanceof OwnedFd) closeFd(o.fd); throw error; }
   for (const [at, len] of from.ashmem) to.ashmem.set(at, len);
 });
 /** a call from this process into a service it hosts for system_server: the stub reads a copy of

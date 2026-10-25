@@ -9,7 +9,7 @@ import { netInit, socketCreate } from "./socket/syscalls.ts";
 import type { Socket, Accepted } from "./socket/core.ts";
 import { SOL_SOCKET, type SocketAddress } from "./socket/abi.ts";
 import { E } from "./abi.ts";
-import { javaCloseFd } from "./fd.ts";
+import { closeFd } from "./fd.ts";
 import { readSocket, socketOf } from "./socket/core.ts";
 import { AF_INET, AF_INET6, guestEndpoint, type Endpoint } from "./net-address.ts";
 import { loopbackFetch } from "../shell/devicefetch.ts";
@@ -44,7 +44,7 @@ test("a loopback TCP connection stays in the process, with Linux's errors", asyn
   expect(sock(client).send(Uint8Array.of(4), null, null)).toBe(-E.PIPE);
   expect(sock(accepted.fd).send(Uint8Array.of(5), null, null)).toBe(1);
   expect(readSocket(client, buffer)).toBe(1);
-  for (const fd of [client, accepted.fd, server, refused]) expect(javaCloseFd(fd)).toBe(0);
+  for (const fd of [client, accepted.fd, server, refused]) expect(closeFd(fd)).toBe(0);
   expect(readSocket(client, buffer)).toBe(-E.BADF);
 });
 
@@ -210,5 +210,5 @@ test("host HTTP to a loopback URL reaches this process's listener", async () => 
   sock(accepted.fd).send(new TextEncoder().encode("HTTP/1.1 200 OK\r\nSet-Cookie: a=1\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n"), null, null);
   const answer = (await response)!;
   expect([answer.status, answer.headers.get("x-wd-set-cookie"), await answer.text()]).toEqual([200, '["a=1"]', "abcde"]);
-  for (const fd of [accepted.fd, server]) javaCloseFd(fd);
+  for (const fd of [accepted.fd, server]) closeFd(fd);
 });

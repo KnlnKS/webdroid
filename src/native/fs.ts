@@ -2,7 +2,7 @@
 // directories, procfs snapshots and devices; the path calls, each where its path lives
 // (file-path.ts); and the read/write family over guest memory.
 
-import { mem, anchor, wrote } from "./mem.ts";
+import { mem, anchor } from "./mem.ts";
 import { type HostFn, PTR, ldp, ldLong, ARG0, complete } from "./host.ts";
 import { E, AT_FDCWD, O_ACCMODE, O_APPEND, O_CLOEXEC, O_CREAT, O_DIRECTORY, O_EXCL, O_NONBLOCK, O_RDONLY, O_RDWR, O_TRUNC, O_WRONLY,
   POLLERR, POLLHUP, POLLIN, S_IFCHR, S_IFDIR, S_IFIFO, S_IFREG } from "./abi.ts";
@@ -13,9 +13,9 @@ import { filePaths, changeOpenFile, isRandomDevice, openFileStat, type Attribute
 import { procMemory, procText, procWritable, procWrite } from "../shell/procfs.ts";
 import { readAt, writable, type FileSource } from "../shell/lazyfile.ts";
 import { utf8 } from "../jvm/abi.ts";
-import { ANON, FIONREAD, installFile, newFile, openFd, placeFile, refused, woken, javaAllocateFd, javaChangeFdAttributes, javaCloseFd, javaDup2Fd,
-  javaDupFd, javaFcntlFd, javaIoctlIntFd, javaLseekFd, javaSyncFd, javaTruncateFd, type FdStat, type FileOps, type OpenFile } from "./fd.ts";
-import { fifoOf, holdFifo, javaPipeFds, openFifo } from "./pipe.ts";
+import { ANON, FIONREAD, installFile, newFile, openFd, placeFile, readFd, preadFd, pwriteFd, writeFd, allocateFd, changeFdAttributes, closeFd, dup2Fd,
+  dupFd, fcntlFd, ioctlIntFd, seekFd, syncFd, truncateFd, type FdStat, type FileOps, type OpenFile } from "./fd.ts";
+import { fifoOf, holdFifo, pipeFds, openFifo } from "./pipe.ts";
 import { closedWrite, hookInotify } from "./inotify.ts";
 import { gather, MSG_NOSIGNAL } from "./socket/abi.ts";
 import { SIGPIPE } from "./signals.ts";
@@ -77,7 +77,7 @@ function contentStat(f: OpenFile): FdStat {
   const content = f.content, attributes = content.attributes ?? vfs.attributes(content.path);
   return openFileStat(content.path, S_IFREG | attributes.mode, content.len, attributes);
 }
-/** bytes read whole when opened: a procfs file's text, whose writes procfs takes, or libcore's (javaBytesFd) */
+/** bytes read whole when opened: a procfs file's text, whose writes procfs takes, or libcore's (bytesFd) */
 const SNAPSHOT: FileOps = {
   ...ANON,
   mode: S_IFREG,
@@ -141,7 +141,7 @@ const RANDOM: FileOps = {
 };
 
 /** an open of a file this realm holds */
-export function javaOpenFd(name: string, flags: number): number {
+export function localOpen(name: string, flags: number): number {
   const path = vfs.norm(name), access = flags & O_ACCMODE, status = flags & (O_ACCMODE | O_APPEND | O_NONBLOCK), cloexec = !!(flags & O_CLOEXEC);
   if (isRandomDevice(path)) return access ? -E.ACCES : installFile(newFile(RANDOM, path, status, undefined), cloexec);
   const s = procText(path);
@@ -165,43 +165,26 @@ export function javaOpenFd(name: string, flags: number): number {
   return installFile(newFile(FILE, path, status, undefined, vfs.open(path)!), cloexec);
 }
 /** a Java-side open of `bytes` into the descriptor table native code reads, so a fd handed across JNI is live */
-export const javaBytesFd = (bytes: Uint8Array): number => installFile(newFile(SNAPSHOT, "", O_RDONLY, undefined, { path: null, data: bytes, len: bytes.length }));
+export const bytesFd = (bytes: Uint8Array): number => installFile(newFile(SNAPSHOT, "", O_RDONLY, undefined, { path: null, data: bytes, len: bytes.length }));
 /** a descriptor, close-on-exec, on `content`, a file without a name (ashmem) */
-export const javaAnonymousFd = (content: VfsFile): number => installFile(newFile(FILE, "", O_RDWR, undefined, content), true);
+export const anonymousFd = (content: VfsFile): number => installFile(newFile(FILE, "", O_RDWR, undefined, content), true);
 /** the file a descriptor reads and writes, which a shared mapping of it shares */
 export function fdFile(fd: number): VfsFile | null {
   const f = openFd(fd);
   return f?.ops === FILE ? f.content : null;
 }
 
-/** read(2), or pread(2) at `off`, into guest memory: in place, or once the bytes come */
-export function fdRead(fd: number, p: number, n: number, off = -1): number | Promise<number> {
-  const f = openFd(fd), error = refused(f, off, false);
-  if (error) return error;
-  const at = mem.reach(p, n), r = f!.ops.read(f!, mem.u8, at, n, off, fd);
-  if (typeof r !== "number") {
-    const dst = anchor(p);
-    return r.then((v) => typeof v === "number" ? v : (mem.write(dst(), v), v.length));
-  }
-  if (r > 0) wrote(p, r);
-  else if (r === -E.AGAIN && !(f!.statusFlags & O_NONBLOCK)) { const dst = anchor(p); return woken(f!).then(() => fdRead(fd, dst(), n, off)); }
-  return r;
-}
-export const pread = (fd: number, p: number, n: number, off: number): number | Promise<number> => off < 0 ? -E.INVAL : fdRead(fd, p, n, off);
 /** EPIPE's signal: a write to a pipe or stream socket no one reads any more raises SIGPIPE in the
  *  writer, unless the call passed MSG_NOSIGNAL */
 export function written(cpu: Cpu | null, f: OpenFile, r: number, flags = 0): number {
   if (r === -E.PIPE && cpu && !(flags & MSG_NOSIGNAL) && !f.ops.messages(f)) cpu.kill(SIGPIPE);
   return r;
 }
-/** write(2), or pwrite(2) at `off`, of guest memory */
-export function fdWrite(cpu: Cpu | null, fd: number, p: number, n: number, off = -1): number | Promise<number> {
-  const f = openFd(fd), error = refused(f, off, true);
-  if (error) return error;
-  const r = f!.ops.write(f!, mem.u8.subarray(p, p + n), off);
-  return typeof r === "number" ? written(cpu, f!, r) : r;
+/** write(2) of `n` bytes of guest memory at `p` */
+export function fdWrite(cpu: Cpu | null, fd: number, p: number, n: number): number | Promise<number> {
+  const r = writeFd(fd, mem.u8.subarray(p, p + n));
+  return r === -E.PIPE ? written(cpu, openFd(fd)!, r) : r;
 }
-export const pwrite = (fd: number, p: number, n: number, off: number): number | Promise<number> => off < 0 ? -E.INVAL : fdWrite(null, fd, p, n, off);
 /** readv/writev: each iovec in turn until a transfer comes up short, as the kernel does. `op` is
  *  told what the call has moved so far: a read that would then have to wait moves nothing. */
 function vectored(iov: number, count: number, op: (p: number, n: number, moved: number) => number | Promise<number>): number | Promise<number> {
@@ -254,9 +237,9 @@ function dirents(f: OpenFile, entries: string[], buf: number, size: number): num
   return at || f.pos >= entries.length ? at : -E.INVAL;
 }
 /** fallocate(2): mode 0 allocates; punching holes and collapsing ranges are not supported */
-export const fallocate = (fd: number, mode: number, off: number, length: number): number | Promise<number> => mode ? -E.NOTSUP : javaAllocateFd(fd, off, length);
+export const fallocate = (fd: number, mode: number, off: number, length: number): number | Promise<number> => mode ? -E.NOTSUP : allocateFd(fd, off, length);
 export function makePipe(out: number, flags: number): number {
-  const [read, write] = javaPipeFds(flags);
+  const [read, write] = pipeFds(flags);
   mem.st32(out, read); mem.st32(out + 4, write);
   return 0;
 }
@@ -325,20 +308,20 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
     const resolved = atPath(dirfd, path);
     return typeof resolved === "string" ? processOpenFd(resolved, flags) : resolved;
   },
-  close: (_c, a) => javaCloseFd(a.i()),
-  read: (_c, a) => fdRead(a.i(), a.p(), a.u()),
+  close: (_c, a) => closeFd(a.i()),
+  read: (_c, a) => readFd(a.i(), a.p(), a.u()),
   write: (cpu, a) => fdWrite(cpu, a.i(), a.p(), a.u()),
-  readv: (_c, a) => { const fd = a.i(); return vectored(a.p(), a.i(), (p, n, moved) => moved && readWouldWait(fd) ? 0 : fdRead(fd, p, n)); },
+  readv: (_c, a) => { const fd = a.i(); return vectored(a.p(), a.i(), (p, n, moved) => moved && readWouldWait(fd) ? 0 : readFd(fd, p, n)); },
   writev: (cpu, a) => {
     const fd = a.i(), iov = a.p(), count = a.i(), f = openFd(fd);
     if (f?.ops.messages(f)) return complete(f.ops.write(f, gather(iov, count), -1), (r) => written(cpu, f, r));
     return vectored(iov, count, (p, n) => fdWrite(cpu, fd, p, n));
   },
-  pread64: (_c, a) => pread(a.i(), a.p(), a.u(), Number(a.l())),
-  pwrite64: (_c, a) => pwrite(a.i(), a.p(), a.u(), Number(a.l())),
+  pread64: (_c, a) => preadFd(a.i(), a.p(), a.u(), Number(a.l())),
+  pwrite64: (_c, a) => { const fd = a.i(), p = a.p(), n = a.u(); return pwriteFd(fd, mem.u8.subarray(p, p + n), Number(a.l())); },
   lseek: (_c, a) => {
     const wide = PTR === 8, fd = a.i(), offset = wide ? Number(a.l()) : a.i(), whence = a.i();
-    return complete(javaLseekFd(fd, offset, whence), result => wide ? BigInt(result) : result);
+    return complete(seekFd(fd, offset, whence), result => wide ? BigInt(result) : result);
   },
   fstat: (_c, a) => statFd(a.i(), a.p()),
   fstatat: (_c, a) => {
@@ -348,8 +331,8 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
     const path = atPath(fd, name);
     return typeof path === "string" ? statProcess(path, buf) : path;
   },
-  fchmod: (_c, a) => javaChangeFdAttributes(a.i(), { mode: a.i() }),
-  fchown: (_c, a) => javaChangeFdAttributes(a.i(), { uid: a.i(), gid: a.i() }),
+  fchmod: (_c, a) => changeFdAttributes(a.i(), { mode: a.i() }),
+  fchown: (_c, a) => changeFdAttributes(a.i(), { uid: a.i(), gid: a.i() }),
   umask: () => 0o22,
   renameat: (_c, a) => {
     const from = atPath(a.i(), a.str());
@@ -359,14 +342,14 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
   },
   mkdirat: (_c, a) => { const path = atPath(a.i(), a.str()); return typeof path === "string" ? mkdirProcess(path) : path; },
   mknodat: (_c, a) => { const path = atPath(a.i(), a.str()); return typeof path === "string" ? mknodProcess(path, a.i()) : path; },
-  ftruncate: (_c, a) => javaTruncateFd(a.i(), offArg(a)),
+  ftruncate: (_c, a) => truncateFd(a.i(), offArg(a)),
   fallocate: (_c, a) => { const fd = a.i(), mode = a.i(), off = Number(a.l()); return fallocate(fd, mode, off, Number(a.l())); },
   // the raw call has no flags, libc's (stdio.ts) has
   faccessat: (_c, a) => faccessatPath(a.i(), a.str(), a.i(), 0),
   getdents64: (_c, a) => getdents64(a.i(), a.p(), a.u()),
   truncate: (_c, a) => {
     const path = a.str(), n = offArg(a);
-    return complete(processOpenFd(path, 1), fd => fd < 0 ? fd : complete(javaTruncateFd(fd, n), r => complete(javaCloseFd(fd), () => r)));
+    return complete(processOpenFd(path, 1), fd => fd < 0 ? fd : complete(truncateFd(fd, n), r => complete(closeFd(fd), () => r)));
   },
   fcntl: (_c, a) => {
     const fd = a.i(), cmd = a.i();
@@ -376,15 +359,15 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
       mem.st16(lock, 2);
       return 0;
     }
-    return javaFcntlFd(fd, cmd, a.i());
+    return fcntlFd(fd, cmd, a.i());
   },
-  fsync: (_c, a) => javaSyncFd(a.i()), fdatasync: (_c, a) => javaSyncFd(a.i()),
+  fsync: (_c, a) => syncFd(a.i()), fdatasync: (_c, a) => syncFd(a.i()),
   syncfs: (_c, a) => openFd(a.i()) ? 0 : -E.BADF,
-  dup: (_c, a) => javaDupFd(a.i()),
+  dup: (_c, a) => dupFd(a.i()),
   dup3: (_c, a) => {
     const fd = a.i(), to = a.i(), flags = a.i();
     if (fd === to || (flags & ~O_CLOEXEC)) return -E.INVAL;
-    return javaDup2Fd(fd, to, !!(flags & O_CLOEXEC));
+    return dup2Fd(fd, to, !!(flags & O_CLOEXEC));
   },
   pipe2: (_c, a) => makePipe(a.p(), a.i()),
   sendfile: () => -E.NOSYS,
@@ -394,14 +377,14 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
   fchmodat: (_c, a) => { const path = atPath(a.i(), a.str()), mode = a.i(); return typeof path === "string" ? changeProcess(path, { mode }) : path; },
   utimensat: (_c, a) => {
     const dirfd = a.i(), name = a.p(), change = modifiedTime(a.p());
-    if (!name) return javaChangeFdAttributes(dirfd, change);
+    if (!name) return changeFdAttributes(dirfd, change);
     const path = atPath(dirfd, mem.cstr(name));
     return typeof path === "string" ? changeProcess(path, change) : path;
   },
   // the int a request answers into its argument: FIONREAD's, the one request files take
   ioctl: (_c, a) => {
     const fd = a.i(), request = a.i(), destination = request === FIONREAD ? anchor(a.p()) : null;
-    return complete(javaIoctlIntFd(fd, request), n => {
+    return complete(ioctlIntFd(fd, request), n => {
       if (n < 0) return n;
       mem.st32(destination!(), n);
       return 0;

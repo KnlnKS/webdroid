@@ -6,7 +6,7 @@ import { jarray, u8 } from "../jvm/abi.ts";
 import { fdInt, mkFd } from "../jvm/natives/jio.ts";
 import { errno, sys, ioResult, readBytes, writeBytes, FD, type IoBuffer } from "./os.ts";
 import { E, ERRSTR, POLLIN, POLLERR } from "../native/abi.ts";
-import { javaDup2Fd, dropFile } from "../native/fd.ts";
+import { dup2Fd, dropFile } from "../native/fd.ts";
 import { pollEntries, type PollEntry } from "../native/poll.ts";
 import { SOL_SOCKET, MSG_DONTWAIT, MSG_TRUNC, sunPath, sunPathBytes, unixAddress, type SocketAddress } from "../native/socket/abi.ts";
 import { SO_PEERCRED, SO_RCVTIMEO, SO_SNDTIMEO, SO_BINDTODEVICE, readSocket, socketOf, type Socket, type Received, type Accepted } from "../native/socket/core.ts";
@@ -101,7 +101,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     setDeclared(b!, "java/io/FileDescriptor", { descriptor: y });
   },
   [`dup2(${FD}I)${FD}`]: (d: JObj | null, to: number) => {
-    const fd = javaDup2Fd(fdInt(d), to);
+    const fd = dup2Fd(fdInt(d), to);
     sys("dup2", fd);
     return mkFd(fd);
   },

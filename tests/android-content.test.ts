@@ -34,7 +34,7 @@ import { PendingIntents } from "../src/shell/pendingintents.ts";
 import { pendingTransport, sendIntent, type PendingAccess } from "../src/android/pendingintent.ts";
 import { removeAlarm, setOperationAlarm, useAlarmIntents } from "../src/android/alarm.ts";
 import { callProxy } from "../src/shell/rpc.ts";
-import { javaReadFd } from "../src/native/fd.ts";
+import { readFd } from "../src/native/fd.ts";
 import { Arsc } from "../src/android/arsc.ts";
 import { scall, bootApp, packageRecord, loadPlatform, thrown } from "./java.ts";
 import { procIdentity } from "../src/shell/procfs.ts";
@@ -480,7 +480,7 @@ describe("resolver-file", () => {
       await vcall(stream, "close", "()V");
       const pfd = await vcall(resolver, "openFileDescriptor", "(Landroid/net/Uri;Ljava/lang/String;)Landroid/os/ParcelFileDescriptor;", uri, "r");
       const fd = await vcall(pfd, "getFd", "()I"), data = new Uint8Array(2);
-      expect(await javaReadFd(fd, data)).toBe(2);
+      expect(await readFd(fd, data, data.length)).toBe(2);
       expect([...data]).toEqual([7, 8]);
       await vcall(pfd, "close", "()V");
       vfs.delete(path);

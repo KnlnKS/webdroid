@@ -24,12 +24,12 @@ import { pathOf, fdInt, setFdInt, mkFd } from "../jvm/natives/jio.ts";
 import { vfs, storageEstimate } from "../shell/vfs.ts";
 import { filePaths, type AttributeChange } from "../shell/file-path.ts";
 import { processOpenFd, processAshmemCreate, processAshmemSize, processAshmemProtect, remoteOf } from "../native/process-fd.ts";
-import { javaOpenFd, javaBytesFd, fdFile } from "../native/fs.ts";
-import { openFd, javaOnLastClose, javaCloseFd, javaDupFd, javaFdSource, javaFdStat, localFdStat, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd,
-  javaLseekFd, javaTruncateFd, javaSyncFd, javaFcntlFd, javaIoctlIntFd, javaChangeFdAttributes, fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag,
+import { localOpen, bytesFd, fdFile } from "../native/fs.ts";
+import { openFd, whenLastClosed, closeFd, dupFd, fdSource, fdStat, localFdStat, readFd, preadFd, writeFd, pwriteFd,
+  seekFd, truncateFd, syncFd, fcntlFd, ioctlIntFd, changeFdAttributes, fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag,
   fdsanTagType, fdsanTagValue, type FileStat } from "../native/fd.ts";
-import { javaPipeFds } from "../native/pipe.ts";
-import { javaInotifyAddWatch, javaInotifyInit, javaInotifyRmWatch } from "../native/inotify.ts";
+import { pipeFds } from "../native/pipe.ts";
+import { inotifyAddWatch, inotifyInit, inotifyRmWatch } from "../native/inotify.ts";
 import { inoOf } from "../native/kernel.ts";
 import { type JBuffer, isBuffer, readBufferBytes, writeBufferBytes, capacity, elementShift } from "../jvm/natives/jnio.ts";
 import { isExternal, mapRemote, unmapExternal } from "../jvm/natives/jmemory.ts";
@@ -197,7 +197,7 @@ export const pfdBackingBytes = driven(function* pfdBackingBytes(key: string): Ge
  *  bytes to `sink` once the last descriptor on it closes. Descriptors opened under one `key` while
  *  one is open share its file. */
 export function fdOverBytes(bytes: Uint8Array, sink: ((b: Uint8Array) => unknown) | null = null, key?: string): number {
-  if (!sink) return javaBytesFd(bytes);
+  if (!sink) return bytesFd(bytes);
   let backing = key === undefined ? undefined : pfdBackings.get(key);
   if (!backing || backing.closing) {
     backing = { path: `/data/webdroid-pfd-${++pfdBackingSeq}`, refs: 0, closing: null };
@@ -205,9 +205,9 @@ export function fdOverBytes(bytes: Uint8Array, sink: ((b: Uint8Array) => unknown
     vfs.write(backing.path, bytes, false);
     vfs.markVolatile(backing.path);
   }
-  const shared = backing, fd = javaOpenFd(shared.path, 2);
+  const shared = backing, fd = localOpen(shared.path, 2);
   shared.refs++;
-  javaOnLastClose(fd, () => {
+  whenLastClosed(fd, () => {
     if (--shared.refs) return;
     shared.closing = (async () => {
       try { await sink(vfs.read(shared.path) ?? new Uint8Array(0)); }
@@ -251,11 +251,11 @@ rt.registerJnis("android/os/SharedMemory", {
 });
 // FileObserver's inotify instance, over the descriptor table's, which the VFS reports its changes to
 rt.registerJnis("android/os/FileObserver$ObserverThread", {
-  "init()I": () => javaInotifyInit(),
+  "init()I": () => inotifyInit(),
   // android_os_FileObserver.cpp's loop: each event to onEvent(wd, mask, name) until a read fails
   "observe(I)V": driven(function* (this: JObj, fd: number): Gen {
     const buf = new Uint8Array(512), view = new DataView(buf.buffer);
-    for (let n: number; (n = yield* awaited(javaReadFd(fd, buf))) >= 16;) {
+    for (let n: number; (n = yield* awaited(readFd(fd, buf, buf.length))) >= 16;) {
       for (let at = 0; at + 16 <= n;) {
         const len = view.getUint32(at + 12, true), name = buf.subarray(at + 16, at + 16 + len);
         const path = len ? utf8.dec.decode(name.subarray(0, name.indexOf(0) < 0 ? len : name.indexOf(0))) : null;
@@ -266,16 +266,16 @@ rt.registerJnis("android/os/FileObserver$ObserverThread", {
     }
   }),
   "startWatching(I[Ljava/lang/String;I[I)V": (fd: number, paths: string[], mask: number, wfds: Int32Array) => {
-    paths.forEach((path, i) => { wfds[i] = fd < 0 ? -1 : Math.max(-1, javaInotifyAddWatch(fd, path, mask)); });
+    paths.forEach((path, i) => { wfds[i] = fd < 0 ? -1 : Math.max(-1, inotifyAddWatch(fd, path, mask)); });
   },
-  "stopWatching(I[I)V": (fd: number, wfds: Int32Array) => { for (const wd of wfds) if (wd >= 0) javaInotifyRmWatch(fd, wd); },
+  "stopWatching(I[I)V": (fd: number, wfds: Int32Array) => { for (const wd of wfds) if (wd >= 0) inotifyRmWatch(fd, wd); },
 });
 /** a ParcelFileDescriptor over bytes, as fdOverBytes opens them */
 export const mkPfd = (bytes: Uint8Array, sink: ((b: Uint8Array) => unknown) | null = null, key?: string): JObj | Promise<JObj> =>
   after(mkFd(fdOverBytes(bytes, sink, key)), (fd) => newObj("android/os/ParcelFileDescriptor", `(${FD})V`, fd));
 /** what a descriptor's file holds, whatever its offset; null for one with no file (a pipe, a socket) */
 export const fdContents = (fd: number): Uint8Array | null | Promise<Uint8Array | null> =>
-  after(javaFdSource(fd), source => source && source.read(0, source.size));
+  after(fdSource(fd), source => source && source.read(0, source.size));
 /** the bytes a ParcelFileDescriptor's file holds */
 export const pfdContents = driven(function* pfdContents(pfd: JObj): Gen<Uint8Array | null> {
   return yield* awaited(fdContents(fdInt(yield vcall(pfd, "getFileDescriptor", `()${FD}`))));
@@ -321,24 +321,24 @@ const linux: Record<string, (...args: never[]) => unknown> = {
       return yield* awaited(mkFd(fd));
     }),
     [`fstat(${FD})Landroid/system/StructStat;`]: driven(function* (d: JObj | null): Gen {
-      const st = yield* awaited(javaFdStat(fdInt(d)));
+      const st = yield* awaited(fdStat(fdInt(d)));
       if (!st) throw errno("fstat", E.BADF);
       return yield* awaited(statOf(st));
     }),
     [`readBytes(${FD}Ljava/lang/Object;II)I`]: waits((d: JObj | null, buffer: IoBuffer, offset: number, count: number) =>
-      readBytes("read", buffer, offset, count, (target) => javaReadFd(fdInt(d), target))),
+      readBytes("read", buffer, offset, count, (target) => readFd(fdInt(d), target, count))),
     [`preadBytes(${FD}Ljava/lang/Object;IIJ)I`]: waits((d: JObj | null, buffer: IoBuffer, offset: number, count: number, position: bigint) =>
-      readBytes("pread", buffer, offset, count, (target) => javaPreadFd(fdInt(d), target, Number(position)))),
+      readBytes("pread", buffer, offset, count, (target) => preadFd(fdInt(d), target, count, Number(position)))),
     [`writeBytes(${FD}Ljava/lang/Object;II)I`]: waits((d: JObj | null, buffer: IoBuffer, offset: number, count: number) =>
-      writeBytes(buffer, offset, count, (bytes) => after(javaWriteFd(fdInt(d), bytes), n => ioResult("write", n)))),
+      writeBytes(buffer, offset, count, (bytes) => after(writeFd(fdInt(d), bytes), n => ioResult("write", n)))),
     [`pwriteBytes(${FD}Ljava/lang/Object;IIJ)I`]: waits((d: JObj | null, buffer: IoBuffer, offset: number, count: number, position: bigint) =>
-      writeBytes(buffer, offset, count, (bytes) => after(javaPwriteFd(fdInt(d), bytes, Number(position)), n => ioResult("pwrite", n)))),
-    [`ftruncate(${FD}J)V`]: (d: JObj | null, length: bigint) => after(javaTruncateFd(fdInt(d), Number(length)), n => sys("ftruncate", n)),
-    [`fsync(${FD})V`]: (d: JObj | null) => after(javaSyncFd(fdInt(d)), n => sys("fsync", n)),
-    [`fdatasync(${FD})V`]: (d: JObj | null) => after(javaSyncFd(fdInt(d)), n => sys("fdatasync", n)),
-    [`ioctlInt(${FD}I)I`]: (d: JObj | null, request: number) => after(javaIoctlIntFd(fdInt(d), request), n => ioResult("ioctl", n)),
-    [`fcntlInt(${FD}II)I`]: (d: JObj | null, cmd: number, arg: number) => after(javaFcntlFd(fdInt(d), cmd, arg), n => ioResult("fcntl", n)),
-    [`fcntlVoid(${FD}I)I`]: (d: JObj | null, cmd: number) => after(javaFcntlFd(fdInt(d), cmd, 0), n => ioResult("fcntl", n)),
+      writeBytes(buffer, offset, count, (bytes) => after(pwriteFd(fdInt(d), bytes, Number(position)), n => ioResult("pwrite", n)))),
+    [`ftruncate(${FD}J)V`]: (d: JObj | null, length: bigint) => after(truncateFd(fdInt(d), Number(length)), n => sys("ftruncate", n)),
+    [`fsync(${FD})V`]: (d: JObj | null) => after(syncFd(fdInt(d)), n => sys("fsync", n)),
+    [`fdatasync(${FD})V`]: (d: JObj | null) => after(syncFd(fdInt(d)), n => sys("fdatasync", n)),
+    [`ioctlInt(${FD}I)I`]: (d: JObj | null, request: number) => after(ioctlIntFd(fdInt(d), request), n => ioResult("ioctl", n)),
+    [`fcntlInt(${FD}II)I`]: (d: JObj | null, cmd: number, arg: number) => after(fcntlFd(fdInt(d), cmd, arg), n => ioResult("fcntl", n)),
+    [`fcntlVoid(${FD}I)I`]: (d: JObj | null, cmd: number) => after(fcntlFd(fdInt(d), cmd, 0), n => ioResult("fcntl", n)),
     [`android_fdsan_exchange_owner_tag(${FD}JJ)V`]: (d: JObj | null, expected: bigint, tag: bigint) =>
       fdsanExchangeOwnerTag(fdInt(d), expected, tag),
     [`android_fdsan_get_owner_tag(${FD})J`]: (d: JObj | null) => fdsanOwnerTag(fdInt(d)),
@@ -347,7 +347,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     // no descriptor here is a terminal
     [`isatty(${FD})Z`]: () => 0,
     "pipe2(I)[Ljava/io/FileDescriptor;": (flags: number) => {
-      const [read, write] = javaPipeFds(flags);
+      const [read, write] = pipeFds(flags);
       return after(mkFd(read), (r) => after(mkFd(write), (w) => jarray([r, w], FD)));
     },
     [`sendfile(${FD}${FD}Landroid/system/Int64Ref;J)J`]: (out: JObj | null, input: JObj | null, offset: JObj | null, count: bigint) => {
@@ -356,9 +356,9 @@ const linux: Record<string, (...args: never[]) => unknown> = {
       if (n < 0 || start < 0) throw errno("sendfile", E.INVAL);
       if (!openFd(fdInt(out))) throw errno("sendfile", E.BADF);
       const scratch = new Uint8Array(n), from = fdInt(input);
-      return after(offset ? javaPreadFd(from, scratch, start) : javaReadFd(from, scratch), (read) => {
+      return after(offset ? preadFd(from, scratch, n, start) : readFd(from, scratch, n), (read) => {
         sys("sendfile", read);
-        return after(read ? javaWriteFd(fdInt(out), scratch.subarray(0, read)) : 0, written => {
+        return after(read ? writeFd(fdInt(out), scratch.subarray(0, read)) : 0, written => {
           sys("sendfile", written);
           if (offset) setDeclared(offset, "android/system/Int64Ref", { value: BigInt(start + written) });
           return BigInt(written);
@@ -366,7 +366,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
       });
     },
     [`lseek(${FD}JI)J`]: driven(function* (d: JObj | null, off: bigint, whence: number): Gen {
-      const r = yield* awaited(javaLseekFd(fdInt(d), Number(off), whence));
+      const r = yield* awaited(seekFd(fdInt(d), Number(off), whence));
       if (r < 0) throw errno("lseek", -r);
       return BigInt(r);
     }),
@@ -376,13 +376,13 @@ const linux: Record<string, (...args: never[]) => unknown> = {
       setFdInt(d, -1);
       let pending: number | Promise<number> | undefined;
       const immediate = fdsanClose(fd, owner ?? 0n, fd => {
-        pending = javaCloseFd(fd);
+        pending = closeFd(fd);
         return pending instanceof Promise ? 0 : pending;
       });
       return after(pending ?? immediate, n => sys("close", n));
     }),
     [`dup(${FD})${FD}`]: waits((d: JObj | null) => {
-      const fd = javaDupFd(fdInt(d));
+      const fd = dupFd(fdInt(d));
       if (fd < 0) throw errno("dup", -fd);
       return mkFd(fd);
     }),
@@ -400,7 +400,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
         if (typeof address === "number") throw errno("mmap",-address);
         return address;
       }
-      const source = anonymous ? null : yield* awaited(javaFdSource(fd));
+      const source = anonymous ? null : yield* awaited(fdSource(fd));
       if (!anonymous && !source) throw errno("mmap", E.BADF);
       if (source && prot === 0) throw errno("mmap", E.NOTSUP);
       // ashmem refuses a mapping beyond its region's protection
@@ -605,8 +605,8 @@ function removeAt(path: string, directory: boolean) {
 }
 /** chmod, chown and utimes; the VFS keeps modification times only, which utimes gives in microseconds */
 const changePath = (path: string, change: AttributeChange) => after(filePaths(path).fileSetAttributes(path, change), (n) => { unixSys(n); });
-const changeFd = (fd: number, change: AttributeChange) => after(javaChangeFdAttributes(fd, change), (n) => { unixSys(n); });
-const fdPath = (fd: number) => after(javaFdStat(fd), st => { if (!st) throw unixError(E.BADF); return st.path ?? ""; });
+const changeFd = (fd: number, change: AttributeChange) => after(changeFdAttributes(fd, change), (n) => { unixSys(n); });
+const fdPath = (fd: number) => after(fdStat(fd), st => { if (!st) throw unixError(E.BADF); return st.path ?? ""; });
 /** open DIR streams: the entries as readdir(3) returns them, and the descriptor closedir closes */
 const dirStreams = new Map<bigint, { names: string[]; i: number; fd: number }>();
 let nextDir = 0n;
@@ -625,10 +625,10 @@ const unixNativeDispatcher: Record<string, (...args: never[]) => unknown> = {
   "init()I": waits(() => after(initClass("sun/nio/fs/UnixException"), () => 6)),
   "getcwd()[B": () => bytesOf("/"),
   "strerror(I)[B": (e: number) => bytesOf(strerror(e)),
-  "dup(I)I": (fd: number) => unixSys(javaDupFd(fd)),
+  "dup(I)I": (fd: number) => unixSys(dupFd(fd)),
   "open0(JII)I": (path: bigint, flags: number) => after(processOpenFd(cpath(path),flags),unixSys),
   "openat0(IJII)I": (dfd: number, path: bigint, flags: number) => after(processOpenFd(atPath(dfd,path),flags),unixSys),
-  "close(I)V": (fd: number) => after(javaCloseFd(fd),n => {unixSys(n);}),
+  "close(I)V": (fd: number) => after(closeFd(fd),n => {unixSys(n);}),
   "link0(JJ)V": () => { throw unixError(E.PERM); },
   "symlink0(JJ)V": () => { throw unixError(E.PERM); },
   "unlink0(J)V": (path: bigint) => removeAt(cpath(path), false),
@@ -644,7 +644,7 @@ const unixNativeDispatcher: Record<string, (...args: never[]) => unknown> = {
   "lstat0(JLsun/nio/fs/UnixFileAttributes;)V": (path: bigint, attrs: JObj) => after(statPath(cpath(path), attrs), () => {}),
   "stat1(J)I": (path: bigint) => after(pathReply(cpath(path)), ({ value }) => value?.mode ?? 0),
   "fstatat0(IJILsun/nio/fs/UnixFileAttributes;)V": (dfd: number, path: bigint, _flag: number, attrs: JObj) => after(statPath(atPath(dfd, path), attrs), () => {}),
-  "fstat(ILsun/nio/fs/UnixFileAttributes;)V": (fd: number, attrs: JObj) => after(javaFdStat(fd), st => {
+  "fstat(ILsun/nio/fs/UnixFileAttributes;)V": (fd: number, attrs: JObj) => after(fdStat(fd), st => {
     if (!st) throw unixError(E.BADF);
     fillAttrs(attrs, st.path ?? "", st);
   }),
@@ -661,7 +661,7 @@ const unixNativeDispatcher: Record<string, (...args: never[]) => unknown> = {
     const stream = dirStreams.get(dir);
     if (!stream) throw unixError(E.BADF);
     dirStreams.delete(dir);
-    if (stream.fd >= 0) return after(javaCloseFd(stream.fd), n => { unixSys(n); });
+    if (stream.fd >= 0) return after(closeFd(stream.fd), n => { unixSys(n); });
   },
   "readdir(J)[B": (dir: bigint) => {
     const stream = dirStreams.get(dir);
@@ -708,10 +708,10 @@ rt.registerJnis("sun/nio/fs/LinuxNativeDispatcher", linuxNativeDispatcher);
 rt.registerJni("sun/nio/fs/UnixCopyFile", "transfer(IIJ)V", driven(function* (dst: number, src: number, cancel: bigint): Gen {
   const buffer = new Uint8Array(1 << 16);
   for (;;) {
-    const n = unixSys(yield* awaited(javaReadFd(src, buffer)));
+    const n = unixSys(yield* awaited(readFd(src, buffer, buffer.length)));
     if (!n) return;
     if (cancel && mem.ld32(mem.txVa(cancel))) throw unixError(E.CANCELED);
-    for (let at = 0; at < n;) at += unixSys(yield* awaited(javaWriteFd(dst, buffer.subarray(at, n))));
+    for (let at = 0; at < n;) at += unixSys(yield* awaited(writeFd(dst, buffer.subarray(at, n))));
   }
 }));
 // libcore's OsConstants fills its fields from native initConstants(); these are the reference

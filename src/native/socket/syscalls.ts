@@ -7,8 +7,8 @@ import type { Cpu } from "../cpu.ts";
 import { hostLib, stLong, complete, type HostFn, type HostRet } from "../host.ts";
 import { mem, anchor } from "../mem.ts";
 import { wrapped } from "../kernel.ts";
-import { fdRead, fdWrite, written } from "../fs.ts";
-import { installFile, dropFile, type OpenFile } from "../fd.ts";
+import { fdWrite, written } from "../fs.ts";
+import { installFile, dropFile, readFd, type OpenFile } from "../fd.ts";
 import { nativePoll, nativeSelect } from "../poll.ts";
 import { AF_UNSPEC, AF_UNIX, AF_INET, AF_INET6 } from "../net-address.ts";
 import {
@@ -151,7 +151,7 @@ function recvfrom(fd: number, destination: number, length: number, flags: number
   const s = socketOf(fd);
   if (typeof s !== "number") return length && !destination ? -E.FAULT : receive(fd, s, [guestBuffer(destination, length)], flags, { ...NO_RESULTS, name: source, nameLength: sourceLength });
   if (source || sourceLength) return -E.NOTCONN;
-  return fdRead(fd, destination, length);
+  return readFd(fd, destination, length);
 }
 
 export const NET_SYSCALLS: Record<string, HostFn> = {

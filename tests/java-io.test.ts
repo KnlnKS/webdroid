@@ -16,8 +16,8 @@ import { kernelCalls } from "../src/native/calls.testkit.ts";
 import { libcInit } from "../src/native/libc.ts";
 import { mem, guestAt } from "../src/native/mem.ts";
 import { jarray } from "../src/jvm/abi.ts";
-import { FS_SYSCALLS, javaOpenFd } from "../src/native/fs.ts";
-import { javaCloseFd, javaLseekFd, javaReadFd, javaPreadFd, javaPwriteFd, javaTruncateFd, javaDupFd, openFd } from "../src/native/fd.ts";
+import { FS_SYSCALLS, localOpen } from "../src/native/fs.ts";
+import { closeFd, seekFd, readFd, preadFd, pwriteFd, truncateFd, dupFd, openFd } from "../src/native/fd.ts";
 import { FdScope } from "../src/android/fd-scope.ts";
 import { settleRemoteMaps } from "../src/native/mappings.ts";
 import { kernelInit } from "../src/native/syscall.ts";
@@ -68,7 +68,7 @@ describe("file-descriptor", () => {
     const shared = await newObj("android/os/SharedMemory", "(Ljava/io/FileDescriptor;)V", await mkFd(fd));
     const call = clients[1].fileDescriptor;
     try {
-      javaLseekFd(fd,23,0);
+      seekFd(fd,23,0);
       const token = await kernel.receive(1001,kernel.stageLocal(1001,fd),1002);
       expect(await call({kind:"take",fd:token})).toBe(0);
       const acquired = await call({kind:"mappingAcquire",fd:token,offset:0,length:4096,prot:3});
@@ -109,7 +109,7 @@ describe("file-descriptor", () => {
     try {
       expect(await a.fileDescriptor({kind:"open",path,flags:0x800})).toBe("fifo");
       expect(await b.fileDescriptor({kind:"open",path,flags:1})).toBe(-E.NXIO);
-      expect(javaOpenFd(path,1)).toBe(-E.NXIO);
+      expect(localOpen(path,1)).toBe(-E.NXIO);
       kernel.close(1001);
       expect(await b.fileDescriptor({kind:"open",path,flags:1})).toBe("fifo");
     } finally { kernel.close(1001); kernel.close(1002); vfs.delete(path); }
@@ -118,7 +118,7 @@ describe("file-descriptor", () => {
   test("Java Parcel owner release closes only its descriptor side table", async () => {
     const path = "/data/data/test/fd/parcel-owner.bin";
     vfs.write(path, Uint8Array.of(1, 2));
-    const fd = javaOpenFd(path, 2), file = openFd(fd)!;
+    const fd = localOpen(path, 2), file = openFd(fd)!;
     const parcel = await scall("android/os/Parcel", "obtain", "()Landroid/os/Parcel;"), native = nativeParcel(parcel), ptr = handle(native);
     try {
       await vcall(parcel, "writeFileDescriptor", "(Ljava/io/FileDescriptor;)V", await mkFd(fd));
@@ -127,7 +127,7 @@ describe("file-descriptor", () => {
       expect(file.references).toBe(1);
       expect(native.objects.size).toBe(0);
       const byte = new Uint8Array(1);
-      expect(javaReadFd(fd, byte)).toBe(1);
+      expect(readFd(fd, byte, 1)).toBe(1);
       expect([...byte]).toEqual([1]);
       freeData(native);
       expect(file.references).toBe(1);
@@ -137,7 +137,7 @@ describe("file-descriptor", () => {
       try { expect(file.references).toBe(2); }
       finally { freeData(taken); }
       expect(file.references).toBe(1);
-    } finally { freeData(native); releaseHandle(ptr); javaCloseFd(fd); vfs.delete(path); }
+    } finally { freeData(native); releaseHandle(ptr); closeFd(fd); vfs.delete(path); }
   });
 
   test("retained Java Parcel rights replay shared offsets after sender death and survive store replacement",async()=>{
@@ -183,7 +183,7 @@ describe("file-descriptor", () => {
     const path = "/data/data/test/fd/scoped.bin", kernel = new FileDescriptors(), scope = new FdScope();
     kernel.ensureReceiver(1001);
     vfs.write(path, Uint8Array.of(1, 2, 3));
-    const fd = javaOpenFd(path, 2), file = openFd(fd)!;
+    const fd = localOpen(path, 2), file = openFd(fd)!;
     let stored: StoredParcel | undefined, recipient: JObj | undefined, duplicate: JObj | undefined;
     try {
       const pfd = await newObj("android/os/ParcelFileDescriptor", "(Ljava/io/FileDescriptor;)V", await mkFd(fd));
@@ -197,7 +197,7 @@ describe("file-descriptor", () => {
       scope.close(); scope.close();
       expect(file.references).toBe(2);
       expect(fdInt(await vcall(duplicate, "getFileDescriptor", FD))).toBe(-1);
-      javaCloseFd(fd); kernel.close(1001);
+      closeFd(fd); kernel.close(1001);
       expect(file.references).toBe(1);
       const recipientScope = new FdScope();
       try {
@@ -207,7 +207,7 @@ describe("file-descriptor", () => {
       } finally { recipientScope.close(); }
       await stored.close();
       const byte = new Uint8Array(1);
-      expect(javaReadFd(fdInt(await vcall(recipient, "getFileDescriptor", FD)), byte)).toBe(1);
+      expect(readFd(fdInt(await vcall(recipient, "getFileDescriptor", FD)), byte, 1)).toBe(1);
       expect([...byte]).toEqual([1]);
       await vcall(recipient, "close", "()V"); recipient = undefined;
       expect(file.references).toBe(0);
@@ -215,7 +215,7 @@ describe("file-descriptor", () => {
       scope.close(); await stored?.close();
       if (recipient) await vcall(recipient, "close", "()V");
       if (duplicate) await vcall(duplicate, "close", "()V");
-      javaCloseFd(fd); kernel.close(1001); kernel.close(1002); vfs.delete(path);
+      closeFd(fd); kernel.close(1001); kernel.close(1002); vfs.delete(path);
     }
   });
 
@@ -223,7 +223,7 @@ describe("file-descriptor", () => {
     const path = "/data/data/test/fd/scoped-failure.bin", kernel = new FileDescriptors();
     kernel.ensureReceiver(1001);
     vfs.write(path, Uint8Array.of(4, 5));
-    const fd = javaOpenFd(path, 2), file = openFd(fd)!;
+    const fd = localOpen(path, 2), file = openFd(fd)!;
     const scope = new FdScope();
     let stored: StoredParcel | undefined;
     try {
@@ -249,13 +249,13 @@ describe("file-descriptor", () => {
       native.objects.set(0, new OwnedFd(owned.fd, reuseScope));
       const slot = owned.fd;
       reuseScope.close();
-      const replacement = javaOpenFd(path, 2);
+      const replacement = localOpen(path, 2);
       try {
         expect(replacement).toBe(slot);
         freeData(native);
-        expect(javaReadFd(replacement, new Uint8Array(1))).toBe(1);
-      } finally { javaCloseFd(replacement); await vcall(parcel, "recycle", "()V"); }
-    } finally { scope.close(); await stored?.close(); kernel.close(1001); kernel.close(1002); javaCloseFd(fd); vfs.delete(path); }
+        expect(readFd(replacement, new Uint8Array(1), 1)).toBe(1);
+      } finally { closeFd(replacement); await vcall(parcel, "recycle", "()V"); }
+    } finally { scope.close(); await stored?.close(); kernel.close(1001); kernel.close(1002); closeFd(fd); vfs.delete(path); }
   });
 
   test("canonical descriptors share live bytes and offsets across ports and retain a recipient after owner death", async () => {
@@ -547,7 +547,7 @@ describe("file-input-descriptor", () => {
       vfs.delete(renamed);
       expect(await vcall(borrowed, "read", "()I")).toBe(1);
       const byte = new Uint8Array(1);
-      expect(await javaReadFd(fdInt(fd), byte)).toBe(1);
+      expect(await readFd(fdInt(fd), byte, 1)).toBe(1);
       expect(byte[0]).toBe(2);
       const channel = await vcall(owner, "getChannel", "()Ljava/nio/channels/FileChannel;");
       expect(await vcall(channel, "position", "()J")).toBe(2n);
@@ -563,7 +563,7 @@ describe("file-input-descriptor", () => {
       expect([...dst]).toEqual([0, 2, 3, 4, 0]);
       expect(await vcall(owner, "read", "()I")).toBe(-1);
       await vcall(borrowed, "close", "()V");
-      expect(javaLseekFd(fdInt(fd), 0, 0)).toBe(0);
+      expect(seekFd(fdInt(fd), 0, 0)).toBe(0);
       expect(await vcall(owner, "read", "()I")).toBe(1);
       await rejectsJava(vcallAsync(borrowed, "read", "()I"), "java/io/IOException");
       await vcall(channel, "close", "()V");
@@ -575,7 +575,7 @@ describe("file-input-descriptor", () => {
   test("descriptor streams serialize lazy reads and reject invalid input", async () => {
     const path = "/input-descriptor-lazy", bytes = Uint8Array.of(5, 6, 7, 8);
     vfs.mount(path, { size: 4, read: async (offset, length) => bytes.subarray(offset, offset + Math.min(length, 2)) });
-    const fd = await mkFd(javaOpenFd(path, 0));
+    const fd = await mkFd(localOpen(path, 0));
     const input = await newObj("java/io/FileInputStream", "(Ljava/io/FileDescriptor;)V", fd);
     try {
       const a = new Int8Array(3), b = new Int8Array(3);
@@ -589,10 +589,10 @@ describe("file-input-descriptor", () => {
       ] satisfies [string, string, unknown[], string][]) {
         await rejectsJava(vcallAsync(input, method, desc, ...args), error);
       }
-      javaCloseFd(fdInt(fd));
+      closeFd(fdInt(fd));
       await rejectsJava(vcallAsync(input, "read", "()I"), "java/io/IOException");
       await rejectsJava(vcallAsync(input, "available", "()I"), "java/io/IOException");
-    } finally { javaCloseFd(fdInt(fd)); await vcall(input, "close", "()V"); vfs.delete(path); }
+    } finally { closeFd(fdInt(fd)); await vcall(input, "close", "()V"); vfs.delete(path); }
   });
 
   test("descriptor streams wait for pipe bytes without closing borrowed descriptors", async () => {
@@ -609,11 +609,11 @@ describe("file-input-descriptor", () => {
       expect(await call("write", writer, buffer + 8, 2)).toBe(2);
       expect(await pending).toBe(2);
       expect([...bytes]).toEqual([9, 10]);
-      javaCloseFd(writer);
+      closeFd(writer);
       expect(await vcall(input, "read", "()I")).toBe(-1);
       await vcall(input, "close", "()V");
-      expect(await javaReadFd(fdInt(fd), new Uint8Array(1))).toBe(0);
-    } finally { javaCloseFd(fdInt(fd)); javaCloseFd(writer); mem.free(buffer); cpu.dispose(); }
+      expect(await readFd(fdInt(fd), new Uint8Array(1), 1)).toBe(0);
+    } finally { closeFd(fdInt(fd)); closeFd(writer); mem.free(buffer); cpu.dispose(); }
   });
 
   test("descriptor constructors defer invalid descriptor failures and honor explicit ownership", async () => {
@@ -624,7 +624,7 @@ describe("file-input-descriptor", () => {
     await vcall(invalid, "close", "()V");
     const path = "/input-descriptor-owner";
     vfs.write(path, Uint8Array.of(1));
-    setFdInt(fd, javaOpenFd(path, 0));
+    setFdInt(fd, localOpen(path, 0));
     const input = await newObj("java/io/FileInputStream", "(Ljava/io/FileDescriptor;Z)V", fd, 1);
     await vcall(input, "close", "()V");
     expect(fdInt(fd)).toBe(-1);
@@ -647,15 +647,15 @@ describe("parcel-file", () => {
     const pfd = await mkPfd(Uint8Array.of(1, 2, 3));
     const fd = await vcall(pfd, "getFd", "()I");
     expect(fd).toBeGreaterThanOrEqual(0);
-    expect(javaLseekFd(fd, 0, 2)).toBe(3);
+    expect(seekFd(fd, 0, 2)).toBe(3);
     const duplicate = await vcall(pfd, "dup", "()Landroid/os/ParcelFileDescriptor;");
     await vcall(pfd, "close", "()V");
     await expect(vcallAsync(pfd, "getFd", "()I")).rejects.toBeDefined();
     const copyFd = await vcall(duplicate, "detachFd", "()I");
-    expect(javaLseekFd(copyFd, 0, 1)).toBe(3);
+    expect(seekFd(copyFd, 0, 1)).toBe(3);
     await vcall(duplicate, "close", "()V");
-    expect(javaLseekFd(copyFd, 0, 0)).toBe(0);
-    javaCloseFd(copyFd);
+    expect(seekFd(copyFd, 0, 0)).toBe(0);
+    closeFd(copyFd);
   });
   test("an imported writable descriptor writes back once its reader closes", async () => {
     const path = "/data/local/tmp/pfd-write-back-test";
@@ -665,7 +665,7 @@ describe("parcel-file", () => {
       const pfd = await scall(PFD, "open", "(Ljava/io/File;I)Landroid/os/ParcelFileDescriptor;", await newFile(path), 0x30000000);
       const reader = await unparcelled(PFD, await parcelled(pfd));
       const fd = await vcall(reader, "getFd", "()I");
-      javaTruncateFd(fd, 0); javaPwriteFd(fd, Uint8Array.of(9), 0);
+      truncateFd(fd, 0); pwriteFd(fd, Uint8Array.of(9), 0);
       await vcall(reader, "close", "()V");
       for (let i = 0; i < 50 && vfs.read(path)?.length !== 1; i++) await new Promise((resolve) => setTimeout(resolve, 10));
       expect(vfs.read(path)).toEqual(Uint8Array.of(9));
@@ -765,7 +765,7 @@ describe("shared-memory", () => {
       const fd = fdInt(await vcall(first,"getFileDescriptor","()Ljava/io/FileDescriptor;"));
       // the descriptor leaves with the stores its mappings hold
       const staged = await processRights.stage(fd), held = new Uint8Array(4);
-      expect(await javaPreadFd(fd,held,4096)).toBe(4);
+      expect(await preadFd(fd,held,held.length,4096)).toBe(4);
       expect(new DataView(held.buffer).getInt32(0)).toBe(0x12345678);
       const token = await owner.receive(1001,staged!,1002);
       usePathOwner({ files, descriptors: ports[1].proxy.endpoint });
@@ -777,13 +777,13 @@ describe("shared-memory", () => {
       expect(await vcall(b,"getInt","(I)I",0)).toBe(0x12345678);
       // the mapping outlives its descriptors, and unmapping a page carries its stores to the owner
       await vcall(a,"putInt","(II)Ljava/nio/ByteBuffer;",4100,0x34567812);
-      const fd2 = fdInt(await vcall(second,"getFileDescriptor","()Ljava/io/FileDescriptor;")), reopened = javaDupFd(fd2);
+      const fd2 = fdInt(await vcall(second,"getFileDescriptor","()Ljava/io/FileDescriptor;")), reopened = dupFd(fd2);
       await vcall(first,"close","()V"); await vcall(second,"close","()V");
       await scall("android/system/Os","munmap","(JJ)V",addressOf(a) + 4096n,4096n);
       await settleRemoteMaps();
-      expect(await javaPreadFd(reopened,held,4100)).toBe(4);
+      expect(await preadFd(reopened,held,held.length,4100)).toBe(4);
       expect(new DataView(held.buffer).getInt32(0)).toBe(0x34567812);
-      await javaCloseFd(reopened);
+      await closeFd(reopened);
       await scall("android/system/Os","munmap","(JJ)V",addressOf(a),4096n); a = undefined;
       await scall("android/os/SharedMemory","unmap","(Ljava/nio/ByteBuffer;)V",b); b = undefined;
     } finally {

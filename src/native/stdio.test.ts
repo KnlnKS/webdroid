@@ -5,8 +5,8 @@ import { Cpu, setA64 } from "./cpu.ts";
 import { lookupHost, stp } from "./host.ts";
 import { libcInit } from "./libc.ts";
 import { mem } from "./mem.ts";
-import { fdFile, javaOpenFd } from "./fs.ts";
-import { javaCloseFd, javaFdBytes, javaLseekFd, javaDupFd, javaReadFd, openFd } from "./fd.ts";
+import { fdFile, localOpen } from "./fs.ts";
+import { closeFd, readRest, seekFd, dupFd, readFd, openFd } from "./fd.ts";
 import { renamePath } from "../shell/file-path.ts";
 import { kernelInit } from "./syscall.ts";
 import { kernel, kernelCalls, libCalls } from "./calls.testkit.ts";
@@ -27,7 +27,7 @@ test("fixed file remapping preserves dirty shared bytes before replacing pages",
   setA64(true); kernelInit();
   const path = "/fixed-mapping-test";
   vfs.write(path, new Uint8Array(3));
-  const fd = javaOpenFd(path, 2), cpu = new Cpu(mainThread, "fixed-mapping-test");
+  const fd = localOpen(path, 2), cpu = new Cpu(mainThread, "fixed-mapping-test");
   const mmap = kernel("mmap"), munmap = kernel("munmap");
   let address = 0;
   try {
@@ -36,16 +36,16 @@ test("fixed file remapping preserves dirty shared bytes before replacing pages",
     mem.st8(address + 2, 18);
     mem.st8(address + 7, 99);
     const bytes = new Uint8Array(16);
-    expect(await javaReadFd(fd,bytes)).toBe(3);
+    expect(await readFd(fd,bytes,bytes.length)).toBe(3);
     expect([...bytes.subarray(0,3)]).toEqual([17,0,18]);
     expect(vfs.stat(path)?.size).toBe(3);
-    expect(await javaReadFd(fd,bytes)).toBe(0);
+    expect(await readFd(fd,bytes,bytes.length)).toBe(0);
     expect(await cpu.call(mmap, [address, 4096, 3, 0x11, fd, 0])).toBe(address);
     expect(mem.ld8u(address)).toBe(17);
     expect(vfs.read(path)?.[0]).toBe(17);
   } finally {
     if (address) await cpu.call(munmap, [address, 4096]);
-    javaCloseFd(fd); vfs.delete(path); cpu.dispose(); setA64(false);
+    closeFd(fd); vfs.delete(path); cpu.dispose(); setA64(false);
   }
 });
 
@@ -53,7 +53,7 @@ test("shared file mappings see each other's synced stores and every writer's, wi
   setA64(true); kernelInit();
   const path = "/coherent-mapping-test";
   vfs.write(path, new Uint8Array(4096));
-  const fd = javaOpenFd(path, 2), cpu = new Cpu(mainThread, "coherent-mapping-test");
+  const fd = localOpen(path, 2), cpu = new Cpu(mainThread, "coherent-mapping-test");
   const mmap = kernel("mmap"), munmap = kernel("munmap"), msync = kernel("msync");
   const pwrite = kernel("pwrite64"), buf = mem.hostAlloc(1);
   const maps: number[] = [];
@@ -75,7 +75,7 @@ test("shared file mappings see each other's synced stores and every writer's, wi
     expect(vfs.read(path)?.[4]).toBe(5);
   } finally {
     for (const m of [maps[0], maps[2]]) if (m) await cpu.call(munmap, [m, 4096]);
-    javaCloseFd(fd); vfs.delete(path); cpu.dispose(); setA64(false);
+    closeFd(fd); vfs.delete(path); cpu.dispose(); setA64(false);
   }
 });
 
@@ -84,7 +84,7 @@ test("mremap carries a shared file mapping's range, and its new pages hold the f
   const path = "/remapped-mapping-test", bytes = new Uint8Array(8192);
   bytes[4096] = 9;
   vfs.write(path, bytes);
-  const fd = javaOpenFd(path, 2), cpu = new Cpu(mainThread, "remapped-mapping-test");
+  const fd = localOpen(path, 2), cpu = new Cpu(mainThread, "remapped-mapping-test");
   const mmap = kernel("mmap"), mremap = kernel("mremap"), munmap = kernel("munmap"), msync = kernel("msync");
   let address = 0;
   try {
@@ -98,7 +98,7 @@ test("mremap carries a shared file mapping's range, and its new pages hold the f
     expect(vfs.read(path)?.[0]).toBe(7);
   } finally {
     if (address) await cpu.call(munmap, [address, 8192]);
-    javaCloseFd(fd); vfs.delete(path); cpu.dispose(); setA64(false);
+    closeFd(fd); vfs.delete(path); cpu.dispose(); setA64(false);
   }
 });
 
@@ -128,7 +128,7 @@ test("a private file mapping grows with the file's bytes, and MAP_FIXED/MREMAP_F
   const path = "/private-mapping-test", bytes = new Uint8Array(8192);
   bytes[4096] = 9;
   vfs.write(path, bytes);
-  const fd = javaOpenFd(path, 0), cpu = new Cpu(mainThread, "private-mapping-test");
+  const fd = localOpen(path, 0), cpu = new Cpu(mainThread, "private-mapping-test");
   const mmap = kernel("mmap"), mremap = kernel("mremap"), munmap = kernel("munmap");
   const maps: [number | bigint, number][] = [];
   try {
@@ -152,7 +152,7 @@ test("a private file mapping grows with the file's bytes, and MAP_FIXED/MREMAP_F
     expect(mem.ld8u(mem.txVa(free + 4096n))).toBe(9);
   } finally {
     for (const [m, n] of maps) await cpu.call(munmap, [m, n]);
-    javaCloseFd(fd); vfs.delete(path); cpu.dispose(); setA64(false);
+    closeFd(fd); vfs.delete(path); cpu.dispose(); setA64(false);
   }
 });
 
@@ -161,7 +161,7 @@ test("record-lock queries report no conflicting process lock through the guest p
   const cpu = new Cpu(mainThread, "fcntl-test");
   const path = "/fcntl-test";
   vfs.write(path, new Uint8Array(0));
-  const fd = javaOpenFd(path, 2);
+  const fd = localOpen(path, 2);
   const lock = mem.hostAlloc(32);
   const fcntl = kernel("fcntl");
   try {
@@ -175,14 +175,14 @@ test("record-lock queries report no conflicting process lock through the guest p
       expect(mem.ld64(lock + 8)).toBe(128n);
       expect(mem.ld64(lock + 16)).toBe(1n);
     }
-  } finally { javaCloseFd(fd); vfs.delete(path); cpu.dispose(); }
+  } finally { closeFd(fd); vfs.delete(path); cpu.dispose(); }
 });
 
 test("independent file opens share writes, growth and truncation without sharing position", async () => {
   setA64(true); kernelInit();
   const cpu = new Cpu(mainThread, "shared-file-test"), path = "/shared-file-test";
   vfs.write(path, Uint8Array.of(1, 2));
-  const writer = javaOpenFd(path, 2), reader = javaOpenFd(path, 0), buf = mem.hostAlloc(8192);
+  const writer = localOpen(path, 2), reader = localOpen(path, 0), buf = mem.hostAlloc(8192);
   const call = kernelCalls(cpu);
   try {
     mem.st8(buf, 7);
@@ -197,18 +197,18 @@ test("independent file opens share writes, growth and truncation without sharing
     vfs.write(path, Uint8Array.of(4, 5, 6));
     expect(await call("pread64", reader, buf, 3, 0)).toBe(3);
     expect([...mem.bytes(buf, 3)]).toEqual([4, 5, 6]);
-  } finally { javaCloseFd(writer); javaCloseFd(reader); vfs.delete(path); cpu.dispose(); }
+  } finally { closeFd(writer); closeFd(reader); vfs.delete(path); cpu.dispose(); }
 });
 
 test("open files and mappings retain their identity through rename and unlink", () => {
   const from = "/mapped-file-test", to = "/mapped-file-renamed";
   vfs.write(from, Uint8Array.of(1));
-  const fd = javaOpenFd(from, 2), file = fdFile(fd)!;
+  const fd = localOpen(from, 2), file = fdFile(fd)!;
   expect(renamePath(from, to)).toBe(0);
   vfs.writeAt(file, 0, Uint8Array.of(2));
   expect(vfs.read(to)).toEqual(Uint8Array.of(2));
   expect(vfs.read(from)).toBeNull();
-  javaCloseFd(fd);
+  closeFd(fd);
   vfs.writeAt(file, 1, Uint8Array.of(3));
   expect(vfs.read(to)).toEqual(Uint8Array.of(2, 3));
   vfs.delete(to); vfs.write(to, Uint8Array.of(9));
@@ -222,16 +222,16 @@ test("descriptor bytes retain shared positions and read lazy files through short
   for (const lazy of [false, true]) {
     if (lazy) vfs.mount(path, { size: bytes.length, read: async (offset, length) => bytes.subarray(offset, offset + Math.min(length, 2)) });
     else vfs.write(path, bytes);
-    const fd = javaOpenFd(path, 0), dup = javaDupFd(fd);
+    const fd = localOpen(path, 0), dup = dupFd(fd);
     try {
-      expect(javaLseekFd(fd, 1, 0)).toBe(1);
-      expect(await javaFdBytes(dup)).toEqual(Uint8Array.of(2, 3, 4, 5));
-      expect(javaLseekFd(fd, 0, 1)).toBe(1);
-      expect(await javaFdBytes(fd)).toEqual(Uint8Array.of(2, 3, 4, 5));
-      expect(javaLseekFd(fd, 9, 0)).toBe(9);
-      expect(await javaFdBytes(fd)).toEqual(new Uint8Array(0));
-    } finally { javaCloseFd(fd); javaCloseFd(dup); vfs.delete(path); }
-    expect(await javaFdBytes(fd)).toBeNull();
+      expect(seekFd(fd, 1, 0)).toBe(1);
+      expect(await readRest(dup)).toEqual(Uint8Array.of(2, 3, 4, 5));
+      expect(seekFd(fd, 0, 1)).toBe(1);
+      expect(await readRest(fd)).toEqual(Uint8Array.of(2, 3, 4, 5));
+      expect(seekFd(fd, 9, 0)).toBe(9);
+      expect(await readRest(fd)).toEqual(new Uint8Array(0));
+    } finally { closeFd(fd); closeFd(dup); vfs.delete(path); }
+    expect(await readRest(fd)).toBeNull();
   }
 });
 
@@ -242,13 +242,13 @@ test("descriptor bytes await pipe data without closing the caller's descriptor",
   expect(await call("pipe2", buffer, 0)).toBe(0);
   const reader = mem.ld32(buffer), writer = mem.ld32(buffer + 4);
   try {
-    const pending = javaFdBytes(reader);
+    const pending = readRest(reader);
     mem.write(buffer + 8, Uint8Array.of(4, 5, 6));
     expect(await call("write", writer, buffer + 8, 3)).toBe(3);
-    javaCloseFd(writer);
+    closeFd(writer);
     expect(await pending).toEqual(Uint8Array.of(4, 5, 6));
-    expect(await javaFdBytes(reader)).toEqual(new Uint8Array(0));
-  } finally { javaCloseFd(reader); mem.free(buffer); cpu.dispose(); }
+    expect(await readRest(reader)).toEqual(new Uint8Array(0));
+  } finally { closeFd(reader); mem.free(buffer); cpu.dispose(); }
 });
 
 test("inotify waits on a real descriptor and reports completed file writes", async () => {
@@ -265,7 +265,7 @@ test("inotify waits on a real descriptor and reports completed file writes", asy
     expect(await pending).toBe(16);
     expect(mem.ld32(buf)).toBe(wd);
     expect(mem.ld32(buf + 4)).toBe(0x8);
-  } finally { javaCloseFd(fd); vfs.delete(path); mem.free(name); mem.free(buf); cpu.dispose(); setA64(false); }
+  } finally { closeFd(fd); vfs.delete(path); mem.free(name); mem.free(buf); cpu.dispose(); setA64(false); }
 });
 
 test("fts walks directories in pre- and postorder", async () => {
@@ -310,7 +310,7 @@ test("writev and readv move each iovec in order through a pipe, stopping short r
     expect(await call("write", writer, buffer + 8, 2)).toBe(2);
     iov(buffer + 16, [buffer + 56, 2], [buffer + 60, 3]);
     expect(await call("readv", reader, buffer + 16, 2)).toBe(2);
-  } finally { javaCloseFd(reader); javaCloseFd(writer); mem.free(buffer); cpu.dispose(); setA64(false); }
+  } finally { closeFd(reader); closeFd(writer); mem.free(buffer); cpu.dispose(); setA64(false); }
 });
 
 test("a fifo goes with its file and ends when its last writer closes", async () => {
@@ -319,17 +319,17 @@ test("a fifo goes with its file and ends when its last writer closes", async () 
   const call = libCalls(cpu, "libc.so");
   try {
     expect(await call("mkfifo", path, 0o600)).toBe(0);
-    const reader = javaOpenFd("/fifo-test", 0x800), writer = javaOpenFd("/fifo-test", 1), copy = javaDupFd(writer);
-    javaCloseFd(writer);
+    const reader = localOpen("/fifo-test", 0x800), writer = localOpen("/fifo-test", 1), copy = dupFd(writer);
+    closeFd(writer);
     expect(await call("read", reader, buf, 4)).toBe(-1);                   // EAGAIN: a writer is still open
-    javaCloseFd(copy);
+    closeFd(copy);
     expect(await call("read", reader, buf, 4)).toBe(0);
-    javaCloseFd(reader);
+    closeFd(reader);
     expect(await call("unlinkat", -100, path, 0)).toBe(0);
     vfs.write("/fifo-test", Uint8Array.of(7));
-    const file = javaOpenFd("/fifo-test", 0);
+    const file = localOpen("/fifo-test", 0);
     expect(await call("read", file, buf, 4)).toBe(1);
-    javaCloseFd(file);
+    closeFd(file);
     mem.st16(buf, 0x72);                                                          // "r"
     const fp = await call("fopen", path, buf);
     expect([await call("fgetc", fp), await call("fgetc", fp), await call("feof", fp)]).toEqual([7, -1, 1]);
