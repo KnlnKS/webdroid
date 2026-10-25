@@ -381,12 +381,11 @@ export class World {
     this.hosts.loaded();
   }
   /** the Program changed: results a compile worker made before are not adopted (epoch), the compile service hears of it (`notice`), and what was worked out from
-   *  its classes is forgotten; where namespaces resolve them differently (`rebound`), what was worked out from their types too */
-  changed(notice?: (service: CompileService) => void, rebound = false): void {
+   *  its classes is forgotten */
+  changed(notice?: (service: CompileService) => void): void {
     this.epoch++;
     if (notice && this.compiler) notice(this.compiler);
-    this.planner.forgetImplementations();
-    if (rebound) { this.helpers.forgetFieldReaders(); PerWorld.rebound(this); }
+    PerWorld.forget(this, false);
   }
 
   /** ends the World for a host done with it: its threads' waits end and their strands unwind without running more Java, its Cleaners no longer run and

@@ -41,7 +41,7 @@ const innerFlags = (jc: JClass | undefined): number => {
 };
 
 // ---------- what the host answers (host.info(kind, a, b); a is a class id)
-const ifaceCache = new PerWorld(() => new Map<string, string[]>(), true);
+const ifaceCache = new PerWorld(() => new Map<string, string[]>(), "rebound");
 function interfaces(w: World, name: string): string[] {
   const m = ifaceCache.get(w);
   let l = m.get(name);

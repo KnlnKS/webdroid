@@ -5,6 +5,7 @@ import { changedTypes } from "../compiler/loadergraph.ts";
 import { failed, symbolicDispatchFor } from "../compiler/linkage.ts";
 import { hasHierarchy } from "./unit.ts";
 import type { World } from "./world.ts";
+import { PerWorld } from "./perworld.ts";
 
 export class Namespaces {
   private readonly w: World;
@@ -85,9 +86,9 @@ export class Namespaces {
     const names = change();
     if (!names.length) return;
     // worked out again for the checks below, it holds after them
-    w.dispatch.forget();
+    PerWorld.forget(w, true);
     const refuse = (what: string, name: string) => {
-      undo(); w.dispatch.forget();
+      undo(); PerWorld.forget(w, true);
       return w.exception(w.helpers.makeThrowable("java/lang/LinkageError", `${reason} changed linked ${what} of ${name}`));
     };
     // A kept app build was made under the new graph: the classes laid out by its data modules already have the new hierarchy and dispatch.
@@ -109,7 +110,7 @@ export class Namespaces {
         if (oldKey in old.rt.exports && !(newKey in old.rt.exports)) old.rt.exports = { ...old.rt.exports, [newKey]: old.rt.exports[oldKey] };
       }
     }
-    w.changed((s) => s.namespaces(), true);
+    w.changed((s) => s.namespaces());
     // Existing code and app builds used the previous namespace, except a kept build, which was made under this one. Platform code retains its defining boot namespace.
     const refreshed = new Set(names);
     // a slot without state has never been compiled here

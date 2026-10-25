@@ -6,6 +6,7 @@ import { parseMethodDesc } from "../../jvm/abi.ts";
 import { dispatchMethodKey, dispatchSlotKey, overridesMethod, failed, symbolicDispatchFor, symbolicImplFor, symbolicMethod, resolveSymbolicMethod } from "../compiler/linkage.ts";
 import type { World } from "./world.ts";
 import { synthFamily } from "./synths.ts";
+import { PerWorld } from "./perworld.ts";
 
 /** the kinds of a vtable entry's parameters (the receiver first) and result, from its method key */
 function entryKinds(key: string): Kinds {
@@ -13,16 +14,16 @@ function entryKinds(key: string): Kinds {
   return { params: ["L", ...p.params.map(kindOf)], ret: p.ret === "V" ? "V" : kindOf(p.ret) };
 }
 
+/** the vtable layouts and interface lookups worked out in a World's namespaces */
+const caches = new PerWorld(() => ({ vslots: new Map<string, string[]>(), imt: new Map<number, Map<number, number>>() }), "rebound");
+
 export class Dispatch {
   private readonly w: World;
   constructor(w: World) { this.w = w; }
-  /** forgets the vtable layouts and interface lookups: the namespace they were worked out in changed */
-  forget(): void { this.vslotCache.clear(); this.imtCache.clear(); }
-  private vslotCache = new Map<string, string[]>();
-  private imtCache = new Map<number, Map<number, number>>();
   /** Binary DEX method keys in slot order. Resolving signature Class identities must not renumber published dispatch slots. */
   vslots(n: string): string[] {
-    let s = this.vslotCache.get(n); if (s) return s;
+    const cache = caches.get(this.w).vslots;
+    let s = cache.get(n); if (s) return s;
     const c = this.w.prog.get(n);
     s = n === "java/lang/Object" || !c ? [] : [...this.vslots(c.sup ?? "java/lang/Object")];
     if (c && !c.isInterface) {
@@ -50,7 +51,7 @@ export class Dispatch {
       };
       for (let k: JClass | undefined = c; k; k = k.sup ? this.w.prog.get(k.sup) : undefined) k.ifaces.forEach(addIface);
     }
-    this.vslotCache.set(n, s); return s;
+    cache.set(n, s); return s;
   }
   /** vtable index of virtual method `key` as seen from class `decl` */
   vslot(decl: string, key: string): number {
@@ -99,8 +100,9 @@ export class Dispatch {
     return Int32Array.from(body);
   }
   imtMiss(cls: number, sel: number): number {
-    let cache = this.imtCache.get(cls);
-    if (!cache) this.imtCache.set(cls, cache = new Map());
+    const byClass = caches.get(this.w).imt;
+    let cache = byClass.get(cls);
+    if (!cache) byClass.set(cls, cache = new Map());
     let slot = cache.get(sel);
     if (slot === undefined) {
       const key = this.w.numbers.selKeys[sel], name = this.w.nameOf(cls);

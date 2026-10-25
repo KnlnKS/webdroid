@@ -30,7 +30,7 @@ function members(w: World, jc: JClass | undefined): string[] {
 }
 
 /** the class ids of a method's parameter and return types in a World, which a lookup compares for every method of a class */
-const sigs = new PerWorld(() => new WeakMap<MethodInfo, { params: number[]; ret: number }>(), true);
+const sigs = new PerWorld(() => new WeakMap<MethodInfo, { params: number[]; ret: number }>(), "rebound");
 function sigOf(w: World, m: MethodInfo) {
   const byMethod = sigs.get(w);
   let s = byMethod.get(m); if (!s) byMethod.set(m, s = { params: m.params.map((p) => w.idOf(typeName(p))), ret: w.idOf(typeName(m.ret)) });

@@ -5,6 +5,10 @@ import type { Kind } from "../compiler/program.ts";
 import { Compiler, kindVT } from "../compiler/j2w.ts";
 import type { Strand } from "./sched.ts";
 import type { Built, World } from "./world.ts";
+import { PerWorld } from "./perworld.ts";
+
+/** the field readers made for each World: field layouts follow its namespaces */
+const fieldReaders = new PerWorld(() => new Map<string, (obj: object) => unknown>(), "rebound");
 
 export class HostFunctions {
   private readonly w: World;
@@ -129,17 +133,15 @@ export class HostFunctions {
     if (result instanceof Promise) return result.finally(() => s.end());
     s.end(); return result;
   }
-  /** field readers are made again: field layouts follow a changed namespace */
-  forgetFieldReaders(): void { this.fieldReaders.clear(); }
-  private fieldReaders = new Map<string, (obj: object) => unknown>();
   /** a JS function reading instance field `name` of `cls` from a Java object that crossed to JS (a reference field gives an opaque object) */
   fieldReader<T = unknown>(cls: string, name: string, desc: string): (obj: object) => T {
     const key = cls + "." + name + ":" + desc;
-    let read = this.fieldReaders.get(key);
+    const readers = fieldReaders.get(this.w);
+    let read = readers.get(key);
     if (!read) {
       const f = this.w.prog.resolveField(cls, name, desc);
       if (!f) throw new Error(`field ${cls}.${name} not found`);
-      this.fieldReaders.set(key, read = this.synchronousHelper(this.hostHelper("get:" + key, ["L"], f.kind, (cx, c) => {
+      readers.set(key, read = this.synchronousHelper(this.hostHelper("get:" + key, ["L"], f.kind, (cx, c) => {
         const st = cx.structFor(cls);
         c.lget(0).refAsNonNull().refCast(st).structGet(st, cx.fieldIndex(cls, f));
       })) as (obj: object) => unknown);
