@@ -76,6 +76,7 @@ function setDictionary(strm: number, s: ZStream | undefined, dictionary: number,
 
 export function zlibLibc(): Record<string, HostFn> {
   messages.clear();
+  const zver = mem.hostStr("1.2.8");
   const M: Record<string, HostFn> = {
     deflateInit_: (_c, a) => { const strm = a.p(), level = a.i(); a.str(); a.i(); return open(strm, deflaters, (s) => zDeflate.deflateInit2(s, level, 8, 15, 8, 0)); },
     deflateInit2_: (_c, a) => {
@@ -110,5 +111,4 @@ export function zlibLibc(): Record<string, HostFn> {
     },
   };
   return M;
-  const zver = mem.hostStr("1.2.8");
 }
