@@ -12,9 +12,9 @@ import { deref } from "./handles.ts";
 import { NativePath, PathMeasure, inversePath, pathAt } from "./path.ts";
 import type { NativeRegion } from "./region.ts";
 import { NativeBitmap, bitmapAt, ALPHA_8, ARGB_8888, PREMUL, OPAQUE, setPixels, colorLongAt } from "./bitmap.ts";
-import { drawGlyphs, cssFont, shapeTextRun, hyphenEdited, graphemes } from "./shaping.ts";
+import { drawGlyphs, cssFont, shapeTextRun, hyphenEdited, graphemes, clusterwise, shapeStyle } from "./shaping.ts";
 import { withFonts } from "./fonts.ts";
-import { paintAdvance } from "./minikin.ts";
+import { advances, paintAdvance } from "./minikin.ts";
 import { NativePaint, copyPaint, defaultPaint, underlinePosition, underlineThickness, strikeThruPosition, strikeThruThickness } from "./paint.ts";
 import { cssColor, BLEND_MODES, COMPOSITE } from "./graphics.ts";
 import { tintedBmp } from "./colorfilter.ts";
@@ -301,15 +301,20 @@ function textRun(nc: NativeCanvas, text: string, s: string, font: string, x: num
   if ("lang" in ctx) ctx.lang = p.language;
   if (warped) { ctx.save(); ctx.transform(p.textScaleX, 0, p.textSkewX, 1, x - p.textScaleX * x - p.textSkewX * y, 0); }
   nc.prep(p, false);
-  ctx.textAlign = p.textAlignN === 1 ? "center" : p.textAlignN === 2 ? "right" : "left";
+  // Android draws a run's glyphs at minikin's hinted advances and Chrome at its own unhinted ones,
+  // ending a long row pixels short: a run that can is drawn a cluster at a time where minikin places it
+  const start = !warped && s === text && clusterwise(s) ? placeClusters(s, x, p) : null;
+  ctx.textAlign = start !== null || p.textAlignN === 0 ? "left" : p.textAlignN === 1 ? "center" : "right";
   ctx.textBaseline = "alphabetic";
-  if (p.letterSpacingEm && "letterSpacing" in ctx) ctx.letterSpacing = `${p.letterSpacingEm * p.textSize}px`;
-  if (p.style !== 1) ctx.fillText(s, x, y);
+  const spaced = start === null && p.letterSpacingEm && "letterSpacing" in ctx;
+  if (spaced) ctx.letterSpacing = `${p.letterSpacingEm * p.textSize}px`;
+  const draw = (op: typeof ctx.fillText) => start === null ? op.call(ctx, s, x, y) : eachCluster(s, start, (piece, at) => op.call(ctx, piece, at, y));
+  if (p.style !== 1) draw(ctx.fillText);
   if (p.style === 1 || p.style === 2 && p.strokeWidth !== 0) {
     nc.prep(p, true);
-    ctx.strokeText(s, x, y);
+    draw(ctx.strokeText);
   }
-  if (p.letterSpacingEm && "letterSpacing" in ctx) ctx.letterSpacing = "0px";
+  if (spaced) ctx.letterSpacing = "0px";
   if (warped) ctx.restore();
   // Canvas::drawTextDecorations: rects at least a pixel thick across the run's advance
   if (p.underline || p.strikeThru) {
@@ -318,6 +323,25 @@ function textRun(nc: NativeCanvas, text: string, s: string, font: string, x: num
     nc.prep(p, false);
     if (p.underline) ctx.fillRect(sx, y + underlinePosition(p), w, Math.max(1, underlineThickness(p)));
     if (p.strikeThru) ctx.fillRect(sx, y + strikeThruPosition(p), w, Math.max(1, strikeThruThickness(p)));
+  }
+}
+let clusterAdvances = new Float32Array(64);
+/** places `s`'s clusters at minikin's advances, letter and word spacing included (a cluster's advance is its first char's, its other chars'
+ *  none), and answers the x its first starts at under the paint's alignment at `x` */
+function placeClusters(s: string, x: number, p: NativePaint): number {
+  if (clusterAdvances.length < s.length) clusterAdvances = new Float32Array(s.length * 2);
+  const total = advances(shapeStyle(p), s, 0, s.length, clusterAdvances);
+  return p.textAlignN === 1 ? x - total / 2 : p.textAlignN === 2 ? x - total : x;
+}
+/** each cluster placeClusters placed of `s`, from `at`; spaces draw nothing */
+function eachCluster(s: string, at: number, draw: (piece: string, x: number) => void) {
+  const w = clusterAdvances;
+  for (let i = 0; i < s.length;) {
+    let j = i + 1;
+    while (j < s.length && w[j] === 0) j++;
+    if (j > i + 1 || s.charCodeAt(i) !== 0x20) draw(s.slice(i, j), at);
+    at += w[i];
+    i = j;
   }
 }
 const onPath = new PathMeasure(), posTan = new Float32Array(4);

@@ -2,7 +2,7 @@
 // one page.evaluate against the probe in lib/probe.ts; nothing here polls the page.
 // Deliberately free of any Android/adb dependency: `pnpm e2e` must run with no SDK present.
 import { readFile } from "node:fs/promises";
-import { chromium, type Browser, type BrowserServer, type Page } from "playwright";
+import { chromium, type Browser, type BrowserServer, type CDPSession, type Page } from "playwright";
 import { PINNED_CLOCK_MS, deviceScreen, screenParam, type CaptureScreen, type WaitPolicy } from "../types.ts";
 import { CONTEXT_OPTS, launchOptions, openWebdroid, pageErrors, webdroidUrl } from "../../../scripts/page.ts";
 import { deadline } from "../../../scripts/util.ts";
@@ -11,12 +11,26 @@ import { DEFAULT_QUIESCENCE, probeScript, stepDeadlineMs, type Act, type Quiesce
 /** `WEBDROID_SCREEN=1080x2424@480` overrides the geometry every flow runs at — which un-scores
  *  the run, because the goldens are pixels at one size. That is the point: it measures cost. */
 export const ENV_SCREEN = process.env.WEBDROID_SCREEN;
+/** `WEBDROID_CORES=N`: the cores a flow's page sees (LaunchOpts.cores) unless the run names them */
+export const ENV_CORES = Number(process.env.WEBDROID_CORES) || undefined;
 
 async function closeOwned(server: BrowserServer): Promise<void> {
   try { await deadline(server.close(), 3000, "browser graceful close deadline"); }
   catch { await deadline(server.kill(), 3000, "owned browser kill deadline"); }
   const child = server.process();
   if (child.exitCode === null && child.signalCode === null) throw new Error("owned browser did not exit");
+}
+
+/** the page, and each worker it starts (held at its start until then), sees `cores` cores */
+async function emulateCores(cdp: CDPSession, cores: number): Promise<void> {
+  const override = { hardwareConcurrency: cores };
+  await cdp.send("Emulation.setHardwareConcurrencyOverride", override);
+  let id = 0;
+  cdp.on("Target.attachedToTarget", ({ sessionId }) => {
+    const send = (method: string, params = {}) => cdp.send("Target.sendMessageToTarget", { sessionId, message: JSON.stringify({ id: ++id, method, params }) }).catch(() => {});
+    void send("Emulation.setHardwareConcurrencyOverride", override).then(() => send("Runtime.runIfWaitingForDebugger"));
+  });
+  await cdp.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: false });
 }
 
 type LaunchOpts = {
@@ -31,6 +45,9 @@ type LaunchOpts = {
   controlled?: boolean;
   /** no network, as a device in airplane mode: every name fails to resolve */
   offline?: boolean;
+  /** the cores the page and its workers see, as a device with them would: what a launch sizes by them (its compile shards, its fetch workers)
+   *  then fits a browser that shares the host */
+  cores?: number;
 };
 
 type StepOptions = {
@@ -38,6 +55,7 @@ type StepOptions = {
   capture?: boolean;
   timing?: StepSpec["timing"];
   quiescence?: Partial<Quiescence>;
+  dwellMs?: number;
 };
 
 export class WebdroidDriver {
@@ -62,6 +80,7 @@ export class WebdroidDriver {
       }
       const page = await ctx.newPage();
       if (process.env.WEBDROID_CPU_THROTTLE) await (await ctx.newCDPSession(page)).send("Emulation.setCPUThrottlingRate", { rate: Number(process.env.WEBDROID_CPU_THROTTLE) });
+      if (opts.cores) await emulateCores(await ctx.newCDPSession(page), opts.cores);
       // offline, what the network serves fails to load, as on a device without one
       const drv = new WebdroidDriver(browser, page, screen, pageErrors(page, { offline: opts.offline }), server);
       page.on("pageerror", (e) => console.error("  [page error]", String(e).slice(0, 200)));
@@ -104,6 +123,7 @@ export class WebdroidDriver {
       aliveMs: timing === "controlled" ? 3500 : 3000,
       capture: options.capture ?? true,
       timing,
+      dwellMs: options.dwellMs,
     };
     const ms = stepDeadlineMs(spec);
     const late = new Error(`host step deadline (${ms} ms)`);

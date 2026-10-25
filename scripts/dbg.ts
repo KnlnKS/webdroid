@@ -9,7 +9,7 @@ const [app, stopAtArg = "99", outDir = "webdroid-shots/dbg"] = cli("pnpm dbg <fl
 const stopAt = Number(stopAtArg);
 const source = FLOWS.find((f) => f.app === app);
 if (!source) { console.error(`unknown flow "${app}" — known: ${FLOWS.map((f) => f.app).join(", ")}`); process.exit(2); }
-const flow = executionFlow(source, "full");
+const flow = executionFlow(source, "webdroid");
 const manifest = await loadManifest(app);
 mkdirSync(outDir, { recursive: true });
 

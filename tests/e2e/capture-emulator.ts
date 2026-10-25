@@ -4,11 +4,12 @@
 //
 // Walks each flow on the API 35 oracle, resolves every text anchor to a concrete normalized
 // coordinate, and writes tests/e2e/golden/<flow>/{NN-id.png, manifest.json}. Run this by hand
-// when the flows change; `pnpm e2e --full` then diffs off the committed result with no emulator.
+// when the flows change; `pnpm e2e` then scores against the committed result with no emulator.
 import { mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import * as emu from "./drivers/emulator.ts";
-import { PINNED_CLOCK_MS, screenOf, screenParam, sameDimensions, uiFileFor, waitHorizonMs, type Flow, type Manifest, type RecordedStep } from "./types.ts";
+import { PINNED_CLOCK_MS, screenOf, screenParam, sameDimensions, uiFileFor, waitHorizonMs, type Flow, type Manifest, type RecordedStep, type Screen, type StateCondition } from "./types.ts";
+import { stateMatches } from "./lib/settle.ts";
 import { E2E_DIR, readJson, sleep } from "./lib/util.ts";
 import { device as profile } from "../../src/shell/config.ts";
 
@@ -32,6 +33,13 @@ async function ensureDevice(flow: Flow) {
   if (flow.screen?.statusBarDp !== undefined && info.statusBarDp !== flow.screen.statusBarDp)
     throw new Error(`device status inset is ${info.statusBarDp}dp; ${flow.app} requires ${flow.screen.statusBarDp}dp`);
   return info;
+}
+
+/** whether the device's UI tree meets `condition` within `ms` */
+async function reached(condition: StateCondition, ms: number, screen: Screen): Promise<boolean> {
+  for (const deadline = Date.now() + ms; Date.now() < deadline; await sleep(250))
+    if (stateMatches(condition, screen, await emu.dumpUi(), null)) return true;
+  return false;
 }
 
 /** Start once so the app creates its data dir, then write the flow's seed prefs into it. */
@@ -64,6 +72,8 @@ async function recordInto(dir: string, flow: Flow, device: Awaited<ReturnType<ty
   const steps = startup ? flow.steps.slice(0, 1) : flow.steps;
   console.log(`\n=== recording ${flow.app} (${steps.length} steps) ===`);
   const clockMs = await setDeviceClock(flow);
+  // launched from home, as from a launcher: Back out of the app shows home, not the app recorded before
+  await emu.shell("input keyevent 3");
   await emu.shell(`pm clear ${flow.pkg}`);
   await sleep(1200);
   if (flow.seedPrefs) {
@@ -136,14 +146,19 @@ async function recordInto(dir: string, flow: Flow, device: Awaited<ReturnType<ty
         break;
     }
 
-    const horizonMs = waitHorizonMs(step.wait);
+    const acted = Date.now(), horizonMs = waitHorizonMs(step.wait);
+    // A screen can hold still before the step's state (a loading screen), so the state webdroid waits for is reached here first.
+    if (step.wait.kind === "state" && !await reached(step.wait.condition, step.wait.maxRealMs, device)) {
+      note ??= "state not reached";
+      console.warn(`  ! step ${i} ${step.id}: ${note}`);
+    }
     if (horizonMs) await sleep(horizonMs);
     // webdroid has no IME. A soft keyboard in a golden would floor that step's diff near 50%,
     // so it is closed before capture — but only when one is actually up, since the dismiss key
     // also closes dialogs.
     if (await emu.dismissIme()) await sleep(400);
 
-    const { png, timedOut } = await emu.settle();
+    const { png, timedOut } = await emu.settle(), dwellMs = Date.now() - acted;
     const file = `${String(i).padStart(2, "0")}-${step.id}.png`;
     await writeFile(`${dir}/${file}`, png);
     // The hierarchy this screen actually had. dumpUi already runs for every tapText step and its
@@ -153,7 +168,7 @@ async function recordInto(dir: string, flow: Flow, device: Awaited<ReturnType<ty
       await writeFile(`${dir}/${uiFileFor(file)}`, JSON.stringify(await emu.dumpUi()));
       uiFile = uiFileFor(file);
     } catch (e) { console.log(`     (no hierarchy: ${(e as Error).message})`); }
-    recorded.push({ id: step.id, label: step.label, index: i, file, resolved, bounds, uiFile, settleTimedOut: timedOut, note });
+    recorded.push({ id: step.id, label: step.label, index: i, file, resolved, bounds, uiFile, settleTimedOut: timedOut, dwellMs, note });
     console.log(`  ${String(i).padStart(2, "0")} ${step.label}${timedOut ? "  [settle timeout]" : ""}${note ? "  [" + note + "]" : ""}`);
   }
 

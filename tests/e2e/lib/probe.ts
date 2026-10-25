@@ -1,7 +1,7 @@
 // The page-side half of the webdroid driver. `probeScript` is installed as an init script before
 // any page script runs; `installProbe` is serialised into it, so it must stay self-contained and
 // reach the runtime only through `globalThis.wd`.
-import { stableFrame } from "./settle.ts";
+import { stableFrame, stateMatches } from "./settle.ts";
 import { ERROR_LINE } from "./processes.ts";
 import { environmentScript, performAction } from "./actions.ts";
 import type { Screen, StateCondition, UiNode, WaitPolicy } from "../types.ts";
@@ -40,6 +40,9 @@ export type StepSpec = {
   aliveMs: number;
   capture: boolean;
   timing: "controlled" | "real";
+  /** how long after its action the reference device captured the step, when it is compared with one: a controlled clock
+   *  passes at least as much before settling, and a state the step waits for is settled past, as the recorder does */
+  dwellMs?: number;
 };
 
 /** `native`: the guest threads not parked; `stalledMs`: how long a wedged main loop took to answer (null: not within 30 s) */
@@ -78,6 +81,8 @@ export type StepResult = {
 export const DEFAULT_QUIESCENCE: Quiescence = { stableMs: 150, intervalMs: 250, stableFrames: 4 };
 export const PHASE_BOUND_MS = 30_000;
 
+/** a launch's bound: a first launch installs the app and builds its code before it is shown, as long as the app is large */
+const LAUNCH_MS = 60_000;
 /** Includes real live dwell even when the virtual clock is controlled. */
 export function waitBudget(wait: WaitPolicy): { actionMs: number; settleMs: number } {
   const actionMs = wait.kind === "live" || wait.kind === "live-sample" ? wait.timeoutMs : wait.maxRealMs;
@@ -85,9 +90,10 @@ export function waitBudget(wait: WaitPolicy): { actionMs: number; settleMs: numb
   return { actionMs, settleMs: horizonMs + actionMs + PHASE_BOUND_MS };
 }
 
+function actionBound(spec: StepSpec): number { return Math.max(waitBudget(spec.wait).actionMs, spec.act.type === "boot" ? LAUNCH_MS : 0); }
 /** A host envelope for the existing page phases; it does not change their budgets. */
 export function stepDeadlineMs(spec: StepSpec): number {
-  const { actionMs, settleMs } = waitBudget(spec.wait), a = spec.act;
+  const { settleMs } = waitBudget(spec.wait), a = spec.act, actionMs = actionBound(spec);
   let calls = 1, dwell = 0;
   if (a.type === "tap") {
     if (a.whileText) {
@@ -265,26 +271,25 @@ function installProbe(cfg: ProbeConfig): void {
   };
 
   let captured: ImageData | null = null;
-  const inScreen = (node: UiNode, screen: Screen) =>
-    node.bounds[2] > 0 && node.bounds[3] > 0 && node.bounds[0] < screen.width && node.bounds[1] < screen.height;
-  const stateMatches = (condition: StateCondition, screen: Screen, nodes: UiNode[], perf: Record<string, number>): boolean => {
-    if (condition.kind === "all" || condition.kind === "any") {
-      const matches = condition.conditions.map((item) => stateMatches(item, screen, nodes, perf));
-      return condition.kind === "all" ? matches.every(Boolean) : matches.some(Boolean);
-    }
-    if (condition.kind === "perf") return (perf[condition.counter] ?? 0) >= condition.atLeast;
-    if (condition.kind === "resource" || condition.kind === "resource-absent") {
-      const found = nodes.some((node) => node.resId === condition.resId && inScreen(node, screen));
-      return condition.kind === "resource" ? found : !found;
-    }
-    const want = condition.text.replace(/\s+/g, " ").trim().toLowerCase();
-    const found = nodes.some((node) =>
-      (!condition.resId || node.resId === condition.resId) && (!condition.visible || inScreen(node, screen)) &&
-      [node.text, node.desc].some((text) => text.replace(/\s+/g, " ").trim().toLowerCase().includes(want)));
-    return condition.kind === "text" ? found : !found;
-  };
   const WORKING = new Set(["queued", "transition", "starting"]);
-  const settle = async (policy: WaitPolicy, controlled: boolean, q: Quiescence, capture: boolean, screen: Screen): Promise<Settled> => {
+  /** four display frames: how far a controlled clock moves between the frames it steps */
+  const FRAME_STEP_MS = 64;
+  // Time passes on a controlled clock as the app would see it pass: the work a timer wakes and the
+  // frame it asks for run before time moves on, as a frame comes within a refresh on a device. A
+  // jump would run the timers alone: a window's first frame, and the scrollbar fade it arms, would
+  // come after the dwell.
+  const passTime = async (ms: number, deadline: number) => {
+    const clock = g.wd.guestClock, end = clock.now() + ms;
+    let frameAt = -Infinity;
+    while (clock.now() < end && performance.now() < deadline) {
+      const b = await busy(0, 0);
+      if (b.some((k) => k.startsWith("job:") || k === "queued")) { await sleep(4); continue; }
+      const vsync = b.includes("vsync");
+      if (vsync && clock.now() >= frameAt + FRAME_STEP_MS) { frameAt = clock.now(); await g.wd.testFrame(); }
+      await clock.advanceTo(Math.min(end, clock.nextDeadline() ?? end, vsync ? frameAt + FRAME_STEP_MS : end));
+    }
+  };
+  const settle = async (policy: WaitPolicy, controlled: boolean, q: Quiescence, capture: boolean, screen: Screen, dwellMs: number | undefined): Promise<Settled> => {
     const t0 = performance.now();
     captured = null;
     const done = (how: Settled["how"], busy: Record<string, number> = {}): Settled => {
@@ -301,35 +306,70 @@ function installProbe(cfg: ProbeConfig): void {
       wantSample = false;
       return presentation > before;
     };
-    if (policy.kind === "state" || policy.kind === "live" && policy.condition) {
-      const condition = policy.condition!;
-      const maxRealMs = policy.kind === "state" ? policy.maxRealMs : policy.horizonMs + policy.timeoutMs;
-      const maxVirtualMs = policy.kind === "state" ? policy.maxVirtualMs : 0;
-      const stableMs = policy.kind === "state" ? policy.stableMs : 0;
-      const virtualEnd = (g.wd.guestClock?.now() ?? 0) + maxVirtualMs;
-      let matchedAt = 0;
+    /** the pixel rule past `horizonMs`, within `timeoutMs` of the settle's start */
+    const pixels = async (horizonMs: number, timeoutMs: number): Promise<Settled> => {
+      // the pixel rule needs stableFrames + 1 samples past the horizon before it can settle, so
+      // anything scheduled inside that window was always waited for: a toast timing out, a
+      // snackbar dismissing, a list's click after its pressed state. A quick step keeps that
+      // contract, and a controlled clock runs through the window as a real one would, and through the reference's dwell: what
+      // only time ends there (a banner, a dialog's entrance) has ended here too.
+      const windowMs = (q.stableFrames + 1) * q.intervalMs;
+      if (controlled) await passTime(Math.max(horizonMs + windowMs, dwellMs ?? 0), t0 + timeoutMs);
+      // a ripple or transition runs well inside two seconds; a spinner stops at the bound
+      const animationEnd = controlled ? g.wd.guestClock.now() + 2000 : 0;
+      const horizonAt = t0 + (controlled ? 0 : horizonMs);
+      const dueBefore = horizonAt + windowMs;
+      // the pixel rule samples only past the horizon, as the recorder does past its dwell
+      const hashes: number[] = [];
+      let activeSince = 0;
+      const seen: Record<string, number> = {};
+      // at a controlled clock only the app's real work can still change the screen, so samples need not be spaced in real time
+      let lastSample = horizonAt - q.intervalMs, interval = controlled ? Math.min(q.intervalMs, 50) : q.intervalMs;
+      lastHash = -1;
       for (;;) {
         const now = performance.now();
-        const perf = usesPerf(condition) ? stepPerf(await foreground()) : g.wd.perf;
-        const matches = stateMatches(condition, screen, await g.wd.uiTree(), perf);
-        if (matches) {
-          matchedAt ||= now;
-          if (now - matchedAt >= stableMs) break;
-        } else matchedAt = 0;
-        if (performance.now() - t0 >= maxRealMs) return done("timeout", { state: 1 });
-        const next = controlled ? g.wd.guestClock.nextDeadline() : null;
-        if (controlled && g.wd.guestClock.now() < virtualEnd) {
-          await g.wd.guestClock.advanceTo(Math.min(virtualEnd, next ?? g.wd.guestClock.now() + 16));
+        if (now - lastSample >= interval) {
+          lastSample = now;
+          if (now > horizonAt) hashes.push(lastHash);
+          if (hashes.length > q.stableFrames * 2) hashes.shift();
+          wantSample = true;
+          if (lastHash < 0) g.wd.redraw();
+          // each sample is a synchronous GPU readback. Under SwiftShader one waits seconds for an animating
+          // app's backlog of frames, on the page's thread, where the broker answers the app's IPC: what a
+          // readback takes beyond a few frames is kept to a fifth of the thread. A screen whose every
+          // sample differs (a spinner) is sampled less often until a frame repeats
+          if (!controlled) interval = Math.max(4 * (readbackMs - 150), hashes.length === q.stableFrames * 2 && new Set(hashes).size === hashes.length ? Math.min(interval * 2, 1000) : q.intervalMs);
+        }
+        const b = await busy(dueBefore, q.stableMs);
+        if (!b.length) return done("idle", seen);
+        for (const k of b) seen[k] = (seen[k] ?? 0) + 1;
+        // an animation the app started after the clock ran through the window (a slow tap's ripple)
+        // would stay at its first frame and ask for frames forever: time passes while frames are asked
+        // for, four display frames a sample, since only where the animation ends is captured. A
+        // frame's request for the next waits for time, so past the bound this steps the frame, which
+        // also draws what came in meanwhile
+        let advanced = false;
+        if (controlled && b.includes("vsync")) {
+          advanced = g.wd.guestClock.now() < animationEnd;
+          if (advanced) await g.wd.guestClock.advanceTo(Math.min(animationEnd, g.wd.guestClock.now() + FRAME_STEP_MS));
           await g.wd.testFrame();
-        } else await sleep(10);
+        }
+        // a still screen settles past timers and network, not past work under way: a main-thread job
+        // or its queue (its result is not drawn yet), an activity start or finish or a process start,
+        // nor on a real clock during the first 1.5 s of frames scheduled or threads running (a fling's
+        // overscroll stretch changes no pixels; a background thread's result is not shown yet). A
+        // controlled clock has already run through the window, and a loop that keeps going without
+        // changing the screen (a paused game) is still.
+        activeSince = b.includes("vsync") || b.includes("yields") ? activeSince || now : 0;
+        const working = b.some((k) => k.startsWith("job:") || WORKING.has(k)) ||
+          (!controlled && activeSince > 0 && now - activeSince < 1500);
+        const h = working ? undefined : stableFrame(hashes, q.stableFrames);
+        if (h !== undefined && h >= 0) { captured = sampled.get(h) ?? null; return done("pixels", seen); }
+        if (now - t0 >= timeoutMs + (controlled ? 0 : horizonMs)) return done("timeout", seen);
+        // a frame that moved the controlled clock waits only for its presentation; frames at a frozen clock are paced
+        if (advanced) await nextPresent(25); else await sleep(25);
       }
-      const alive = controlled
-        ? await g.wd.guestClock.drive(g.wd.alive(maxRealMs), maxVirtualMs)
-        : await g.wd.alive(maxRealMs);
-      if (!alive) return done("timeout", { queued: 1 });
-      if (!capture) return done("state");
-      return await samplePresentation() ? done("state") : done("timeout", { presentation: 1 });
-    }
+    };
     if (policy.kind === "sample" || policy.kind === "live-sample") {
       if (policy.kind === "sample" && controlled) {
         await g.wd.guestClock.advanceBy(policy.atVirtualMs);
@@ -345,68 +385,37 @@ function installProbe(cfg: ProbeConfig): void {
       }
       return done("snapshot");
     }
-    const horizonMs = policy.kind === "quiescent" ? policy.maxVirtualMs : policy.horizonMs;
-    const timeoutMs = policy.kind === "quiescent" ? policy.maxRealMs : policy.timeoutMs;
-    // the pixel rule needs stableFrames + 1 samples past the horizon before it can settle, so
-    // anything scheduled inside that window was always waited for: a toast timing out, a
-    // snackbar dismissing, a list's click after its pressed state. The fast path keeps that
-    // contract, and a controlled clock runs through the window as a real one would.
-    const windowMs = (q.stableFrames + 1) * q.intervalMs;
-    if (controlled) await g.wd.guestClock.advanceBy(horizonMs + windowMs);
-    // a ripple or transition runs well inside two seconds; a spinner stops at the bound
-    const animationEnd = controlled ? g.wd.guestClock.now() + 2000 : 0;
-    const horizonAt = t0 + (controlled ? 0 : horizonMs);
-    const dueBefore = horizonAt + windowMs;
-    // the pixel rule samples only past the horizon, as the recorder does past its dwell
-    const hashes: number[] = [];
-    let activeSince = 0;
-    const seen: Record<string, number> = {};
-    // at a controlled clock only the app's real work can still change the screen, so samples need not be spaced in real time
-    let lastSample = horizonAt - q.intervalMs, interval = controlled ? Math.min(q.intervalMs, 50) : q.intervalMs;
-    lastHash = -1;
+    if (policy.kind === "quiescent") return pixels(policy.maxVirtualMs, policy.maxRealMs);
+    if (policy.kind === "live" && !policy.condition) return pixels(policy.horizonMs, policy.timeoutMs);
+    const condition = policy.condition!;
+    const maxRealMs = policy.kind === "state" ? policy.maxRealMs : policy.horizonMs + policy.timeoutMs;
+    const maxVirtualMs = policy.kind === "state" ? policy.maxVirtualMs : 0;
+    const stableMs = policy.kind === "state" ? policy.stableMs : 0;
+    const virtualEnd = (g.wd.guestClock?.now() ?? 0) + maxVirtualMs;
+    let matchedAt = 0;
     for (;;) {
       const now = performance.now();
-      if (now - lastSample >= interval) {
-        lastSample = now;
-        if (now > horizonAt) hashes.push(lastHash);
-        if (hashes.length > q.stableFrames * 2) hashes.shift();
-        wantSample = true;
-        if (lastHash < 0) g.wd.redraw();
-        // each sample is a synchronous GPU readback. Under SwiftShader one waits seconds for an animating
-        // app's backlog of frames, on the page's thread, where the broker answers the app's IPC: what a
-        // readback takes beyond a few frames is kept to a fifth of the thread. A screen whose every
-        // sample differs (a spinner) is sampled less often until a frame repeats
-        if (!controlled) interval = Math.max(4 * (readbackMs - 150), hashes.length === q.stableFrames * 2 && new Set(hashes).size === hashes.length ? Math.min(interval * 2, 1000) : q.intervalMs);
-      }
-      const b = await busy(dueBefore, q.stableMs);
-      if (!b.length) return done("idle", seen);
-      for (const k of b) seen[k] = (seen[k] ?? 0) + 1;
-      // an animation the app started after the clock ran through the window (a slow tap's ripple)
-      // would stay at its first frame and ask for frames forever: time passes while frames are asked
-      // for, four display frames a sample, since only where the animation ends is captured. A
-      // frame's request for the next waits for time, so past the bound this steps the frame, which
-      // also draws what came in meanwhile
-      let advanced = false;
-      if (controlled && b.includes("vsync")) {
-        advanced = g.wd.guestClock.now() < animationEnd;
-        if (advanced) await g.wd.guestClock.advanceTo(Math.min(animationEnd, g.wd.guestClock.now() + 64));
+      const perf = usesPerf(condition) ? stepPerf(await foreground()) : g.wd.perf;
+      const matches = stateMatches(condition, screen, await g.wd.uiTree(), perf);
+      if (matches) {
+        matchedAt ||= now;
+        if (now - matchedAt >= stableMs) break;
+      } else matchedAt = 0;
+      if (performance.now() - t0 >= maxRealMs) return done("timeout", { state: 1 });
+      const next = controlled ? g.wd.guestClock.nextDeadline() : null;
+      if (controlled && g.wd.guestClock.now() < virtualEnd) {
+        await g.wd.guestClock.advanceTo(Math.min(virtualEnd, next ?? g.wd.guestClock.now() + 16));
         await g.wd.testFrame();
-      }
-      // a still screen settles past timers and network, not past work under way: a main-thread job
-      // or its queue (its result is not drawn yet), an activity start or finish or a process start,
-      // nor on a real clock during the first 1.5 s of frames scheduled or threads running (a fling's
-      // overscroll stretch changes no pixels; a background thread's result is not shown yet). A
-      // controlled clock has already run through the window, and a loop that keeps going without
-      // changing the screen (a paused game) is still.
-      activeSince = b.includes("vsync") || b.includes("yields") ? activeSince || now : 0;
-      const working = b.some((k) => k.startsWith("job:") || WORKING.has(k)) ||
-        (!controlled && activeSince > 0 && now - activeSince < 1500);
-      const h = working ? undefined : stableFrame(hashes, q.stableFrames);
-      if (h !== undefined && h >= 0) { captured = sampled.get(h) ?? null; return done("pixels", seen); }
-      if (now - t0 >= timeoutMs + (controlled ? 0 : horizonMs)) return done("timeout", seen);
-      // a frame that moved the controlled clock waits only for its presentation; frames at a frozen clock are paced
-      if (advanced) await nextPresent(25); else await sleep(25);
+      } else await sleep(10);
     }
+    const alive = controlled
+      ? await g.wd.guestClock.drive(g.wd.alive(maxRealMs), maxVirtualMs)
+      : await g.wd.alive(maxRealMs);
+    if (!alive) return done("timeout", { queued: 1 });
+    if (!capture) return done("state");
+    // compared with the reference, a state step settles past its state as the recorder does: an entrance can run on after its text is there
+    if (policy.kind === "state" && dwellMs !== undefined) return pixels(policy.maxVirtualMs, policy.maxRealMs);
+    return await samplePresentation() ? done("state") : done("timeout", { presentation: 1 });
   };
   const capture = () => captured ? encode(captured) : screenPng();
 
@@ -445,15 +454,14 @@ function installProbe(cfg: ProbeConfig): void {
     let semanticHit: boolean | undefined, error: string | undefined;
     const actionAt = performance.now();
     try {
-      const { actionMs: maxActionMs } = waitBudget(spec.wait);
-      semanticHit = await act(spec.act, spec.screen, maxActionMs, spec.timing === "controlled");
+      semanticHit = await act(spec.act, spec.screen, actionBound(spec), spec.timing === "controlled");
     } catch (e) {
       error = String((e as Error)?.message ?? e).slice(0, 300);
     }
     const actionMs = performance.now() - actionAt;
     const controlled = spec.timing === "controlled";
     const { settleMs: settleBound } = waitBudget(spec.wait);
-    const settled = await bounded("settle", settle(spec.wait, controlled, spec.quiescence, spec.capture, spec.screen), settleBound,
+    const settled = await bounded("settle", settle(spec.wait, controlled, spec.quiescence, spec.capture, spec.screen, spec.dwellMs), settleBound,
       { how: "timeout", ms: settleBound, busy: { hang: 1 } } as Settled, hangs);
     const aliveAt = performance.now();
     const alive = wd.alive(spec.aliveMs);
@@ -496,4 +504,4 @@ function installProbe(cfg: ProbeConfig): void {
 
 /** The init script: the stability rule and the probe, installed with the flow's configuration. */
 export const probeScript = (cfg: ProbeConfig): string =>
-  `${environmentScript(cfg)}; (() => { ${stableFrame.toString()}; ${performAction.toString()}; const PHASE_BOUND_MS=${PHASE_BOUND_MS}; const ERROR_LINE=${ERROR_LINE}; ${waitBudget.toString()}; (${installProbe.toString()})(${JSON.stringify(cfg)}); })();`;
+  `${environmentScript(cfg)}; (() => { ${stableFrame.toString()}; ${stateMatches.toString()}; ${performAction.toString()}; const PHASE_BOUND_MS=${PHASE_BOUND_MS}, LAUNCH_MS=${LAUNCH_MS}; const ERROR_LINE=${ERROR_LINE}; ${waitBudget.toString()}; ${actionBound.toString()}; (${installProbe.toString()})(${JSON.stringify(cfg)}); })();`;

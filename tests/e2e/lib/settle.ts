@@ -1,3 +1,5 @@
+import type { Screen, StateCondition, UiNode } from "../types.ts";
+
 /**
  * The one settle contract both drivers apply to a sequence of frame hashes sampled at a fixed
  * interval: the newest hash once `stableFrames` consecutive samples repeated it, or — because a
@@ -26,4 +28,26 @@ export function stableFrame<H>(samples: H[], stableFrames = 4): H | undefined {
   const last = samples[n - 1];
   for (let i = n - 1 - stableFrames; i < n - 1; i++) if (samples[i] !== last) return undefined;
   return last;
+}
+
+/**
+ * The one state contract both drivers wait for: whether a UI tree on `screen` meets `condition`. `perf` holds the step's
+ * counters, null on the reference device, which has none: a condition on them holds there. Serialised into the page like `stableFrame`.
+ */
+export function stateMatches(condition: StateCondition, screen: Screen, nodes: UiNode[], perf: Record<string, number> | null): boolean {
+  if (condition.kind === "all" || condition.kind === "any") {
+    const matches = condition.conditions.map((item) => stateMatches(item, screen, nodes, perf));
+    return condition.kind === "all" ? matches.every(Boolean) : matches.some(Boolean);
+  }
+  if (condition.kind === "perf") return !perf || (perf[condition.counter] ?? 0) >= condition.atLeast;
+  const inScreen = (node: UiNode) => node.bounds[2] > 0 && node.bounds[3] > 0 && node.bounds[0] < screen.width && node.bounds[1] < screen.height;
+  if (condition.kind === "resource" || condition.kind === "resource-absent") {
+    const found = nodes.some((node) => node.resId === condition.resId && inScreen(node));
+    return condition.kind === "resource" ? found : !found;
+  }
+  const want = condition.text.replace(/\s+/g, " ").trim().toLowerCase();
+  const found = nodes.some((node) =>
+    (!condition.resId || node.resId === condition.resId) && (!condition.visible || inScreen(node)) &&
+    [node.text, node.desc].some((text) => text.replace(/\s+/g, " ").trim().toLowerCase().includes(want)));
+  return condition.kind === "text" ? found : !found;
 }

@@ -93,6 +93,9 @@ out.bound = await vcall(am, "bindServiceInstance", BIND, app, null, await servic
 out.up = calls.splice(0);
 await vcall(am, "publishService", `(${BINDER}${INTENT}${BINDER})V`, token, await serviceIntent(), await tagged("webdroid/test/Binder", "published"));
 await vcall(am, "bindServiceInstance", BIND, app, null, await serviceIntent(), null, second, 1n, null, PKG, 0);
+// connected() is oneway: its deliveries run detached and may finish after the calls that queued them
+for (const end = Date.now() + 5000; connected.length < 2; await new Promise(resolve => setTimeout(resolve, 1)))
+  if (Date.now() > end) throw new Error(`${connected.length} of 2 connections delivered within 5 s`);
 out.connected = connected.splice(0);
 for (const conn of [first, second]) await vcall(am, "unbindService", "(Landroid/app/IServiceConnection;)Z", conn);
 out.unbound = calls.splice(0);

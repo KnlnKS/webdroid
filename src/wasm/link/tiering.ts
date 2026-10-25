@@ -4,7 +4,7 @@
 import { Compiler, type CallPlan } from "../compiler/j2w.ts";
 import type { InlineFrame } from "../compiler/code.ts";
 import type { MethodInfo } from "../compiler/program.ts";
-import { THROWERS, throwerBody, wasmFrameNames, deepStack } from "../compiler/exc.ts";
+import { THROWERS, throwerBody, engineFrames, deepStack } from "../compiler/exc.ts";
 import { COUNT_BASE, COUNT_SLOTS } from "../compiler/consts.ts";
 import { mid, methodOf } from "../compiler/program.ts";
 import { definitionReady, initiatedType } from "./resolution.ts";
@@ -208,8 +208,8 @@ export class Tiering {
   private outermostWaiting(): number | undefined {
     if (!this.refused.size) return undefined;
     let found: number | undefined;
-    for (const name of wasmFrameNames(deepStack().stack ?? "")) {
-      const m = methodOf(this.w.prog, name.replace(/^\$dispatch:/, "").split("#")[0]), slot = m && this.w.slotOf(m);
+    for (const { name } of engineFrames(deepStack())) {
+      const m = name ? methodOf(this.w.prog, name.replace(/^\$dispatch:/, "").split("#")[0]) : undefined, slot = m && this.w.slotOf(m);
       if (slot !== undefined && this.refused.has(slot) && this.waits(slot)) found = slot;
     }
     return found;

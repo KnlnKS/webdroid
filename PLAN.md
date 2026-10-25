@@ -1,4 +1,4 @@
-# Webdroid status — 2026-10-22
+# Webdroid status — 2026-10-24
 
 This file tracks where the work stands and what is open. [AGENTS.md](AGENTS.md) defines the working and
 verification rules, [docs/architecture.md](docs/architecture.md) the design, [docs/performance.md](docs/performance.md)
@@ -13,7 +13,7 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
 - **The platform runs from AOSP bytecode** of one API-35 reference build (bytecode-first stages A–F complete):
   libcore, resources, graphics, text, the view stack, windows, `android.content` and ActivityThread, over TS
   system services and natives. 64-bit processes run the reference build's bionic; text measures on HarfBuzz
-  (`textcmp` 72/72); Path ops run on Skia.
+  (`textcmp` 108/108) and draws at minikin's positions; Path ops run on Skia.
 - **Every app process runs in its own Worker**; the page realm is `system_server`.
 - **Code delivery:** the platform is compiled at build time. A shown first launch without a saved or bundled build
   waits for a build of the whole app, made in parallel shards in the compile host's process, as an install compiles an
@@ -63,7 +63,8 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
 
 The 2026-10-21 native-region and call-site experiments pass the gates listed in their
 [verification report](docs/performance-design.md#verification), which also records a cold FitNotes page crash and
-an intermittent Chrome startup SIGILL. Negligible overhead across all apps remains open.
+an intermittent Chrome startup SIGILL, Chrome 151's V8 defect (the harness runs Chrome 156 since 2026-10-23).
+Negligible overhead across all apps remains open.
 
 After the second code-quality pass (2026-10-20; history, "Second code-quality pass (2026-10-20)"): typecheck passes,
 along with 1,187 unit tests, all `wasm all` suites, `fwtest` (31 of 31), desccheck (no mismatches), `build:prod` and the
@@ -71,13 +72,18 @@ Worker dry run. After `pnpm aot` the `--jobs 1` quick gate reaches 7 of 7 flows 
 and Komikku tap within 150 ms; Mihon's launch is unavailable because its live update check shows "New version
 available!" over the onboarding screen the scenario expects.
 
-`pnpm check` (2026-10-22) runs typecheck, the unit tests, `wasm all` and the quick e2e gate in 90 s on an M4 Pro
-with the five flows whose APKs this checkout has. The Mihon flows now open `apks/mihon.apk` (0.21.2), whose screens
-stay within the 0.20.4 goldens' thresholds; with them all seven pass in 115 s (2026-10-23). The quick gate runs
-two flows at once on the host GPU (45 s); five at once fails on the starting commit too.
+`pnpm check` (2026-10-24) runs the typecheck, three unit-test shards, each part of `wasm all` and the seven
+deterministic flows as one pool in 83–89 s on an M4 Pro beside other sessions' load (three runs); `--corpus` adds a
+launch of each corpus APK no flow launches (221 s). Each flow runs once. Calculator M, FitNotes and both Mihon flows
+are scored against API 35 goldens recorded with each step's dwell (content 0.65, 2.94, 22.3–24.5 and 10.94%), and
+the other three run as smoke. Two browsers run at once, each as an 8-core device; three took 120 s, since a flow's
+launch is bound by CPU. How long a gate takes follows the host's memory pressure: from t=0 the flows take nearly twice
+their time alone.
 
-Not run since the JS tier was deleted: `e2e --live`, `e2e --full --jobs 1` and `corpus`. Before that,
-the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budget).
+`e2e --live` (2026-10-24, the first run since the JS tier was deleted) passes 6 of 7 flows: TikTok's cold launch
+reaches its first-run gate at about 32 s, past its 20 s bound (item 2). Lichess's launch differs from its reference
+on both tiers (a notification-permission request and live content); do not raise the limit. `textcmp` FitNotes:
+108/108 layouts, 184/184 hyphenated lines.
 
 ## Open work, in priority order
 
@@ -87,24 +93,18 @@ the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budg
    Chrome Worker charges about 18.5 µs per module against Node's 4.2 µs, and no V8 flag changes that, so fold
    `linkEnsure` (603 modules) into fewer modules. A callee prediction must hit more than
    about 70% to pay inside a tap (single-target callees hit 64%).
-2. **The full matrix after the JS tier's removal.** Run `--live`, then `--full --jobs 1`, `corpus` and `textcmp`,
-   serially, with a platform build that matches the sources. Compare any failure with `33373567` (the last commit
-   before the removal) under the same settings: check it out in its own worktree with its own `vendor/wasm-aot`
-   (not the symlink), cherry-pick `06f9ceb4` (which keys the platform build correctly), copy the main checkout's
-   `vendor/wasm-aot/hot.json` into it, and run `pnpm aot` there. Lichess's launch differs from its reference on
-   both tiers (a notification-permission request and live content); do not raise the limit.
-3. **TikTok's launch** (11.5 s cold in `lat` on this branch and its base, 2026-10-16; 8.2 s warm since its saved
-   build attaches). A cold launch needs about 48 s to its first gate, so the quick lane's 20 s launch wait fails on
-   this branch and its base alike; under `--full` the flow reaches the feed and plays through both swipes
-   (2026-10-16), though liveness probes can stall past 3 s while the interests and first swipe steps compile cold
-   code. With compile workers in their own renderer its app cage peaks at 2.5–2.6 GB; native code takes 27.6 s and
+2. **TikTok's launch** (11.5 s cold in `lat` on this branch and its base, 2026-10-16; 8.2 s warm since its saved
+   build attaches). A cold launch needs 32–48 s to its first gate (2026-10-16, 2026-10-24), so its flow's 20 s
+   launch wait fails on this branch and its base alike; given the reference's 90 s the flow reached the feed and
+   played through both swipes (2026-10-16), though liveness probes can stall past 3 s while the interests and first
+   swipe steps compile cold code. With compile workers in their own renderer its app cage peaks at 2.5–2.6 GB; native code takes 27.6 s and
    on-demand compiling 26 s of the main process's busy time. Its e2e flow now picks an adult birthdate on the guest
    birthdate screen. In matched cold first visits against its base (new browser contexts, 2026-10-16), signup comes
    at 37.6 s, as on the base. The feed comes at 66.9 s against 95.1 s, and 60 s later the main Worker holds 1.13 GB
    after a full collection against 1.36 GB. On the base, merged-away units drained 32 per collection force full
    collections for external memory. Two of 14 of the branch's cold launches stalled idle on a black window before
    any gate, and none of the base's 12; the cause is open (history, "The branch against its base").
-4. **First-launch build cost** (Komikku 3.0 s, FitNotes 0.5 s, TikTok). A first launch waits for its app's build,
+3. **First-launch build cost** (Komikku 3.0 s, FitNotes 0.5 s, TikTok). A first launch waits for its app's build,
    so the compiler is now on its path: front-end allocation (about 200 MB/s, `Flow` construction 12%), a shard's fixed
    cost (its script and jars, about 290 ms) and instantiation (code modules import about 172 globals each;
    cross-module class access could use id-indexed arrays). Measure each on Komikku's first launch, three matched runs
@@ -112,17 +112,17 @@ the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budg
    path itself is worth profiling. Building an app's static roots before its first launch and a Zig compiler were
    measured and rejected: the build costs more than the 6–9 s it saves TikTok's signup, and the compiler's profile
    has no phase to move (history, 2026-10-16).
-5. **Launch reliability and status.** First launches no longer hang on the compile worker script, whose body
+4. **Launch reliability and status.** First launches no longer hang on the compile worker script, whose body
    Chrome stopped delivering in about 1 of 80 (history, "Compile workers that end or never load"). Still open: one
    first launch that did not wait for a build hung and one launch-only FitNotes run crashed its renderer, neither
    reproduced; the page shows "Starting app…" through the whole launch, the build's wait included.
-6. **Application compatibility.**
+5. **Application compatibility.**
    - *TikTok playback and input:* capture repeatable source media and separate decoded-video, EGL-swap and
      presentation counts; profile dense clips and warmed action latency. Its unchanged ByteVC decoder reached a
      near-30/s cadence on one 30-fps HEVC segment.
    - *YouTube:* search, thumbnails, playback, fullscreen and Shorts work; the fullscreen crash (about 1 in 9
-     walks) was a stale handle long naming a reused slot (history, YouTube). The full lane's video-open tap is a
-     coordinate that can land on a live Short.
+     walks) was a stale handle long naming a reused slot (history, YouTube). The reference's video-open tap is a
+     coordinate that can land on a live Short; webdroid's run taps the title.
    - *NewPipe:* feeds, search, playback (fullscreen, background and popup players), live streams, channels,
      subscriptions, downloads, history and settings work. Live streams intermittently get HTTP 403 from YouTube,
      as they do on the reference AVD. It has no e2e flow.
@@ -144,13 +144,13 @@ the serial `--live` matrix reached 13 of 14 flows (TikTok missed its launch budg
    - *`apks/new`:* McDonald's Order tab overlaps because the XAPK ships only the mdpi split. Walmart's Sparky needs
      an on-demand feature split that is not in the XAPK, and microG's SplitInstallService is disabled. Tubi's Widevine
      titles show a DRM error and Snapseed's "Looks" needs GLES 3.1 compute; both need a decision from the user.
-7. **Lower value; only with a new measurement that justifies it.**
+6. **Lower value; only with a new measurement that justifies it.**
    - `system_server` and the broker stores in a system Worker: the broker answers app IPC on the page thread, so
      slow page work starves app queries. Measure page-thread time during app IPC first.
    - Pre-linked images with relocations: direct calls measured neutral, and FitNotes' warm launch would save an
-     estimated 100–200 ms; relocation matters mainly as the enabler of ahead-of-time compiles (item 4).
+     estimated 100–200 ms; relocation matters mainly as the enabler of ahead-of-time compiles (item 3).
    - Per-signature trampolines in place of the per-name `callFn` and `hostFn` modules (15–30 ms of a launch).
-8. **Cleanup candidates** (confirm with a reference search before deleting): `src/jvm/runtime.ts` is still shaped
+7. **Cleanup candidates** (confirm with a reference search before deleting): `src/jvm/runtime.ts` is still shaped
    around the JS tier in places (`rt.make` gives a carrier of fields that cannot take a virtual call); browser tests
    intermittently fail with "End Of Central Directory signature not found" while reading a jar, still unexplained.
 
@@ -182,7 +182,8 @@ Unranked; each needs a measurement or a check against the current code before wo
   WatchService; the regex natives (`jregex.ts`) translate to JS RegExp, so possessive quantifiers run greedy; only 9 of 226 charsets are
   served; A64 exclusive-monitor semantics are unverified.
 - **Harness:** the emulator recorder runs online, so re-recording Mihon's references would capture its update
-  dialog.
+  dialog. Two unit tests sample wall time and failed only with the unit shards starved (utility QoS): `app.browser`'s
+  animated GIF, read 150 ms after `start()` on 100 ms frames, and `webview-provider`'s fragment navigation.
 - **Tap candidates** (2026-10-22, from profiles; unmeasured as changes): YouTube's first RuntimeShader creates a
   WebGL context in its tap (~9 ms), which could be made while idle; a caught exception captures its Java stack
   eagerly whenever bridged callers exist (~1.5 ms a Komikku tap); a LaunchRecord's ran slots are keyed by the build

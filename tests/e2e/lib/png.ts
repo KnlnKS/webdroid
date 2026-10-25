@@ -11,9 +11,10 @@ export async function loadPng(path: string): Promise<Img> {
 }
 
 export async function savePng(path: string, img: Img): Promise<void> {
+  // one row filter: choosing among the five per row took half of a flow's scoring, for a quarter less size
   const png = new PNG({ width: img.width, height: img.height });
   img.data.copy(png.data);
-  await writeFile(path, PNG.sync.write(png));
+  await writeFile(path, PNG.sync.write(png, { filterType: 2 }));
 }
 
 export function newImg(width: number, height: number, fill = 0x00): Img {

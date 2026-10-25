@@ -2,14 +2,15 @@
   "app": "calculatorm",
   "pkg": "com.vagujhelyigergely.calculatorm3",
   "activity": "com.vagujhelyigergely.calculatorm3.MainActivity",
-  "recordedAt": "2026-09-23T23:14:52.856Z",
+  "recordedAt": "2026-10-24T05:22:19.006Z",
   "pinnedClockMs": 1767355200000,
   "device": {
     "width": 1080,
     "height": 2424,
     "densityDpi": 480,
-    "fingerprint": "google/sdk_gphone64_arm64/emu64a:13/TE1A.240213.009/12342917:userdebug/dev-keys",
-    "sdk": "33"
+    "statusBarDp": 24,
+    "fingerprint": "google/sdk_gphone64_arm64/emu64a:15/AE3A.240806.043/12960925:userdebug/dev-keys",
+    "sdk": "35"
   },
   "crop": {
     "top": 48,
@@ -24,7 +25,8 @@
       "index": 0,
       "file": "00-launch.png",
       "uiFile": "00-launch.ui.json",
-      "settleTimedOut": false
+      "settleTimedOut": false,
+      "dwellMs": 7644
     },
     {
       "id": "keypad",
@@ -32,7 +34,8 @@
       "index": 1,
       "file": "01-keypad.png",
       "uiFile": "01-keypad.ui.json",
-      "settleTimedOut": false
+      "settleTimedOut": false,
+      "dwellMs": 2690
     },
     {
       "id": "7",
@@ -44,7 +47,8 @@
         "y": 0.5808580858085809
       },
       "uiFile": "02-7.ui.json",
-      "settleTimedOut": false
+      "settleTimedOut": false,
+      "dwellMs": 3085
     },
     {
       "id": "plus",
@@ -56,7 +60,8 @@
         "y": 0.7978547854785478
       },
       "uiFile": "03-plus.ui.json",
-      "settleTimedOut": false
+      "settleTimedOut": false,
+      "dwellMs": 3133
     },
     {
       "id": "7b",
@@ -68,7 +73,8 @@
         "y": 0.5808580858085809
       },
       "uiFile": "04-7b.ui.json",
-      "settleTimedOut": false
+      "settleTimedOut": false,
+      "dwellMs": 3176
     },
     {
       "id": "eq",
@@ -80,7 +86,8 @@
         "y": 0.9067656765676567
       },
       "uiFile": "05-eq.ui.json",
-      "settleTimedOut": false
+      "settleTimedOut": false,
+      "dwellMs": 3155
     },
     {
       "id": "result",
@@ -88,15 +95,8 @@
       "index": 6,
       "file": "06-result.png",
       "uiFile": "06-result.ui.json",
-      "settleTimedOut": false
-    },
-    {
-      "id": "back",
-      "label": "Back",
-      "index": 7,
-      "file": "07-back.png",
-      "uiFile": "07-back.ui.json",
-      "settleTimedOut": false
+      "settleTimedOut": false,
+      "dwellMs": 2671
     }
   ]
 }

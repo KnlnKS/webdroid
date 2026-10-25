@@ -1,6 +1,5 @@
 // JSON + standalone HTML report. The HTML embeds nothing but relative PNG links, so the whole
 // report/ directory is portable.
-import type { StepRun } from "../capture-webdroid.ts";
 import type { TreeDiff } from "./tree.ts";
 export type StepReport = {
   index: number; id: string; label: string; file: string;
@@ -42,34 +41,6 @@ export type FlowReport = {
 
 const pct = (n: number) => n.toFixed(2).padStart(6) + "%";
 
-/** A flow with no goldens: what ran, what hung, what was missing — nothing about pixels. */
-export function printSmoke(app: string, runs: StepRun[], log = console.log): void {
-  log(`\n--- ${app} (smoke, not scored) ---`);
-  let wedgedAt: number | undefined;
-  const missing = new Set<string>(), native = new Set<string>();
-  for (const s of runs) {
-    if (s.mainLoopWedged && wedgedAt === undefined) wedgedAt = s.index;
-    for (const m of s.newMissing ?? []) missing.add(m);
-    for (const n of s.nativeRequired ?? []) native.add(n);
-    const flags = [
-      s.fps !== undefined ? `${s.fps}fps` : "",
-      s.slow ? "SLOW" : "",
-      s.settleTimedOut ? "settle-timeout" : "",
-      s.mainLoopWedged ? "WEDGED" : "",
-      s.error ? "error" : "",
-      s.newMissing?.length ? `${s.newMissing.length} missing` : "",
-      s.newErrors?.length ? `${s.newErrors.length} errors` : "",
-    ].filter(Boolean).join(" ");
-    log(`  ${String(s.index).padStart(2, "0")} ${s.id}${flags ? "  [" + flags + "]" : ""}`);
-  }
-  const fps = runs.map((s) => s.fps).filter((f): f is number => f !== undefined);
-  log(`  rendered ${runs.filter((s) => !s.mainLoopWedged).length}/${runs.length}` +
-    (wedgedAt !== undefined ? ` · wedged at ${String(wedgedAt).padStart(2, "0")}` : "") +
-    (fps.length ? ` · min fps ${Math.min(...fps)}` : "") +
-    (missing.size ? ` · missing: ${[...missing].join(", ")}` : " · nothing missing") +
-    (native.size ? ` · native code required: ${[...native].join(", ")}` : ""));
-}
-
 export function printFlow(r: FlowReport): void {
   console.log(`\n--- ${r.app} (Android API ${r.androidSdk}) ---`);
   console.log("  ##  strict  tolerant  content  step");
@@ -104,7 +75,7 @@ export function printFlow(r: FlowReport): void {
   }
 }
 
-export function html(reports: FlowReport[], generatedAt: string, geometry: string): string {
+export function html(reports: FlowReport[], generatedAt: string): string {
   const bar = (v: number) =>
     `<span class="bar"><i style="width:${Math.min(100, v).toFixed(1)}%"></i></span>`;
   const rows = (r: FlowReport) => r.steps.map((s) => `
@@ -120,7 +91,7 @@ export function html(reports: FlowReport[], generatedAt: string, geometry: strin
       <td class="num">${s.tolerantPct.toFixed(2)}%</td>
       <td class="num">${s.contentDiffPct.toFixed(2)}% ${bar(s.contentDiffPct)}
         <div class="ink">${s.mainLoopWedged ? `scored as non-render &middot; measured ${s.rawContentDiffPct.toFixed(2)}%` : `ink ${s.actualInk.toLocaleString()} / ${s.goldenInk.toLocaleString()}${s.bgMismatch ? " &middot; bg mismatch" : ""}`}</div></td>
-      <td><a href="../${r.app}-sxs/${s.file}"><img loading="lazy" src="../${r.app}-sxs/${s.file}"></a></td>
+      <td><a href="${r.app}-sxs/${s.file}"><img loading="lazy" src="${r.app}-sxs/${s.file}"></a></td>
     </tr>`).join("");
 
   return `<title>webdroid visual diff</title>
@@ -150,7 +121,7 @@ export function html(reports: FlowReport[], generatedAt: string, geometry: strin
   a { color:inherit }
 </style>
 <h1>webdroid vs. real Android — visual diff</h1>
-<div class="meta">generated ${esc(generatedAt)} &middot; ${esc(geometry)} &middot; system bars cropped &middot;
+<div class="meta">generated ${esc(generatedAt)} &middot; system bars cropped &middot;
   <b>content</b> = tolerant mismatch over the union of both images' non-background pixels
   (the target metric &mdash; a blank render scores ~100% here, ~3% on whole-frame numbers).
   A step webdroid never rendered, because its main loop was wedged, scores a flat 100%: a

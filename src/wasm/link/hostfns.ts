@@ -141,10 +141,12 @@ export class HostFunctions {
     return f;
   }
   /** calls a Java function made of `body` (as callFn's) with `args`, waiting only where strand `parent` can: on a new strand of its own then, which answers a Promise if
-   *  it waited, else plainly */
+   *  it waited, else plainly. A parent that owes (Sched.owes) waits once first: the engine keeps each entry's stack until then */
   mayWait(parent: Strand, name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void, args: unknown[], prepare?: (cx: Compiler) => void): unknown {
-    if (!this.w.sched.canWait(parent)) return this.w.unwound(() => this.hostFn(name, params, ret, (cx, c) => body(cx, c, (i) => { c.lget(i); }), prepare)(...args));
-    const s = this.w.sched.strand(parent.thread, parent);
+    const sched = this.w.sched;
+    if (!sched.canWait(parent)) return this.w.unwound(() => this.hostFn(name, params, ret, (cx, c) => body(cx, c, (i) => { c.lget(i); }), prepare)(...args));
+    if (sched.current() === parent && sched.owes()) return Promise.resolve().then(() => this.mayWait(parent, name, params, ret, body, args, prepare));
+    const s = sched.strand(parent.thread, parent);
     let result: unknown;
     try { result = this.callFn(name, params, ret, body, prepare)(s, ...args); } catch (e) { s.end(); throw e; }
     if (result instanceof Promise) return result.finally(() => s.end());

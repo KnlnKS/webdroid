@@ -6,7 +6,7 @@ import { unresolvedClass } from "../compiler/linkage.ts";
 import type { InvokeMode } from "../compiler/handles.ts";
 import { HEAP_LIMIT } from "../../jvm/abi.ts";
 import { NO_INDEX } from "../../jvm/dex.ts";
-import { hostInfo } from "./classes.ts";
+import { className, hostInfo } from "./classes.ts";
 import { hostMembers, hostText } from "./members.ts";
 import { hostReflect } from "./reflect.ts";
 import { hostUnsafe } from "./unsafe.ts";
@@ -63,7 +63,7 @@ export function hostImports(w: World): HostImports {
     heapCheck: () => (heap() - heapBase > limit && (opts.collect?.(), heap() - heapBase > limit) ? 1 : 0),
     info: (kind: number, a: number, b: number) => kind >= MInfo.ExecCount ? hostMembers(w, kind, a, b) : kind >= RInfo.MethodCount ? hostReflect(w, kind, a, b)
       : kind >= UInfo.FieldGet ? hostUnsafe(w, kind, a, b) : hostInfo(w, kind, a, b),
-    text: (kind: number, a: number) => w.javaValue(hostText(w, kind, a)),
+    text: (kind: number, a: number, b: number) => hostText(w, kind, a, b),
     obj: (kind: number, a: number, b: number, filter: object | null) => (kind === LOADER_OF_CLASS ? loaderObject(w, a) : w.javaValue(hostObject(w, kind, a, b, filter))),
     annotation: (kind: number, a: number, b: number, filter: object | null) => park(hostObject(w, kind, a, b, filter), null),
     annotationWait: sched.settle(),
@@ -95,7 +95,7 @@ export function hostImports(w: World): HostImports {
     // the class `n` frames out from the caller of the native; 0 when the stack is not that deep
     stackClass: (n: number) => {
       const frames = w.stacks.callerFrames(n + 2), f = frames[n + 1];
-      return f ? w.idOf(f.cls.replace(/\./g, "/")) : 0;
+      return f ? w.idOf(f.cls) : 0;
     },
     excMessage: (kind: number, a: number, b: number, c: number, d: number, e: number) => {
       const message = w.lastMessage = excMessage(kind, a, b, c, d, e, names, (id) => id < 0 ? w.numbers.gapList[lastGap] : w.numbers.links.message(id)!);
@@ -106,8 +106,8 @@ export function hostImports(w: World): HostImports {
     stFrames: (state: object | null) => state ? w.stacks.stackTrace(state) : [],
     // a frame's class, method and the source file its class def names (null without one)
     stString: (frames: JavaFrame[], i: number, which: number) => {
-      const f = frames[i], c = which === 2 ? w.prog.get(f.cls.replace(/\./g, "/")) : undefined;
-      return which === 0 ? javaName(f.cls) : which === 1 ? f.method : c?.def && c.def.sourceFileIdx !== NO_INDEX ? c.dex!.string(c.def.sourceFileIdx) : null;
+      const f = frames[i], c = which === 2 ? w.prog.get(f.cls) : undefined;
+      return which === 0 ? className(f.cls) : which === 1 ? f.method : c?.def && c.def.sourceFileIdx !== NO_INDEX ? c.dex!.string(c.def.sourceFileIdx) : null;
     },
     stLine: (frames: JavaFrame[], i: number) => frames[i].line,
     // the length of an answer the code holds (stFrames, net), or the code a lookup answered instead

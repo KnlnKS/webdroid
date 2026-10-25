@@ -4,11 +4,11 @@
 // exercise from scratch, log against it, and read ITS graph. Aspirational by design — it
 // deliberately crosses surfaces the implementation history lists as unfinished (overflow menu, EditText box
 // styling, the ViewPager draw/settle gap), because the flow is the target, not a certificate.
-import { wait, type Flow } from "../types.ts";
+import { PHONE_720, pixelsOn, wait, type Flow } from "../types.ts";
 
 // Normalized centres verified on-device. EditTexts and ActionBar icons carry no matchable
 // text, so they are tapped positionally; everything else uses a text anchor.
-const N = (x: number, y: number) => ({ x: x / 720, y: y / 1280 });
+const { point: N } = pixelsOn(PHONE_720);
 
 const WEIGHT_FIELD = N(360, 353);
 const REPS_FIELD = N(360, 531);
@@ -36,6 +36,7 @@ export const fitnotes: Flow = {
   activity: "com.github.jamesgay.fitnotes.feature.home.MainActivity",
   apk: "FitNotes.apk",
   // Reference captures retain Android's 48px status inset; the normal browser UI does not.
+  screen: PHONE_720,
   crop: { top: 48, bottom: 48, left: 0, right: 0 },
   clock: "controlled",
   steps: [
@@ -80,6 +81,6 @@ export const fitnotes: Flow = {
     { id: "back-1", label: "Back to exercise list", action: { type: "back" }, wait: wait.quiescent(700) },
     { id: "back-2", label: "Back to categories", action: { type: "back" }, wait: wait.quiescent(700) },
     { id: "home-final", label: "Home — workout logged", action: { type: "back" }, wait: wait.quiescent(1200),
-      fastEvidence: { kind: "visual", maxContentDiffPct: 22 } },
+      evidence: { kind: "visual", maxContentDiffPct: 22 } },
   ],
 };

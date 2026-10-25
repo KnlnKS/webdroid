@@ -7,8 +7,8 @@ import { OP } from "../compiler/code.ts";
 import { T, refNull } from "../compiler/wasmbin.ts";
 import { ACC, kindOf, type JClass, type MethodInfo, typeName } from "../compiler/program.ts";
 import { descToName } from "../../jvm/abi.ts";
-import { emitString, idOfClass, emitNameEq } from "./classes.ts";
-import { UInfo, RInfo } from "../compiler/info.ts";
+import { idOfClass, emitName, emitNameEq } from "./classes.ts";
+import { UInfo, RInfo, TextKind } from "../compiler/info.ts";
 import { WIDEN, BOX, box } from "../compiler/primitives.ts";
 import { rt, type Synth } from "../compiler/rtfns.ts";
 import type { Code } from "../compiler/code.ts";
@@ -238,7 +238,7 @@ def("java/lang/Class.getDeclaredClasses()[Ljava/lang/Class;", (cx, c) => { c.lge
 def("java/lang/Class.getInterfacesInternal()[Ljava/lang/Class;", (cx, c) => { c.lget(0); idOfClass(cx, c); c.i32(0).i32(1); cx.callRt(c, "classArray"); });
 def("java/lang/reflect/Executable.getMethodNameInternal()Ljava/lang/String;", (cx, c) => {
   const [cid, idx] = cookie(cx, c);
-  emitString(cx, c, () => info(cx, c, RInfo.MethodNameLen, cid, () => c.lget(idx)), (j) => info(cx, c, RInfo.MethodNameChar, cid, () => c.lget(idx).i32(16).raw(OP.i32_shl).lget(j).raw(OP.i32_or)));
+  emitName(cx, c, TextKind.MethodName, () => c.lget(cid), () => c.lget(idx));
 });
 def("java/lang/reflect/Executable.getMethodReturnTypeInternal()Ljava/lang/Class;", (cx, c) => { const [cid, idx] = cookie(cx, c); info(cx, c, RInfo.MethodRet, cid, () => c.lget(idx)); cx.callRt(c, "classOf"); });
 def("java/lang/reflect/Executable.getParameterCountInternal()I", (cx, c) => { const [cid, idx] = cookie(cx, c); info(cx, c, RInfo.MethodParams, cid, () => c.lget(idx)); });

@@ -53,7 +53,7 @@ export function workerSnapshots(entries: Iterable<ProcessRecord>): Promise<Worke
       const snapshot = await within(shared(snapshots, host, () => host.control.snapshot()), 5000, () => { throw new Error("Worker diagnostic timeout"); });
       const after = ended(entry, identity);
       if (after) return after;
-      if (snapshot.dead || snapshot.phase !== "ready") throw new Error(`Worker is ${snapshot.dead ? "dead" : "not ready: " + snapshot.phase}`);
+      if (snapshot.dead) throw new Error("Worker is dead");
       return { ...identity, snapshot };
     } catch (error) { return ended(entry, identity) ?? { ...identity, error: failure(error) }; }
   }));

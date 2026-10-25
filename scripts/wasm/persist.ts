@@ -60,11 +60,12 @@ const answers = (w: World) => {
 const expected = answers(world(app));
 check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
 
-// A build made in shards, each World compiling its share with the numbering they share frozen, runs as the app does.
+// A build made in shards, each World compiling its share with the numbering they share frozen, runs as the app does. It is of the fixture's classes alone: the host's
+// classes patch platform modules, which shard they land in depends on the platform build, and the lead's data load sends the fixture's module to another shard.
 {
   const part = (shard: number) => {
     const w = world(app, { compileOnly: true });
-    return buildPart(w, [...w.prog.own()].flatMap((c) => c.methods.filter((m) => m.codeOff)), { methods: [], classes: [], synths: [] }, shard, 3);
+    return buildPart(w, [...w.prog.own()].filter((c) => c.dex && app.includes(c.dex)).flatMap((c) => c.methods.filter((m) => m.codeOff)), { methods: [], classes: [], synths: [] }, shard, 3);
   };
   const [lead, ...rest] = [0, 1, 2].map(part);
   if (!("index" in lead)) throw new Error("the first shard made no index");

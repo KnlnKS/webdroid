@@ -171,9 +171,8 @@ async function readProfiles(page: import("playwright").Page): Promise<AotProfile
 async function collectLaunch(page: import("playwright").Page, deadline: number, errors: string[]) {
   for (;;) {
     const processes = await readProcesses(page);
-    const pending = processes.some(({diagnostics:d}) => d.status === "failure" && d.message.startsWith("Worker is not ready:"));
-    const failed = processes.filter(({diagnostics:d}) => d.status === "unavailable"
-      || d.status === "failure" && !d.message.startsWith("Worker is not ready:")
+    const pending = processes.some(({diagnostics:d}) => d.status === "starting");
+    const failed = processes.filter(({diagnostics:d}) => d.status === "unavailable" || d.status === "failure"
       || d.status === "ok" && (d.errors === null || d.errors.length || d.missing.length || d.native.length));
     if (!processes.length || failed.length || errors.length) throw new Error(`incomplete launch diagnostics: ${JSON.stringify({processes:failed,errors})}`);
     if (!pending) {

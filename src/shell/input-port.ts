@@ -88,7 +88,11 @@ export function receiveIme(view: MessagePort, canvas: HTMLCanvasElement, calls: 
   } }, () => close());
   input.addEventListener("input", event => enqueue({generation:state.generation,kind:"input",text:input.value,
     start:input.selectionStart,end:input.selectionEnd,composing:event instanceof InputEvent && event.isComposing}), {signal:events.signal});
-  input.addEventListener("select", () => enqueue({generation:state.generation,kind:"selection",start:input.selectionStart,end:input.selectionEnd}), {signal:events.signal});
+  // mirror's setSelectionRange fires `select` too: the editor's own selection, sent back late, would undo an edit made since
+  input.addEventListener("select", () => {
+    if (input.selectionStart === state.start && input.selectionEnd === state.end) return;
+    enqueue({generation:state.generation,kind:"selection",start:input.selectionStart,end:input.selectionEnd});
+  }, {signal:events.signal});
   input.addEventListener("compositionend", () => enqueue({generation:state.generation,kind:"finish"}), {signal:events.signal});
   input.addEventListener("keydown", event => {
     if (event.key === "Enter" && !event.isComposing && state.hasAction) { event.preventDefault(); enqueue({generation:state.generation,kind:"action"}); }

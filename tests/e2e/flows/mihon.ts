@@ -12,9 +12,9 @@
 //
 // Every screen here is offline-reachable: the reproducible gate runs without a network, so
 // Browse/Extensions would be an unreachable target rather than a fair one.
-import { wait, type Flow } from "../types.ts";
+import { PHONE_720, pixelsOn, wait, type Flow } from "../types.ts";
 
-const N = (x: number, y: number) => ({ x: x / 720, y: y / 1280 });
+const { point: N } = pixelsOn(PHONE_720);
 
 const PKG = "app.mihon";
 const ACTIVITY = "eu.kanade.tachiyomi.ui.main.MainActivity";
@@ -39,20 +39,20 @@ export const mihonOnboarding: Flow = {
   pkg: PKG,
   activity: ACTIVITY,
   apk: "mihon.apk",
+  screen: PHONE_720,
   crop: CROP,
   clock: "pinned",
   steps: [
-    // Mihon shows a static splash for several seconds; without a floor here the settle
-    // heuristic locks onto the splash and records THAT as the golden.
+    // A launch presents frames before Mihon draws (a static splash, early window frames), so it waits for the screen itself.
     { id: "launch", label: "Launch — Welcome / theme picker", action: { type: "launch" },
-      wait: wait.state({ kind: "perf", counter: "presentations", atLeast: 2 }, 0) },
+      wait: wait.state({ kind: "text", text: "Welcome!" }, 0) },
     // Pin the theme explicitly: the default "Dynamic" derives Material You colours from the
     // wallpaper, which is not a thing webdroid can or should reproduce.
     { id: "theme-light", label: "Choose Light mode", action: { type: "tapText", text: "Light" }, wait: wait.quiescent(900) },
     { id: "theme-default", label: "Choose Default theme", action: { type: "tapAt", ...N(177, 870) }, wait: wait.quiescent(900) },
     { id: "onboarding-next", label: "Next — storage step", action: { type: "tapText", text: "Next" }, wait: wait.quiescent(1200) },
     { id: "storage-step", label: "Storage step (picker not entered)", action: { type: "settle" }, wait: wait.quiescent(),
-      fastEvidence: { kind: "visual", maxContentDiffPct: 29 } },
+      evidence: { kind: "visual", maxContentDiffPct: 29 } },
   ],
 };
 
@@ -61,12 +61,13 @@ export const mihonApp: Flow = {
   pkg: PKG,
   activity: ACTIVITY,
   apk: "mihon.apk",
+  screen: PHONE_720,
   crop: CROP,
   seedPrefs: SEED_PREFS,
   clock: "pinned",
   steps: [
     { id: "library", label: "Library — empty state", action: { type: "launch" },
-      wait: wait.state({ kind: "perf", counter: "presentations", atLeast: 3 }, 0) },
+      wait: wait.state({ kind: "text", text: "Your library is empty" }, 0) },
     { id: "nav-more", label: "More tab", action: { type: "tapText", text: "More" }, wait: wait.quiescent(1500) },
     // Settings sits below the fold on the More list — the scroll is load-bearing, not decorative.
     { id: "more-scroll", label: "Scroll the More list",
@@ -92,7 +93,7 @@ export const mihonApp: Flow = {
       action: { type: "tapText", text: "Dark" }, wait: wait.quiescent(2500) },
     { id: "appearance-light", label: "Switch back to Light",
       action: { type: "tapText", text: "Light" }, wait: wait.quiescent(2500),
-      fastEvidence: { kind: "visual", maxContentDiffPct: 14 } },
+      evidence: { kind: "visual", maxContentDiffPct: 14 } },
     { id: "appearance-scroll", label: "Scroll Appearance",
       action: { type: "swipe", from: [0.5, 0.82], to: [0.5, 0.4], ms: 400 }, wait: wait.quiescent(2500) },
     { id: "back-out", label: "Back out of Appearance", action: { type: "back" }, wait: wait.quiescent(2000) },

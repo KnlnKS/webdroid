@@ -230,6 +230,9 @@ let pieces = new WeakMap<NativeTypeface, Map<string, Map<string, Piece>>>(), pie
 /** the code units of the blocks of right-to-left scripts: outside them HarfBuzz guesses a run with no direction LTR, so a piece laid out LTR is the
  *  piece measured */
 const RTL_BLOCKS = /[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufeff\ud802\ud803\ud83a\ud83b]/;
+/** whether `s` can be drawn a cluster at a time: left to right throughout (no right-to-left script nor bidi control), in no
+ *  script whose letters join across clusters */
+export const clusterwise = (s: string): boolean => !RTL_BLOCKS.test(s) && !/[\u200f\u202a-\u202e\u2066-\u2069]/.test(s) && !JOINING.test(s);
 /** LayoutCache::getOrCreate: the piece text[start, end) with hyphen edits at its ends, in its context
  *  text[ctxStart, ctxEnd), in `direction` (HarfBuzz's guess from its script when invalid) */
 export function pieceOf(style: ShapeStyle, text: string, start: number, end: number, startEdit = 0, endEdit = 0, ctxStart = start, ctxEnd = end,

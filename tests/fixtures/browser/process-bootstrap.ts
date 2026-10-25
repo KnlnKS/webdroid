@@ -460,7 +460,7 @@ export async function workerDiagnosticOwnership() {
     const failure=(rows:typeof first,pid:number)=>{const value=row(rows,pid);return 'error' in value?value.error:null;};
     const healthy=row(first,8401);
     return {pendingTerminal,healthy:'snapshot' in healthy,rejected:failure(first,8402),hung:failure(first,8403),
-      phase:failure(first,8404),profilePending:profileFailure(8404),profileIdentity:profileFailure(8405),secondHealthy:'snapshot' in row(second,8401),hungCalls:count.hungCalls,
+      phase:row(first,8404).snapshot?.phase ?? null,profilePending:profileFailure(8404),profileIdentity:profileFailure(8405),secondHealthy:'snapshot' in row(second,8401),hungCalls:count.hungCalls,
       queueBlocked:'snapshot' in blocked[0] && !stillBlocked,live,aliveCalls:count.aliveCalls,
       retained:failure(ended,8401),identity:healthy.snapshot?.identity.pid ?? null};
   } finally {

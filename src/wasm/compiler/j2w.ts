@@ -72,7 +72,7 @@ const HOST_IMPORTS = {
   hot: { params: [T.i32], results: [] },
   long: { params: [T.i32], results: [] },
   mhInvoke: { params: [T.externref, T.externref, T.externref, T.i32], results: [T.externref] },
-  text: { params: [T.i32, T.i32], results: [T.externref] },
+  text: { params: [T.i32, T.i32, T.i32], results: [T.externref] },
   net: { params: [T.externref, T.i32, T.i32], results: [T.externref] },
   netByte: { params: [T.externref, T.i32, T.i32], results: [T.i32] },
   proxy: { params: [T.externref, T.externref, T.externref, T.externref, T.externref], results: [T.externref] },

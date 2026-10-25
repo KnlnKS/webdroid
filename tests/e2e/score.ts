@@ -42,20 +42,20 @@ async function diffFlow(flow: Flow): Promise<FlowReport> {
   }
   const manifest: Manifest = await readJson(`${goldenDir}/manifest.json`);
   if (manifest.depth === "startup")
-    throw new Error(`${flow.app}: Android reference covers startup only; run the quick E2E test`);
+    throw new Error(`${flow.app}: Android reference covers startup only`);
   await rm(sxsDir, { recursive: true, force: true });
   await mkdir(sxsDir, { recursive: true });
 
   const runPath = `${actualDir}/run.json`;
-  if (!existsSync(runPath)) throw new Error(`${flow.app}: missing run.json; rerun \`pnpm e2e --full --test ${flow.app}\``);
+  if (!existsSync(runPath)) throw new Error(`${flow.app}: missing run.json; rerun \`pnpm e2e ${flow.app}\``);
   const runInfo: FlowRun = await readJson(runPath);
   if (runInfo.aborted) throw new Error(`${flow.app}: capture aborted at ${runInfo.aborted.step}: ${runInfo.aborted.error}`);
-  if (runInfo.mode !== "full" || runInfo.flowSchemaHash !== flowSchemaHash([flow], "full") ||
+  if (!runInfo.scored || runInfo.flowSchemaHash !== flowSchemaHash([flow], "webdroid") ||
       runInfo.screen !== screenParam(screenOf(manifest)) ||
       runInfo.statusBarDp !== screenOf(manifest).statusBarDp ||
       runInfo.steps.length !== flow.steps.length ||
       runInfo.steps.some((run, index) => run.id !== flow.steps[index]?.id)) {
-    throw new Error(`${flow.app}: run.json does not match the current full flow and Android reference geometry; rerun \`pnpm e2e --full --test ${flow.app}\``);
+    throw new Error(`${flow.app}: run.json does not match the current flow and Android reference geometry; rerun \`pnpm e2e ${flow.app}\``);
   }
   const runById = new Map(runInfo.steps.map((run) => [run.id, run]));
   const steps: StepReport[] = [];
@@ -67,7 +67,7 @@ async function diffFlow(flow: Flow): Promise<FlowReport> {
     if (!rec) throw new Error(`golden manifest has no step "${step.id}" — re-record ${flow.app}`);
     const actualPath = `${actualDir}/${rec.file}`;
     if (!existsSync(actualPath)) {
-      throw new Error(`missing ${actualPath} — run \`pnpm e2e --full --test ${flow.app}\``);
+      throw new Error(`missing ${actualPath} — run \`pnpm e2e ${flow.app}\``);
     }
     const golden = await loadPng(`${goldenDir}/${rec.file}`);
     const actual = await loadPng(actualPath);
@@ -124,22 +124,19 @@ async function diffFlow(flow: Flow): Promise<FlowReport> {
 const flowJson = (app: string) => `${E2E_DIR}report/${app}.json`;
 
 /** Score one flow in a subprocess — the pixel work is CPU-bound and must not stall the event
- *  loop the other flows' browsers are driven from — and return its printed summary. */
-export async function scoreFlow(app: string): Promise<string> {
+ *  loop the other flows' browsers are driven from — and return its report. */
+export async function scoreFlow(app: string): Promise<FlowReport> {
   const { status, stdout, stderr } = await run(...nodeCommand(`${E2E_DIR}run.ts`, "--diff", "--json", "--test", app));
-  if (status) throw new Error(`scoring ${app} failed: ${stderr || stdout}`);
-  return stdout.trimEnd();
+  if (status) throw new Error(`scoring ${app} failed: ${(stderr || stdout).trim().split("\n").at(-1)}`);
+  return readJson(flowJson(app));
 }
 
-/** index.html + report.json from the per-flow JSON files the scoring passes wrote. */
-export async function assembleReport(apps: string[], geometry: string): Promise<{ out: string; reports: FlowReport[] }> {
-  const dir = `${E2E_DIR}report`;
-  const reports: FlowReport[] = [];
-  for (const app of apps) reports.push(await readJson(flowJson(app)));
-  const generatedAt = new Date().toISOString();
-  await writeFile(`${dir}/index.html`, html(reports, generatedAt, geometry));
+/** writes report/index.html and report/report.json of `reports`, and answers the page's path */
+export async function assembleReport(reports: FlowReport[]): Promise<string> {
+  const dir = `${E2E_DIR}report`, generatedAt = new Date().toISOString();
+  await writeFile(`${dir}/index.html`, html(reports, generatedAt));
   await writeFile(`${dir}/report.json`, JSON.stringify({ generatedAt, reports }, null, 2));
-  return { out: `${dir}/index.html`, reports };
+  return `${dir}/index.html`;
 }
 
 /** rescores `flows`' captures, `jobs` at a time, and writes the report; `json`, scores the first in this process and writes its report as JSON */
@@ -150,10 +147,8 @@ export async function score(flows: Flow[], jobs: number, json: boolean): Promise
     await writeFile(flowJson(flows[0].app), JSON.stringify(r));
     printFlow(r);
   } else {
-    for (const summary of await runQueue(flows.map((f) => f.app), jobs, () => 0, scoreFlow)) console.log(summary);
-    // scored flows all share the goldens' geometry — diffImages would have thrown otherwise
-    const first: Manifest = await readJson(`${E2E_DIR}golden/${flows[0].app}/manifest.json`);
-    const { out } = await assembleReport(flows.map((f) => f.app), screenParam(screenOf(first)));
-    console.log(`\nreport: ${out}`);
+    const reports = await runQueue(flows.map((f) => f.app), jobs, () => 0, scoreFlow);
+    reports.forEach(printFlow);
+    console.log(`\nreport: ${await assembleReport(reports)}`);
   }
 }

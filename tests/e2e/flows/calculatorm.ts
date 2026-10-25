@@ -9,10 +9,10 @@
 // are only right at that aspect ratio, and the flow pins it.
 // The app also bundles an arm64 on-device LLM (liblitertlm_jni.so) behind its camera/AI screen —
 // off this flow; when reached it must surface as nativeRequired (the app's own unavailable state).
-import { wait, type Flow, type Screen } from "../types.ts";
+import { pixelsOn, wait, type Flow, type Screen } from "../types.ts";
 
 const SCREEN: Screen = { width: 1080, height: 2424, densityDpi: 480 };
-const N = (x: number, y: number) => ({ x: x / SCREEN.width, y: y / SCREEN.height });
+const { point: N } = pixelsOn(SCREEN);
 const KEY_7 = N(142, 1408);
 const KEY_PLUS = N(931, 1934);
 const KEY_EQ = N(931, 2198);
@@ -33,7 +33,6 @@ export const calculatorm: Flow = {
     { id: "7b", label: "Tap 7 again", action: { type: "tapAt", ...KEY_7 }, wait: wait.quiescent(400) },
     { id: "eq", label: "Tap = (expect 14)", action: { type: "tapAt", ...KEY_EQ }, wait: wait.quiescent(400) },
     { id: "result", label: "Result shown", action: { type: "settle" }, wait: wait.quiescent(),
-      fastEvidence: { kind: "visual", maxContentDiffPct: 10 } },
-    { id: "back", label: "Back", action: { type: "back" }, wait: wait.quiescent() },
+      evidence: { kind: "visual", maxContentDiffPct: 10 } },
   ],
 };

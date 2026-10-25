@@ -12,11 +12,9 @@
 // comment count); the overflow reaches Settings, which is offline and deterministic.
 // Accepted newMissing: `class androidx/window/extensions/WindowExtensionsProvider` — the
 // optional <uses-library> the foldable split layout wants, absent on most real devices too.
-import { wait, type Flow } from "../types.ts";
+import { PHONE_720, pixelsOn, wait, type Flow } from "../types.ts";
 
-const N = (x: number, y: number) => ({ x: x / 720, y: y / 1280 });
-const P = (x: number, y: number): [number, number] => [x / 720, y / 1280];
-const R = (x: number, y: number, w: number, h: number) => ({ x: x / 720, y: y / 1280, w: w / 720, h: h / 1280 });
+const { point: N, pair: P, rect: R } = pixelsOn(PHONE_720);
 
 // The story list is live HN, so it is masked away and these steps score the chrome around it.
 const LIST = [R(0, 282, 720, 998)];
@@ -36,10 +34,11 @@ export const harmonic: Flow = {
   // and the app records its "Loading failed" state instead of its real UI
   clock: "live",
   // status bar [0,48) and gesture bar [1232,1280) — the split fitnotes verified on-device
+  screen: PHONE_720,
   crop: { top: 48, bottom: 48, left: 0, right: 0 },
   steps: [
-    { id: "launch", label: "Launch — welcome dialog over the loading front page", action: { type: "launch" }, wait: wait.live(6000), fastWait: wait.state({ kind: "text", text: "Get started" }, 0, 18_000), maskRects: AROUND_CARD,
-      fastEvidence: { kind: "visual", maxContentDiffPct: 19 } },
+    { id: "launch", label: "Launch — welcome dialog over the loading front page", action: { type: "launch" }, wait: wait.live(6000), liveWait: wait.state({ kind: "text", text: "Get started" }, 0, 18_000), maskRects: AROUND_CARD,
+      evidence: { kind: "visual", maxContentDiffPct: 19 } },
     { id: "welcome-scroll", label: "Scroll the welcome dialog to its button", action: { type: "swipe", from: P(360, 1000), to: P(360, 300) }, maskRects: AROUND_CARD, wait: wait.live() },
     { id: "preset-simple", label: "Pick the Simple UI preset", action: { type: "tapText", text: "Simple" }, maskRects: AROUND_CARD, wait: wait.live() },
     { id: "preset-expressive", label: "Back to the Expressive preset", action: { type: "tapText", text: "Expressive" }, maskRects: AROUND_CARD, wait: wait.live() },

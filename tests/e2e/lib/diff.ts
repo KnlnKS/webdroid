@@ -3,15 +3,14 @@ import pixelmatch from "pixelmatch";
 import { crop, applyMasks, newImg, type Img } from "./png.ts";
 import type { Rect } from "../types.ts";
 
+const DIFF_COLOR: [number, number, number] = [255, 0, 0];
+
 /** Most common colour in an image, quantised to 4 bits/channel — the page background. */
 function modalColor(img: Img): [number, number, number] {
-  const hist = new Map<number, number>();
-  for (let i = 0; i < img.data.length; i += 4) {
-    const k = ((img.data[i] >> 4) << 8) | ((img.data[i + 1] >> 4) << 4) | (img.data[i + 2] >> 4);
-    hist.set(k, (hist.get(k) ?? 0) + 1);
-  }
-  let best = 0, bestN = -1;
-  for (const [k, n] of hist) if (n > bestN) { bestN = n; best = k; }
+  const hist = new Uint32Array(4096);
+  for (let i = 0; i < img.data.length; i += 4) hist[((img.data[i] >> 4) << 8) | ((img.data[i + 1] >> 4) << 4) | (img.data[i + 2] >> 4)]++;
+  let best = 0;
+  for (let k = 1; k < hist.length; k++) if (hist[k] > hist[best]) best = k;
   return [((best >> 8) & 15) * 17, ((best >> 4) & 15) * 17, (best & 15) * 17];
 }
 
@@ -82,15 +81,12 @@ export function diffImages(
   const tolerant = pixelmatch(g.data, a.data, diffImg.data, g.width, g.height, {
     threshold: 0.1,
     includeAA: true,
-    diffColor: [255, 0, 0],
+    diffColor: DIFF_COLOR,
     alpha: 0.25,
   });
 
-  // A second pass with diffMask leaves ONLY differing pixels non-transparent. The overlay
-  // above also paints matching pixels (faded), so it cannot be read as a boolean mask.
-  const maskImg = { width: g.width, height: g.height, data: Buffer.alloc(g.width * g.height * 4) };
-  pixelmatch(g.data, a.data, maskImg.data, g.width, g.height,
-    { threshold: 0.1, includeAA: true, diffMask: true });
+  // the overlay paints a matching pixel gray and a counted one DIFF_COLOR, which no gray is
+  const differs = (p: number) => diffImg.data[p * 4] === DIFF_COLOR[0] && diffImg.data[p * 4 + 1] === DIFF_COLOR[1];
 
   const bgG = modalColor(g), bgA = modalColor(a);
   const inkG = inkMask(g, bgG), inkA = inkMask(a, bgA);
@@ -105,7 +101,7 @@ export function diffImages(
     if (inkA[p]) actualInk++;
     if (bgMismatch || inkG[p] || inkA[p]) {
       unionInk++;
-      if (maskImg.data[p * 4 + 3] !== 0) unionDiff++;
+      if (differs(p)) unionDiff++;
     }
   }
 

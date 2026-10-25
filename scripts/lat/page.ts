@@ -38,7 +38,7 @@ async function run() {
   const diagnostics = w.__wdLatRead = async (settled = false): Promise<Diagnostics> => {
     let workers: ProcessSnapshot[];
     try {
-      const rows: WorkerProcess[] = settled ? await workerRows(STARTING_MS) : await w.wd.workerProcesses();
+      const rows: WorkerProcess[] = await workerRows(settled ? STARTING_MS : 0);
       workers = rows.map((row) => ({ url: `worker:${row.url}#pid=${row.pid}`, diagnostics: workerDiagnostics(row) }));
     } catch (error) { workers = [{ url: "worker:" + location.origin, diagnostics: { status: "failure", message: String(error) } }]; }
     return { at: performance.now(), aotKey: globalThis.__wdWasm?.aotKey ?? null,

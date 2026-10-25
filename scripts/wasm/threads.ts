@@ -118,9 +118,9 @@ if (substrate || only?.includes("nativeCallback")) {
 if (!only || only.includes("loopTrace")) {
   const m = { ...w.prog.resolve("Th", "loopTrace", "(I)I")!, cls: "legal/Owner#loop", name: "method#loop", key: "method#loop(I)I" };
   const name = "legal/Owner#loop.method#loop(I)I", traces = new Map([[name, { name, m, offsets: new Int32Array([16, 32]), pcs: new Int32Array([0, 8500]) }]]);
-  const root = `at ${name} (wasm://wasm/a:wasm-function[1]:0x10)`;
-  expect("legal #loop name has an exact Java trace", javaFrames(root, traces, Infinity, false)[0]?.method, "method#loop");
-  const frames = javaFrames(`at ${name}#loop12 (wasm://wasm/a:wasm-function[2]:0x20)\n${root}\n${root}`, traces, Infinity, false);
+  const root = { name, offset: 0x10 };
+  expect("legal #loop name has an exact Java trace", javaFrames([root], traces, Infinity, false)[0]?.method, "method#loop");
+  const frames = javaFrames([{ name: `${name}#loop12`, offset: 0x20 }, root, root], traces, Infinity, false);
   expect("only the generated suffix coalesces its root", frames.length, 2);
   expect("the chunk retains its owner's innermost PC", frames[0]?.pc, 8500);
 }

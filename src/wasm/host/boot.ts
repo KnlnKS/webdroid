@@ -15,6 +15,7 @@ import { appArchives, packedArchives } from "../../shell/packedarchive.ts";
 import { Program } from "../compiler/program.ts";
 import { fetchPlatformJars, jarDexes } from "../../android/framework.ts";
 import { PLATFORM_JARS } from "../../jvm/provenance.ts";
+import { dotName } from "../../jvm/abi.ts";
 import { parkTimeout, unparkTimeout, turnElapsed, wakeSoon, yieldToLoop, yieldStats, sinceInput, answeringFor } from "../../jvm/yield.ts";
 import { World, type WorldOptions } from "../link/world.ts";
 import { objectOfLoader } from "../link/loaders.ts";
@@ -228,10 +229,10 @@ export function useWorld(w: World): World {
   useJavaHost({
     ...objectsIn(() => w), entry: wasmEntry(w), jni: lazy(() => wasmJni(w), useJniVm), fieldName: fieldNamesOf(w),
     // the frames of Java code: a method the host implements is not one
-    javaFrames: () => w.stacks.callerFrames(16).filter((f) => w.prog.get(f.cls.replace(/\./g, "/"))?.dex !== null).map((f) => f.cls + "." + f.method),
+    javaFrames: () => w.stacks.callerFrames(16).filter((f) => w.prog.get(f.cls)?.dex !== null).map((f) => dotName(f.cls) + "." + f.method),
     userClassLoader: () => {
-      for (const f of w.stacks.callerFrames(Infinity)) { const loader = w.prog.loaderOf(f.cls.replace(/\./g, "/")); if (loader !== w.prog.boot) return w.bridge.toHost(objectOfLoader(w, loader)) as object | null; }
-      return null;
+      const f = w.stacks.callerFrame((f) => w.prog.loaderOf(f.cls) !== w.prog.boot);
+      return f ? w.bridge.toHost(objectOfLoader(w, w.prog.loaderOf(f.cls))) as object | null : null;
     },
   });
   return w;

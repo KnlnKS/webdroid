@@ -106,21 +106,37 @@ export function throwerBody(cx: Compiler, c: Code, name: Thrower): void {
   c.lget(exn).throw_(cx.tag);
 }
 
+/** a frame of Java code; `cls` is its class's key (program.ts), slashed */
 export interface JavaFrame { cls: string; method: string; line: number; pc: number }
 /** what an outlined loop's function name adds to its method's (outline.ts): a stack frame names only the function, and the loop's frames are its method's */
 export const CHUNK_MARK = "#loop";
-/** a Wasm frame: a module made from bytes is wasm://wasm/<hash>, one compiled from a streamed response is named by the response's URL */
-const FRAME = /at (?:(.+?) \()?(?:wasm:\/\/wasm\/[0-9a-f]+|\S+?):wasm-function\[\d+\]:0x([0-9a-f]+)\)?\s*$/;
-/** the names of the Wasm functions on a V8 `Error.stack`, innermost first */
-export const wasmFrameNames = (stack: string): string[] => stack.split("\n").flatMap((line) => { const name = FRAME.exec(line)?.[1]; return name ? [name] : []; });
-/** The Java frames of a V8 `Error.stack`, innermost first (the first `count` of them, with their line numbers unless `lines` is false): wasm frames are named by method id and carry a module offset */
-export function javaFrames(stack: string, traces: Pick<Map<string, FnTrace>, "get">, count = Infinity, lines = true): JavaFrame[] {
+/** a frame of the engine's stack: its function's name, and for a Wasm function where in its module it is */
+export type EngineFrame = { name: string | null; offset: number };
+/** a Wasm frame of a stack's text: a module made from bytes is wasm://wasm/<hash>, one compiled from a streamed response is named by the response's URL */
+const FRAME = /at (?:(.+?) \()?(?:wasm:\/\/wasm\/[0-9a-f]+|\S+?):wasm-function\[\d+\]:0x([0-9a-f]+)\)?\s*$/, JS_FRAME = /^\s*at (\S+) \(/;
+type CallSite = { getFunctionName(): string | null; getPosition(): number };
+const callSites = (_: Error, sites: CallSite[]) => sites;
+/** the frames `e` captured, innermost first. V8 hands them over as call sites when the stack is first read (Error.prepareStackTrace), which takes a
+ *  fraction of formatting them as text and parsing that, and keeps that answer as `e.stack`, so a later read is the same call sites; a stack read
+ *  as text before is parsed */
+export function engineFrames(e: Error): EngineFrame[] {
+  const prior = Error.prepareStackTrace;
+  Error.prepareStackTrace = callSites as typeof prior;
+  let stack: unknown;
+  try { stack = e.stack; } finally { Error.prepareStackTrace = prior; }
+  if (Array.isArray(stack)) return (stack as CallSite[]).map((site) => ({ name: site.getFunctionName(), offset: site.getPosition() }));
+  return String(stack ?? "").split("\n").slice(1).map((line): EngineFrame => {
+    const m = FRAME.exec(line) ?? JS_FRAME.exec(line);
+    return { name: m?.[1] ?? null, offset: m?.[2] ? parseInt(m[2], 16) : -1 };
+  });
+}
+/** The Java frames of an engine stack, innermost first (the first `count` of them, with their line numbers unless `lines` is false): wasm frames are named by method id and carry a module offset */
+export function javaFrames(frames: EngineFrame[], traces: Pick<Map<string, FnTrace>, "get">, count = Infinity, lines = true): JavaFrame[] {
   const out: JavaFrame[] = [];
   let chunk: string | undefined;
-  for (const line of stack.split("\n")) {
+  for (const { name, offset: off } of frames) {
     if (out.length >= count) break;
-    const m = FRAME.exec(line);
-    const name = m?.[1], exact = name ? traces.get(name) : undefined;
+    const exact = name ? traces.get(name) : undefined;
     const loop = exact ? -1 : name?.lastIndexOf(CHUNK_MARK) ?? -1;
     const t = exact ?? (name && loop >= 0 ? traces.get(name.slice(0, loop)) : undefined);
     if (!t?.m) continue;                                  // host code, throwers and stubs are not Java frames
@@ -128,7 +144,6 @@ export function javaFrames(stack: string, traces: Pick<Map<string, FnTrace>, "ge
     // An outlined loop and its callers are one Java activation; keep the innermost PC.
     if (chunk === id) { chunk = loop >= 0 ? id : undefined; continue; }
     chunk = loop >= 0 ? id : undefined;
-    const off = parseInt(m![2], 16);
     let lo = 0, hi = t.offsets.length - 1, at = -1;       // last mark at or before the frame's offset
     while (lo <= hi) { const mid = (lo + hi) >> 1; if (t.offsets[mid] <= off) { at = mid; lo = mid + 1; } else hi = mid - 1; }
     let pc = at < 0 ? 0 : t.pcs[at];
@@ -142,6 +157,6 @@ export function javaFrames(stack: string, traces: Pick<Map<string, FnTrace>, "ge
   }
   return out;
 }
-const frame = (m: MethodInfo, pc: number, lines: boolean): JavaFrame => ({ cls: dotted(m.cls), method: m.name, pc, line: lines && m.codeOff ? m.dex.lineAt(m.codeOff, pc) : -1 });
+const frame = (m: MethodInfo, pc: number, lines: boolean): JavaFrame => ({ cls: m.cls, method: m.name, pc, line: lines && m.codeOff ? m.dex.lineAt(m.codeOff, pc) : -1 });
 
 export const isStackOverflow = (e: unknown): boolean => e instanceof RangeError && /call stack/i.test(e.message);

@@ -22,7 +22,7 @@ import { PerWorld } from "./perworld.ts";
 import { fieldCookie } from "./unsafe.ts";
 import { Lookup, LOADER_OF_CLASS, emitClassAnswer } from "./loaders.ts";
 import { emitRestored } from "../compiler/hostcalls.ts";
-import { Info } from "../compiler/info.ts";
+import { Info, TextKind } from "../compiler/info.ts";
 import { FIELD_INDEX_MAX, emitFieldId, fieldClass, fieldIdOf, fieldIndex, splitFieldId } from "../compiler/fieldid.ts";
 
 const CLASS = "java/lang/Class", OBJ_ARRAY = "[Ljava/lang/Object;", FIELD = "java/lang/reflect/Field", FIELD_ARRAY = "[Ljava/lang/reflect/Field;";
@@ -32,7 +32,8 @@ const CLONEABLE = ["java/lang/Cloneable", "java/io/Serializable"];
 export const PRIM = Object.fromEntries([...Object.entries(PRIMS).map(([d, p]) => [d, Math.log2(p.size), p.name] as const), ["V", 0, "void"] as const]
   .map(([d, log, name], i): [string, [number, number, string]] => ["#" + d, [i + 1, log, name]]));
 const isPrim = (n: string) => n in PRIM;
-const javaName = (n: string) => isPrim(n) ? PRIM[n][2] : stripLoader(n).replace(/\//g, ".");
+/** Class.getName's answer for class key `n` */
+export const className = (n: string) => isPrim(n) ? PRIM[n][2] : stripLoader(n).replace(/\//g, ".");
 /** access flags in a class's dalvik.annotation.InnerClass annotation, -1 for a class without one */
 const innerFlags = (jc: JClass | undefined): number => {
   const a = jc?.def && jc.dex!.classAnnotations(jc.def).cls.find((x) => x.type === "dalvik/annotation/InnerClass")?.elements.accessFlags;
@@ -64,10 +65,8 @@ export function hostInfo(w: World, kind: number, a: number, b: number): number {
     // ObjectStreamClass.hasStaticInitializer: a <clinit> of the class, or with b set of a superclass
     case Info.HasClinit: { for (let k = jc; k; k = b && k.sup ? w.prog.get(k.sup) : undefined) if (k.byKey.has("<clinit>()V")) return 1; return 0; }
     case Info.FieldOffset:
-      if (b > FIELD_INDEX_MAX) throw w.exception(w.helpers.makeThrowable("java/lang/InternalError", `${javaName(name)} declares field ${b}, past the ${FIELD_INDEX_MAX + 1} a field id can name`));
+      if (b > FIELD_INDEX_MAX) throw w.exception(w.helpers.makeThrowable("java/lang/InternalError", `${className(name)} declares field ${b}, past the ${FIELD_INDEX_MAX + 1} a field id can name`));
       return fieldCookie(w, fieldIdOf(a, b));
-    case Info.NameLen: return javaName(name).length;
-    case Info.NameChar: return javaName(name).charCodeAt(b);
     case Info.NFields: return fields.length;
     case Info.FieldNameLen: return fields[b].name.length;
     case Info.FieldNameChar: return fields[b >> 16].name.charCodeAt(b & 0xffff);
@@ -254,16 +253,9 @@ rt("nameEq", ["I", "I", "L", "I"], "I", (cx, c) => emitNameEq(cx, c, Info.FieldN
 export const classIntrinsics = new Map<string, Intrinsic>();
 const def = (key: string, f: (cx: Compiler, c: Code) => void) => classIntrinsics.set(key, (cx, m, c) => f(cx, c));
 export const idOfClass = (cx: Compiler, c: Code) => { const cs = cx.structFor(CLASS); c.refCast(cs).structGet(cs, field(cx, "dexTypeIndex", "I")); };
-/** a char[] of `len` characters, `char(j)` pushing character j, handed to StringFactory.newStringFromChars */
-export function emitString(cx: Compiler, c: Code, len: () => void, char: (j: number) => void): void {
-  const w = c.newLocal(refNull(cx.tArr.i16)), data = c.newLocal(refNull(cx.tData.i16)), n = c.newLocal(T.i32), j = c.newLocal(T.i32);
-  len(); c.lset(n);
-  cx.emitNewArray(c, "[C", () => c.lget(n)); c.lset(w).lget(w).structGet(cx.tArr.i16, 2).lset(data);
-  c.block().loop().lget(j).lget(n).raw(OP.i32_ge_s).brIf(1);
-  c.lget(data).refAsNonNull().lget(j); char(j); c.arraySet(cx.tData.i16).lget(j).i32(1).raw(OP.i32_add).lset(j).br(0).end().end();
-  // ART interns the names of classes and members, which Method.equals compares by identity
-  c.lget(w); cx.callNamed(c, "java/lang/StringFactory", "newStringFromChars", "([C)Ljava/lang/String;");
-  cx.callNamed(c, "java/lang/String", "intern", "()Ljava/lang/String;");
+/** the String of the name host.text answers (TextKind), interned: ART interns the names of classes and members, which Method.equals compares by identity */
+export function emitName(cx: Compiler, c: Code, kind: TextKind, a: () => void, b: () => void): void {
+  c.i32(kind); a(); b(); c.call(cx.imp.text); cx.str.fromHost(c); c.call(cx.str.intern());
 }
 
 // ART allocates ClassExt lazily in the Class object's extData field, without
@@ -280,11 +272,7 @@ def("java/lang/Class.ensureExtDataPresent()Ldalvik/system/ClassExt;", (cx, c) =>
 def("java/lang/Object.getClass()Ljava/lang/Class;", (cx, c) => { c.lget(0); cx.vtId(c); cx.callRt(c, "classOf"); });
 
 def("java/io/ObjectStreamClass.hasStaticInitializer(Ljava/lang/Class;Z)Z", (cx, c) => { cx.info(c, Info.HasClinit, () => { c.lget(0); idOfClass(cx, c); }, () => c.lget(1)); });
-def("java/lang/Class.getNameNative()Ljava/lang/String;", (cx, c) => {
-  const id = c.newLocal(T.i32);
-  c.lget(0); idOfClass(cx, c); c.lset(id);
-  emitString(cx, c, () => cx.info(c, Info.NameLen, () => c.lget(id)), (j) => cx.info(c, Info.NameChar, () => c.lget(id), () => c.lget(j)));
-});
+def("java/lang/Class.getNameNative()Ljava/lang/String;", (cx, c) => emitName(cx, c, TextKind.ClassName, () => { c.lget(0); idOfClass(cx, c); }, () => c.i32(0)));
 
 // Class.classForName(name, initialize, loader): the class `loader` sees under that name (loaders.ts)
 def("java/lang/Class.classForName(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;", (cx, c) => {
@@ -392,8 +380,7 @@ def("java/lang/reflect/Field.getArtField()J", (cx, c) => { c.lget(0); fieldId(cx
 def("java/lang/reflect/Field.getNameInternal()Ljava/lang/String;", (cx, c) => {
   const cid = c.newLocal(T.i32), k = c.newLocal(T.i32);
   c.lget(0); fieldId(cx, c); c.lset(k); splitFieldId(c, k, cid, k);
-  emitString(cx, c, () => cx.info(c, Info.FieldNameLen, () => c.lget(cid), () => c.lget(k)),
-    (j) => cx.info(c, Info.FieldNameChar, () => c.lget(cid), () => c.lget(k).i32(16).raw(OP.i32_shl).lget(j).raw(OP.i32_or)));
+  emitName(cx, c, TextKind.FieldName, () => c.lget(cid), () => c.lget(k));
 });
 
 // VMStack.getStackClassN: the class n frames out from the native's caller (the frames come from the host's view of the Wasm stack)

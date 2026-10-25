@@ -4,7 +4,6 @@ node_modules
 webdroid-shots/
 conform-cache/
 tests/e2e/actual/
-tests/e2e/actual-fast/
 tests/e2e/report/
 .worktrees/
 vendor/aosp

@@ -61,6 +61,15 @@ export type EvidencePolicy =
   | { kind: "visual"; maxContentDiffPct: number }
   | { kind: "motion" };
 
+/** the phone the 720x1280 flows were measured on */
+export const PHONE_720: Screen = { width: 720, height: 1280, densityDpi: 320 };
+/** a pixel measured on `screen` normalized, as a point, a pair or (with its size) a rect */
+export const pixelsOn = (screen: Screen) => ({
+  point: (x: number, y: number) => ({ x: x / screen.width, y: y / screen.height }),
+  pair: (x: number, y: number): [number, number] => [x / screen.width, y / screen.height],
+  rect: (x: number, y: number, w: number, h: number) => ({ x: x / screen.width, y: y / screen.height, w: w / screen.width, h: h / screen.height }),
+});
+
 const REAL_WAIT_MS = 20_000;
 export const wait = {
   state: (condition: StateCondition, maxVirtualMs = 20_000, maxRealMs = REAL_WAIT_MS, stableMs = 0): StateWait =>
@@ -82,26 +91,27 @@ export type Step = {
   action: Action;
   /** Equivalent action when Webdroid geometry differs from the Android reference. */
   webdroidAction?: Action;
-  /** Equivalent quick action when platform UI or a live text anchor differs from the reference. */
-  fastAction?: Action;
+  /** A live flow's webdroid action when platform UI or a live text anchor differs from the reference. */
+  liveAction?: Action;
   /** Regions excluded from the diff (normalized). Escape hatch for non-deterministic pixels. */
   maskRects?: Rect[];
   wait: WaitPolicy;
-  /** Runtime readiness for the all-action quick run; recording keeps the reference wait. */
-  fastWait?: WaitPolicy;
-  /** Fast-lane assertion. Absence means semantic evidence only. */
-  fastEvidence?: Exclude<EvidencePolicy, { kind: "semantic" }>;
+  /** A live flow's webdroid readiness; recording keeps the reference wait. */
+  liveWait?: WaitPolicy;
+  /** What gates the step besides its diagnostics. Absence means semantic evidence only. */
+  evidence?: Exclude<EvidencePolicy, { kind: "semantic" }>;
 };
 
-export type ExecutionStep = Step & { fastAction?: never; fastWait?: never; webdroidAction?: never };
+export type ExecutionStep = Step & { liveAction?: never; liveWait?: never; webdroidAction?: never };
 export type ExecutionFlow = Flow<ExecutionStep>;
 
-export function executionFlow(flow: Flow, mode: "reference" | "full" | "fast"): ExecutionFlow {
-  const quick = mode === "fast" && flow.clock === "live";
-  return { ...flow, steps: flow.steps.map(({ fastAction, fastWait, webdroidAction, ...step }) => ({
+/** the steps as the reference device or webdroid performs them: a live flow's webdroid run takes its live actions and waits, being semantic past launch */
+export function executionFlow(flow: Flow, side: "reference" | "webdroid"): ExecutionFlow {
+  const live = side === "webdroid" && flow.clock === "live";
+  return { ...flow, steps: flow.steps.map(({ liveAction, liveWait, webdroidAction, ...step }) => ({
     ...step,
-    action: mode === "reference" ? step.action : (quick ? fastAction : undefined) ?? webdroidAction ?? step.action,
-    wait: quick ? fastWait ?? wait.liveSample(500) : step.wait,
+    action: side === "reference" ? step.action : (live ? liveAction : undefined) ?? webdroidAction ?? step.action,
+    wait: live ? liveWait ?? wait.liveSample(500) : step.wait,
   })) };
 }
 
@@ -137,16 +147,16 @@ export type Flow<TStep extends Step = Step> = FlowBase<TStep> & (
       expectedErrors?: never;
     }
   | {
-      /** Controlled flows advance Android-visible time in fast mode; pinned flows retain real scheduling. */
+      /** Controlled flows advance Android-visible time on the test clock; pinned flows retain real scheduling. */
       clock: "controlled" | "pinned";
       /** Errors accepted by exact substring wherever they surface (browser console, app log, process
        *  diagnostics): ones a device shows too, such as a bundled library's own error-level log lines.
-       *  Every unmatched error fails the fast lane. */
+       *  Every unmatched error fails the run. */
       expectedErrors?: readonly string[];
     }
 );
 
-export const evidenceOf = (step: Step): EvidencePolicy => step.fastEvidence ?? { kind: "semantic" };
+export const evidenceOf = (step: Step): EvidencePolicy => step.evidence ?? { kind: "semantic" };
 
 export const waitHorizonMs = (policy: WaitPolicy): number => {
   switch (policy.kind) {
@@ -172,13 +182,13 @@ export function validateFlow(flow: Flow): void {
       throw new Error(`${flow.app}/${step.id}: controlled flow cannot use a live wait`);
     if (flow.clock === "live" && step.wait.kind !== "live" && step.wait.kind !== "live-sample")
       throw new Error(`${flow.app}/${step.id}: live flow requires a live wait`);
-    if (step.fastWait && flow.clock !== "live")
-      throw new Error(`${flow.app}/${step.id}: fast wait is only for live flows`);
-    if (step.fastAction && flow.clock !== "live")
-      throw new Error(`${flow.app}/${step.id}: fast action is only for live flows`);
-    const evidence = step.fastEvidence;
+    if (step.liveWait && flow.clock !== "live")
+      throw new Error(`${flow.app}/${step.id}: a live wait override is only for live flows`);
+    if (step.liveAction && flow.clock !== "live")
+      throw new Error(`${flow.app}/${step.id}: a live action is only for live flows`);
+    const evidence = step.evidence;
     if (flow.clock === "live" && evidence && (step !== flow.steps[0] || evidence.kind !== "visual"))
-      throw new Error(`${flow.app}/${step.id}: live fast evidence must compare the launch screen`);
+      throw new Error(`${flow.app}/${step.id}: a live flow's evidence must compare the launch screen`);
     if (evidence?.kind === "visual" && !(evidence.maxContentDiffPct >= 0 && evidence.maxContentDiffPct <= 100))
       throw new Error(`${flow.app}/${step.id}: invalid visual difference limit`);
     const measuresMotion = isMotionWait(step.wait) || (step.wait.kind === "state" && step.wait.condition.kind === "perf");
@@ -219,6 +229,8 @@ export type RecordedStep = {
   /** Hierarchy dump beside the png, when the recorder captured one. */
   uiFile?: string;
   settleTimedOut?: boolean;
+  /** from the end of the step's action to its capture: the time the device let pass, which a controlled clock passes too */
+  dwellMs?: number;
   note?: string;
 };
 
@@ -284,7 +296,7 @@ function canonical(value: unknown): string {
 }
 
 /** Identifies the steps a capture ran, so rescoring rejects captures from since-edited flows. */
-export function flowSchemaHash(flows: Flow[], mode: "all" | "reference" | "full" | "fast" = "all"): string {
-  const resolved = mode === "all" ? flows : flows.map((flow) => executionFlow(flow, mode));
+export function flowSchemaHash(flows: Flow[], side?: "reference" | "webdroid"): string {
+  const resolved = side ? flows.map((flow) => executionFlow(flow, side)) : flows;
   return createHash("sha256").update(canonical(resolved)).digest("hex");
 }

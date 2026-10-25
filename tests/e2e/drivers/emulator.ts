@@ -5,7 +5,8 @@
 import { device } from "../../../src/shell/config.ts";
 import type { CaptureScreen, UiNode } from "../types.ts";
 import { adbOn } from "../../../scripts/adb.ts";
-import { sleep, settleOn } from "../lib/util.ts";
+import { sha1, sleep } from "../lib/util.ts";
+import { stableFrame } from "../lib/settle.ts";
 import { parseUiAutomator } from "../lib/uiautomator.ts";
 
 const adb = adbOn();
@@ -28,14 +29,34 @@ async function screencap(): Promise<Buffer> {
   return buf;
 }
 
+/** how `dumpsys window` names a starting window's splash screen (WindowManager's title for it) */
+const SPLASH_WINDOW = "Splash Screen ";
+
 /**
- * Wait until the framebuffer stops changing. Returns the settled screenshot and whether we
- * gave up — a timeout is recorded, never thrown, so a stuck screen still produces a golden.
+ * Wait until no starting window is up and the framebuffer stops changing, on the contract lib/settle.ts defines. A launching
+ * activity's splash holds still for as long as the app keeps it, and is not the app's screen. Returns the settled screenshot and
+ * whether we gave up — a timeout is recorded, never thrown, so a stuck screen still produces a golden.
  */
 export async function settle(
   { stableFrames = 4, intervalMs = 350, timeoutMs = 20000 } = {},
 ): Promise<{ png: Buffer; timedOut: boolean }> {
-  return settleOn(screencap, { stableFrames, intervalMs, timeoutMs });
+  const deadline = Date.now() + timeoutMs, hashes: string[] = [], frames = new Map<string, Buffer>();
+  while (Date.now() < deadline && (await shell("dumpsys window visible")).includes(SPLASH_WINDOW)) await sleep(intervalMs);
+  let png = await screencap();
+  while (Date.now() < deadline) {
+    await sleep(intervalMs);
+    png = await screencap();
+    const h = sha1(png);
+    frames.set(h, png);
+    hashes.push(h);
+    if (hashes.length > stableFrames * 2) {
+      const gone = hashes.shift()!;
+      if (!hashes.includes(gone)) frames.delete(gone);
+    }
+    const settled = stableFrame(hashes, stableFrames);
+    if (settled !== undefined) return { png: frames.get(settled)!, timedOut: false };
+  }
+  return { png, timedOut: true };
 }
 
 /**

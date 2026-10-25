@@ -9,7 +9,7 @@ export function diagnostics(flow: Flow, runs: StepRun[], browserErrors: string[]
   const gaps: string[] = [];
   const live = flow.clock === "live";
   const brief = (item: string) => item.split("\n", 1)[0]!.slice(0, 300);
-  const seenProcessErrors = new Set<string>();
+  const seenProcessErrors = new Set<string>(), last = runs.at(-1);
   for (const step of runs) {
     const prefix = `${String(step.index).padStart(2, "0")} ${step.id}`;
     const action = flow.steps[step.index]?.action;
@@ -29,8 +29,13 @@ export function diagnostics(flow: Flow, runs: StepRun[], browserErrors: string[]
     for (const process of processes) {
       const diagnostics = process.diagnostics;
       if (diagnostics.status === "exited") continue;
+      // a process still starting is diagnosed at a later step, which its log reaches whole
+      if (diagnostics.status === "starting") {
+        if (step === last) errors.push(`${prefix}: ${process.url} still starting (${diagnostics.phase}) when the flow ended`);
+        continue;
+      }
       if (diagnostics.status !== "ok") {
-        errors.push(`${prefix}: ${process.url} diagnostics ${diagnostics.status}`);
+        errors.push(`${prefix}: ${process.url} diagnostics ${diagnostics.status === "failure" ? diagnostics.message : diagnostics.status}`);
         continue;
       }
       for (const item of diagnostics.errors ?? []) {

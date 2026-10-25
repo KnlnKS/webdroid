@@ -4,7 +4,7 @@
 import { OP } from "../compiler/code.ts";
 import { T } from "../compiler/wasmbin.ts";
 import { ACC, javaName, type JClass, typeName } from "../compiler/program.ts";
-import { idOfClass, fieldId, PRIM } from "./classes.ts";
+import { idOfClass, fieldId, PRIM, className } from "./classes.ts";
 
 import { rt } from "../compiler/rtfns.ts";
 import { executableSlot, methodAt } from "./reflect.ts";
@@ -12,15 +12,13 @@ import type { EncAnnotation } from "../../jvm/dex.ts";
 import type { Code } from "../compiler/code.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
 import type { World } from "./world.ts";
-import { MInfo } from "../compiler/info.ts";
+import { MInfo, TextKind } from "../compiler/info.ts";
 import { PerWorld } from "./perworld.ts";
 import { fieldClass, fieldIndex } from "../compiler/fieldid.ts";
 
 const METHOD_ARRAY = "[Ljava/lang/reflect/Method;", CTOR_ARRAY = "[Ljava/lang/reflect/Constructor;";
 const INNER = "dalvik/annotation/InnerClass", ENCLOSING_CLASS = "dalvik/annotation/EnclosingClass", ENCLOSING_METHOD = "dalvik/annotation/EnclosingMethod";
 const THROWS = "dalvik/annotation/Throws", RUNTIME = 1;
-
-const TextKind = { SimpleName: 0 } as const;
 
 const annotationsOf = (w: World, jc: JClass | undefined) => jc?.def && w.prog.typesOf(jc.dex!).classAnnotations(jc.def);
 /** the annotations of an element that are visible at run time, as ART's lookups see them (build and system visibility are not) */
@@ -89,9 +87,14 @@ export function hostMembers(w: World, kind: number, a: number, b: number): numbe
   }
 }
 
-/** the strings the host answers (host.text) */
-export function hostText(w: World, kind: number, a: number): string {
+/** the strings the host answers (host.text, TextKind) */
+export function hostText(w: World, kind: number, a: number, b: number): string {
   const name = w.nameOf(a);
+  switch (kind) {
+    case TextKind.ClassName: return className(name);
+    case TextKind.MethodName: return w.prog.get(name)!.methods[b].name;
+    case TextKind.FieldName: return w.prog.get(name)!.fields[b].name;
+  }
   if (name in PRIM) return PRIM[name][2];
   const jc = w.prog.get(name), inner = annotationsOf(w, jc)?.cls.find((x) => x.type === INNER);
   // a member class has its name in InnerClass; a local or anonymous class has none ("" for an anonymous one); a top-level class is named after its package
@@ -131,7 +134,7 @@ const classId = (cx: Compiler, c: Code, local: number) => { c.lget(local); idOfC
 /** the Class (or null) of the id the host answered, 0 or -1 for none */
 const classOrNull = (cx: Compiler, c: Code, id: number) => { c.lget(id).i32(0).raw(OP.i32_gt_s).if_(T.anyref).lget(id); cx.callRt(c, "classOf"); c.else_().anyNull().end(); };
 
-def("java/lang/Class.getSimpleNameNative()Ljava/lang/String;", (cx, c) => { c.i32(TextKind.SimpleName); classId(cx, c, 0); c.call(cx.imp.text).anyConvertExtern(); });
+def("java/lang/Class.getSimpleNameNative()Ljava/lang/String;", (cx, c) => { c.i32(TextKind.SimpleName); classId(cx, c, 0); c.i32(0).call(cx.imp.text); cx.str.fromHost(c); });
 def("java/lang/Class.isRecord0()Z", (cx, c) => { cx.info(c, MInfo.IsRecord, () => classId(cx, c, 0)); });
 def("java/lang/Class.getDeclaredMethodsUnchecked(Z)[Ljava/lang/reflect/Method;", (cx, c) => { classId(cx, c, 0); c.lget(1); cx.callRt(c, "methodArray"); });
 def("java/lang/Class.getDeclaredConstructorsInternal(Z)[Ljava/lang/reflect/Constructor;", (cx, c) => { classId(cx, c, 0); c.lget(1); cx.callRt(c, "ctorArray"); });

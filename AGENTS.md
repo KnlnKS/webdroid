@@ -31,7 +31,8 @@ changed behavior; complete the broader matrix when required by PLAN or the task.
 run the entire suite solely for documentation edits.
 
 ```bash
-pnpm check       # the gate (~90 s): a stale platform build rebuilt, typecheck and test, wasm all, then e2e [flow ...]
+pnpm check       # the gate (~95 s): one pool of a stale platform build, typecheck, test shards, wasm parts and e2e [flow ...]
+pnpm check --corpus  # also launches each corpus apk no flow launches (~220 s), held to tests/corpus-drawn.json (`pnpm corpus --update`)
 pnpm typecheck
 pnpm test
 pnpm fwtest
@@ -41,7 +42,6 @@ WEBDROID_URL=http://localhost:4090 pnpm e2e
 # outside the gate: text layout parity, live content and measurement
 WEBDROID_URL=http://localhost:4090 pnpm textcmp FitNotes.apk
 WEBDROID_URL=http://localhost:4090 pnpm e2e --live
-WEBDROID_URL=http://localhost:4090 pnpm e2e --full --jobs 1
 WEBDROID_URL=http://localhost:4090 pnpm corpus
 WEBDROID_URL=http://localhost:4090 pnpm lat [--warm]
 pnpm conform guava|jsr166|ojluni-time
@@ -52,8 +52,9 @@ pnpm ts scripts/perfsum.ts tests/e2e/actual <baseline.json>
   output directories and keep the code under capture stable. See the
   [harness guide](tests/e2e/README.md) for flow selection, output paths and recording.
   `pnpm check` is the reproducible gate: it starts a dev server on a free port unless `WEBDROID_URL`
-  names one, stops at the first failing lane and shows its output. `--live` adds flows that depend
-  on network content; `lat`, `--full`, `corpus` and the conform suites measure and run on their own.
+  names one, stops at the first failing task and shows its output. Each e2e flow runs once and is
+  scored when it has goldens. `--live` adds flows that depend on network content; `lat`, `corpus`
+  and the conform suites measure and run on their own.
 - Typecheck includes `noUnusedLocals` and builds the Wasm core with Zig 0.16. Generated core
   blobs, the WebView page bundle and the sql.js build are not committed; the node preload
   (`scripts/preload.ts`) and the Vite config build them, and tests use ReleaseSafe.

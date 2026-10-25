@@ -15,3 +15,8 @@ import { komikku } from "./komikku.ts";
 
 export const FLOWS: Flow[] = [fitnotes, mihonOnboarding, mihonApp, flappybird, harmonic, calculatorm, lichess, doodlejump, resy, reddit, tiktok, youtube, chatgpt, komikku];
 for (const flow of FLOWS) validateFlow(flow);
+/** the flows a name selects: the one it names exactly, else those it is a prefix of */
+export function flowsNamed(name: string): Flow[] {
+  const exact = FLOWS.find((f) => f.app === name);
+  return exact ? [exact] : FLOWS.filter((f) => name && f.app.startsWith(name));
+}

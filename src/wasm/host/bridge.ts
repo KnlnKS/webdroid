@@ -4,7 +4,7 @@
 // reached through Object, a JS array for an object array, a field-reading Proxy for any other object) and what the native wrote is
 // stored back when the call ends. A result the native returns is turned into a Java value: strings and references it was given pass
 // through, host arrays are allocated in the Wasm heap, and an object a native made (a Struct*) is copied field by field.
-import { PRIMS, mangleField } from "../../jvm/abi.ts";
+import { PRIMS, dotName, mangleField } from "../../jvm/abi.ts";
 import { rt, JObj } from "../../jvm/runtime.ts";
 import { JThrowable } from "../../jvm/natives/jthrowable.ts";
 import { ELEM_KINDS, TRANSFER_BASE, TRANSFER_BYTES } from "../compiler/consts.ts";
@@ -216,7 +216,7 @@ export class Bridge implements HostBridge {
   /** the Java frames the throwable `o` recorded, for the report of an exception nothing caught */
   private frames(o: object): string[] | undefined {
     const f = this.fieldsOf(THROWABLE).get(mangleField(THROWABLE, "backtrace")), state = f && this.accessor("get", f)(o);
-    return state ? this.w.stacks.stackTrace(state).map((x) => `${x.cls}.${x.method}:${x.line}`) : undefined;
+    return state ? this.w.stacks.stackTrace(state).map((x) => `${dotName(x.cls)}.${x.method}:${x.line}`) : undefined;
   }
 
   // ---------- host objects (hostclass.ts)

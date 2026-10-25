@@ -2,12 +2,13 @@
   "app": "mihon-app",
   "pkg": "app.mihon",
   "activity": "eu.kanade.tachiyomi.ui.main.MainActivity",
-  "recordedAt": "2026-08-31T23:49:17.517Z",
+  "recordedAt": "2026-10-24T05:03:16.866Z",
   "pinnedClockMs": 1767355200000,
   "device": {
     "width": 720,
     "height": 1280,
     "densityDpi": 320,
+    "statusBarDp": 24,
     "fingerprint": "google/sdk_gphone64_arm64/emu64a:15/AE3A.240806.043/12960925:userdebug/dev-keys",
     "sdk": "35"
   },
@@ -23,7 +24,9 @@
       "label": "Library — empty state",
       "index": 0,
       "file": "00-library.png",
-      "settleTimedOut": false
+      "uiFile": "00-library.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 2757
     },
     {
       "id": "nav-more",
@@ -32,22 +35,26 @@
       "file": "01-nav-more.png",
       "resolved": {
         "x": 0.9,
-        "y": 0.925
+        "y": 0.890625
       },
       "bounds": [
-        614,
-        1164,
-        681,
-        1204
+        624,
+        1116,
+        672,
+        1164
       ],
-      "settleTimedOut": false
+      "uiFile": "01-nav-more.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 3801
     },
     {
       "id": "more-scroll",
       "label": "Scroll the More list",
       "index": 2,
       "file": "02-more-scroll.png",
-      "settleTimedOut": false
+      "uiFile": "02-more-scroll.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 4791
     },
     {
       "id": "settings",
@@ -56,29 +63,35 @@
       "file": "03-settings.png",
       "resolved": {
         "x": 0.25972222222222224,
-        "y": 0.51640625
+        "y": 0.515625
       },
       "bounds": [
         128,
-        633,
+        632,
         245,
-        689
+        688
       ],
-      "settleTimedOut": false
+      "uiFile": "03-settings.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 4093
     },
     {
       "id": "settings-scroll",
       "label": "Scroll the settings list",
       "index": 4,
       "file": "04-settings-scroll.png",
-      "settleTimedOut": false
+      "uiFile": "04-settings-scroll.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 4807
     },
     {
       "id": "settings-scroll-back",
       "label": "Scroll back to the top",
       "index": 5,
       "file": "05-settings-scroll-back.png",
-      "settleTimedOut": false
+      "uiFile": "05-settings-scroll-back.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 4798
     },
     {
       "id": "reader",
@@ -95,14 +108,18 @@
         228,
         568
       ],
-      "settleTimedOut": false
+      "uiFile": "06-reader.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 4096
     },
     {
       "id": "reader-scroll",
       "label": "Scroll Reader settings",
       "index": 7,
       "file": "07-reader-scroll.png",
-      "settleTimedOut": false
+      "uiFile": "07-reader-scroll.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 4803
     },
     {
       "id": "reader-rotation",
@@ -111,29 +128,35 @@
       "file": "08-reader-rotation.png",
       "resolved": {
         "x": 0.19722222222222222,
-        "y": 0.209375
+        "y": 0.3375
       },
       "bounds": [
         32,
-        240,
+        404,
         252,
-        296
+        460
       ],
-      "settleTimedOut": false
+      "uiFile": "08-reader-rotation.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 4304
     },
     {
       "id": "dialog-dismiss",
       "label": "Dismiss dialog",
       "index": 9,
       "file": "09-dialog-dismiss.png",
-      "settleTimedOut": false
+      "uiFile": "09-dialog-dismiss.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 4186
     },
     {
       "id": "back-to-settings",
       "label": "Back to Settings",
       "index": 10,
       "file": "10-back-to-settings.png",
-      "settleTimedOut": false
+      "uiFile": "10-back-to-settings.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 4247
     },
     {
       "id": "appearance",
@@ -150,7 +173,9 @@
         299,
         264
       ],
-      "settleTimedOut": false
+      "uiFile": "11-appearance.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 4247
     },
     {
       "id": "appearance-dark",
@@ -167,7 +192,9 @@
         608,
         360
       ],
-      "settleTimedOut": false
+      "uiFile": "12-appearance-dark.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 5892
     },
     {
       "id": "appearance-light",
@@ -184,28 +211,36 @@
         393,
         360
       ],
-      "settleTimedOut": false
+      "uiFile": "13-appearance-light.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 4922
     },
     {
       "id": "appearance-scroll",
       "label": "Scroll Appearance",
       "index": 14,
       "file": "14-appearance-scroll.png",
-      "settleTimedOut": false
+      "uiFile": "14-appearance-scroll.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 4891
     },
     {
       "id": "back-out",
       "label": "Back out of Appearance",
       "index": 15,
       "file": "15-back-out.png",
-      "settleTimedOut": false
+      "uiFile": "15-back-out.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 4471
     },
     {
       "id": "back-out-2",
       "label": "Back again",
       "index": 16,
       "file": "16-back-out-2.png",
-      "settleTimedOut": false
+      "uiFile": "16-back-out-2.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 4908
     }
   ]
 }

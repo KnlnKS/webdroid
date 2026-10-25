@@ -18,7 +18,7 @@ export type ProcessDiagnostics = {
   perf: Record<string, number> | null;
   queue: { queued: number; depth: number } | null;
 } | { status: "exited"; pid: number; pkg: string; process: string; terminal: WorkerTerminal }
-  | { status: "unavailable" } | { status: "failure"; message: string; terminal?: WorkerTerminal };
+  | { status: "starting"; phase: string } | { status: "unavailable" } | { status: "failure"; message: string; terminal?: WorkerTerminal };
 
 export type ProcessSnapshot = { url: string; diagnostics: ProcessDiagnostics };
 /** a row of wd.workerProcesses(): a process Worker's identity, and its snapshot or how it ended */
@@ -40,9 +40,9 @@ export function pageDiagnostics(errorLine: string) {
 }
 /** whether a process's diagnostics were read, or it ended as the broker expected (an exit is no failure) */
 export const diagnosed = (diagnostics: ProcessDiagnostics): boolean => diagnostics.status === "ok" || diagnostics.status === "exited";
-/** each process's error lines, and for one whose diagnostics did not arrive, why */
+/** each process's error lines, and for one whose diagnostics did not arrive, why; a process still starting has none yet */
 export const diagnosticErrors = (processes: ProcessSnapshot[]): string[] => processes.flatMap(({ url, diagnostics: d }) =>
-  d.status === "ok" ? d.errors ?? [] : d.status === "exited" ? [] : [`${url}: diagnostics ${d.status === "failure" ? d.message : d.status}`]);
+  d.status === "ok" ? d.errors ?? [] : d.status === "exited" || d.status === "starting" ? [] : [`${url}: diagnostics ${d.status === "failure" ? d.message : d.status}`]);
 
 /** a process Worker's row of wd.workerProcesses() as its diagnostics: its snapshot when that is complete and names the process, or how it ended */
 export function workerDiagnostics(worker: WorkerProcess): ProcessDiagnostics {
@@ -57,7 +57,8 @@ export function workerDiagnostics(worker: WorkerProcess): ProcessDiagnostics {
   }
   const snapshot = worker.snapshot;
   if (worker.error || !snapshot) return { status: "failure", message: worker.error ?? "Worker snapshot unavailable" };
-  if (snapshot.dead || snapshot.phase !== "ready") return { status: "failure", message: `Worker ${worker.pid}: ${snapshot.dead ? "dead" : snapshot.phase}` };
+  if (snapshot.phase === "failed") return { status: "failure", message: `Worker ${worker.pid}: start failed` };
+  if (snapshot.phase !== "ready") return { status: "starting", phase: snapshot.phase };
   if (!snapshot.missingAt || !snapshot.placeholders || !snapshot.placeholderAt)
     return { status: "failure", message: `Worker ${worker.pid}: incomplete diagnostics` };
   const identity = snapshot.identity;
@@ -68,22 +69,16 @@ export function workerDiagnostics(worker: WorkerProcess): ProcessDiagnostics {
     errors: snapshot.logs.filter(line => ERROR_LINE.test(line)), perf: snapshot.perf,
     queue: { queued: snapshot.main.queued, depth: snapshot.main.depth } };
 }
-/** how long workerRows waits for processes still starting */
+/** how long a final read waits for processes still starting */
 export const STARTING_MS = 30_000;
-/** in the page: wd.workerProcesses() once no process is starting, waiting up to `waitMs`. A process another one started (a service it binds) boots
- *  at its own pace, past a timed checkpoint under load, and has no diagnostics before it is ready; the wait asks the broker, not the booting Worker. */
-export async function workerRows(waitMs: number): Promise<WorkerProcess[]> {
+/** in the page: wd.workerProcesses() once no process is starting, waiting up to `waitMs`. A step reads at once (a process still starting is read at a
+ *  later one); a final read waits, since a process another one started (a service it binds) boots at its own pace and has no diagnostics before it
+ *  is ready. The wait asks the broker, not the booting Worker. */
+export async function workerRows(waitMs = 0): Promise<WorkerProcess[]> {
   const wd = globalThis.wd, read = wd?.workerProcesses;
   if (!read) throw new Error("Worker diagnostics unavailable");
-  const deadline = performance.now() + waitMs, pause = () => new Promise(resolve => setTimeout(resolve, 50));
-  while (wd.processStarting() && performance.now() < deadline) await pause();
-  let rows: WorkerProcess[] = await read();
-  // the broker holds a Worker's endpoint a moment before the Worker says it is ready
-  while (rows.some((row) => row.error?.startsWith("Worker is not ready:")) && performance.now() < deadline) {
-    await pause();
-    rows = await read();
-  }
-  return rows;
+  for (const deadline = performance.now() + waitMs; wd.processStarting() && performance.now() < deadline;) await new Promise(resolve => setTimeout(resolve, 50));
+  return read();
 }
 
 /** In the page: waits until the foreground app process has drawn its first frame, or with `presented` put one on the screen, polling every
@@ -104,5 +99,18 @@ export async function appUp({ until, ms, pollMs }: { until: "drawn" | "presented
     }
     if (performance.now() > end) return `no app ${until} a frame within ${ms} ms${row ? ` (${row.pkg}${row.error ? ": " + row.error : ""})` : ""}`;
     await new Promise(resolve => setTimeout(resolve, pollMs));
+  }
+}
+
+/** In the page: waits until no process is starting and every process's main queue has been empty for `stableMs`, polling every `pollMs`; true
+ *  then, or what was still busy when `ms` passed. An app that animates keeps its queue busy until then. */
+export async function appIdle({ ms, stableMs, pollMs }: { ms: number; stableMs: number; pollMs: number }): Promise<true | string> {
+  const end = performance.now() + ms;
+  for (let idleSince = performance.now(); ; await new Promise(resolve => setTimeout(resolve, pollMs))) {
+    const wd = globalThis.wd, rows: WorkerProcess[] = await wd.workerProcesses(), now = performance.now();
+    const busy = rows.filter(({ terminal, snapshot: s }) => !terminal && !(s?.phase === "ready" && !s.main.depth && !s.main.queued));
+    if (busy.length || wd.processStarting()) idleSince = now;
+    else if (now - idleSince >= stableMs) return true;
+    if (now > end) return `busy after ${ms} ms: ${busy.map(r => `${r.process} ${r.snapshot?.phase === "ready" ? "main queue" : r.snapshot?.phase ?? r.error}`).join(", ") || "a process starting"}`;
   }
 }

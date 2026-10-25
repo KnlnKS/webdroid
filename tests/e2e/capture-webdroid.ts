@@ -3,9 +3,9 @@
 // The entry point is run.ts; this module only captures.
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { ENV_SCREEN, WebdroidDriver } from "./drivers/webdroid.ts";
+import { ENV_CORES, ENV_SCREEN, WebdroidDriver } from "./drivers/webdroid.ts";
 import { E2E_DIR, readJson } from "./lib/util.ts";
-import { PINNED_CLOCK_MS, evidenceOf, flowSchemaHash, isMotionWait, screenOf, screenParam, uiFileFor, type ExecutionFlow, type ExecutionStep, type Flow, type Manifest, type WaitPolicy } from "./types.ts";
+import { PINNED_CLOCK_MS, evidenceOf, flowSchemaHash, isMotionWait, sameScreen, screenOf, screenParam, uiFileFor, type ExecutionFlow, type ExecutionStep, type Flow, type Manifest, type RecordedStep, type WaitPolicy } from "./types.ts";
 import { parseScreen } from "../../src/shell/config.ts";
 import type { Act, Hang, Settled, StepResult } from "./lib/probe.ts";
 import type { ProcessSnapshot } from "./lib/processes.ts";
@@ -52,9 +52,9 @@ export type StepRun = {
   phases?: StepResult["phases"] & { hostWriteMs: number };
 };
 
-type CaptureMode = "full" | "fast";
-/** What `actual/<flow>/run.json` holds: the steps plus how the run was driven. */
-export type FlowRun = { mode: CaptureMode; flowSchemaHash: string; jobs: number; screen: string; statusBarDp: number; steps: StepRun[]; browserErrors?: string[]; hostFiles?: { path: string; size: number }[]; aborted?: { step: string; error: string } };
+/** What `actual/<flow>/run.json` holds: the steps plus how the run was driven; `scored`, every step was captured to compare with the goldens;
+ *  `alone`, no other flow ran beside it. */
+export type FlowRun = { scored: boolean; flowSchemaHash: string; alone: boolean; screen: string; statusBarDp: number; steps: StepRun[]; browserErrors?: string[]; hostFiles?: { path: string; size: number }[]; aborted?: { step: string; error: string } };
 export class CaptureAborted extends Error {
   readonly runs: StepRun[];
   constructor(cause: unknown, runs: StepRun[]) { super(String(cause), { cause }); this.runs = runs; }
@@ -75,16 +75,17 @@ export async function loadManifest(app: string): Promise<Manifest | undefined> {
 
 /** A browser prepared for one flow: the goldens' geometry (unless the run is pinned elsewhere
  *  to measure cost), the flow's clock, and its seed prefs already in its data, at the path the emulator pass writes them to. */
-export function launchFor(flow: Flow, manifest: Manifest | undefined, shots = false, controlled = false): Promise<WebdroidDriver> {
+export function launchFor(flow: Flow, manifest: Manifest | undefined, { shots = false, cores = ENV_CORES }: { shots?: boolean; cores?: number } = {}): Promise<WebdroidDriver> {
   return WebdroidDriver.launch({
     screen: { ...screenOf(manifest, flow.screen), ...parseScreen(ENV_SCREEN) },
     fixedMs: flow.clock === "live" ? null : PINNED_CLOCK_MS,
     files: flow.seedPrefs ? [[`/data/data/${flow.pkg}/shared_prefs/${flow.pkg}_preferences.xml`, flow.seedPrefs]] : [],
     privateStorage: flow.privateStorage,
     shots,
-    controlled,
+    controlled: flow.clock === "controlled",
     // the reproducible gate does not depend on what the network serves (Mihon's update check)
     offline: flow.clock !== "live",
+    cores,
   });
 }
 
@@ -104,40 +105,40 @@ export function actOf(flow: Flow, step: ExecutionStep): Act {
   }
 }
 
-/** Perform one step and settle it on the step's horizon. */
-export function runStep(drv: WebdroidDriver, flow: Flow, step: ExecutionStep, mode: CaptureMode = "full"): Promise<StepResult> {
-  const evidence = evidenceOf(step);
-  const capture = mode === "full" || evidence.kind !== "semantic";
+/** Perform one step and settle it: a `scored` step on its horizon as the reference waited, and on a controlled clock past the `reference` step's
+ *  dwell; a step that only reaches its checkpoint settles as soon as the screen is still. */
+export function runStep(drv: WebdroidDriver, flow: Flow, step: ExecutionStep, { scored = true, reference }: { scored?: boolean; reference?: RecordedStep } = {}): Promise<StepResult> {
+  const evidence = evidenceOf(step), quick = !scored && evidence.kind === "semantic";
   // Controlled gestures need their virtual horizon to finish flings before the next input.
-  const policy: WaitPolicy = mode === "fast" && flow.clock !== "controlled" && evidence.kind === "semantic" && step.wait.kind === "quiescent" && step.action.type !== "launch"
+  const policy: WaitPolicy = quick && flow.clock !== "controlled" && step.wait.kind === "quiescent" && step.action.type !== "launch"
     ? { ...step.wait, maxVirtualMs: 0 }
     : step.wait;
-  const quiescence = mode === "fast" && evidence.kind === "semantic"
-    ? { stableMs: 50, intervalMs: 50, stableFrames: 2 }
-    : undefined;
   return drv.step(actOf(flow, step), {
     wait: policy,
-    capture,
-    timing: mode === "fast" && flow.clock === "controlled" ? "controlled" : "real",
-    quiescence,
+    capture: !quick,
+    timing: flow.clock === "controlled" ? "controlled" : "real",
+    quiescence: quick ? { stableMs: 50, intervalMs: 50, stableFrames: 2 } : undefined,
+    dwellMs: reference?.dwellMs,
   });
 }
 
+/** `flow`'s steps in `drv`, into actual/<flow>: every step of a flow with goldens at this geometry is captured to be scored, else only the steps
+ *  whose evidence is visual or motion */
 export async function captureFlow(flow: ExecutionFlow, drv: WebdroidDriver, {
-  jobs = 1, shots, log = console.log, mode = "full",
-}: { jobs?: number; shots?: string; log?: (s: string) => void; mode?: CaptureMode } = {}): Promise<{ runs: StepRun[]; errors: string[] }> {
+  alone = true, shots, log = console.log,
+}: { alone?: boolean; shots?: string; log?: (s: string) => void } = {}): Promise<{ runs: StepRun[]; errors: string[]; scored: boolean }> {
   const manifest = await loadManifest(flow.app);
-  if (!manifest) log(`  no goldens for ${flow.app} — smoke run (rendered/wedged/missing/perf; not scored)`);
+  const scored = !!manifest && manifest.depth !== "startup" && sameScreen(drv.screen, screenOf(manifest));
   const byId = new Map((manifest?.steps ?? []).map((s) => [s.id, s]));
 
-  const outDir = `${E2E_DIR}${mode === "fast" ? "actual-fast" : "actual"}/${flow.app}`;
+  const outDir = `${E2E_DIR}actual/${flow.app}`;
   await rm(outDir, { recursive: true, force: true });
   await mkdir(outDir, { recursive: true });
 
-  log(`=== webdroid: ${flow.app} (${flow.steps.length} steps) ===`);
+  log(`=== webdroid: ${flow.app} (${flow.steps.length} steps${scored ? "" : ", not scored"}) ===`);
   const runs: StepRun[] = [];
   const persist = (hostFiles?: FlowRun["hostFiles"], aborted?: FlowRun["aborted"]) => {
-    const run: FlowRun = { mode, flowSchemaHash: flowSchemaHash([flow]), jobs, screen: screenParam(drv.screen), statusBarDp: drv.screen.statusBarDp, steps: runs, browserErrors: [...drv.errors], hostFiles, aborted };
+    const run: FlowRun = { scored, flowSchemaHash: flowSchemaHash([flow]), alone, screen: screenParam(drv.screen), statusBarDp: drv.screen.statusBarDp, steps: runs, browserErrors: [...drv.errors], hostFiles, aborted };
     return writeFile(`${outDir}/run.json`, JSON.stringify(run, null, 2));
   };
   await persist();
@@ -150,15 +151,14 @@ export async function captureFlow(flow: ExecutionFlow, drv: WebdroidDriver, {
       if (!rec && manifest && manifest.depth !== "startup")
         throw new Error(`golden manifest has no step "${step.id}" — re-record ${flow.app}`);
       const file = rec?.file ?? `${String(i).padStart(2, "0")}-${step.id}.png`;
-      const fastEvidence = evidenceOf(step);
-      const evidence = mode === "full" ? "visual" : fastEvidence.kind;
-      const r = await runStep(drv, flow, step, mode);
+      const evidence = evidenceOf(step).kind;
+      const r = await runStep(drv, flow, step, { scored, reference: scored ? rec : undefined });
       const stepMs = Math.round(r.ms);
       const fps = r.ms ? (r.perf.frames ?? 0) * 1000 / r.ms : 0;
       // the launch step's window is mostly boot + lazy compilation, not the app's frame loop; and
       // a frame rate measured beside other flows' browsers measures the host, not the app
-      const motion = mode === "fast" ? fastEvidence.kind === "motion" : isMotionWait(step.wait);
-      const slow = !!(motion && action.type !== "launch" && flow.minFps && fps < flow.minFps && jobs === 1);
+      const motion = evidence === "motion" || isMotionWait(step.wait);
+      const slow = !!(motion && action.type !== "launch" && flow.minFps && fps < flow.minFps && alone);
       const writeAt = performance.now();
       if (r.png) {
         await writeFile(`${outDir}/${file}`, Buffer.from(r.png, "base64"));
@@ -193,7 +193,7 @@ export async function captureFlow(flow: ExecutionFlow, drv: WebdroidDriver, {
         r.hang ? `HANG in ${r.hang.phase}` : "",
         frames ? `${frames} frame${frames === 1 ? "" : "s"}` : "",
         `${stepMs}ms`,
-        motion ? `${fps.toFixed(0)}fps${jobs > 1 ? ` (${jobs} jobs)` : ""}` : "",
+        motion ? `${fps.toFixed(0)}fps${alone ? "" : " (beside other flows)"}` : "",
         p.glFrames ? `${p.glFrames} gl` : "",
         slow ? "SLOW" : "",
         p.draws ? `${p.draws} draw/${Math.round(p.drawMs)}ms` : "",
@@ -208,7 +208,7 @@ export async function captureFlow(flow: ExecutionFlow, drv: WebdroidDriver, {
       for (const e of r.newErrors) log(`       ${e.slice(0, 200)}`);
     }
     // Persist the per-step run flags next to the frames so `pnpm e2e --diff` can apply the same
-    // scoring rules as `pnpm e2e --full` — without this, a standalone diff has no idea the app hung
+    // scoring rules as the run — without this, a standalone diff has no idea the app hung
     // and would quietly report a better number for the same pixels.
     const hostFiles = flow.privateStorage ? await drv.page.evaluate(async () => {
       const scan = async (dir: FileSystemDirectoryHandle, prefix: string): Promise<{ path: string; size: number }[]> => {
@@ -226,7 +226,7 @@ export async function captureFlow(flow: ExecutionFlow, drv: WebdroidDriver, {
     const missingFiles = (flow.privateStorage?.expectedFiles ?? []).filter((expected) => !hostFiles?.some(({ path, size }) =>
       path.startsWith(expected.pathPrefix) && path.endsWith(expected.suffix) && size >= expected.minBytes))
       .map((expected) => `missing host file ${expected.pathPrefix}*${expected.suffix} (${expected.minBytes} bytes)`);
-    return { runs, errors: missingFiles };
+    return { runs, errors: missingFiles, scored };
   } catch (cause) {
     await persist(undefined, { step: executing, error: String(cause) });
     throw new CaptureAborted(cause, runs);

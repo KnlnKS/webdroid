@@ -102,7 +102,7 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
       const {workerDiagnosticOwnership} = await import(location.origin+"/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap.ts");
       return workerDiagnosticOwnership();
     });
-    expect(diagnostic).toEqual({pendingTerminal:{expected:true,reason:1,status:0,pid:8403},healthy:true,rejected:"owned diagnostic failure",hung:"Worker diagnostic timeout",phase:"Worker is not ready: packages",
+    expect(diagnostic).toEqual({pendingTerminal:{expected:true,reason:1,status:0,pid:8403},healthy:true,rejected:"owned diagnostic failure",hung:"Worker diagnostic timeout",phase:"packages",
       profilePending:"Worker is not ready: packages",profileIdentity:"Worker AOT profile identity mismatch",
       secondHealthy:true,hungCalls:1,queueBlocked:true,live:true,aliveCalls:2,retained:"actual diagnostic fixture exit",identity:8401});
     const ime = await page.evaluate(async () => {

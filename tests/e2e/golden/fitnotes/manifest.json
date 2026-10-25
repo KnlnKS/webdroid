@@ -2,12 +2,13 @@
   "app": "fitnotes",
   "pkg": "com.github.jamesgay.fitnotes",
   "activity": "com.github.jamesgay.fitnotes.feature.home.MainActivity",
-  "recordedAt": "2026-08-31T23:09:12.187Z",
+  "recordedAt": "2026-10-24T05:01:01.836Z",
   "pinnedClockMs": 1767355200000,
   "device": {
     "width": 720,
     "height": 1280,
     "densityDpi": 320,
+    "statusBarDp": 24,
     "fingerprint": "google/sdk_gphone64_arm64/emu64a:15/AE3A.240806.043/12960925:userdebug/dev-keys",
     "sdk": "35"
   },
@@ -23,7 +24,9 @@
       "label": "Launch — welcome dialog",
       "index": 0,
       "file": "00-launch.png",
-      "settleTimedOut": false
+      "uiFile": "00-launch.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 3951
     },
     {
       "id": "unit-metric",
@@ -40,7 +43,9 @@
         632,
         766
       ],
-      "settleTimedOut": false
+      "uiFile": "01-unit-metric.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 2442
     },
     {
       "id": "welcome-ok",
@@ -57,7 +62,9 @@
         664,
         1134
       ],
-      "settleTimedOut": false
+      "uiFile": "02-welcome-ok.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 2494
     },
     {
       "id": "home-tip-ok",
@@ -74,14 +81,18 @@
         670,
         1178
       ],
-      "settleTimedOut": false
+      "uiFile": "03-home-tip-ok.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 2404
     },
     {
       "id": "home",
       "label": "Workout log — empty",
       "index": 4,
       "file": "04-home.png",
-      "settleTimedOut": false
+      "uiFile": "04-home.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 2433
     },
     {
       "id": "start-workout",
@@ -98,7 +109,9 @@
         507,
         1050
       ],
-      "settleTimedOut": false
+      "uiFile": "05-start-workout.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 2505
     },
     {
       "id": "exlist-tip-ok",
@@ -115,7 +128,9 @@
         670,
         1016
       ],
-      "settleTimedOut": false
+      "uiFile": "06-exlist-tip-ok.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 2498
     },
     {
       "id": "routines-tip-ok",
@@ -132,14 +147,18 @@
         670,
         1161
       ],
-      "settleTimedOut": false
+      "uiFile": "07-routines-tip-ok.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 2389
     },
     {
       "id": "categories",
       "label": "Exercise categories (SQLite)",
       "index": 8,
       "file": "08-categories.png",
-      "settleTimedOut": false
+      "uiFile": "08-categories.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 2454
     },
     {
       "id": "cat-biceps",
@@ -156,7 +175,9 @@
         640,
         573
       ],
-      "settleTimedOut": false
+      "uiFile": "09-cat-biceps.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 3768
     },
     {
       "id": "ex-barbell-curl",
@@ -173,7 +194,9 @@
         624,
         353
       ],
-      "settleTimedOut": false
+      "uiFile": "10-ex-barbell-curl.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 3316
     },
     {
       "id": "1-weight",
@@ -184,7 +207,9 @@
         "x": 0.5,
         "y": 0.27578125
       },
-      "settleTimedOut": false
+      "uiFile": "11-1-weight.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 2889
     },
     {
       "id": "1-reps",
@@ -195,7 +220,9 @@
         "x": 0.5,
         "y": 0.41484375
       },
-      "settleTimedOut": false
+      "uiFile": "12-1-reps.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 2827
     },
     {
       "id": "1-save",
@@ -212,7 +239,9 @@
         354,
         689
       ],
-      "settleTimedOut": false
+      "uiFile": "13-1-save.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 4218
     },
     {
       "id": "2-weight",
@@ -223,7 +252,9 @@
         "x": 0.5,
         "y": 0.27578125
       },
-      "settleTimedOut": false
+      "uiFile": "14-2-weight.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 2834
     },
     {
       "id": "2-reps",
@@ -234,7 +265,9 @@
         "x": 0.5,
         "y": 0.41484375
       },
-      "settleTimedOut": false
+      "uiFile": "15-2-reps.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 2878
     },
     {
       "id": "2-save",
@@ -251,7 +284,9 @@
         354,
         689
       ],
-      "settleTimedOut": false
+      "uiFile": "16-2-save.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 4281
     },
     {
       "id": "tab-history",
@@ -268,7 +303,9 @@
         487,
         233
       ],
-      "settleTimedOut": false
+      "uiFile": "17-tab-history.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 3165
     },
     {
       "id": "tab-graph",
@@ -285,14 +322,18 @@
         720,
         233
       ],
-      "settleTimedOut": false
+      "uiFile": "18-tab-graph.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 3655
     },
     {
       "id": "back-to-exlist",
       "label": "Back to exercise list",
       "index": 19,
       "file": "19-back-to-exlist.png",
-      "settleTimedOut": false
+      "uiFile": "19-back-to-exlist.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 3630
     },
     {
       "id": "new-exercise-open",
@@ -303,7 +344,9 @@
         "x": 0.7666666666666667,
         "y": 0.075
       },
-      "settleTimedOut": false
+      "uiFile": "20-new-exercise-open.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 3114
     },
     {
       "id": "new-name",
@@ -314,7 +357,9 @@
         "x": 0.5,
         "y": 0.22265625
       },
-      "settleTimedOut": false
+      "uiFile": "21-new-name.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 2845
     },
     {
       "id": "new-category-open",
@@ -325,7 +370,9 @@
         "x": 0.5,
         "y": 0.53359375
       },
-      "settleTimedOut": false
+      "uiFile": "22-new-category-open.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 3777
     },
     {
       "id": "new-category-chest",
@@ -342,7 +389,9 @@
         544,
         356
       ],
-      "settleTimedOut": false
+      "uiFile": "23-new-category-chest.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 2912
     },
     {
       "id": "new-save",
@@ -353,7 +402,9 @@
         "x": 0.9222222222222223,
         "y": 0.075
       },
-      "settleTimedOut": false
+      "uiFile": "24-new-save.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 4596
     },
     {
       "id": "up-to-categories",
@@ -364,7 +415,9 @@
         "x": 0.06666666666666667,
         "y": 0.075
       },
-      "settleTimedOut": false
+      "uiFile": "25-up-to-categories.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 3222
     },
     {
       "id": "cat-chest",
@@ -381,14 +434,18 @@
         640,
         769
       ],
-      "settleTimedOut": false
+      "uiFile": "26-cat-chest.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 3621
     },
     {
       "id": "scroll-chest",
       "label": "Scroll to the custom exercise",
       "index": 27,
       "file": "27-scroll-chest.png",
-      "settleTimedOut": false
+      "uiFile": "27-scroll-chest.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 3367
     },
     {
       "id": "ex-custom",
@@ -405,7 +462,9 @@
         624,
         1208
       ],
-      "settleTimedOut": false
+      "uiFile": "28-ex-custom.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 3369
     },
     {
       "id": "3-weight",
@@ -416,7 +475,9 @@
         "x": 0.5,
         "y": 0.27578125
       },
-      "settleTimedOut": false
+      "uiFile": "29-3-weight.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 2875
     },
     {
       "id": "3-reps",
@@ -427,7 +488,9 @@
         "x": 0.5,
         "y": 0.41484375
       },
-      "settleTimedOut": false
+      "uiFile": "30-3-reps.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 2894
     },
     {
       "id": "3-save",
@@ -444,7 +507,9 @@
         354,
         689
       ],
-      "settleTimedOut": false
+      "uiFile": "31-3-save.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 4285
     },
     {
       "id": "4-weight",
@@ -455,7 +520,9 @@
         "x": 0.5,
         "y": 0.27578125
       },
-      "settleTimedOut": false
+      "uiFile": "32-4-weight.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 2889
     },
     {
       "id": "4-reps",
@@ -466,7 +533,9 @@
         "x": 0.5,
         "y": 0.41484375
       },
-      "settleTimedOut": false
+      "uiFile": "33-4-reps.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 2707
     },
     {
       "id": "4-save",
@@ -483,7 +552,9 @@
         354,
         689
       ],
-      "settleTimedOut": false
+      "uiFile": "34-4-save.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 4533
     },
     {
       "id": "custom-graph",
@@ -500,28 +571,36 @@
         720,
         233
       ],
-      "settleTimedOut": false
+      "uiFile": "35-custom-graph.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 3494
     },
     {
       "id": "back-1",
       "label": "Back to exercise list",
       "index": 36,
       "file": "36-back-1.png",
-      "settleTimedOut": false
+      "uiFile": "36-back-1.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 3437
     },
     {
       "id": "back-2",
       "label": "Back to categories",
       "index": 37,
       "file": "37-back-2.png",
-      "settleTimedOut": false
+      "uiFile": "37-back-2.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 2985
     },
     {
       "id": "home-final",
       "label": "Home — workout logged",
       "index": 38,
       "file": "38-home-final.png",
-      "settleTimedOut": false
+      "uiFile": "38-home-final.ui.json",
+      "settleTimedOut": false,
+      "dwellMs": 3488
     }
   ]
 }

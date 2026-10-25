@@ -2,11 +2,10 @@
 // so every step is positional at the pinned screen, the launch settles for as long as the app
 // takes to reach the feed, and the video steps are captured once after their dwell (a playing
 // video never holds still).
-import { wait, type Flow, type Screen } from "../types.ts";
+import { pixelsOn, wait, type Flow, type Screen } from "../types.ts";
 
 const SCREEN: Screen = { width: 1080, height: 2160, densityDpi: 480 };
-const at = (x: number, y: number): [number, number] => [x / SCREEN.width, y / SCREEN.height];
-const xy = (x: number, y: number) => ({ x: x / SCREEN.width, y: y / SCREEN.height });
+const { pair: at, point: xy } = pixelsOn(SCREEN);
 const swipeUp = { type: "swipe" as const, from: at(540, 1600), to: at(540, 500), ms: 300 };
 
 export const tiktok: Flow = {
@@ -18,7 +17,9 @@ export const tiktok: Flow = {
   crop: { top: 0, bottom: 0, left: 0, right: 0 },
   clock: "live",
   steps: [
-    { id: "launch", label: "Launch — splash to first-run gates", action: { type: "launch" }, wait: wait.liveSample(90000), fastWait: wait.state({ kind: "text", text: "Agree and continue" }, 0, 20_000) },
+    // the service decides which first-run gate comes first: its consent, or the guest sign-up before it
+    { id: "launch", label: "Launch — splash to first-run gates", action: { type: "launch" }, wait: wait.liveSample(90000),
+      liveWait: wait.state({ kind: "any", conditions: [{ kind: "text", text: "Agree and continue" }, { kind: "text", text: "Sign up for TikTok" }] }, 0, 20_000) },
     { id: "fullscreen", label: "Dismiss Android's full-screen notice", action: { type: "tapText", text: "Got it", optional: true }, wait: wait.liveSample(1500) },
     { id: "signup", label: "Skip guest sign-up", action: { type: "tapText", text: "Skip", optional: true }, wait: wait.liveSample(1500) },
     // the birthdate wheel starts at today: three flings of the year column reach an adult's year
