@@ -41,7 +41,6 @@ export class Burner {
   }
   /** Idle time: burns the busy first-tier methods until `until`. Whether any is left. */
   burn(until: number): boolean {
-    if (!this.w.instantiates) return false;
     if (!this.queue.length) this.queue = this.scan();
     const warm = new Int32Array(this.w.mem.buffer, WARM_AT, 1);
     warm[0] = 1;

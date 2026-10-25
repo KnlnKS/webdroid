@@ -17,7 +17,6 @@ export class AheadCompiler {
   /** the slots of methods compiled ahead that have not been seen to run: a build is made of what runs */
   private unran = new Set<number>();
   noteRun(ms: MethodInfo[]): void {
-    if (!this.w.instantiates) return;
     this.roots.push(...ms);
     if (this.roots.length > AHEAD_ROOTS) this.roots.splice(0, this.roots.length - AHEAD_ROOTS / 2);
   }

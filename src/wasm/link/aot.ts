@@ -494,7 +494,6 @@ export class AotRuntime {
   /** Idle time: links the planned code modules until `until`, as the first call of one of their methods would, so that an interaction's first calls find their
    *  code in place rather than link it on the way (the training run of ahead-of-time class loading and linking, JEP 483). Whether any is left. */
   linkAhead(until: number): boolean {
-    if (!this.w.instantiates) return false;
     while (this.linkQueue.length && performance.now() < until) {
       const c = this.linkQueue.pop()!;
       if (!this.stateOf(c) && this.linkable(c) && this.loadC(c)) this.w.stats.aot.linkedAhead++;
