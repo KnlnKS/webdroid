@@ -7,10 +7,12 @@ import { closePort } from "./rpc.ts";
 type PackageSnapshot = { certificates: Uint8Array[]; pkg: string;
   source: RemoteFileData | { index: PackedArchiveIndex; base: string }; splits: RemoteFileData[];
   uid: number; system: boolean; grants: string[]; signatures: Uint8Array[] | null };
+/** A process's surfaces, each a port between its page end (process-host.ts) and its Worker end (worker-bootstrap.ts): its
+ *  frames; the pointer events and IME edits the page sends, with the IME state the page's text control hears; its WebView
+ *  surfaces; and its audio and media elements. */
+export type SurfaceName = "display" | "input" | "web" | "media";
 export type ProcessBootstrap = { pid: number; pkg: string; process: string; uid: number; registry: PackageSnapshot[];
-  launcher: { assetKey: string } | null; broker: MessagePort; display: MessagePort; screen: OffscreenCanvas;
-  /** the pointer events and IME edits the page sends, and the IME state the page's text control hears */
-  input: MessagePort; web: MessagePort; media: MessagePort;
+  launcher: { assetKey: string } | null; broker: MessagePort; screen: OffscreenCanvas; surfaces: Record<SurfaceName, MessagePort>;
   /** a replica of the device storage its package reads (device-storage.ts) */
   storage: [string, string][];
   /** the display's rotation state its activities' requests resolve against */
@@ -20,7 +22,7 @@ export type ProcessBootstrap = { pid: number; pkg: string; process: string; uid:
 export const bootstrapTransfers = (data: ProcessBootstrap): Transferable[] => [...bootstrapPorts(data), data.screen];
 function bootstrapPorts(data: ProcessBootstrap): MessagePort[] {
   return [...data.registry.flatMap(record => [...("port" in record.source ? [record.source.port] : []),
-    ...record.splits.map(split => split.port)]), data.broker, data.display, data.input, data.web, data.media];
+    ...record.splits.map(split => split.port)]), data.broker, ...Object.values(data.surfaces)];
 }
 
 /** Close only this received bootstrap's capabilities after an unpublished startup fails. */

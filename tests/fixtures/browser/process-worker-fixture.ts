@@ -208,7 +208,7 @@ async function clockProcess({ bootstrap: data, endpoint }: Start) {
   }, 10);
   const commands = { cookies: await broker.cookieHas() };
   post({ kind: "phase", phase: "ready" } satisfies ProcessWorkerStatus);
-  post({ report: { display: !!data.display, archive, controlled: guestClockControl.controlled, bootTime, identity: [procIdentity.pid, procIdentity.uid, procIdentity.name], commands } });
+  post({ report: { display: !!data.surfaces.display, archive, controlled: guestClockControl.controlled, bootTime, identity: [procIdentity.pid, procIdentity.uid, procIdentity.name], commands } });
 }
 
 const handle = roles[new URLSearchParams(location.search).get("role")!]!();

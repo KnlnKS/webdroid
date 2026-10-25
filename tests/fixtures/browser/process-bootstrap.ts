@@ -67,9 +67,10 @@ export async function bootstrapOwnership() {
   const watchClock = (data: ProcessBootstrap) => {
     if (!data.broker) throw new Error("expected command capability");
     callers.push(callProxy<BrokerCalls>(data.broker,brokerMethods));
-    if (!data.display) throw new Error("expected display capability");
-    displays.push(new Promise<void>(resolve => data.display!.addEventListener("message",({data})=>{if(data.kind==="close")resolve();})));
-    sendFrames(data.display, data.screen);
+    const display = data.surfaces.display;
+    if (!display) throw new Error("expected display capability");
+    displays.push(new Promise<void>(resolve => display.addEventListener("message",({data})=>{if(data.kind==="close")resolve();})));
+    sendFrames(display, data.screen);
   };
   // each process's Worker posts back the bootstrap it is started with
   const start = (pkg: string, process: string, pid: number) => {
