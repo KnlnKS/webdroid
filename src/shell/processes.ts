@@ -352,7 +352,7 @@ export class ProcessBroker {
     }
     const target = request.handle.pid;
     return this.withTransferred(caller.pid, target, request.data, delivered => this.request(this.entry(target), async endpoint => {
-      const reply = await endpoint.transact({...request,data:delivered},request.system ? SYSTEM_CALLER : {pid:caller.pid,uid:caller.uid});
+      const reply = await endpoint.transact({...request,data:delivered},caller.pid === procIdentity.pid ? SYSTEM_CALLER : {pid:caller.pid,uid:caller.uid});
       return {...reply,data:await this.withTransferred(target,caller.pid,reply.data,async data => data)};
     }));
   }

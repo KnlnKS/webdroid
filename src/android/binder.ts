@@ -30,8 +30,7 @@ export type BinderHandle = { pid: number; id: number };
 type FileHandle = { bytes: Uint8Array; writer: BinderHandle | null; prot?: number };
 export type DescriptorHandle = { descriptor: number };
 export type ParcelData = { bytes: Uint8Array; objects: [number, BinderHandle | FileHandle | DescriptorHandle | null][] };
-/** `system`: sent by a service hosted here on system_server's behalf, so it carries the system's identity */
-export type Transaction = { handle: BinderHandle; code: number; flags: number; data: ParcelData; system?: boolean };
+export type Transaction = { handle: BinderHandle; code: number; flags: number; data: ParcelData };
 export type TransactionReply = { handled: number; data: ParcelData };
 export type Caller = { pid: number; uid: number };
 const callerDeaths = new Map<number, Set<(pid: number) => void>>();
@@ -217,7 +216,8 @@ export const copyParcelable = driven(function* (cls: string, object: JObj, scope
 });
 
 // ── IPCThreadState: a thread's calling identity (`explicit` once cleared), StrictMode policy and
-// work source, and whether it transacts as system_server
+// work source, and whether its calls into services hosted here are system_server's (the broker gives
+// remote calls their sender's identity, system_server's for the page's)
 type IpcState = { caller: Caller | undefined; explicit: boolean; policy: number; workSource: { uid: number; propagate: boolean }; system: boolean; parcelScope?: FdScope };
 const UNSET_WORK_SOURCE = -1;
 const ipcStates = new WeakMap<JThread, IpcState>();
@@ -289,7 +289,7 @@ export async function withCallingIdentity<T>(caller: Caller, call: () => T | Pro
   try { return await callOn(thread, call); }
   finally { state.caller = undefined; }
 }
-/** system_server's identity: what a hosted service's binder calls carry, local or remote. Its pid is
+/** system_server's identity: what its realm's and a hosted service's binder calls carry. Its pid is
  *  the 0 Binder.getCallingPid reports when a caller's is unavailable: system_server's halves also run
  *  in app processes, beside app code whose AttributionSources carry that process's pid */
 export const SYSTEM_CALLER: Caller = { pid: 0, uid: 1000 };
@@ -457,7 +457,7 @@ const transact = driven(function* transact(target: BinderHandle, code: number, d
   const binder = target.pid === procIdentity.pid ? local.get(target.id) : undefined;
   if (binder && isSystemBinder(binder)) return yield localTransact(binder, code, data, reply, flags);
   const sent = yield* awaited(exportParcel(data, processRights));
-  const request = { handle: target, code, data: sent, flags, system: ipc().system };
+  const request = { handle: target, code, data: sent, flags };
   // system_server outlives its callers, so the driver's queueing is all a oneway call to it can report;
   // one carrying no rights reaches it in order without the caller waiting
   if (flags & FLAG_ONEWAY && target.pid === SYSTEM_SERVER_PID && !sent.objects.length) {
