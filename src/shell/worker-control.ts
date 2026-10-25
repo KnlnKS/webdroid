@@ -10,10 +10,9 @@ import { device } from "./config.ts";
 import { ACTION_DOWN, ACTION_MOVE, ACTION_UP } from "../android/input-codes.ts";
 import { dumpWindows } from "./uiautomator.ts";
 import { imeInput, imeAction, imeState } from "../android/ime.ts";
-import { hostFrames, recordVsync, vsyncScheduled } from "../android/vsync.ts";
+import { displayShown, vsyncScheduled } from "../android/vsync.ts";
 import { pendingTransitions } from "../android/server/atm.ts";
 import { perf } from "../perf.ts";
-import { processPresentation } from "./process-endpoint.ts";
 import { nativeRequirements } from "./diagnostics.ts";
 import { existingAotProfile } from "./aot-profile.ts";
 import { timelineSince } from "../timeline.ts";
@@ -22,17 +21,8 @@ import { procIdentity } from "./procfs.ts";
 
 /** one finger's touch event, at `eventTime` on the guest's uptime clock */
 const touch = (action: number, x: number, y: number, eventTime?: number) => dispatchTouches(action, [{ id: 0, x, y }], eventTime);
-
-/** the vsyncs this realm's shown display has had while its process lives; `frame` runs first on each shown frame */
-export function countVsyncs(frame?: () => void): () => number {
-  let ticks = 0;
-  hostFrames(time => {
-    if (!processPresentation.visible) return;
-    frame?.();
-    if (!processExited() && recordVsync(time)) ticks++;
-  });
-  return () => ticks;
-}
+const identity = () => ({ pid: procIdentity.pid, uid: procIdentity.uid, process: procIdentity.name, pkg: appHost?.pkg ?? null });
+const framesBy = (map: Map<string, string[]>) => Object.fromEntries([...map].map(([name, frames]) => [name, frames.slice()]));
 
 /** how far a process Worker's start has come (process-worker.ts) */
 export type WorkerPhase = "attaching" | StartPhase | "failed";
@@ -42,13 +32,9 @@ export type StartPhase = "packages" | "platform" | "application" | "ready";
  *  through its control port. Copies only observable data; a page never receives this JVM's objects or callbacks. */
 export function workerControl(logs: string[], phase: () => WorkerPhase, ticks: () => number) {
   return {
-    aotProfile: async () => ({phase:phase(),dead:processExited(),
-      identity:{pid:procIdentity.pid,uid:procIdentity.uid,process:procIdentity.name,pkg:appHost?.pkg ?? null},
-      profile:await existingAotProfile()}),
-    snapshot: async () => ({ phase: phase(), dead: processExited(), ticks: ticks(), width: SCREEN_W, height: SCREEN_H,
-      identity: {pid:procIdentity.pid,uid:procIdentity.uid,process:procIdentity.name,pkg:appHost?.pkg ?? null},
-      missingAt: Object.fromEntries([...rt.missingAt].map(([name,frames])=>[name,frames.slice()])),
-      placeholders: [...rt.placeholders], placeholderAt: Object.fromEntries([...rt.placeholderAt].map(([name,frames])=>[name,frames.slice()])),
+    aotProfile: async () => ({ phase: phase(), dead: processExited(), identity: identity(), profile: await existingAotProfile() }),
+    snapshot: async () => ({ phase: phase(), dead: processExited(), ticks: ticks(), width: SCREEN_W, height: SCREEN_H, identity: identity(),
+      missingAt: framesBy(rt.missingAt), placeholders: [...rt.placeholders], placeholderAt: framesBy(rt.placeholderAt),
       vsyncScheduled: vsyncScheduled(), pendingTransitions: pendingTransitions(),
       yields: {pushes:yieldStats.pushes,fires:yieldStats.fires,pending:yieldStats.pending()}, timedParks: timedParks.size, web: webViewInfo(),
       main: { ...mainDbg }, perf: { ...perf },
@@ -94,7 +80,7 @@ export function workerControl(logs: string[], phase: () => WorkerPhase, ticks: (
     enter: async () => imeAction(imeState().generation),
     imeState: async () => imeState(),
     back: async () => { await pressBack(); },
-    testFrame: async (): Promise<void> => { if (processPresentation.visible) await testFrame(); },
+    testFrame: async (): Promise<void> => { if (displayShown()) await testFrame(); },
     /** the frame-path events since `from` (ms since the epoch), each [ms since the epoch, event, arg] */
     timeline: async (from: number) => timelineSince(from - performance.timeOrigin),
   };

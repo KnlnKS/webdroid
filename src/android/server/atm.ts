@@ -17,7 +17,7 @@ import { grantIntentUris$ } from "./urigrants.ts";
 import { pms, processRecord, runsHere, scheduleOnApp, thisApp } from "./process.ts";
 import { decodeIntent, encodeIntent } from "../intentipc.ts";
 import { broker, tellBroker } from "../../shell/broker-access.ts";
-import { note, Ev } from "../../timeline.ts";
+import { setDisplayShown } from "../vsync.ts";
 import { fillIn$, senderId$, sendPending$, START_CANCELED } from "../pendingintent.ts";
 import type { PendingOperation } from "../../shell/pendingintents.ts";
 import { GET_META_DATA, MATCH_DEFAULT_ONLY } from "../packages.ts";
@@ -45,9 +45,6 @@ export function deliverRemoteResult(request: number, code: number, data: JIntent
   remoteResults.delete(request);
   deliver?.(code, data);
 }
-/** whether this process's windows are on screen, which its display loop follows */
-export const processPresentation = { visible: true };
-export function setVisible(visible: boolean): void { note(Ev.Visible, +visible); processPresentation.visible = visible; }
 
 /** a resumed activity is also the top resumed one: it hears that with its resume, and loses it
  *  in the transaction that pauses it */
@@ -194,7 +191,7 @@ function* destroy(r: ActivityRecord): Gen<void> {
   settlePause(r);
   if (r.remote) {
     const { id } = r.remote, code = r.owed?.code ?? RESULT_CANCELED, data = r.owed?.data ?? null;
-    setVisible(false);
+    setDisplayShown(false);
     tellBroker(({ activity }) => after(data && encodeIntent(data), encoded => activity.finish(id, code, encoded)));
   }
   yield* schedule(r.app, null, yield item("DestroyActivityItem", "Landroid/os/IBinder;Z", r.token, +r.finishing));

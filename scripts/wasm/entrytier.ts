@@ -12,7 +12,7 @@ import { classNameOf, newObj, scall, staticField, vcall } from "../../src/jvm/na
 import { FileDescriptors, type DescriptorCalls } from "../../src/shell/file-descriptors.ts";
 import { canonicalFilePaths } from "../../src/shell/file-path.ts";
 import { connectBroker } from "../../src/shell/broker-access.ts";
-import type { BrokerCalls } from "../../src/shell/broker-contract.ts";
+import { brokerMethods, type BrokerCalls } from "../../src/shell/broker-contract.ts";
 import { callProxy, serveCalls } from "../../src/shell/rpc.ts";
 import { writeBufferBytes } from "../../src/jvm/natives/jnio.ts";
 
@@ -31,7 +31,7 @@ async function inMemoryControl(): Promise<void> {
   padded.set(bytes, 8);
   const heap = await scall("java/nio/ByteBuffer", "wrap", "([BII)Ljava/nio/ByteBuffer;", padded, 8, bytes.length);
   const owner = new FileDescriptors(), ports = new MessageChannel();
-  const stop = serveCalls(ports.port1, owner.session(2001, () => 0)), proxy = callProxy<DescriptorCalls>(ports.port2, ["fileDescriptor"]);
+  const stop = serveCalls(ports.port1, owner.session(2001, () => 0)), proxy = callProxy<DescriptorCalls>(ports.port2, brokerMethods.descriptors);
   let shared, mapped;
   try {
     connectBroker({ files: canonicalFilePaths(() => 0), descriptors: proxy.endpoint } as unknown as BrokerCalls, true);

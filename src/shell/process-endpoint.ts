@@ -9,7 +9,8 @@ import { deathOf, lastExit, noteAppKill } from "../android/server/appexitinfo.ts
 import { hostedServices, remoteServiceConnected } from "../android/server/activeservices.ts";
 import { vfs } from "./vfs.ts";
 import { broadcastResult, deliverBroadcast as deliverQueued, resultData } from "../android/server/broadcastqueue.ts";
-import { deliverRemoteResult, setVisible, startActivityInProcess, taskVisibility } from "../android/server/atm.ts";
+import { deliverRemoteResult, startActivityInProcess, taskVisibility } from "../android/server/atm.ts";
+import { setDisplayShown } from "../android/vsync.ts";
 import { executePendingIntent, publishedProvider } from "../android/server/am.ts";
 import { stopSettingsUpdates } from "../android/settings.ts";
 import { stopAccountUpdates } from "../android/accounts.ts";
@@ -24,7 +25,6 @@ import type { ProcessBroker } from "./processes.ts";
 import { callProxy, closePort } from "./rpc.ts";
 import { procIdentity } from "./procfs.ts";
 
-export { processPresentation } from "../android/server/atm.ts";
 
 let calls: ReturnType<typeof callProxy<BrokerCalls>> | undefined, releaseFiles = () => {};
 function attach(port: MessagePort, worker: boolean): BrokerCalls {
@@ -66,7 +66,7 @@ export function createProcessEndpoint(): ProcessEndpoint {
     cookiesChanged: async () => cookiesChanged(),
     storageChanged: async (key, value) => storageChanged(key, value),
     packageRemoved: async pkg => unregisterPackage(pkg),
-    packageAdded: async snapshot => (await import("./process-bootstrap.ts")).registerSnapshot(snapshot),
+    packageAdded: async snapshot => (await import("./process-packages.ts")).registerSnapshot(snapshot),
     kill: (signal, note) => { if (note) noteAppKill(note); exitProcess({ signal }); },
     activity: async (request) => {
       if (request.kind === "back") return (await import("./device.ts")).pressBack();
@@ -74,10 +74,10 @@ export function createProcessEndpoint(): ProcessEndpoint {
       return asBroker(function* (): Gen<void> {
         if (request.kind === "visibility") {
           yield taskVisibility(request.phase);
-          if (request.phase !== "pause") setVisible(request.phase !== "stop");
+          if (request.phase !== "pause") setDisplayShown(request.phase !== "stop");
         } else if (request.kind === "launch") {
           yield startActivityInProcess(request.component, yield* awaited(decodeIntent(request.intent)), request.id, request.caller);
-          setVisible(true);
+          setDisplayShown(true);
         } else deliverRemoteResult(request.request, request.code, request.data ? yield* awaited(decodeIntent(request.data)) : null);
       }());
     },

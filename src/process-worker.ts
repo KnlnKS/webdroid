@@ -19,9 +19,9 @@ async function prepare({ clock, jars, tier: ports }: Extract<ProcessWorkerMessag
   (await import("./guest-clock.ts")).attachGuestClockPort(clock);
   await import("./natives.ts");
   (await import("./android/framework.ts")).receivePlatformJars(jars);
-  const [control, rpc, core, apex, cacerts, packages, device, skia, tier, config, jvmruntime] = await Promise.all([
-    import("./shell/worker-control.ts"), import("./shell/rpc.ts"), import("./native/core.ts"), import("./shell/apex.ts"), import("./shell/cacerts.ts"), import("./shell/process-bootstrap.ts"),
-    import("./shell/device.ts"), import("./android/skia.ts"), import("./jvm/tier.ts"), import("./shell/config.ts"), import("./jvm/natives/jvmruntime.ts"),
+  const [control, rpc, core, apex, cacerts, packages, device, skia, tier, config, jvmruntime, vsync] = await Promise.all([
+    import("./shell/worker-control.ts"), import("./shell/rpc.ts"), import("./native/core.ts"), import("./shell/apex.ts"), import("./shell/cacerts.ts"), import("./shell/process-packages.ts"),
+    import("./shell/device.ts"), import("./android/skia.ts"), import("./jvm/tier.ts"), import("./shell/config.ts"), import("./jvm/natives/jvmruntime.ts"), import("./android/vsync.ts"),
   ]);
   apex.mountPlatformData(); cacerts.mountSystemCertificates(); packages.prepareSystemPackages();
   await tier.useTierPorts(ports);
@@ -30,7 +30,7 @@ async function prepare({ clock, jars, tier: ports }: Extract<ProcessWorkerMessag
   // the zygote this process is forked from runs before its package is known, of the bitness the page chose by the package
   jvmruntime.setZygoteBitness(switchValue("abi") !== "32");
   void runtime.then(() => device.startZygote(rate.then((hz) => { config.device.refreshRate = hz; }))).catch(() => {});
-  return { control, rpc, core, packages, device, config, runtime };
+  return { control, rpc, core, packages, device, config, runtime, vsync };
 }
 
 let prepared: ReturnType<typeof prepare> | undefined, started = false;
@@ -45,9 +45,7 @@ globalThis.onmessage = async ({ data }: MessageEvent<ProcessWorkerMessage>) => {
     started = true;
     const p = await prepared;
     await attachWorkerBootstrap(data.bootstrap);
-    const { processPresentation } = await import("./shell/process-endpoint.ts");
-    processPresentation.visible = false;
-    closeControl = p.rpc.serveCalls(data.control, p.control.workerControl(logs, () => phase, p.control.countVsyncs()));
+    closeControl = p.rpc.serveCalls(data.control, p.control.workerControl(logs, () => phase, p.vsync.startDisplayLoop(false)));
     p.core.jitStats.on = switchOn("jit", true);
     enter("packages");
     const boot = await p.packages.loadProcessPackages(data.bootstrap);

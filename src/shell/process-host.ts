@@ -1,7 +1,7 @@
 // The page's side of each app process: the Worker it runs in, the canvas it presents to, the page's
 // ends of its surfaces and its control port. The broker (processes.ts) registers the process and
 // answers the host's bootstrap; the Worker itself is process-worker.ts.
-import { bootstrapTransfers, closeProcessBootstrap, type ProcessBootstrap } from "./process-bootstrap-data.ts";
+import { bootstrapTransfers, closeProcessBootstrap, type ProcessBootstrap, type SurfaceName } from "./process-bootstrap-data.ts";
 import { callProxy, methodsOf, type CallFailure } from "./rpc.ts";
 import type { StartPhase, WorkerControl } from "./worker-control.ts";
 import type { ProcessRecord } from "./processes.ts";
@@ -154,17 +154,22 @@ export class ProcessHost {
       } catch (error) { closeProcessBootstrap(data); throw error; }
     })().catch(error => this.fail(String(error)));
   }
-  /** the bootstrap's ends of the process's display, input, web and media ports, once: the canvas
-   *  hands its control to the display */
-  surfaces(): Pick<ProcessBootstrap, "display" | "screen" | "input" | "ime" | "web" | "media"> {
-    const display = new MessageChannel(), input = new MessageChannel(), ime = new MessageChannel(), web = new MessageChannel(), media = new MessageChannel();
-    const canvas = this.canvas, frames = this.display = receiveFrames(display.port1, canvas, () => this.presented.resolve());
-    if (this.hosts.mirroring) frames.mirror(this.hosts.mirroring);
-    const text = this.ime = attachRealmInput(canvas, device, input.port1, ime.port1);
-    const surfaces = receiveWebSurfaces(web.port1, canvas, () => device);
-    this.web = surfaces.layer;
-    this.ends.push(text.close, frames.close, receiveMedia(media.port1), surfaces.close);
-    return { display: display.port2, screen: canvas.transferControlToOffscreen(), input: input.port2, ime: ime.port2, web: web.port2, media: media.port2 };
+  /** each surface's page end, closed with the host */
+  private readonly surfaceEnds: Record<SurfaceName, (port: MessagePort) => () => void> = {
+    display: port => (this.display = receiveFrames(port, this.canvas, this.hosts.mirroring, () => this.presented.resolve())).close,
+    input: port => (this.ime = attachRealmInput(this.canvas, device, port)).close,
+    web: port => { const web = receiveWebSurfaces(port, this.canvas, () => device); this.web = web.layer; return web.close; },
+    media: receiveMedia,
+  };
+  /** the bootstrap's ends of the process's surfaces, once: the canvas hands its control to the display */
+  surfaces(): Pick<ProcessBootstrap, "screen" | "surfaces"> {
+    const surfaces = {} as ProcessBootstrap["surfaces"];
+    for (const name of Object.keys(this.surfaceEnds) as SurfaceName[]) {
+      const { port1, port2 } = new MessageChannel();
+      this.ends.push(this.surfaceEnds[name](port1));
+      surfaces[name] = port2;
+    }
+    return { screen: this.canvas.transferControlToOffscreen(), surfaces };
   }
   /** its place among the processes shown: `z` from the bottom, or hidden; `interactive` takes the pointer */
   setLayer(z: number | null, interactive: boolean): void {

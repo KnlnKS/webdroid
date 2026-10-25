@@ -1,5 +1,5 @@
 // The browser fixtures' Worker halves: each Worker plays the role its URL names (fixture-calls.ts).
-import { callProxy, serveCalls } from "../../../src/shell/rpc.ts";
+import { callProxy, duplex, serveCalls } from "../../../src/shell/rpc.ts";
 import { remoteProcessLife } from "../../../src/shell/process-life.ts";
 import { attachGuestClockPort, bootTime, guestClockControl, setGuestTimeout, uptimeMillis, wallMillis } from "../../../src/guest-clock.ts";
 import { attachWorkerBootstrap, serveWorkerEndpoint } from "../../../src/shell/worker-bootstrap.ts";
@@ -10,7 +10,7 @@ import { bootstrapTransfers } from "../../../src/shell/process-bootstrap-data.ts
 import type { ProcessWorkerMessage, ProcessWorkerStatus } from "../../../src/shell/process-host.ts";
 import type { ClockBootstrap } from "../../../src/shell/clock-port.ts";
 import type { BrokerCalls, ProcessEndpoint } from "../../../src/shell/broker-contract.ts";
-import type { ImeView } from "../../../src/shell/input-port.ts";
+import type { ImeView, InputCalls } from "../../../src/shell/input-port.ts";
 import type { BinderHandle, ParcelData, TransactionReply } from "../../../src/android/binder.ts";
 import { stubEndpoint, type BrokerInit, type PointerCalls } from "./fixture-calls.ts";
 
@@ -35,27 +35,27 @@ const roles: Record<string, () => (data: never) => void> = {
     const steps: Record<number, (intent: ParcelData) => Promise<BinderHandle>> = {
       42: async intent => ({ pid: (await broker.transact({ handle: { pid: 8001, id: 1 }, code: 2, flags: 0, data: intent, ...forged })).handled, id: notices }),
       43: async () => {
-        fd = (await broker.descriptors.fileDescriptor({ kind: "open", path: "/data/data/test.endpoint.two/fd.bin", flags: 2 }) as { token: number }).token;
-        const foreign = await broker.descriptors.fileDescriptor({ kind: "open", path: "/data/data/test.endpoint.one/fd.bin", flags: 2 }) as number;
-        await broker.descriptors.fileDescriptor({ kind: "write", fd, bytes: Uint8Array.of(55), offset: 0 });
+        fd = (await broker.descriptors.open("/data/data/test.endpoint.two/fd.bin",2) as { token: number }).token;
+        const foreign = await broker.descriptors.open("/data/data/test.endpoint.one/fd.bin",2) as number;
+        await broker.descriptors.write(fd,Uint8Array.of(55),0);
         return { pid: fd, id: foreign };
       },
       44: async () => {
-        const reply = await broker.descriptors.fileDescriptor({ kind: "read", fd, length: 1, offset: 0 }) as Uint8Array;
+        const reply = await broker.descriptors.read(fd,1,0) as Uint8Array;
         return { pid: reply[0] ?? -1, id: reply.length };
       },
       45: async () => {
-        const stage = await broker.descriptors.fileDescriptor({ kind: "stage", fd });
+        const stage = await broker.descriptors.stage(fd);
         received = descriptor(await broker.transact({ handle: { pid: 8001, id: 1 }, code: 3, flags: 0,
           data: { bytes: new Uint8Array(0), objects: [[0, { descriptor: stage }]] } }));
-        const read = await broker.descriptors.fileDescriptor({ kind: "read", fd: received, length: 1 }) as Uint8Array;
-        const position = await broker.descriptors.fileDescriptor({ kind: "seek", fd, offset: 0, whence: 1 });
-        await broker.descriptors.fileDescriptor({ kind: "close", fd });
+        const read = await broker.descriptors.read(received,1) as Uint8Array;
+        const position = await broker.descriptors.seek(fd,0,1);
+        await broker.descriptors.close(fd);
         return { pid: read[0], id: position };
       },
       46: async () => {
-        const read = await broker.descriptors.fileDescriptor({ kind: "read", fd: received, length: 1, offset: 0 }) as Uint8Array;
-        await broker.descriptors.fileDescriptor({ kind: "close", fd: received });
+        const read = await broker.descriptors.read(received,1,0) as Uint8Array;
+        await broker.descriptors.close(received);
         return { pid: read[0], id: read.length };
       },
       47: async () => {
@@ -133,10 +133,9 @@ const roles: Record<string, () => (data: never) => void> = {
     let generation = 1, release = () => {}, page: ImeView;
     const state = (text: string, start: number, end: number, active: boolean) =>
       page.state({ generation, text, start, end, active, hasAction: false });
-    return (data: { input: MessagePort; view: MessagePort } | { kind: "release" | "switch" | "hide" }) => {
+    return (data: { input: MessagePort } | { kind: "release" | "switch" | "hide" }) => {
       if ("input" in data) {
-        page = callProxy<ImeView>(data.view, ["state"], { notifications: ["state"] }).endpoint;
-        serveCalls(data.input, {
+        page = duplex<Omit<InputCalls, "pointer">, ImeView>(data.input, {
           input: async (edit: number, text: string, start: number, end: number) => {
             if (edit !== generation) return;
             post({ input: text });
@@ -144,7 +143,7 @@ const roles: Record<string, () => (data: never) => void> = {
             state(text, start, end, true);
           },
           selection: async () => {}, finish: async () => {}, action: async () => true,
-        });
+        }, ["state"], { notifications: ["state"] }).endpoint;
         state("", 0, 0, true);
       } else if (data.kind === "release") release();
       else {
@@ -209,7 +208,7 @@ async function clockProcess({ bootstrap: data, endpoint }: Start) {
   }, 10);
   const commands = { cookies: await broker.cookieHas() };
   post({ kind: "phase", phase: "ready" } satisfies ProcessWorkerStatus);
-  post({ report: { display: !!data.display, archive, controlled: guestClockControl.controlled, bootTime, identity: [procIdentity.pid, procIdentity.uid, procIdentity.name], commands } });
+  post({ report: { display: !!data.surfaces.display, archive, controlled: guestClockControl.controlled, bootTime, identity: [procIdentity.pid, procIdentity.uid, procIdentity.name], commands } });
 }
 
 const handle = roles[new URLSearchParams(location.search).get("role")!]!();

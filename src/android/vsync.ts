@@ -11,6 +11,7 @@ import { perf } from "../perf.ts";
 import { device } from "../shell/config.ts";
 import { guestClockControl, uptimeMillis } from "../guest-clock.ts";
 import { note, Ev } from "../timeline.ts";
+import { processExited } from "../process-exit.ts";
 
 let nextVsync = 0, vsyncWaiters: (() => void)[] = [], vsyncWatchdog: ReturnType<typeof setTimeout> | undefined;
 const vsyncIntervalMs = (): number => 1000 / device.refreshRate;
@@ -106,11 +107,26 @@ export function shownFrameAt(now = performance.now()): number {
 }
 /** The host's frame loop: an animation frame while the realm has them (a process Worker's come with
  *  the canvas it presents to), a timer while the browser runs none, as in a hidden tab */
-export function hostFrames(frame: (time: number) => void): void {
+function hostFrames(frame: (time: number) => void): void {
   let framed = -Infinity;
   const loop = (time: number) => { framed = performance.now(); displayFrame(time); frame(time); requestAnimationFrame(loop); };
   if (typeof requestAnimationFrame === "function") requestAnimationFrame(loop);
   setInterval(() => { if (performance.now() - framed > 40) frame(performance.now()); }, 33);
+}
+/** whether this process's windows are on screen, which its display's vsyncs follow */
+let shown = true;
+export const displayShown = (): boolean => shown;
+export function setDisplayShown(visible: boolean): void { note(Ev.Visible, +visible); shown = visible; }
+/** This realm's display: the host's frame loop drives its vsyncs while its windows show and its process lives, after
+ *  `frame` (the page's pointer drain) on every host frame. Answers the vsyncs it has had. */
+export function startDisplayLoop(visible: boolean, frame?: () => void): () => number {
+  let ticks = 0;
+  shown = visible;
+  hostFrames(time => {
+    frame?.();
+    if (shown && !processExited() && recordVsync(time)) ticks++;
+  });
+  return () => ticks;
 }
 export const vsyncScheduled = (): boolean => scheduled.size > 0 || vsyncHooks.length > 0;
 let vsyncHooks: { fn: () => void; after: number }[] = [];

@@ -24,6 +24,7 @@ import { kernelInit } from "../src/native/syscall.ts";
 import { BytesFile } from "../src/shell/lazyfile.ts";
 import { assetFd, scall, useTestBroker } from "./java.ts";
 import { FileDescriptors, type DescriptorCalls } from "../src/shell/file-descriptors.ts";
+import { brokerMethods } from "../src/shell/broker-contract.ts";
 import { callProxy, serveCalls } from "../src/shell/rpc.ts";
 import { isRemoteFd, processRights } from "../src/native/process-fd.ts";
 import { type JBuffer, addressOf, directAddress } from "../src/jvm/natives/jnio.ts";
@@ -63,45 +64,45 @@ describe("android-pfd", () => {
 describe("file-descriptor", () => {
   /** descriptor `token` of session `from` passed to session `to`, as a Parcel stages and receives it */
   const pass = async (kernel: FileDescriptors, calls: DescriptorCalls, from: number, token: number, to: number) =>
-    kernel.receive(from, await calls.fileDescriptor({kind:"stage",fd:token}) as number, to);
+    kernel.receive(from, await calls.stage(token) as number, to);
   const FD = "()Ljava/io/FileDescriptor;";
 
   test("canonical mapping leases retain live ashmem aliases, protection and independent FD lifetime", async () => {
     const kernel = new FileDescriptors(), clients = [1001,1002].map(pid => kernel.session(pid,() => 0));
     const fd = ashmemFd(new Uint8Array(4096)), file = openFd(fd)!;
     const shared = await newObj("android/os/SharedMemory", "(Ljava/io/FileDescriptor;)V", await mkFd(fd));
-    const call = clients[1].fileDescriptor;
+    const call = clients[1];
     try {
       seekFd(fd,23,0);
       const token = await kernel.receive(1001,kernel.stageLocal(1001,fd),1002);
-      expect(await call({kind:"take",fd:token})).toBe(0);
-      const acquired = await call({kind:"mappingAcquire",fd:token,offset:0,length:4096,prot:3});
+      expect(await call.take(token)).toBe(0);
+      const acquired = await call.mappingAcquire(token,0,4096,3);
       if (typeof acquired === "number") throw new Error(`mappingAcquire: ${acquired}`);
       const a = acquired.lease;
       expect(await vcall(shared,"setProtect","(I)Z",1)).toBe(1);
-      expect(await call({kind:"mappingAcquire",fd:token,offset:0,length:4096,prot:3})).toBe(-E.PERM);
+      expect(await call.mappingAcquire(token,0,4096,3)).toBe(-E.PERM);
       const duplicate = await pass(kernel,clients[1],1002,token,1002);
-      const alias = await call({kind:"mappingAcquire",fd:duplicate,offset:1,length:4095,prot:1});
+      const alias = await call.mappingAcquire(duplicate,1,4095,1);
       if (typeof alias === "number") throw new Error(`mappingAcquire: ${alias}`);
       const b = alias.lease;
       expect(alias).toEqual({lease:b,region:acquired.region,immutable:false});
       await vcall(shared,"close","()V");
-      await call({kind:"close",fd:token});
-      await call({kind:"close",fd:duplicate});
+      await call.close(token);
+      await call.close(duplicate);
       expect(file.references).toBe(2);
-      expect(await call({kind:"mappingWrite",lease:a,offset:0,bytes:Uint8Array.of(8)})).toBe(1);
+      expect(await call.mappingWrite(a,0,Uint8Array.of(8))).toBe(1);
       vfs.writeAt(file.content,1,Uint8Array.of(9));
-      expect(await call({kind:"mappingRead",lease:a,offset:0,length:2})).toEqual(Uint8Array.of(8,9));
-      expect(await call({kind:"mappingRead",lease:b,offset:0,length:1})).toEqual(Uint8Array.of(9));
+      expect(await call.mappingRead(a,0,2)).toEqual(Uint8Array.of(8,9));
+      expect(await call.mappingRead(b,0,1)).toEqual(Uint8Array.of(9));
       expect(file.pos).toBe(23);
-      expect(await call({kind:"mappingWrite",lease:b,offset:0,bytes:Uint8Array.of(7)})).toBe(-E.ACCES);
-      expect(await clients[0].fileDescriptor({kind:"mappingRead",lease:a,offset:0,length:1})).toBe(-E.BADF);
-      await call({kind:"mappingRelease",lease:a});
+      expect(await call.mappingWrite(b,0,Uint8Array.of(7))).toBe(-E.ACCES);
+      expect(await clients[0].mappingRead(a,0,1)).toBe(-E.BADF);
+      await call.mappingRelease(a);
       expect(file.references).toBe(1);
       kernel.close(1002);
       await new Promise(resolve => setTimeout(resolve,0));
       expect(file.references).toBe(0);
-      expect(await call({kind:"mappingRead",lease:b,offset:0,length:1})).toBe(-E.BADF);
+      expect(await call.mappingRead(b,0,1)).toBe(-E.BADF);
     } finally {
       await vcall(shared,"close","()V"); kernel.close(1001); kernel.close(1002);
     }
@@ -111,11 +112,11 @@ describe("file-descriptor", () => {
     const kernel = new FileDescriptors(), [a, b] = [1001,1002].map(pid => kernel.session(pid,() => 0)), path = "/fifo-kernel";
     expect(makeFifo(path)).toBe(0);
     try {
-      expect(await a.fileDescriptor({kind:"open",path,flags:0x800})).toBe("fifo");
-      expect(await b.fileDescriptor({kind:"open",path,flags:1})).toBe(-E.NXIO);
+      expect(await a.open(path,0x800)).toBe("fifo");
+      expect(await b.open(path,1)).toBe(-E.NXIO);
       expect(localOpen(path,1)).toBe(-E.NXIO);
       kernel.close(1001);
-      expect(await b.fileDescriptor({kind:"open",path,flags:1})).toBe("fifo");
+      expect(await b.open(path,1)).toBe("fifo");
     } finally { kernel.close(1001); kernel.close(1002); vfs.delete(path); }
   });
 
@@ -149,7 +150,7 @@ describe("file-descriptor", () => {
     vfs.write(path,Uint8Array.of(1,2,3,4));
     const channels=[new MessageChannel(),new MessageChannel()];
     const stops=channels.map((channel,i)=>serveCalls(channel.port1,kernel.session(1001+i,()=>0)));
-    const proxies=channels.map(channel=>callProxy<DescriptorCalls>(channel.port2,["fileDescriptor"]));
+    const proxies=channels.map(channel=>callProxy<DescriptorCalls>(channel.port2,brokerMethods.descriptors));
     const files=canonicalFilePaths(()=>0);let stored:StoredParcel|null=null;
     const recipients:JObj[]=[];
     try {
@@ -174,7 +175,7 @@ describe("file-descriptor", () => {
       expect([...byte]).toEqual([3]);
       await scall("android/system/Os","pwrite","(Ljava/io/FileDescriptor;[BIIJ)I",received,Int8Array.of(9),0,1,0n);
       expect([...vfs.read(path)!]).toEqual([9,2,3,4]);
-      const rejected=await proxies[1].endpoint.fileDescriptor({kind:"stage",fd:-1});
+      const rejected=await proxies[1].endpoint.stage(-1);
       await expect(StoredParcel.retain(kernel,1002,{bytes:new Uint8Array(),objects:[[0,{descriptor:rejected}]]})).rejects.toThrow("Invalid retained");
     } finally {
       for(const pfd of recipients)await vcall(pfd,"close","()V");await stored?.close();
@@ -268,28 +269,28 @@ describe("file-descriptor", () => {
     const source = owner.session(1001, () => 0), recipient = owner.session(1002, () => E.ACCES);
     const channels = [new MessageChannel(), new MessageChannel()];
     const stops = [serveCalls(channels[0].port1,source),serveCalls(channels[1].port1,recipient)];
-    const proxies = channels.map(channel => callProxy<DescriptorCalls>(channel.port2,["fileDescriptor"]));
-    const [a,b] = proxies.map(proxy => proxy.endpoint.fileDescriptor);
+    const proxies = channels.map(channel => callProxy<DescriptorCalls>(channel.port2,brokerMethods.descriptors));
+    const [a,b] = proxies.map(proxy => proxy.endpoint);
     try {
-      expect(await b({kind:"open",path,flags:2})).toBe(-E.ACCES);
-      const fd = (await a({kind:"open",path,flags:2}) as {token: number}).token;
+      expect(await b.open(path,2)).toBe(-E.ACCES);
+      const fd = (await a.open(path,2) as {token: number}).token;
       expect(await owner.receive(1001,fd,1002)).toBe(-E.BADF);
       const copy = await pass(owner,source,1001,fd,1001);
-      await a({kind:"fcntl",fd:copy,command:2,arg:1});
-      expect(await a({kind:"fcntl",fd:copy,command:1,arg:0})).toBe(1);
-      expect(await a({kind:"fcntl",fd,command:1,arg:0})).toBe(0);
+      await a.fcntl(copy,2,1);
+      expect(await a.fcntl(copy,1,0)).toBe(1);
+      expect(await a.fcntl(fd,1,0)).toBe(0);
       const passed = await pass(owner,source,1001,copy,1002);
       expect(passed).toBeGreaterThan(0);
-      expect(await b({kind:"read",fd:passed,length:1})).toEqual(Uint8Array.of(1));
-      expect(await a({kind:"read",fd,length:1})).toEqual(Uint8Array.of(2));
-      await b({kind:"write",fd:passed,bytes:Uint8Array.of(9),offset:0});
-      expect(await a({kind:"read",fd,length:2,offset:0})).toEqual(Uint8Array.of(9,2));
-      expect(await a({kind:"seek",fd:copy,offset:0,whence:1})).toBe(2);
-      await a({kind:"fcntl",fd:copy,command:4,arg:0x400});
-      expect(await b({kind:"fcntl",fd:passed,command:3,arg:0}) & 0x400).toBe(0x400);
-      await a({kind:"fcntl",fd,command:4,arg:0});
-      expect(await b({kind:"stat",fd})).toBe(-E.BADF);
-      const stagedLate = await a({kind:"stage",fd});
+      expect(await b.read(passed,1)).toEqual(Uint8Array.of(1));
+      expect(await a.read(fd,1)).toEqual(Uint8Array.of(2));
+      await b.write(passed,Uint8Array.of(9),0);
+      expect(await a.read(fd,2,0)).toEqual(Uint8Array.of(9,2));
+      expect(await a.seek(copy,0,1)).toBe(2);
+      await a.fcntl(copy,4,0x400);
+      expect(await b.fcntl(passed,3,0) & 0x400).toBe(0x400);
+      await a.fcntl(fd,4,0);
+      expect(await b.stat(fd)).toBe(-E.BADF);
+      const stagedLate = await a.stage(fd);
       const late = await owner.receive(1001,stagedLate,1002), channel = new MessageChannel();
       let enter!: () => void, release!: () => void, dispose!: () => void;
       const entered = new Promise<void>(resolve => { enter=resolve; });
@@ -301,22 +302,22 @@ describe("file-descriptor", () => {
       try {
         const result = pending.endpoint.reply().catch(() => -1);
         await entered;stop();release();await disposed;await result;
-        expect(await b({kind:"stat",fd:late})).toBe(-E.BADF);
+        expect(await b.stat(late)).toBe(-E.BADF);
       } finally { release();pending.close();stop(); }
       owner.close(1001);
-      expect(await a({kind:"read",fd,length:1})).toBe(-E.BADF);
-      expect(await b({kind:"read",fd:passed,length:1})).toEqual(Uint8Array.of(3));
-      await b({kind:"truncate",fd:passed,length:3});
-      expect(await b({kind:"stat",fd:passed})).toMatchObject({size:3});
-      expect(await b({kind:"read",fd:passed,length:1})).toEqual(new Uint8Array(0));
+      expect(await a.read(fd,1)).toBe(-E.BADF);
+      expect(await b.read(passed,1)).toEqual(Uint8Array.of(3));
+      await b.truncate(passed,3);
+      expect(await b.stat(passed)).toMatchObject({size:3});
+      expect(await b.read(passed,1)).toEqual(new Uint8Array(0));
       vfs.setAttributes(path,{uid:12345,gid:1078,mode:0o660});
       vfs.delete(path);
-      expect(await b({kind:"stat",fd:passed})).toMatchObject({uid:12345,gid:1078,mode:0o100660,path:null});
-      await b({kind:"write",fd:passed,bytes:Uint8Array.of(8),offset:0});
-      expect(await b({kind:"read",fd:passed,length:1,offset:0})).toEqual(Uint8Array.of(8));
+      expect(await b.stat(passed)).toMatchObject({uid:12345,gid:1078,mode:0o100660,path:null});
+      await b.write(passed,Uint8Array.of(8),0);
+      expect(await b.read(passed,1,0)).toEqual(Uint8Array.of(8));
       expect(vfs.exists(path)).toBe(false);
-      expect(await b({kind:"close",fd:passed})).toBe(0);
-      expect(await b({kind:"close",fd:passed})).toBe(-E.BADF);
+      expect(await b.close(passed)).toBe(0);
+      expect(await b.close(passed)).toBe(-E.BADF);
     } finally {
       owner.close(1001); owner.close(1002);
       proxies.forEach(proxy => proxy.close()); stops.forEach(stop => stop()); vfs.delete(path);
@@ -331,21 +332,21 @@ describe("file-descriptor", () => {
     vfs.mount(path,{size:4,read:async (offset,length) => { entered(); await waiting; return Uint8Array.of(1,2,3,4).slice(offset,offset+length); }});
     const a = owner.session(1001,() => 0), b = owner.session(1002,() => 0);
     try {
-      const fd = (await a.fileDescriptor({kind:"open",path,flags:0}) as {token: number}).token;
+      const fd = (await a.open(path,0) as {token: number}).token;
       const passed = await pass(owner,a,1001,fd,1002);
-      const staged = await a.fileDescriptor({kind:"stage",fd});
-      const read = a.fileDescriptor({kind:"read",fd,length:2});
+      const staged = await a.stage(fd);
+      const read = a.read(fd,2);
       await started;
       const receive = owner.receive(1001,staged,1002);
-      const position = b.fileDescriptor({kind:"seek",fd:passed,offset:0,whence:1});
+      const position = b.seek(passed,0,1);
       const duplicate = pass(owner,b,1002,passed,1002);
       owner.close(1001); release();
       expect(await read).toBe(-E.BADF);
       expect(await receive).toBe(-E.BADF);
       expect(await position).toBe(2);
       const second = await duplicate;
-      expect(await b.fileDescriptor({kind:"read",fd:second,length:1})).toEqual(Uint8Array.of(3));
-      expect(await b.fileDescriptor({kind:"read",fd:passed,length:1})).toEqual(Uint8Array.of(4));
+      expect(await b.read(second,1)).toEqual(Uint8Array.of(3));
+      expect(await b.read(passed,1)).toEqual(Uint8Array.of(4));
     } finally { release(); owner.close(1001); owner.close(1002); vfs.delete(path); }
   });
 
@@ -353,7 +354,7 @@ describe("file-descriptor", () => {
     const path="/data/data/test/fd/java-owner.tmp", renamed="/data/data/test/fd/java-owner.bin";
     const owner=new FileDescriptors(), paths=canonicalFilePaths(() => 0), channel=new MessageChannel();
     const stop=serveCalls(channel.port1,owner.session(1001,() => 0));
-    const proxy=callProxy<DescriptorCalls>(channel.port2,["fileDescriptor"]);
+    const proxy=callProxy<DescriptorCalls>(channel.port2,brokerMethods.descriptors);
     const files:FilePaths={fileSetAttributes:async (p,c) => paths.fileSetAttributes(p,c),fileStat:async p => paths.fileStat(p),fileMkdir:async p => paths.fileMkdir(p),
       fileAccess:async (p,m) => paths.fileAccess(p,m),fileList:async p => paths.fileList(p),fileCreate:async p => paths.fileCreate(p),fileFifo:async p => paths.fileFifo(p),fileRemove:async p => paths.fileRemove(p),fileRename:async (a,b) => paths.fileRename(a,b)};
     usePathOwner({files,descriptors:proxy.endpoint});
@@ -405,7 +406,7 @@ describe("file-descriptor", () => {
         mem.free(mode);arm.dispose();
       }
       const channel2=new MessageChannel(),stop2=serveCalls(channel2.port1,owner.session(1002,()=>E.ACCES));
-      const recipient=callProxy<DescriptorCalls>(channel2.port2,["fileDescriptor"]);
+      const recipient=callProxy<DescriptorCalls>(channel2.port2,brokerMethods.descriptors);
       let incoming: JObj | null=null,passed: JObj | null=null;
       try {
         const original=await scall("android/system/Os","open","(Ljava/lang/String;II)Ljava/io/FileDescriptor;",renamed,2,0);
@@ -418,7 +419,7 @@ describe("file-descriptor", () => {
         expect(await owner.receive(1002,right.descriptor,1001)).toBe(-E.BADF);
         const received=await owner.receive(1001,right.descriptor,1002);
         expect(received).toBeGreaterThan(0);
-        expect(await recipient.endpoint.fileDescriptor({kind:"fcntl",fd:received,command:1,arg:0})).toBe(1);
+        expect(await recipient.endpoint.fcntl(received,1,0)).toBe(1);
         expect(await owner.receive(1001,right.descriptor,1002)).toBe(-E.BADF);
         usePathOwner({files,descriptors:recipient.endpoint});
         incoming=await importParcel({...data,objects:[[data.objects[0]![0],{descriptor:received}]]});
@@ -452,7 +453,7 @@ describe("file-descriptor", () => {
     const source = "/data/data/test/fd/copy-source.bin", target = "/data/data/test/fd/copy-target.bin";
     const owner = new FileDescriptors(), paths = canonicalFilePaths(() => 0), channel = new MessageChannel();
     const stop = serveCalls(channel.port1, owner.session(1001, () => 0));
-    const proxy = callProxy<DescriptorCalls>(channel.port2, ["fileDescriptor"]);
+    const proxy = callProxy<DescriptorCalls>(channel.port2, brokerMethods.descriptors);
     usePathOwner({ files: new Proxy(paths, { get: (calls, name) => async (...args: never[]) => (calls as unknown as Record<string, (...a: never[]) => unknown>)[name as string]?.(...args) }), descriptors: proxy.endpoint });
     vfs.mkdir("/data/data/test/fd");
     vfs.write(source, Uint8Array.of(1, 2, 3, 4, 5));
@@ -756,7 +757,7 @@ describe("shared-memory", () => {
   test("Worker shared memory maps into guest memory and hands Java stores to the owner", async () => {
     const owner = new FileDescriptors(), ports = [1001,1002].map(pid => {
       const channel = new MessageChannel(), stop = serveCalls(channel.port1,owner.session(pid,() => 0));
-      return {stop,proxy:callProxy<DescriptorCalls>(channel.port2,["fileDescriptor"])};
+      return {stop,proxy:callProxy<DescriptorCalls>(channel.port2,brokerMethods.descriptors)};
     });
     const files = canonicalFilePaths(() => 0);
     let first: JObj | null = null, second: JObj | null = null, a: JBuffer | undefined, b: JBuffer | undefined;

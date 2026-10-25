@@ -10,7 +10,8 @@ import { guestClockControl, setSystemTimeout, wallMillis, bootTime, createGuestC
 import { callProxy } from "../../../src/shell/rpc.ts";
 import { sendFrames } from "../../../src/shell/frame-port.ts";
 import { attachPointerInput } from "../../../src/shell/pointer-input.ts";
-import { inputMethods, receiveIme, type InputCalls } from "../../../src/shell/input-port.ts";
+import { attachRealmInput } from "../../../src/shell/input-port.ts";
+import { device } from "../../../src/shell/config.ts";
 import { ProcessHost, workerControlMethods } from "../../../src/shell/process-host.ts";
 import type { WorkerControl } from "../../../src/shell/worker-control.ts";
 import { NOT_CRASHED, recordRemoteExit } from "../../../src/android/server/appexitinfo.ts";
@@ -66,9 +67,10 @@ export async function bootstrapOwnership() {
   const watchClock = (data: ProcessBootstrap) => {
     if (!data.broker) throw new Error("expected command capability");
     callers.push(callProxy<BrokerCalls>(data.broker,brokerMethods));
-    if (!data.display) throw new Error("expected display capability");
-    displays.push(new Promise<void>(resolve => data.display!.addEventListener("message",({data})=>{if(data.kind==="close")resolve();})));
-    sendFrames(data.display, data.screen);
+    const display = data.surfaces.display;
+    if (!display) throw new Error("expected display capability");
+    displays.push(new Promise<void>(resolve => display.addEventListener("message",({data})=>{if(data.kind==="close")resolve();})));
+    sendFrames(display, data.screen);
   };
   // each process's Worker posts back the bootstrap it is started with
   const start = (pkg: string, process: string, pid: number) => {
@@ -131,11 +133,11 @@ export async function endpointOwnership() {
         if(!right || !("descriptor" in right))throw new Error("missing driver FD right");
         const owner=callProxy<BrokerCalls>(broker.brokerPort(pid),brokerMethods);
         try {
-          const read=await owner.endpoint.descriptors.fileDescriptor({kind:"read",fd:right.descriptor,length:1});
-          await owner.endpoint.descriptors.fileDescriptor({kind:"write",fd:right.descriptor,offset:0,bytes:Uint8Array.of(77)});
-          await owner.endpoint.descriptors.fileDescriptor({kind:"seek",fd:right.descriptor,offset:0,whence:0});
-          const stage=await owner.endpoint.descriptors.fileDescriptor({kind:"stage",fd:right.descriptor});
-          await owner.endpoint.descriptors.fileDescriptor({kind:"close",fd:right.descriptor});
+          const read=await owner.endpoint.descriptors.read(right.descriptor,1);
+          await owner.endpoint.descriptors.write(right.descriptor,Uint8Array.of(77),0);
+          await owner.endpoint.descriptors.seek(right.descriptor,0,0);
+          const stage=await owner.endpoint.descriptors.stage(right.descriptor);
+          await owner.endpoint.descriptors.close(right.descriptor);
           return {handled:(read as Uint8Array)[0],data:{bytes:new Uint8Array(0),objects:[[0,{descriptor:stage}]]}};
         } finally {owner.close();}
       }
@@ -388,11 +390,11 @@ export async function pendingDescriptorRights() {
   const {ask,worker}=brokerWorker(broker,pid);
   try {
     await ask("files.fileMkdir",`/data/data/${pkg}`);
-    const opened=await ask("descriptors.fileDescriptor",{kind:"open",path,flags:0x42}) as number|{token:number};
+    const opened=await ask("descriptors.open",path,0x42) as number|{token:number};
     if(typeof opened==="number")throw new Error("Descriptor open failed: "+opened);
-    const staged=await ask("descriptors.fileDescriptor",{kind:"stage",fd:opened.token}) as number;
+    const staged=await ask("descriptors.stage",opened.token) as number;
     const denied=await ask("pending.create",pkg,"broadcast",0,0,{bytes:new Uint8Array(24),objects:[[0,{descriptor:staged}]]}) as {error?:string};
-    const retired=typeof await ask("descriptors.fileDescriptor",{kind:"stat",fd:staged})==="number";
+    const retired=typeof await ask("descriptors.stat",staged)==="number";
     return {pendingRejected:denied.error==="File descriptors passed in Intent" && retired};
   } finally {
     worker.terminate();broker.fail(pid,"pending rights fixture cleanup",NOT_CRASHED);
@@ -472,15 +474,14 @@ export async function workerDiagnosticOwnership() {
 
 export async function imeOwnership() {
   const canvas = document.createElement("canvas"); document.body.append(canvas);
-  const input = new MessageChannel(), view = new MessageChannel(), calls = callProxy<InputCalls>(input.port1,inputMethods);
-  const owner = receiveIme(view.port1,canvas,calls.endpoint), inputs:string[]=[];
+  const channel = new MessageChannel(), owner = attachRealmInput(canvas,device,channel.port1), inputs:string[]=[];
   let entered!:()=>void; const first = new Promise<void>(resolve=>entered=resolve);
   const worker=fixtureWorker("ime");
   worker.onmessage=({data})=>{if(data.input){inputs.push(data.input);if(data.input==='a')entered();}};
   const wait = async (ready:()=>boolean) => {const until=performance.now()+2000;while(!ready()){if(performance.now()>until)throw new Error("IME core deadline");await new Promise(resolve=>setTimeout(resolve,0));}};
   try {
-    const forwarded=structuredClone({input:input.port2,view:view.port2},{transfer:[input.port2,view.port2]});
-    worker.postMessage(forwarded,[forwarded.input,forwarded.view]);
+    const forwarded=structuredClone({input:channel.port2},{transfer:[channel.port2]});
+    worker.postMessage(forwarded,[forwarded.input]);
     await wait(()=>!owner.input.disabled);
     const edit=(text:string)=>{owner.input.value=text;owner.input.setSelectionRange(text.length,text.length);owner.input.dispatchEvent(new InputEvent("input",{isComposing:false}));};
     edit("a");await first;edit("ab");edit("abc");worker.postMessage({kind:"release"});
@@ -491,5 +492,5 @@ export async function imeOwnership() {
     const inactive=owner.input.disabled;
     owner.close();edit("closed");await new Promise(resolve=>setTimeout(resolve,0));
     return {inputs,switched,inactive,closed:!owner.input.isConnected};
-  }finally{owner.close();calls.close();worker.terminate();canvas.remove();}
+  }finally{owner.close();worker.terminate();canvas.remove();}
 }

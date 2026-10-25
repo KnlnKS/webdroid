@@ -12,12 +12,11 @@ if (typeof window !== "undefined") window.addEventListener("pagehide", () => clo
 export function attachIme(canvas: HTMLCanvasElement, kbd: HTMLTextAreaElement, source: HTMLElement): void {
   closeInput?.();
   let closed = false, stop: (() => void) | undefined;
-  const input = new MessageChannel(), view = new MessageChannel();
-  const realm = attachRealmInput(canvas, device, input.port2, view.port2, { dispatch: dispatchTouches, kbd, source });
-  void serveInput(input.port1, view.port1).then(close => { if (closed) close(); else stop = close; });
+  const { port1, port2 } = new MessageChannel();
+  const realm = attachRealmInput(canvas, device, port2, { dispatch: dispatchTouches, kbd, source });
+  void serveInput(port1).then(close => { if (closed) close(); else stop = close; });
   closeInput = () => {
     if (closed) return;
-    closed = true; realm.close(); stop?.();
-    input.port1.close(); view.port1.close();
+    closed = true; realm.close(); stop?.(); port1.close();
   };
 }
