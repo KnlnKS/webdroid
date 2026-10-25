@@ -1,19 +1,15 @@
 // The registered natives (rt.register specs and rt.registerJni functions) as the Wasm tier's NativeSource.
 import { rt, JObj, type NativeSpec } from "../../jvm/runtime.ts";
 import { JThrowable } from "../../jvm/natives/jthrowable.ts";
-import { splitSig } from "../../jvm/abi.ts";
-import { stringMethods } from "../../jvm/natives/jstring.ts";
-import type { HostFn, HostSpec, NativeSource } from "../link/hostapi.ts";
+import { splitSig, type NativeImpl } from "../../jvm/abi.ts";
+import type { HostSpec, NativeSource } from "../link/hostapi.ts";
 import type { World } from "../link/world.ts";
 import { waitsEnded } from "../link/module.ts";
 import { Natives } from "./natives.ts";
 import { refOf } from "./bridge.ts";
 
-const lookup = (cls: string, key: string, isStatic: boolean): HostFn | undefined => {
-  const own = rt.natives.get(cls)?.methods?.[(isStatic ? "static " : "") + key] as HostFn | undefined;
-  // a registered JNI function is tracked already; a spec's placeholder is recorded here
-  return own ? rt.trackPlaceholder(cls + "." + key, own) : rt.jniFn(cls, key) as HostFn | null ?? undefined;
-};
+const lookup = (cls: string, key: string, isStatic: boolean): NativeImpl | undefined => rt.specNative(cls, key, isStatic) ?? rt.jniNative(cls, key) ?? undefined;
+const CLINIT: NativeImpl = { fn: () => {} };
 /** a registered class, which the host implements */
 const hostSpec = (spec: NativeSpec): HostSpec => ({
   name: spec.name, sup: spec.sup ?? null, ifaces: spec.ifaces ?? [], methods: Object.keys(spec.methods ?? {}), platformClinit: spec.platformClinit, statics: spec.statics, ctor: spec.ctor,
@@ -28,19 +24,21 @@ export function attachHostClasses<W extends World>(w: W): W {
 export const nativeSource = {
   hostSpecs: () => [...rt.natives.values()].map(hostSpec),
   find: (cls, key, isStatic, hasBody) => {
-    if (cls === "java/lang/String") { const f = stringMethods.get(key) as HostFn | undefined; if (f || hasBody) return f; }
-    if (key === "<clinit>()V" && !hasBody && rt.natives.get(cls)?.statics) return () => {};
+    if (key === "<clinit>()V" && !hasBody && rt.natives.get(cls)?.statics) return CLINIT;
     const own = lookup(cls, key, isStatic);
     if (own || hasBody) return own;
     // a method no code declares is the one the spec's superclass (or the interface-implementing class of a spec: its supertypes' specs) implements
     for (let sup = rt.natives.get(cls)?.sup; sup; sup = rt.natives.get(sup)?.sup) { const inherited = lookup(sup, key, isStatic); if (inherited) return inherited; }
     return undefined;
   },
-  late: (cls, key) => Object.assign(function (this: unknown, ...args: unknown[]) {
-    const bound = rt.jniFn(cls, key) as HostFn | null;
-    if (!bound) throw rt.ulink(cls, ...splitSig(key));
-    return bound.apply(this, args);
-  }, { javaValues: true }),
+  late: (cls, key) => ({
+    fn(this: unknown, ...args: unknown[]) {
+      const bound = rt.jniNative(cls, key);
+      if (!bound) throw rt.ulink(cls, ...splitSig(key));
+      return bound.fn.apply(this, args);
+    },
+    raw: true,
+  }),
   stores: (cls, run) => { run(); return { ...rt.natives.get(cls)?.statics }; },
   classOf: (v) => v instanceof JObj ? (v.constructor as unknown as { $i?: { name: string } }).$i?.name : undefined,
   // a Java exception the host caught from a call into Java and rethrows is thrown as it is, never copied

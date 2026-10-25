@@ -1,6 +1,6 @@
 // libcore's socket syscalls (libcore.io.Linux) and the socket streams' natives, over the socket
 // core native code shares (src/native/socket/): a descriptor from either side is the same socket.
-import { awaited, rt, type JObj, getDeclared, setDeclared, driven, waits } from "../jvm/runtime.ts";
+import { awaited, rt, type JObj, getDeclared, setDeclared, driven, waits, ranged } from "../jvm/runtime.ts";
 import { vcall, scall, newObj, after, iof } from "../jvm/natives/jentry.ts";
 import { jarray, u8 } from "../jvm/abi.ts";
 import { fdInt, mkFd } from "../jvm/natives/jio.ts";
@@ -174,11 +174,11 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     if (level !== SOL_SOCKET || name !== SO_BINDTODEVICE) throw errno("setsockopt", E.NOPROTOOPT);
     if (ifname && !iface(ifname)) throw errno("setsockopt", E.NODEV);
   },
-  [`sendtoBytes(${FD}Ljava/lang/Object;III${INET}I)I`]: (d: JObj | null, buffer: IoBuffer, offset: number, count: number, flags: number, address: JObj | null, port: number) =>
-    address === null ? sendto(d, buffer, offset, count, null) : after(endpoint(address, port), (ep) => sendto(d, buffer, offset, count, inet(ep))),
-  [`sendtoBytes(${FD}Ljava/lang/Object;III${SOCKADDR})I`]: (d: JObj | null, buffer: IoBuffer, offset: number, count: number, flags: number, address: JObj | null) =>
-    address === null ? sendto(d, buffer, offset, count, null) : after(socketAddress("sendto", address), (to) => sendto(d, buffer, offset, count, to)),
-  [`recvfromBytes(${FD}Ljava/lang/Object;III${"Ljava/net/InetSocketAddress;"})I`]: waits((d: JObj | null, buffer: IoBuffer, offset: number, count: number, flags: number, source: JObj | null) => {
+  [`sendtoBytes(${FD}Ljava/lang/Object;III${INET}I)I`]: ranged((d: JObj | null, buffer: IoBuffer, offset: number, count: number, flags: number, address: JObj | null, port: number) =>
+    address === null ? sendto(d, buffer, offset, count, null) : after(endpoint(address, port), (ep) => sendto(d, buffer, offset, count, inet(ep))), [1, 2, 3]),
+  [`sendtoBytes(${FD}Ljava/lang/Object;III${SOCKADDR})I`]: ranged((d: JObj | null, buffer: IoBuffer, offset: number, count: number, flags: number, address: JObj | null) =>
+    address === null ? sendto(d, buffer, offset, count, null) : after(socketAddress("sendto", address), (to) => sendto(d, buffer, offset, count, to)), [1, 2, 3]),
+  [`recvfromBytes(${FD}Ljava/lang/Object;III${"Ljava/net/InetSocketAddress;"})I`]: ranged(waits((d: JObj | null, buffer: IoBuffer, offset: number, count: number, flags: number, source: JObj | null) => {
     const s = socket("recvfrom", d);
     let from: SocketAddress | null = null;
     const take = (r: Received | number) => {
@@ -192,7 +192,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
       return r instanceof Promise ? r.then((v) => closedUnder("recvfrom", take(v))) : take(r);
     });
     return after(n, (received) => after(fillSocketAddress(source, from), () => received));
-  }),
+  }), [1, 2, 3]),
   [`getnameinfo(${INET}I)Ljava/lang/String;`]: (address: JObj | null, flags: number) => after(endpoint(address, 0), (ep) => {
     const name = flags & NI_NUMERICHOST ? null : hostOf(ep.address);
     if (name === null && flags & NI_NAMEREQD) return gaiError("getnameinfo", EAI_NONAME);
@@ -236,7 +236,7 @@ const readFailure = (e: number) => e === E.CONNRESET || e === E.PIPE
   ? thrown("sun/net/ConnectionResetException", "(Ljava/lang/String;)V", "Connection reset")
   : Promise.reject(e === E.BADF ? socketClosed() : rt.mkThrowable("java/net/SocketException", ERRSTR[e] ?? "Read failed"));
 const readDone = (n: number) => n >= 0 ? n : readFailure(-n);
-rt.registerJni("java/net/SocketInputStream", `socketRead0(${FD}[BIII)I`, waits((d: JObj | null, b: Int8Array, off: number, len: number, timeout: number) => {
+rt.registerJni("java/net/SocketInputStream", `socketRead0(${FD}[BIII)I`, ranged(waits((d: JObj | null, b: Int8Array, off: number, len: number, timeout: number) => {
   const fd = fdInt(d);
   if (fd < 0) throw socketClosed();
   const target = new Uint8Array(b.buffer, b.byteOffset + off, len);
@@ -248,12 +248,12 @@ rt.registerJni("java/net/SocketInputStream", `socketRead0(${FD}[BIII)I`, waits((
     if (!ready) throw rt.mkThrowable("java/net/SocketTimeoutException", "Read timed out");
     return after(readSocket(fd, target, MSG_DONTWAIT), readDone);
   });
-}));
-rt.registerJni("java/net/SocketOutputStream", `socketWrite0(${FD}[BII)V`, (d: JObj | null, b: Int8Array, off: number, len: number) => {
+}), [1, 2, 3]));
+rt.registerJni("java/net/SocketOutputStream", `socketWrite0(${FD}[BII)V`, ranged((d: JObj | null, b: Int8Array, off: number, len: number) => {
   const fd = fdInt(d);
   if (fd < 0) throw socketClosed();
   const s = socketOf(fd), n = typeof s === "number" ? s : s.send(new Uint8Array(b.buffer, b.byteOffset + off, len), null, null);
   if (n >= 0) return;
   if (n === -E.CONNRESET) return thrown("sun/net/ConnectionResetException", "(Ljava/lang/String;)V", "Connection reset");
   throw n === -E.BADF ? socketClosed() : rt.mkThrowable("java/net/SocketException", ERRSTR[-n] ?? "Write failed");
-});
+}, [1, 2, 3]));

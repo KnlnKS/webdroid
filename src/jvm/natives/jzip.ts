@@ -5,7 +5,7 @@
 import * as zInflate from "pako/lib/zlib/inflate.js";
 import * as zDeflate from "pako/lib/zlib/deflate.js";
 import ZStream from "pako/lib/zlib/zstream.js";
-import { rt, waits, type JObj, setDeclared } from "../runtime.ts";
+import { rt, waits, ranged, type JObj, setDeclared } from "../runtime.ts";
 import { u8 } from "../abi.ts";
 import { after } from "./jentry.ts";
 import { crc32, adler32 } from "../../zip.ts";
@@ -51,17 +51,17 @@ rt.registerJnis("java/util/zip/Inflater", {
     if (zInflate.inflateInit2(s, nowrap ? -15 : 15) !== Z_OK) throw rt.mkThrowable("java/lang/InternalError", s.msg || null);
     return handle(s);
   },
-  "setDictionary(J[BII)V": (h: bigint, b: Int8Array, off: number, len: number) => setDictionary(h, region(b, off, len), zInflate.inflateSetDictionary),
+  "setDictionary(J[BII)V": ranged((h: bigint, b: Int8Array, off: number, len: number) => setDictionary(h, region(b, off, len), zInflate.inflateSetDictionary), [1, 2, 3]),
   "setDictionaryBuffer(JJI)V": waits((h: bigint, address: bigint, len: number) => after(memoryAt(address, len), (d) => setDictionary(h, d, zInflate.inflateSetDictionary))),
-  "inflateBytesBytes(J[BII[BII)J": function (this: JObj, h: bigint, i: Int8Array, io: number, il: number, o: Int8Array, oo: number, ol: number) {
+  "inflateBytesBytes(J[BII[BII)J": ranged(function (this: JObj, h: bigint, i: Int8Array, io: number, il: number, o: Int8Array, oo: number, ol: number) {
     return inflateBytes.call(this, h, region(i, io, il), region(o, oo, ol));
-  },
-  "inflateBytesBuffer(J[BIIJI)J": waits(function (this: JObj, h: bigint, i: Int8Array, io: number, il: number, out: bigint, ol: number) {
+  }, [1, 2, 3], [4, 5, 6]),
+  "inflateBytesBuffer(J[BIIJI)J": ranged(waits(function (this: JObj, h: bigint, i: Int8Array, io: number, il: number, out: bigint, ol: number) {
     return after(memoryAt(out, ol), (o) => inflateBytes.call(this, h, region(i, io, il), o));
-  }),
-  "inflateBufferBytes(JJI[BII)J": waits(function (this: JObj, h: bigint, input: bigint, il: number, o: Int8Array, oo: number, ol: number) {
+  }), [1, 2, 3]),
+  "inflateBufferBytes(JJI[BII)J": ranged(waits(function (this: JObj, h: bigint, input: bigint, il: number, o: Int8Array, oo: number, ol: number) {
     return after(memoryAt(input, il), (i) => inflateBytes.call(this, h, i, region(o, oo, ol)));
-  }),
+  }), [3, 4, 5]),
   "inflateBufferBuffer(JJIJI)J": waits(function (this: JObj, h: bigint, input: bigint, il: number, out: bigint, ol: number) {
     return after(memoryAt(input, il), (i) => after(memoryAt(out, ol), (o) => inflateBytes.call(this, h, i, o)));
   }),
@@ -122,14 +122,14 @@ rt.registerJnis("java/util/zip/Deflater", {
     if (code !== Z_OK) throw rt.mkThrowable(code === -2 ? "java/lang/IllegalArgumentException" : "java/lang/InternalError", s.msg || null);
     return handle(s);
   },
-  "setDictionary(J[BII)V": (h: bigint, b: Int8Array, off: number, len: number) => setDictionary(h, region(b, off, len), zDeflate.deflateSetDictionary),
+  "setDictionary(J[BII)V": ranged((h: bigint, b: Int8Array, off: number, len: number) => setDictionary(h, region(b, off, len), zDeflate.deflateSetDictionary), [1, 2, 3]),
   "setDictionaryBuffer(JJI)V": waits((h: bigint, address: bigint, len: number) => after(memoryAt(address, len), (d) => setDictionary(h, d, zDeflate.deflateSetDictionary))),
-  "deflateBytesBytes(J[BII[BIIII)J": (h: bigint, i: Int8Array, io: number, il: number, o: Int8Array, oo: number, ol: number, flush: number, params: number) =>
-    deflateBytes(h, region(i, io, il), region(o, oo, ol), flush, params),
-  "deflateBytesBuffer(J[BIIJIII)J": waits((h: bigint, i: Int8Array, io: number, il: number, out: bigint, ol: number, flush: number, params: number) =>
-    after(memoryAt(out, ol), (o) => deflateBytes(h, region(i, io, il), o, flush, params))),
-  "deflateBufferBytes(JJI[BIIII)J": waits((h: bigint, input: bigint, il: number, o: Int8Array, oo: number, ol: number, flush: number, params: number) =>
-    after(memoryAt(input, il), (i) => deflateBytes(h, i, region(o, oo, ol), flush, params))),
+  "deflateBytesBytes(J[BII[BIIII)J": ranged((h: bigint, i: Int8Array, io: number, il: number, o: Int8Array, oo: number, ol: number, flush: number, params: number) =>
+    deflateBytes(h, region(i, io, il), region(o, oo, ol), flush, params), [1, 2, 3], [4, 5, 6]),
+  "deflateBytesBuffer(J[BIIJIII)J": ranged(waits((h: bigint, i: Int8Array, io: number, il: number, out: bigint, ol: number, flush: number, params: number) =>
+    after(memoryAt(out, ol), (o) => deflateBytes(h, region(i, io, il), o, flush, params))), [1, 2, 3]),
+  "deflateBufferBytes(JJI[BIIII)J": ranged(waits((h: bigint, input: bigint, il: number, o: Int8Array, oo: number, ol: number, flush: number, params: number) =>
+    after(memoryAt(input, il), (i) => deflateBytes(h, i, region(o, oo, ol), flush, params))), [3, 4, 5]),
   "deflateBufferBuffer(JJIJIII)J": waits((h: bigint, input: bigint, il: number, out: bigint, ol: number, flush: number, params: number) =>
     after(memoryAt(input, il), (i) => after(memoryAt(out, ol), (o) => deflateBytes(h, i, o, flush, params)))),
   "getAdler(J)I": (h: bigint) => stream(h).adler | 0,
@@ -140,7 +140,7 @@ rt.registerJnis("java/util/zip/Deflater", {
 // ── CRC32 and Adler32
 const checksum = (step: (sum: number, b: Uint8Array) => number) => ({
   "update(II)I": (sum: number, b: number) => step(sum, Uint8Array.of(b)),
-  "updateBytes(I[BII)I": (sum: number, b: Int8Array, off: number, len: number) => step(sum, u8(b, off, len)),
+  "updateBytes(I[BII)I": ranged((sum: number, b: Int8Array, off: number, len: number) => step(sum, u8(b, off, len)), [1, 2, 3]),
   "updateByteBuffer(IJII)I": waits((sum: number, address: bigint, off: number, len: number) => after(memoryAt(address + BigInt(off), len), (b) => step(sum, b))),
 });
 const crc = checksum(crc32);

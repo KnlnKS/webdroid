@@ -6,7 +6,7 @@
 // pixels come from createImageBitmap (libheif for HEIF), sampled and scaled as the browser decodes
 // them, and become a NativeBitmap without an intermediate raster.
 
-import { awaited, rt, declaredField, peerField, driven, waits, type Gen, type JObj } from "../jvm/runtime.ts";
+import { awaited, rt, declaredField, peerField, driven, waits, ranged, type Gen, type JObj } from "../jvm/runtime.ts";
 import { handle, ownedHandle, deref, release } from "./handles.ts";
 import { vcall, scall, newObj, after, iof } from "../jvm/natives/jentry.ts";
 import { type JBuffer, readBufferBytes, elementShift } from "../jvm/natives/jnio.ts";
@@ -399,7 +399,7 @@ rt.registerJnis("android/graphics/BitmapFactory", {
       return doDecode(yield* awaited(assetBytes(asset)), padding, options, inBitmap);
     }),
   "nativeDecodeByteArray([BIILandroid/graphics/BitmapFactory$Options;JJ)Landroid/graphics/Bitmap;":
-    waits((bytes: Int8Array, off: number, len: number, options: Options | null, inBitmap: bigint) => doDecode(u8(bytes, off, len), null, options, inBitmap)),
+    ranged(waits((bytes: Int8Array, off: number, len: number, options: Options | null, inBitmap: bigint) => doDecode(u8(bytes, off, len), null, options, inBitmap)), [0, 1, 2]),
   "nativeIsSeekable(Ljava/io/FileDescriptor;)Z": (fd: JObj | null) => after(javaLseekFd(fdInt(fd), 0, 1), (at) => +(at >= 0)),
 });
 

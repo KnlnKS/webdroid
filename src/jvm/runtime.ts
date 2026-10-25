@@ -3,7 +3,7 @@
 
 import { Strand } from "./suspend.ts";
 import { never, processExited } from "../process-exit.ts";
-import { dotName, oomMessage } from "./abi.ts";
+import { dotName, oomMessage, type NativeImpl } from "./abi.ts";
 
 /** Root of the host's Java objects: a native spec's class, or an object a native makes by class name (`$i` names the Java class). */
 export class JObj {
@@ -32,11 +32,17 @@ export interface NativeSpec {
 export type Gen<T = any> = Generator<unknown, T, any>;
 /** the value of `v` once it settles, typed: `yield* awaited(x)` where `yield x` is any */
 export function* awaited<T>(v: T | Promise<T>): Gen<T> { return yield v; }
-const placeholderMethods = new WeakSet<Function>();
+
+/** what an authoring helper (driven, waits, retries, javaValues, ranged, stubs) declares of a native function, which its registration reads */
+type Declared = Omit<NativeImpl, "fn"> & { body?: Function };
+const declarations = new WeakMap<Function, Declared>();
+const declare = <F extends Function>(fn: F, d: Declared): F => { declarations.set(fn, { ...declarations.get(fn), ...d }); return fn; };
+/** the code a native was written as: the generator of a `driven` one */
+export const bodyOf = (fn: Function): Function => declarations.get(fn)?.body ?? fn;
+const AsyncFunction = (async () => {}).constructor;
 
 export function stubs(value: unknown, ...sigs: string[]): Record<string, () => unknown> {
-  const fn = () => value;
-  placeholderMethods.add(fn);
+  const fn = declare(() => value, { placeholder: true });
   return Object.fromEntries(sigs.map((s) => [s, fn]));
 }
 export const noops = (...sigs: string[]) => stubs(undefined, ...sigs);
@@ -45,8 +51,6 @@ export function noEffect(...sigs: string[]): Record<string, () => void> {
   const fn = () => {};
   return Object.fromEntries(sigs.map((s) => [s, fn]));
 }
-export const isPlaceholderMethod = (value: unknown): boolean =>
-  typeof value === "function" && placeholderMethods.has(value);
 type Accessor = (this: any, v?: unknown) => unknown;
 const accessors = (t: Record<string, string>, make: (f: string) => Accessor) => Object.fromEntries(Object.entries(t).map(([s, f]) => [s, make(f)]));
 export const fieldGetters = (t: Record<string, string>) => accessors(t, (f) => function (this: any) { return this[f]; });
@@ -116,7 +120,24 @@ export class Runtime {
   register(spec: NativeSpec) {
     if (this.natives.has(spec.name)) throw new Error(`${spec.name} is registered twice`);
     this.natives.set(spec.name, spec);
+    for (const [key, fn] of Object.entries(spec.methods ?? {})) this.specImpls.set(spec.name + "|" + key, this.impl(`${spec.name}.${key}`, fn));
     this.registered?.(spec);
+  }
+  /** the specs' methods by "cls|key", a static one's key prefixed "static " */
+  private specImpls = new Map<string, NativeImpl>();
+  specNative(cls: string, key: string, isStatic: boolean): NativeImpl | undefined { return this.specImpls.get(cls + "|" + (isStatic ? "static " : "") + key); }
+  /** `fn` as registered: what its authoring helpers declared, and for a placeholder a stand-in that records its first hit */
+  private impl(what: string, fn: Function): NativeImpl {
+    const d = declarations.get(fn), impl: NativeImpl = { fn: fn as NativeImpl["fn"], wait: fn.constructor === AsyncFunction ? "always" : d?.wait, raw: d?.raw, ranges: d?.ranges };
+    if (!d?.placeholder) return impl;
+    impl.placeholder = true;
+    const R = this;
+    impl.fn = function (this: unknown, ...args: unknown[]) {
+      impl.fn = fn as NativeImpl["fn"];
+      if (!R.placeholders.has(what)) { R.placeholders.add(what); R.placeholderAt.set(what, R.javaFrames().slice(0, 12)); }
+      return fn.apply(this, args);
+    };
+    return impl;
   }
   /** a spec registered after the World was made (a module a split bundle loads later) */
   registered?: (spec: NativeSpec) => void;
@@ -124,12 +145,12 @@ export class Runtime {
   make: (cls: string) => any = (cls) => { throw new Error(`no World makes ${cls}`); };
 
   /** JNI registry: implementations for dex-declared native methods (key "cls|name+desc") */
-  jni = new Map<string, (...a: never[]) => unknown>();
+  jni = new Map<string, NativeImpl>();
   /** `replace`: `fn` replaces the native registered before (JNI's RegisterNatives does), which is otherwise a conflict */
   registerJni(cls: string, sig: string, fn: (...a: never[]) => unknown, replace = false) {
     const key = cls + "|" + sig;
     if (!replace && this.jni.has(key)) throw new Error(`${cls}.${sig} is registered twice`);
-    this.jni.set(key, this.trackPlaceholder(`${cls}.${sig}`, fn, (f) => { if (this.jni.get(key) === f) this.jni.set(key, fn); }));
+    this.jni.set(key, this.impl(`${cls}.${sig}`, fn));
   }
   /** register the native halves of one class, by their exact descriptors */
   registerJnis(cls: string, table: Record<string, unknown>) {
@@ -138,15 +159,15 @@ export class Runtime {
   /** classes whose natives one resolver makes from their descriptors (the GL bindings), each registered when first asked for */
   private families = new Map<string, (sig: string) => ((...a: never[]) => unknown) | null>();
   registerJniFamily(cls: string, resolve: (sig: string) => ((...a: never[]) => unknown) | null) { this.families.set(cls, resolve); }
-  jniFn(cls: string, sig: string): ((...a: never[]) => unknown) | null {
-    const own = this.jni.get(cls + "|" + sig);
+  jniNative(cls: string, sig: string): NativeImpl | null {
+    const key = cls + "|" + sig, own = this.jni.get(key);
     if (own) return own;
     const made = this.families.get(cls)?.(sig);
-    if (made) { this.registerJni(cls, sig, made); return made; }
+    if (made) { this.registerJni(cls, sig, made); return this.jni.get(key)!; }
     return this.jniResolver?.(cls, sig) ?? null;
   }
   /** set by the native tier: resolve a native by its JNI short-name export (`Java_pkg_Cls_m`) in a loaded library */
-  jniResolver: ((cls: string, sig: string) => ((...a: never[]) => unknown) | null) | null = null;
+  jniResolver: ((cls: string, sig: string) => NativeImpl | null) | null = null;
   /** library names (System.loadLibrary spelling) whose natives a TS shim provides */
   nativeLibs = new Set<string>();
   claimNativeLib(name: string) { this.nativeLibs.add(name); }
@@ -190,19 +211,6 @@ export class Runtime {
   /** placeholders (`stubs`/`noops`) reached, as "cls.name(desc)", and the Java frames first reaching each */
   placeholders = new Set<string>();
   placeholderAt = new Map<string, string[]>();
-  /** `fn` itself, or for a placeholder a wrapper that records its first hit and then asks
-   *  `uninstall` to put `fn` back, so later calls cost what they did before */
-  trackPlaceholder<F extends Function>(what: string, fn: F, uninstall: (wrapper: F) => void = () => {}): F {
-    if (!placeholderMethods.has(fn)) return fn;
-    const R = this;
-    const wrapper = function (this: unknown, ...args: unknown[]) {
-      uninstall(wrapper as unknown as F);
-      if (!R.placeholders.has(what)) { R.placeholders.add(what); R.placeholderAt.set(what, R.javaFrames().slice(0, 12)); }
-      return fn.apply(this, args);
-    };
-    placeholderMethods.add(wrapper);
-    return wrapper as unknown as F;
-  }
 
   unimplemented(what: string): Error {
     this.noteMissing(what);
@@ -285,18 +293,20 @@ export function setDeclared<T extends JObj>(o: T, cls: string, values: Record<st
 /** `o`'s field `name` as `cls` declares or inherits it */
 export const getDeclared = <T = unknown>(o: unknown, cls: string, name: string): T => (o as Record<string, T>)[fieldOf(cls, name)]!;
 
-/** A native implemented as a generator (see Runtime.drive), callable like any other method.
- *  `$g` is the generator itself, which the Wasm host runs on a suspendable strand. */
+/** A native implemented as a generator (see Runtime.drive), callable like any other method; it may wait. */
 export function driven<A extends unknown[], T>(g: (this: any, ...a: A) => Gen<T>): (this: any, ...a: A) => Driven<T> {
-  return Object.assign(function (this: unknown) { return rt.drive(g.apply(this, arguments as unknown as A)) as Driven<T>; }, { $g: g });
+  return declare(function (this: unknown) { return rt.drive(g.apply(this, arguments as unknown as A)) as Driven<T>; }, { wait: "maybe", body: g });
 }
 /** A driven generator's result: its value or a Promise of it (unknown for an untyped `Gen`). */
 type Driven<T> = unknown extends T ? unknown : T | Promise<T>;
 /** Marks native `fn`, which answers a Promise for some calls though it is neither `driven` nor async (it hands on an `after`
  *  or `awaited` result): the Wasm tier imports it as Suspending rather than parking the strand that called it. */
-export const waits = <F extends Function>(fn: F): F => Object.assign(fn, { $waits: true });
-export const isWaiting = (fn: Function): boolean => (fn as { $waits?: boolean }).$waits === true;
+export const waits = <F extends Function>(fn: F): F => declare(fn, { wait: "maybe" });
 /** Marks native `fn`, which answers a Promise only while something it reads loads (a font), having had no other effect: the Wasm tier
  *  imports it plainly, over views of its arrays, and calls it again over fresh views once the Promise settles. */
-export const retries = <F extends Function>(fn: F): F => Object.assign(fn, { $retries: true });
-export const isRetrying = (fn: Function): boolean => (fn as { $retries?: boolean }).$retries === true;
+export const retries = <F extends Function>(fn: F): F => declare(fn, { wait: "retry" });
+/** Marks native `fn`, which takes and answers Java values as the Wasm tier holds them (NativeImpl.raw) */
+export const javaValues = <F extends Function>(fn: F): F => declare(fn, { raw: true });
+/** Marks native `fn`, which touches each array `ranges` names only in its (offset, length) range: (array, offset, length) parameter positions, receiver not
+ *  counted. The Wasm tier copies that range alone. */
+export const ranged = <F extends Function>(fn: F, ...ranges: [number, number, number][]): F => declare(fn, { ranges });

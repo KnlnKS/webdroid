@@ -5,7 +5,7 @@
 import { mem } from "./mem.ts";
 import { defineHost, type HostFn, vaList, retF, retD, retPair, type ArgReader, PTR, stp, ldp, type HostRet, hostTrace } from "./host.ts";
 import { type Cpu, cpuFor, type CallArg } from "./cpu.ts";
-import { rt, type Gen } from "../jvm/runtime.ts";
+import { rt, javaValues, type Gen } from "../jvm/runtime.ts";
 import { PRIMS, parseMethodDesc, splitSig, decodeModifiedUtf8, encodeModifiedUtf8, charsToString } from "../jvm/abi.ts";
 import { after, curThread } from "../jvm/natives/jentry.ts";
 import { isExternal, guestAddress } from "../jvm/natives/jmemory.ts";
@@ -480,7 +480,7 @@ function registerNative(c: JniClass, name: string, sig: string, fn: number): voi
 }
 /** the host function a native method with guest code runs: its arguments and result are the Wasm tier's Java values, unconverted */
 const native = (rec: Registered): ((...a: never[]) => unknown) =>
-  Object.assign(function (this: unknown, ...args: unknown[]) { return rt.drive(callGuestNative(cpuFor(curThread), rec, this, args)); }, { javaValues: true }) as never;
+  javaValues(function (this: unknown, ...args: unknown[]) { return rt.drive(callGuestNative(cpuFor(curThread), rec, this, args)); }) as never;
 
 /** natives with no RegisterNatives entry resolve by the JNI short-name export `Java_pkg_Cls_method` */
 export function resolveByExport(lookup: (sym: string) => number | undefined): void {

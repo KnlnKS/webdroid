@@ -1,21 +1,18 @@
 // Registered TS descriptors that AOSP does not declare: every native spec method must exist on
-// its class or an AOSP supertype with the same name, descriptor and staticness, every String
-// method implemented over JS strings must be an instance method of String, and every JNI
-// delegate must be a native method its class declares. A spec method standing in for an AOSP
+// its class or an AOSP supertype with the same name, descriptor and staticness, and every JNI
+// delegate must be a native method its class declares (or a String method, whose bodies the Wasm
+// tier replaces where they read the representation). A spec method standing in for an AOSP
 // bytecode body is a reimplementation (docs/architecture.md) unless provenance's TS_SPECS allows its class.
 //   pnpm desccheck [--write-baseline]
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { rt } from "../src/jvm/runtime.ts";
+import { bodyOf, rt } from "../src/jvm/runtime.ts";
 import { ACC } from "../src/jvm/dex.ts";
-import { descToName, parseMethodDesc } from "../src/jvm/abi.ts";
-import { mayWait } from "../src/wasm/host/suspend.ts";
-import type { HostFn } from "../src/wasm/link/hostapi.ts";
+import { descToName, parseMethodDesc, type NativeImpl } from "../src/jvm/abi.ts";
 import type { ClassDef, DexFile } from "../src/jvm/dex.ts";
 import { jarDexes } from "../src/android/framework.ts";
 import { PLATFORM_JARS, tsSpecViolation } from "../src/jvm/provenance.ts";
 import { cli } from "./args.ts";
-import { stringMethods } from "../src/jvm/natives/jstring.ts";
 import "../src/natives.ts";
 
 const NO_INDEX = 0xffffffff, PRIVATE = 0x2, STRING = "java/lang/String";
@@ -93,17 +90,12 @@ export function descriptorMismatches(): Map<string, string[]> {
       else if (found.hasCode && tsSpecViolation(spec.name, true)) report(spec.name, `reimplements ${key}`);
     }
   }
-  for (const sig of stringMethods.keys()) {
-    const found = resolve(STRING, sig);
-    if (!found) report(STRING, "string " + missing(STRING, sig, sig));
-    else if (found.flags & ACC.STATIC) report(STRING, `string ${sig} is static in AOSP`);
-  }
   for (const key of rt.jni.keys()) {
     const [cls, sig] = key.split("|");
     if (!defs.has(cls)) continue;
     const found = methodsOf(cls).get(sig);
     if (!found) report(cls, "jni " + missing(cls, sig, sig));
-    else if (!(found.flags & ACC.NATIVE)) report(cls, `jni ${sig} is not native in AOSP`);
+    else if (!(found.flags & ACC.NATIVE) && cls !== STRING) report(cls, `jni ${sig} is not native in AOSP`);
   }
   return out;
 }
@@ -115,15 +107,14 @@ const isPrimArray = (d: string) => d.length === 2 && d[0] === "[" && "ZBCSIJFD".
  *  on views of linear memory, which may grow while it waits */
 export function undeclaredWaiters(): string[] {
   const out: string[] = [];
-  const check = (id: string, fn: unknown) => {
-    if (typeof fn !== "function" || (fn as HostFn).javaValues || mayWait(fn as HostFn)) return;
+  const check = (id: string, impl: NativeImpl | undefined) => {
+    if (!impl || impl.raw || impl.wait) return;
     const { params, ret } = parseMethodDesc(id.slice(id.indexOf("(")));
-    const body = Function.prototype.toString.call(fn).replace(/\/\*[\s\S]*?\*\/|(^|\s)\/\/.*$/gm, "$1");
+    const body = Function.prototype.toString.call(bodyOf(impl.fn)).replace(/\/\*[\s\S]*?\*\/|(^|\s)\/\/.*$/gm, "$1");
     if ((params.some(isPrimArray) || isPrimArray(ret)) && WAITS.test(body)) out.push(id);
   };
-  for (const [key, fn] of rt.jni) check(key.replace("|", "."), fn);
-  for (const [cls, spec] of rt.natives) for (const [key, fn] of Object.entries(spec.methods ?? {})) check(`${cls}.${key.replace(/^static /, "")}`, fn);
-  for (const [key, fn] of stringMethods) check(`${STRING}.${key}`, fn);
+  for (const [key, impl] of rt.jni) check(key.replace("|", "."), impl);
+  for (const [cls, spec] of rt.natives) for (const key of Object.keys(spec.methods ?? {})) check(`${cls}.${key.replace(/^static /, "")}`, rt.specNative(cls, key.replace(/^static /, ""), key.startsWith("static ")));
   return out.sort();
 }
 

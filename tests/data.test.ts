@@ -334,7 +334,7 @@ describe("sqlite", () => {
       const windowHandle = handle(readOnly);
       sqliteTransport.call = request => first.call(request);
       try {
-        const fill = rt.jniFn("android/database/sqlite/SQLiteConnection", "nativeExecuteForCursorWindow(JJJIIZ)J")! as (...args: unknown[]) => unknown;
+        const fill = rt.jniNative("android/database/sqlite/SQLiteConnection", "nativeExecuteForCursorWindow(JJJIIZ)J")!.fn;
         expect(await thrown(() => fill(a, tiny, windowHandle, 0, 0, 1))).toMatch(/^java\/lang\/IllegalStateException: /);
         expect(readOnly.values).toEqual([42]); expect(readOnly.rows).toBe(1);
       } finally { sqliteTransport.call = null; release(windowHandle); }
@@ -511,7 +511,7 @@ describe("sqlite", () => {
   });
 
   test("androidx's bundled driver binds, steps and reads columns, guarding the row and column", async () => {
-    const jni = (cls: string, sig: string) => rt.jniFn("androidx/sqlite/driver/bundled/" + cls, sig) as (...a: unknown[]) => unknown;
+    const jni = (cls: string, sig: string) => rt.jniNative("androidx/sqlite/driver/bundled/" + cls, sig)!.fn;
     const connection = await jni("BundledSQLiteDriverKt", "nativeOpen(Ljava/lang/String;I)J")("", 6) as bigint;
     const prepare = (sql: string) => jni("BundledSQLiteConnectionKt", "nativePrepare(JLjava/lang/String;)J")(connection, sql) as bigint;
     const call = (name: string, statement: bigint, ...args: unknown[]) => jni("BundledSQLiteStatementKt", name)(statement, ...args);

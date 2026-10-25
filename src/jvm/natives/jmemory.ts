@@ -4,7 +4,7 @@
 // pages of immutable files (Region). Unsafe's raw accessors (junsafe.ts) are these loads and stores.
 import { mem } from "../../native/mem.ts";
 import { E } from "../../native/abi.ts";
-import { rt, waits, type JObj } from "../runtime.ts";
+import { rt, waits, ranged, type JObj } from "../runtime.ts";
 import { PRIMS } from "../abi.ts";
 import { after } from "./jentry.ts";
 import { addressOf } from "./jnio.ts";
@@ -189,18 +189,18 @@ export function writeAt(address: bigint, bytes: Uint8Array): void {
   if (isExternal(address)) readOnly(address);
   mem.write(physical(address), bytes);
 }
-const peekArray = waits((address: bigint, array: Elements | null, offset: number, count: number, swap = 0) => {
+const peekArray = ranged(waits((address: bigint, array: Elements | null, offset: number, count: number, swap = 0) => {
   const target = region(array, offset, count);
   if (!count) return;
   const n = target.length, size = array!.BYTES_PER_ELEMENT;
   if (!isExternal(address)) { const bytes = mem.bytes(physical(address), n); target.set(swap ? swapped(bytes, size) : bytes); return; }
   return after(memoryAt(address,n),bytes => { target.set(swap ? swapped(bytes,size) : bytes); });
-});
-const pokeArray = (address: bigint, array: Elements | null, offset: number, count: number, swap = 0) => {
+}), [1, 2, 3]);
+const pokeArray = ranged((address: bigint, array: Elements | null, offset: number, count: number, swap = 0) => {
   const source = region(array, offset, count);
   // a set within one buffer copies as memmove does, so a guest-memory array needs no copy first
   if (count) return writeAt(address, swap ? swapped(source, array!.BYTES_PER_ELEMENT) : source);
-};
+}, [1, 2, 3]);
 /** n bytes of a primitive array from byte `at` */
 function arrayBytes(o: ArrayBufferView | null, at: number, n: number): Uint8Array {
   if (o === null) return rt.npe();

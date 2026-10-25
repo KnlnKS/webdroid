@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import { expect, test } from "vite-plus/test";
 import "../natives.ts";
-import { rt } from "../jvm/runtime.ts";
+import { rt, javaValues } from "../jvm/runtime.ts";
 import { jarray } from "../jvm/abi.ts";
 import { DexFile } from "../jvm/dex.ts";
 import { loadDex } from "../jvm/tier.ts";
@@ -498,7 +498,7 @@ for (const a64 of abis) test(`${abi(a64)} JNI callbacks park only when Java susp
 }));
 
 test("an address that stands for a Java array gives a native the array, and what it writes is the array's", async () => {
-  rt.registerJni("JniProbe", "handleOf(Ljava/lang/Object;)J", Object.assign((array: object) => handle(array), { javaValues: true }) as never);
+  rt.registerJni("JniProbe", "handleOf(Ljava/lang/Object;)J", javaValues((array: object) => handle(array)));
   rt.registerJni("JniProbe", "poke(J)V", ((h: bigint) => { deref<Int32Array>(h)[1] = 99; }) as never);
   expect(await scall("JniProbe", "viaHandle", "()I")).toBe(99);
 });

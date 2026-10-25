@@ -6,7 +6,7 @@
 // getX() reads back, strings included: a string is (TYPE_STRING, pool index, cookie), read from
 // the XML block's pool for cookie -1 and from ApkAssets[cookie - 1]'s table pool otherwise.
 
-import { awaited, rt, driven, declaredField, getDeclared, setDeclared, type Gen, type JObj } from "../jvm/runtime.ts";
+import { awaited, rt, driven, ranged, declaredField, getDeclared, setDeclared, type Gen, type JObj } from "../jvm/runtime.ts";
 import { handle, deref, release, FINALIZER } from "./handles.ts";
 import { newObj, vcall } from "../jvm/natives/jentry.ts";
 import { i8, u8, jarray } from "../jvm/abi.ts";
@@ -427,7 +427,7 @@ delegate("android/content/res/AssetManager", {
     c.pos++;
     return bytes[0];
   }),
-  "nativeAssetRead(J[BII)I": driven(function* (a: bigint, out: Int8Array, off: number, len: number): Gen {
+  "nativeAssetRead(J[BII)I": ranged(driven(function* (a: bigint, out: Int8Array, off: number, len: number): Gen {
     const c = deref<Cursor>(a);
     if (!len) return 0;
     const bytes = yield* awaited(c.source.read(c.pos, len));
@@ -435,7 +435,7 @@ delegate("android/content/res/AssetManager", {
     out.set(i8(bytes), off);
     c.pos += bytes.length;
     return bytes.length;
-  }),
+  }), [1, 2, 3]),
   "nativeAssetSeek(JJI)J": (a: bigint, off: bigint, whence: number) => {
     const c = deref<Cursor>(a);
     const base = whence === 0 ? 0 : whence === 1 ? c.pos : c.source.size;
