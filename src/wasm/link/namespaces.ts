@@ -6,6 +6,7 @@ import { failed, symbolicDispatchFor } from "../compiler/linkage.ts";
 import { hasHierarchy } from "./unit.ts";
 import type { World } from "./world.ts";
 import { PerWorld } from "./perworld.ts";
+import { APP, BUILT } from "./slots.ts";
 
 export class Namespaces {
   private readonly w: World;
@@ -113,8 +114,7 @@ export class Namespaces {
     w.changed((s) => s.namespaces());
     // Existing code and app builds used the previous namespace, except a kept build, which was made under this one. Platform code retains its defining boot namespace.
     const refreshed = new Set(names);
-    // a slot without state has never been compiled here
-    const builtUnder = (slot: number) => { const s = slots.peek(slot); return (!s || s.k === "method" && !w.tiers.hot(slot) && !w.demand.methods.has(s.m)) && !!w.aot?.fromAppBuild(slot); };
+    const builtUnder = (slot: number) => slots.is(slot, BUILT | APP);
     for (let b = 0; b < slots.blockClass.length; b++) if (refreshed.has(slots.blockClass[b])) {
       for (let i = 0; i < slots.methodsIn(b); i++) if (!kept || !builtUnder(slots.blockBase[b] + i)) w.assumptions.undoCode(slots.blockBase[b] + i);
     }

@@ -1,5 +1,5 @@
-// The page's side of the compile worker (compile-serve.ts): the World's CompileService. A hot method's second-tier compile (Tiering.upgradeJob) goes to the worker, one job at a time, and
-// its unit is installed when it arrives, if the World can still take it (Tiering.adoptUnit); the method runs its first-tier code meanwhile. Without a worker, or once the worker has
+// The page's side of the compile worker (compile-serve.ts): the World's CompileService. A hot method's second-tier compile (Upgrades.job) goes to the worker, one job at a time, and
+// its unit is installed when it arrives, if the World can still take it (Tiering.adopt); the method runs its first-tier code meanwhile. Without a worker, or once the worker has
 // failed or the Program has gained something it cannot follow, the World compiles inline as before.
 import { note, Ev } from "../../timeline.ts";
 import { answeringFor } from "../../jvm/yield.ts";
@@ -7,7 +7,7 @@ import { compileBytes } from "../link/module.ts";
 import type { CompileService } from "../link/hostapi.ts";
 import type { AppIndex } from "../link/aot.ts";
 import type { Marks } from "../link/numbers.ts";
-import type { UpgradeJob } from "../link/unit.ts";
+import type { UnitJob } from "../link/unit.ts";
 import type { ProxyDefinition } from "../link/proxy.ts";
 import type { World } from "../link/world.ts";
 import type { Loader, LoaderId, Program } from "../compiler/program.ts";
@@ -19,7 +19,7 @@ import type { WarmAnswer } from "./warm-worker.ts";
 export interface WorkerPort extends Port { terminate(): void; onerror: ((e: ErrorEvent) => void) | null }
 /** jobs waiting for the worker; a hot method that finds the queue full asks again after another budget */
 const MAX_QUEUE = 16, MAX_FAILURES = 3;
-/** a merge (Tiering.mergeJob) is paced to leave the worker idle MERGE_REST times as long as it took: its compiling allocates fast enough to grow the worker's heap
+/** a merge (Merges.job) is paced to leave the worker idle MERGE_REST times as long as it took: its compiling allocates fast enough to grow the worker's heap
  *  faster than collections shrink it, in the address space the page's compile workers share (compilehost.ts) */
 const MERGE_REST = 2;
 
@@ -89,7 +89,7 @@ export class CompileClient implements CompileService {
   private marks!: Marks;
   private keep = false;
   private queue: number[] = [];
-  private busy?: { id: number; slot: number; job: UpgradeJob; epoch: number; from: Marks; sent: number };
+  private busy?: { id: number; slot: number; job: UnitJob; epoch: number; from: Marks; sent: number };
   private mergeAfter = 0;
   private nextId = 0;
 
@@ -105,7 +105,7 @@ export class CompileClient implements CompileService {
     port.onmessage = ({ data }: MessageEvent<CompileResponse>) => {
       if (data.type !== "unit") { this.take(data); return; }
       // the engine compiles a unit's bytes off this thread: compiled in the handler, they kept a busy app from its frames for seconds. Bytes that do not compile fail the job
-      const bytes = data.result.module as Uint8Array, merge = this.busy?.id === data.id && this.busy.job.merge;
+      const bytes = data.result.module as Uint8Array, merge = this.busy?.id === data.id && this.busy.job.kind === "merge";
       void compileBytes(bytes).then(async (module) => {
         data.result.module = module;
         if (merge && this.warm) this.stats.warmed += (await this.warm(module, bytes))?.warmed ?? 0;
@@ -172,12 +172,12 @@ export class CompileClient implements CompileService {
     if (this.state !== "ready" || this.holding()) return;
     const w = this.w!;
     while (!this.busy && this.queue.length) {
-      const slot = this.queue.shift()!, job = w.tiers.upgradeJob(slot);
-      if (job) this.send(slot, job); else w.tiers.release(slot);
+      const slot = this.queue.shift()!, job = w.upgrades.job(slot);
+      if (job) this.send(slot, job); else w.upgrades.release(slot);
     }
-    if (!this.busy && performance.now() >= this.mergeAfter && !this.holdMerges()) { const job = w.tiers.mergeJob(); if (job) this.send(-1, job); }
+    if (!this.busy && performance.now() >= this.mergeAfter && !this.holdMerges()) { const job = w.merges.job(); if (job) this.send(-1, job); }
   }
-  private send(slot: number, job: UpgradeJob): void {
+  private send(slot: number, job: UnitJob): void {
     const w = this.w!, from = w.numbers.marks(), id = this.nextId++;
     this.busy = { id, slot, job, epoch: w.epoch, from, sent: performance.now() };
     this.post({ type: "upgrade", id, keep: this.keep, sync: w.numbers.since(this.marks), job });
@@ -195,7 +195,7 @@ export class CompileClient implements CompileService {
     if (!busy || m.id !== busy.id) return;
     if (m.type === "unit" && this.holding(m)) return;
     this.busy = undefined;
-    if (busy.job.merge) this.mergeAfter = performance.now() * (1 + MERGE_REST) - busy.sent * MERGE_REST;
+    if (busy.job.kind === "merge") this.mergeAfter = performance.now() * (1 + MERGE_REST) - busy.sent * MERGE_REST;
     if (m.type === "failed") {
       // the method stays on its first-tier code and does not ask again; a worker that keeps failing has lost track of the numbering
       if (++this.stats.failed > MAX_FAILURES) this.stop(m.message); else this.pump();
@@ -204,7 +204,7 @@ export class CompileClient implements CompileService {
     if (m.type !== "unit") return;
     this.stats.workerMs += m.ms;
     const n = m.result.numbering, numbered = n.names.length + n.tail.length + n.selectors.length + n.gaps.length + n.links.length > 0;
-    const t0 = performance.now(), taken = w.tiers.adoptUnit(busy.slot, busy.job, m.result, busy.epoch);
+    const t0 = performance.now(), taken = w.tiers.adopt(busy.slot, busy.job, m.result, busy.epoch);
     this.stats.adoptMs += performance.now() - t0;
     if (taken) {
       this.stats.adopted++;
@@ -233,7 +233,7 @@ export class CompileClient implements CompileService {
     if (this.state === "retired") return;
     this.state = "retired"; this.retired = reason;
     if (this.held) { clearTimeout(this.held.timer); this.held = undefined; }
-    for (const slot of [...this.queue, ...this.busy ? [this.busy.slot] : []]) this.w?.tiers.release(slot);
+    for (const slot of [...this.queue, ...this.busy ? [this.busy.slot] : []]) this.w?.upgrades.release(slot);
     this.queue = []; this.busy = undefined;
     this.waiting = []; this.w = undefined; this.setup = undefined;
     if (this.port) { this.port.onmessage = null; this.port.onerror = null; this.port.terminate(); this.port = undefined; }

@@ -163,7 +163,7 @@ export class Compiler implements Base {
   linkErrors: string[] = [];
   /** classes whose absence this module's code fails a site on (linkage.ts), with the method that relies on it */
   absent: [string, MethodInfo | undefined][] = [];
-  /** whether methods count their calls and loop iterations and ask the host to recompile them once they are hot (the first tier, see Tiering.upgrade) */
+  /** whether methods count their calls and loop iterations and ask the host to recompile them once they are hot (the first tier, see Upgrades.upgrade) */
   counting = true;
   /** the classes this module allocates */
   allocs = new Set<string>();

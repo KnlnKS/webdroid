@@ -106,11 +106,7 @@ export class Assumptions {
     let lateBy: Map<string, string[]> | undefined;
     const subtypes = new Map<(name: string) => boolean, Map<string, string[]>>();
     for (const [key, a] of this.decisions) {
-      for (const at of a.owners) {
-        // a slot without an entry may hold a loaded build module's code
-        const state = typeof at === "number" ? w.slots.peek(at) : undefined;
-        if (state && (state.k === "ensure" || !state.done)) a.owners.delete(at);
-      }
+      for (const at of a.owners) if (typeof at === "number" && (!w.slots.compiled(at) || w.slots.peek(at)?.k === "ensure")) a.owners.delete(at);
       if (!a.owners.size) { this.decisions.delete(key); continue; }
       const saved = before.get(a), declared = prog.resolve(a.decl, a.name, a.desc);
       const sameTarget = saved && saved.target === prog.get(a.tc)?.byKey.get(a.tk) && saved.target.key === a.tk && saved.target.desc === a.desc;

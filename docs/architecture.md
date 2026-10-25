@@ -113,8 +113,9 @@ is how host code calls Java.
   demand get globals-only modules, and first-tier units share helpers in large modules. In a launch without a
   saved build, `World.ahead` compiles likely callees in the app thread's idle time.
 - **Second tier:** hot methods are recompiled in a compile Worker under the same numbering and adopted only if the
-  World has not renumbered meanwhile (`link/tiering.ts`; the Worker side is `link/unit.ts`). A slot's tier is one
-  state in `Tiering`, which also invalidates and resets it.
+  World has not renumbered meanwhile (`link/upgrades.ts`, installed by `link/tiering.ts`; the Worker side is
+  `link/unit.ts`); `link/merges.ts` merges loose first-tier units the same way. A slot's code and tier are one state
+  in `SlotTable` (`link/slots.ts`), changed only by installing, a build's module loading, and undoing it.
 - Compile Workers start in a sandboxed frame of the page (`host/compilehost.ts`), which Chrome's site isolation
   gives its own renderer, so they do not share the app's 4 GB pointer cage.
 

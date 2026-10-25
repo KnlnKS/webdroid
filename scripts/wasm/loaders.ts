@@ -298,7 +298,7 @@ for (const method of ["memberHostRetry", "memberHostWaitRetry"]) {
     const slot = w.slotOf(method), helperSlot = w.slotOf(helper);
     await w.tiers.linkSlot(slot); await w.tiers.linkSlot(helperSlot);
     new Int32Array(w.mem.buffer, COUNT_BASE + 4 * helperSlot, 1)[0] = HOT_BUDGET;
-    const before = w.tiers.upgradeJob(slot);
+    const before = w.upgrades.job(slot);
     if (!before || [...before.installed, ...before.copies].includes(mid(helper))) fail("symbolic promotion selected an unresolved local copy");
     if (w.prog.initiatedBy(loader, "SymbolicHelper")) fail("promotion eagerly initiated its helper");
     const strand = w.sched.strand();
@@ -307,7 +307,7 @@ for (const method of ["memberHostRetry", "memberHostWaitRetry"]) {
     const winner = w.prog.require(resolved).byKey.get("value()I")!, winnerSlot = w.slotOf(winner);
     await w.tiers.linkSlot(slot); await w.tiers.linkSlot(winnerSlot);
     new Int32Array(w.mem.buffer, COUNT_BASE + 4 * winnerSlot, 1)[0] = HOT_BUDGET;
-    const after = w.tiers.upgradeJob(slot);
+    const after = w.upgrades.job(slot);
     if (!after?.copies.includes(mid(winner)) || resolved !== helperKey && after.copies.includes(mid(helper))) fail("promotion did not recheck the Java loader's winning helper");
     if (await w.entryAsync(key, "symbolic", "()I")() !== expected) fail("copy fixture changed Java result");
     console.log("promotion copies: unresolved helper excluded without loading; initiated helper copied on next selection; wasm=42");

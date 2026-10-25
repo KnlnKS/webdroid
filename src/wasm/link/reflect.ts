@@ -73,9 +73,9 @@ synthFamily("call", reflectiveCall(false, false), true);
 synthFamily("callDirect", reflectiveCall(false, true), true);
 
 export function methodAt(w: World, slot: number): MethodInfo {
-  const entry = w.slots.at(slot);
-  if (entry?.k !== "method") throw new Error(`invalid executable slot ${slot}`);
-  return entry.m;
+  const m = w.slots.methodAt(slot);
+  if (!m) throw new Error(`invalid executable slot ${slot}`);
+  return m;
 }
 
 /** the thunk body: params (receiver, Object[]) -> Object. Method.invoke wraps what the method throws in InvocationTargetException (`wrap`); a method handle

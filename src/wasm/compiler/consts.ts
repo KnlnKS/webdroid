@@ -17,7 +17,7 @@ export const MATH_ARITY = { acos: 1, asin: 1, atan: 1, cbrt: 1, cos: 1, cosh: 1,
   atan2: 2, hypot: 2, pow: 2 } as const;
 
 // the runtime's budgets and the layout of the scratch memory, shared by compiled code and the host
-/** calls and loop iterations a method runs as first-tier code before it is recompiled (Tiering.upgrade) */
+/** calls and loop iterations a method runs as first-tier code before it is recompiled (Upgrades.upgrade) */
 export const HOT_BUDGET = 5000;
 /** The counters of first-tier methods are words of the scratch memory, one per table slot from COUNT_BASE; slots beyond COUNT_SLOTS are not counted. */
 export const COUNT_BASE = 8, COUNT_SLOTS = 1 << 20;

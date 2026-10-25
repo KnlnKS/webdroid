@@ -59,11 +59,11 @@ for (const [hot, own] of [[false, false], [true, false], [true, true]]) {
   let first = call(40000);
   const slot = w.slotOf(w.prog.resolve("Lz", "sum", "(I)I")!), initial = w.table.get(slot);
   // the second tier waits until the program has been hot for a few ms
-  if (w.tiers.upgradeJob(slot)) for (let i = 0; i < 1e4 && w.table.get(slot) === initial; i++) first = call(40000);
+  if (w.upgrades.job(slot)) for (let i = 0; i < 1e4 && w.table.get(slot) === initial; i++) first = call(40000);
   const up = w.stats.upgrades;
   check("hot loop upgraded", up >= 1, true);
   check("second tier answers the same", call(40000), first);
-  check("an upgraded method is not queued again", (call(40000), w.tiers.upgradeJob(slot)), undefined);
+  check("an upgraded method is not queued again", (call(40000), w.upgrades.job(slot)), undefined);
   w.addDexes(loadDexes(join(out, "out2/classes.dex")));
   check("a falsified assumption undoes the second tier too", w.stats.invalidated >= 1, true);
   check("and the method is compiled afresh", call(1000), 11 * 1000);
@@ -77,10 +77,10 @@ for (const [hot, own] of [[false, false], [true, false], [true, true]]) {
   for (let i = 0; i < 1024; i++) call(y, z);
   const m = w.prog.resolve("Lz", "sites", "(LLz$Fn;LLz$Fn;)I")!, group = w.planner.group(m);
   check("separate sites prefer their own receivers", [...group.plan.values()].map(ms => ms.map(m => m.cls).join()).join(";"), "Lz$Y;Lz$Z");
-  const slot = w.slotOf(m), job = w.tiers.upgradeJob(slot)!, worker = new UnitCompiler(lz({ compileOnly: true }));
+  const slot = w.slotOf(m), job = w.upgrades.job(slot)!, worker = new UnitCompiler(lz({ compileOnly: true }));
   check("profile worker follows numbering", worker.sync(w.numbers.since(w.base), true), true);
   const compiled = worker.upgrade(job);
-  check("profiled unit installs from a worker", typeof compiled !== "string" && w.tiers.adoptUnit(slot, job, compiled, w.epoch), true);
+  check("profiled unit installs from a worker", typeof compiled !== "string" && w.tiers.adopt(slot, job, compiled, w.epoch), true);
   check("profiled guards answer", call(y, z), 57);
   check("profiled guards fall back for changed receivers", call(z, x), 73);
 }

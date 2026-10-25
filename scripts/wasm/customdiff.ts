@@ -207,8 +207,7 @@ const assertEagerFieldAccessors = (tier: typeof w) => {
   tier.host.info = (kind: number, a: number, b: number) => {
     const slot = info(kind, a, b);
     if (([UInfo.FieldGet, UInfo.FieldPut, UInfo.StaticGet, UInfo.StaticPut] as number[]).includes(kind) && slot) {
-      const state = tier.slots.at(slot);
-      if (state?.k !== "synth" || !state.done) throw new Error("field accessor still needs lazy admission");
+      if (tier.slots.at(slot)?.k !== "synth" || !tier.slots.compiled(slot)) throw new Error("field accessor still needs lazy admission");
     }
     return slot;
   };

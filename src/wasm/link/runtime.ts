@@ -57,7 +57,7 @@ export function startRuntime(w: World): Runtime {
     params.forEach((_, i) => c.lget(i));
     const f = mb.addFunc(sig, c.i32(SLOT[name]).callIndirect(sig).finish(), "stub:" + name);
     mb.addElemActive(0, SLOT[name], [f]);
-    w.slots.set(SLOT[name], { k: "thrower", name, done: false });
+    w.slots.set(SLOT[name], { k: "thrower", name });
   }
   const linker = {
     link: (slot: number) => w.tiers.linkSlot(slot),

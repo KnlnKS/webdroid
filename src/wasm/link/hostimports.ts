@@ -57,8 +57,8 @@ export function hostImports(w: World): HostImports {
     gap: (id: number) => { lastGap = id; w.onGap(w.numbers.gapList[id]); },
     sync: (op: number, obj: object | null, a: number) => sched.sync(op, obj, a),
     block: sched.suspending((op: number, obj: object | null, a: number, b: number) => sched.block(op, obj, a, b)),
-    hot: (slot: number) => w.tiers.upgrade(slot),
-    long: (slot: number) => { const s = w.slots.at(slot); if (s?.k === "method") w.longLoops.add(mid(s.m)); },
+    hot: (slot: number) => w.upgrades.upgrade(slot),
+    long: (slot: number) => { const m = w.slots.methodAt(slot); if (m) w.longLoops.add(mid(m)); },
     imtMiss: (cls: number, sel: number) => w.dispatch.imtMiss(cls, sel),
     heapCheck: () => (heap() - heapBase > limit && (opts.collect?.(), heap() - heapBase > limit) ? 1 : 0),
     info: (kind: number, a: number, b: number) => kind >= MInfo.ExecCount ? hostMembers(w, kind, a, b) : kind >= RInfo.MethodCount ? hostReflect(w, kind, a, b)

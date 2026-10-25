@@ -26,6 +26,8 @@ import { Numbers, type Marks, type Numbering } from "./numbers.ts";
 import { SlotTable } from "./slots.ts";
 import { Planner } from "./planning.ts";
 import { Tiering } from "./tiering.ts";
+import { Upgrades } from "./upgrades.ts";
+import { Merges } from "./merges.ts";
 import { AheadCompiler } from "./ahead.ts";
 import { Burner } from "./burn.ts";
 import { Dispatch } from "./dispatch.ts";
@@ -120,8 +122,10 @@ export class World {
   };
   readonly slots = new SlotTable(this, FIRST_FREE_SLOT);
   readonly tiers = new Tiering(this);
-  readonly planner = new Planner(this, this.tiers);
-  readonly ahead = new AheadCompiler(this, this.tiers);
+  readonly upgrades = new Upgrades(this);
+  readonly merges = new Merges(this);
+  readonly planner = new Planner(this);
+  readonly ahead = new AheadCompiler(this);
   readonly burner = new Burner(this);
   readonly dispatch = new Dispatch(this);
   readonly classModules = new ClassModules(this);
@@ -266,18 +270,16 @@ export class World {
    *  `eager`: its code is compiled now, for a caller about to call it, instead of after a stub's first call */
   synthSlot(name: string, d?: Synth, eager = false): number {
     this.touching?.add("!" + name);
-    const { slot, fresh } = this.slots.synthSlot(name);
-    if (!fresh) return slot;
+    const slots = this.slots, slot = slots.synthSlot(name);
+    if (slots.peek(slot) || slots.compiled(slot)) return slot;
     d ??= synthOf(this, name);
     if (!d) throw new Error(`no synthetic function ${name}`);
-    const s = { k: "synth" as const, name, d, done: false };
-    this.slots.set(slot, s);
+    slots.set(slot, { k: "synth", name, d });
     if (!this.instantiates) return slot;
     if (askedSynth(name)) this.demand.synths.push(name);
-    // the app build may hold its code, which its module puts in the slot
-    if (this.aot?.installSynth(name)) { s.done = true; return slot; }
-    if (eager) { this.tiers.linkSlot(slot); return slot; }
-    this.table.set(slot, this.stubs.stubsFor([d])[0]);
+    // a build may hold its code, which its module puts in the slot
+    if (this.aot?.installSynth(name)) return slot;
+    if (eager) this.tiers.linkSlot(slot); else this.table.set(slot, this.stubs.stubsFor([d])[0]);
     return slot;
   }
 
@@ -320,7 +322,7 @@ export class World {
   }
 
   // ---------- compiling methods on demand
-  /** the classes linked so far, and those with a method that has been called (a method's slot is done once it has run or its precompiled code is installed) */
+  /** the classes linked so far, and those with a method that has been called (SlotTable.calledClasses) */
   usage(): { linked: string[]; called: string[] } {
     return { linked: [...this.classes.keys()], called: this.slots.calledClasses() };
   }
@@ -390,7 +392,7 @@ export class World {
 
   /** ends the World for a host done with it: its threads' waits end and their strands unwind without running more Java, its Cleaners no longer run and
    *  its retired code is no longer waited on, so that nothing the engine or a timer holds keeps it */
-  close(): void { this.closed = true; this.sched.close(); this.tiers.close(); }
+  close(): void { this.closed = true; this.sched.close(); this.merges.close(); }
 
   // ---------- calling in from JS, and exceptions
   /** a JS function that calls the Java method; a Java exception arrives as a WebAssembly.Exception (see `throwable`) */
