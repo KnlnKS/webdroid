@@ -21,7 +21,7 @@ import { SLOT, FIRST_FREE_SLOT, isStackOverflow } from "../compiler/exc.ts";
 import type { PreparedInstruction } from "../../jvm/prepared.ts";
 import type { DexFile } from "../../jvm/dex.ts";
 import { compileModule } from "./module.ts";
-import { AotRuntime, type AotStore, type AppIndex } from "./aot.ts";
+import { AotRuntime, type AotLayout, type AotStore, type AppIndex } from "./aot.ts";
 import { Numbers, type Marks, type Numbering } from "./numbers.ts";
 import { SlotTable } from "./slots.ts";
 import { Planner } from "./planning.ts";
@@ -62,8 +62,9 @@ export interface WorldOptions {
   claim?: (owner: object, handle: bigint) => void;
   /** precompiled platform code (aot.ts); the Program holds exactly the platform dexes it was built from, apps are added with addDexes */
   aot?: AotStore;
-  /** a World that makes that code (aotbuild.ts AotBuilder): classes, slots and selectors are numbered but nothing is instantiated */
-  build?: boolean;
+  /** a World that makes that code (aotbuild.ts AotBuilder), where classes, slots and selectors are numbered but nothing is instantiated: given the World, it
+   *  numbers the platform classes and answers how the build lays them out */
+  build?: (w: World) => AotLayout;
   /** timers and event loop turns for threads that wait (sched.ts); the host's own where there is one */
   loop?: HostLoop;
   /** marks a moment on the host's timeline (src/timeline.ts: Ev) */
@@ -154,7 +155,7 @@ export class World {
   rt!: Runtime;
   /** the threads: strands, monitors, waits (sched.ts) */
   sched!: Sched;
-  aot?: AotRuntime;
+  readonly aot?: AotRuntime;
   /** what the World had numbered when its constructor returned, or once an app build was attached: where a compile worker's numbering starts */
   base!: Marks;
   /** how many times the Program changed (World.changed): results a compile worker made before are not adopted */
@@ -176,7 +177,7 @@ export class World {
     this.sched = new Sched(this, this.rt, opts.loop ?? defaultLoop);
     this.host = hostImports(this);
     this.compiler = opts.compiler;
-    this.aot = opts.aot && !opts.build ? AotRuntime.attach(this, opts.aot) : undefined;
+    this.aot = opts.build ? new AotRuntime(this, opts.build(this)) : opts.aot && AotRuntime.attach(this, opts.aot);
     this.base = this.numbers.marks();
     if (opts.app) this.attachApp(opts.app);
   }

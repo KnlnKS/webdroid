@@ -5,7 +5,7 @@ import { mid } from "../compiler/program.ts";
 import { uleb } from "../compiler/wasmbin.ts";
 import type { JClass, MethodInfo } from "../compiler/program.ts";
 import { compileModule } from "./module.ts";
-import { AotRuntime, dexSig, VERSION, type AotBuild, type AotIndex, type CHeader, type DHeader, type SHeader, type UnitHeader } from "./aot.ts";
+import { dexSig, VERSION, type AotBuild, type AotLayout, type AotIndex, type CHeader, type DHeader, type SHeader, type UnitHeader } from "./aot.ts";
 import { hostTakeover } from "./hostclass.ts";
 import type { Marks } from "./numbers.ts";
 import type { Owner } from "./assumptions.ts";
@@ -13,7 +13,7 @@ import type { Touched, World } from "./world.ts";
 
 const rle = (a: number[]): number[] => { const o: number[] = []; for (const v of a) { if (o.length && o[o.length - 2] === v) o[o.length - 1]++; else o.push(v, 1); } return o; };
 
-/** The platform build's grouping, over a World made to build it (WorldOptions.build): the classes of the build's dexes are numbered first, in definition order,
+/** The platform build's grouping, made by the World that builds it (WorldOptions.build): the classes of the build's dexes are numbered first, in definition order,
  *  and given the D and C module of their group (-1 for no C module); the World links them as the build lays them out (AotRuntime) */
 export class AotBuilder {
   private readonly w: World;
@@ -42,8 +42,9 @@ export class AotBuilder {
       this.dGroupOf.push(id(dIds, this.dKeys, build.dGroup(name)));
       this.cGroupOf.push(id(cIds, this.cKeys, build.cGroup(name)));
     }
-    w.aot = new AotRuntime(w, { dOf: Int32Array.from(this.dGroupOf), cOf: new Int32Array(0), extraGroup: this.dKeys.length });
   }
+  /** where the build puts the platform classes (WorldOptions.build) */
+  get layout(): AotLayout { return { dOf: Int32Array.from(this.dGroupOf), cOf: new Int32Array(0), extraGroup: this.dKeys.length }; }
   /** the index of the finished build, whose runtime functions are in `synths` */
   finish(synths: string[][]): AotIndex {
     const w = this.w, withCode = [...w.prog.all()].filter((c) => c.dex);
