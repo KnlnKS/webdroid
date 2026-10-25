@@ -4,7 +4,7 @@ import { mark, perf } from "../../perf.ts";
 import { switchValue } from "../../switches.ts";
 import { wallMillis } from "../../guest-clock.ts";
 import { note } from "../../timeline.ts";
-import { FetchStore } from "./aotstore.ts";
+import { FetchStore, decodeJson } from "./aotstore.ts";
 import { rt } from "../../jvm/runtime.ts";
 import { java, useJavaHost, type JavaHost } from "../../jvm/javahost.ts";
 import type { TierBackend, TierPorts } from "../../jvm/tier.ts";
@@ -125,7 +125,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
   // profiled launches numbered (scripts/wasm/aot-profile.ts; null when they disagree or none ran), so its app's build can begin before the zygote has run.
   const persisting = openPersist();
   const remembered = Promise.all([opening, persisting]).then(async ([[aot], persist]) =>
-    aot && (await persist?.prefix(aot.key) ?? JSON.parse(new TextDecoder().decode(await aot.fetchBytes("prefix.json"))) as Numbering | null)).catch(() => null);
+    aot && (await persist?.prefix(aot.key) ?? decodeJson<Numbering | null>(await aot.fetchBytes("prefix.json")))).catch(() => null);
   let seen: Numbering | undefined;
   /** the app code beginAppCode asked for, and the code it began preparing under the prefix it took */
   let asked: Asked | undefined, begun: { prefix: string; code: Promise<AppCode> } | undefined;
@@ -306,7 +306,7 @@ export function openAot(): Promise<FetchStore | undefined> {
     const store = new FetchStore(`/aot/${(await current.json() as { key: string }).key}/`, aotPort);
     const [, startup] = await Promise.all([store.fetchBytes("index.json"), store.fetchBytes("startup.json")]);
     mark("aotIndex");
-    store.ready = prefetchInWorker(store, JSON.parse(new TextDecoder().decode(startup)) as string[]).then(() => mark("aotOpened"));
+    store.ready = prefetchInWorker(store, decodeJson<string[]>(startup)).then(() => mark("aotOpened"));
     return store;
   })();
 }

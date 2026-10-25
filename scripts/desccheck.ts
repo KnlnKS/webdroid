@@ -103,7 +103,7 @@ export function descriptorMismatches(): Map<string, string[]> {
 /** what the body of a native that can answer a Promise has: it waits for something, reads memory that pages in, or hands on the result of a call into Java */
 const WAITS = /\b(after|awaited|withFonts|pagesIn|external|externalRead|memoryAt|guestAddress|Promise|await|drive)\b|\breturn\s+(vcall|scall|newObj|callOn)\b|=>\s*(vcall|scall|newObj|callOn)\(/;
 const isPrimArray = (d: string) => d.length === 2 && d[0] === "[" && "ZBCSIJFD".includes(d[1]);
-/** the natives with primitive arrays whose bodies look like they wait but that are not declared to (suspend.ts `mayWait`): such a native, imported plain, parks
+/** the natives with primitive arrays whose bodies look like they wait but that are not declared to (NativeImpl.wait): such a native, imported plain, parks
  *  on views of linear memory, which may grow while it waits */
 export function undeclaredWaiters(): string[] {
   const out: string[] = [];

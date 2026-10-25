@@ -1,7 +1,7 @@
-import { fetchBytes } from "./aotstore.ts";
+import { decodeJson, fetchBytes } from "./aotstore.ts";
 
 let catalog: { base: string; keys: Promise<string[]> } | undefined;
-const json = async <T>(url: string): Promise<T> => JSON.parse(new TextDecoder().decode(await fetchBytes(url))) as T;
+const json = async <T>(url: string): Promise<T> => decodeJson<T>(await fetchBytes(url));
 
 /** the files of the app build `key` that the platform build at `base` ships, if it ships one */
 export async function fetchBundle(base: string, key: string): Promise<Map<string, Uint8Array> | undefined> {

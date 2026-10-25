@@ -15,6 +15,8 @@ export async function fetchBytes(url: string): Promise<Uint8Array<ArrayBuffer>> 
   if (!res.ok) throw new Error(`${url}: ${res.status}`);
   return new Uint8Array(await res.arrayBuffer());
 }
+/** the JSON value UTF-8 `bytes` hold */
+export const decodeJson = <T>(bytes: Uint8Array): T => JSON.parse(new TextDecoder().decode(bytes)) as T;
 /** what a store asks of another thread's store of the same build (serveStore): the files to fetch and compile; and its answer, a file's module or its failure */
 export type StoreRequest = string[];
 export type StoreAnswer = { file: string; module?: WebAssembly.Module };

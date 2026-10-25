@@ -127,7 +127,7 @@ export class Bridge implements HostBridge {
   }
 
   // ---------- Java to host
-  /** `range` is the (offset, length) the native's contract names inside a primitive array, when it does (natives.ts RANGES): only those elements cross */
+  /** `range` is the (offset, length) the native's contract names inside a primitive array, when it does (NativeImpl.ranges): only those elements cross */
   toHost(v: unknown, _desc?: string, range?: [number, number]): unknown {
     if (v === null || v === undefined || typeof v === "string") return v ?? null;
     const o = v as object, hit = this.live.get(o) ?? this.facades.get(o) ?? this.w.hosts.hostOf(o);

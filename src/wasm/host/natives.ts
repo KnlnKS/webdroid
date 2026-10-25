@@ -223,7 +223,7 @@ export class Natives implements NativeBinder {
     if (landed >= 0) c.lget(landed).call(cx.nativeImports.get("land:check")!);
   }
   /** copies array parameter `i` of class `d` into a fresh scratch region, leaving its (pointer, length), or (0, -1) for null; only the
-   *  elements [from, from + count) are copied when the native's contract names a range inside the array (RANGES), all of them otherwise */
+   *  elements [from, from + count) are copied when the native's contract names a range inside the array (NativeImpl.ranges), all of them otherwise */
   private copyIn(cx: Compiler, c: Code, i: number, d: string, sp: number, range: [number, number] | undefined, before: { i: number; data: number; ptr: number; len: number; ek: ElemKind; ranged: boolean }[]) {
     const ek = elemKindOf(d), data = c.newLocal({ ht: cx.tData[ek], nullable: true }), ptr = c.newLocal(T.i32), len = c.newLocal(T.i32), from = c.newLocal(T.i32), count = c.newLocal(T.i32), alias = c.newLocal(T.i32);
     // an array passed twice is one region: two copies would each be written back, the later over the first's changes
