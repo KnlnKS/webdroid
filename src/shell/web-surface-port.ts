@@ -16,20 +16,18 @@ function remoteSurface(port: MessagePort, retired: () => void): WebSurface {
   let closed = false;
   const owner = duplex<SurfaceView, SurfaceCalls>(port, { ready: event => { if (event.data.bridge) watches.get(event.data.bridge)?.(event); } },
     surfaceMethods, { notifications: surfaceMethods, onClose: () => { closed = true; watches.clear(); retired(); }, transfer: { open: (...args) => [args[4]] } });
-  const send = <K extends keyof SurfaceCalls>(method: K, ...args: Parameters<SurfaceCalls[K]>) => {
-    if (!closed) (owner.endpoint[method] as (...args: Parameters<SurfaceCalls[K]>) => void)(...args);
-  };
+  const send = (call: (page: SurfaceCalls) => void) => { if (!closed) call(owner.endpoint); };
   return {
-    style: value => send("style", value), load: url => send("load", url),
+    style: value => send(page => page.style(value)), load: url => send(page => page.load(url)),
     ready(bridge, callback) {
-      watches.set(bridge, callback); send("watch", bridge);
-      return () => { if (watches.get(bridge) === callback) { watches.delete(bridge); send("unwatch", bridge); } };
+      watches.set(bridge, callback); send(page => page.watch(bridge));
+      return () => { if (watches.get(bridge) === callback) { watches.delete(bridge); send(page => page.unwatch(bridge)); } };
     },
     open(frame, origin, bridge, task, answer) {
       if (typeof frame !== "string") { answer.close(); throw new Error("foreign renderer frame identity"); }
-      if (closed) answer.close(); else send("open", frame, origin, bridge, task, answer);
+      if (closed) answer.close(); else send(page => page.open(frame, origin, bridge, task, answer));
     },
-    replace(frame, url) { if (typeof frame === "string") send("replace", frame, url); },
+    replace(frame, url) { if (typeof frame === "string") send(page => page.replace(frame, url)); },
     remove: owner.close,
   };
 }
