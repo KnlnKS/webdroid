@@ -2,14 +2,14 @@ import { expect, test } from "vite-plus/test";
 import { mainThread } from "../jvm/natives/jentry.ts";
 import { Cpu, setA64 } from "./cpu.ts";
 import { ldp } from "./host.ts";
-import { libcInit } from "./libc.ts";
+import { libcInit } from "./libc32/libc.ts";
 import { kernelInit } from "./syscall.ts";
 import { mem } from "./mem.ts";
-import { netInit, socketCreate } from "./socket/syscalls.ts";
+import { socketCreate } from "./socket/syscalls.ts";
 import type { Socket, Accepted } from "./socket/core.ts";
 import { SOL_SOCKET, type SocketAddress } from "./socket/abi.ts";
 import { E } from "./abi.ts";
-import { javaCloseFd } from "./fd.ts";
+import { closeFd } from "./fd.ts";
 import { readSocket, socketOf } from "./socket/core.ts";
 import { AF_INET, AF_INET6, guestEndpoint, type Endpoint } from "./net-address.ts";
 import { loopbackFetch } from "../shell/devicefetch.ts";
@@ -44,12 +44,12 @@ test("a loopback TCP connection stays in the process, with Linux's errors", asyn
   expect(sock(client).send(Uint8Array.of(4), null, null)).toBe(-E.PIPE);
   expect(sock(accepted.fd).send(Uint8Array.of(5), null, null)).toBe(1);
   expect(readSocket(client, buffer)).toBe(1);
-  for (const fd of [client, accepted.fd, server, refused]) expect(javaCloseFd(fd)).toBe(0);
+  for (const fd of [client, accepted.fd, server, refused]) expect(closeFd(fd)).toBe(0);
   expect(readSocket(client, buffer)).toBe(-E.BADF);
 });
 
 test("getifaddrs exposes the same loopback interface as Java networking", async () => {
-  setA64(false); kernelInit(); libcInit(); netInit();
+  setA64(false); kernelInit(); libcInit();
   const cpu = new Cpu(mainThread, "ifaddrs-test"), result = mem.malloc(4);
   const call = libCalls(cpu, "libc.so");
   try {
@@ -63,7 +63,7 @@ test("getifaddrs exposes the same loopback interface as Java networking", async 
 });
 
 test("the ARM32 libc reads IPv4 text as inet_pton does and answers gethostby* from the resolver", async () => {
-  setA64(false); kernelInit(); libcInit(); netInit();
+  setA64(false); kernelInit(); libcInit();
   const cpu = new Cpu(mainThread, "hostent-test"), text = mem.malloc(32), out = mem.malloc(4);
   const call = libCalls(cpu, "libc.so"), str = (s: string) => { mem.putCstr(text, s, 32); return text; };
   const addresses = (entry: number) => [ldp(ldp(entry + 16)), ldp(ldp(entry + 16) + 4)];
@@ -84,7 +84,7 @@ test("the ARM32 libc reads IPv4 text as inet_pton does and answers gethostby* fr
 });
 
 test("native AF_INET6 sockets take IPv4-mapped peers, and recvmsg keeps a seqpacket message whole", async () => {
-  setA64(false); kernelInit(); libcInit(); netInit();
+  setA64(false); kernelInit(); libcInit();
   const cpu = new Cpu(mainThread, "inet6-test"), scratch = mem.malloc(256);
   const call = libCalls(cpu, "libc.so");
   const sockaddr = scratch, length = scratch + 32, pair = scratch + 40, msg = scratch + 64, iov = scratch + 96, data = scratch + 128;
@@ -210,5 +210,5 @@ test("host HTTP to a loopback URL reaches this process's listener", async () => 
   sock(accepted.fd).send(new TextEncoder().encode("HTTP/1.1 200 OK\r\nSet-Cookie: a=1\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n"), null, null);
   const answer = (await response)!;
   expect([answer.status, answer.headers.get("x-wd-set-cookie"), await answer.text()]).toEqual([200, '["a=1"]', "abcde"]);
-  for (const fd of [accepted.fd, server]) javaCloseFd(fd);
+  for (const fd of [accepted.fd, server]) closeFd(fd);
 });

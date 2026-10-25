@@ -1,6 +1,0 @@
-{
-  "gate": false,
-  "apk": "ChatGPT.xapk",
-  "launch": {"ms":60000,"nodes":[{"text":"Welcome to ChatGPT"}],"pixels":[{"region":[0,200,1080,1900],"nonUniform":true}]},
-  "steps": [{"wait":3000}]
-}

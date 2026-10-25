@@ -1,5 +1,21 @@
-// Modular arithmetic over bigint, for the public-key algorithms and NativeBN.
+// bigint arithmetic and byte conversions for the public-key algorithms, DER and NativeBN.
 
+/** unsigned big-endian bytes ↔ bigint */
+export function bytesToBig(b: Uint8Array): bigint {
+  if (!b.length) return 0n;
+  let hex = "";
+  for (const x of b) hex += (x < 16 ? "0" : "") + x.toString(16);
+  return BigInt("0x" + hex);
+}
+/** `v` as `len` big-endian bytes (minimal when len is omitted) */
+export function bigToBytes(v: bigint, len?: number): Uint8Array {
+  let hex = v.toString(16);
+  if (hex.length & 1) hex = "0" + hex;
+  if (v === 0n) hex = "";
+  const n = len ?? hex.length / 2, out = new Uint8Array(n);
+  for (let i = 0, o = n - hex.length / 2; i < hex.length; i += 2, o++) if (o >= 0) out[o] = parseInt(hex.slice(i, i + 2), 16);
+  return out;
+}
 /** a⁻¹ mod m */
 export function modInverse(a: bigint, m: bigint): bigint {
   let [r0, r1, t0, t1] = [((a % m) + m) % m, m, 1n, 0n];

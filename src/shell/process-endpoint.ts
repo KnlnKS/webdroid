@@ -1,159 +1,72 @@
-import { webStorageTransport } from "../android/webstorage.ts";
-// A process realm's side of the broker: the transports its system services reach other processes
-// and the broker's stores through, and the endpoint the broker's requests to it land on.
-import { remoteProcessLife } from "./process-life.ts";
-import { usePathOwner } from "./file-path.ts";
+// A process realm's side of the broker: its command port, which broker-access.ts hands this realm's
+// services, and the endpoint the broker's requests to it land on.
 import { descriptorTransport } from "../native/process-fd.ts";
-import { useAccountStore } from "../android/accounts.ts";
-import { pendingTransport } from "../android/pendingintent.ts";
-import { uriGrantTransport } from "../android/urigrants.ts";
 import { useAlarmIntents } from "../android/alarm.ts";
-import { encodeIntent, decodeIntent } from "../android/intentipc.ts";
-import { SYSTEM_SERVICES, useSystemServiceAccess, binderTransport, receiveTransaction, exportBinder, importBinder, parcelled, unparcelled, type BinderHandle } from "../android/binder.ts";
-import { processTransport } from "../android/os.ts";
+import { decodeIntent } from "../android/intentipc.ts";
+import { receiveTransaction, exportBinder, importBinder, type BinderHandle } from "../android/binder.ts";
 import { exitProcess, onProcessExit } from "../process-exit.ts";
-import { deathOf, lastExit, noteAppKill, exitRecordTransport } from "../android/server/appexitinfo.ts";
-import { after } from "../jvm/natives/jentry.ts";
-import { systemProviderTransport } from "../android/systemproviders.ts";
-import { logUncaught, detached } from "../jvm/natives/jthrowable.ts";
-import { hostedServices, remoteServiceConnected, serviceTransport } from "../android/server/activeservices.ts";
+import { deathOf, lastExit, noteAppKill } from "../android/server/appexitinfo.ts";
+import { hostedServices, remoteServiceConnected } from "../android/server/activeservices.ts";
 import { vfs } from "./vfs.ts";
-import { broadcastTransport, deliverBroadcast as deliverQueued, type BroadcastResult } from "../android/server/broadcastqueue.ts";
-import { activityTransport, startActivityInProcess, taskVisibility, type ResultDelivery } from "../android/server/atm.ts";
-import { executePendingIntent, publishedProvider, providerProcesses } from "../android/server/am.ts";
-import { usePermissionStore, usePermissionAccess } from "../android/permissions.ts";
-import { sqliteTransport } from "../android/sqlite.ts";
-import { useNotificationStore, notificationTransport } from "../android/notification.ts";
-import { useSettingsStore, useSettingsAccess } from "../android/settings.ts";
-import { awaited, driven, type Gen } from "../jvm/runtime.ts";
-import { cookieTransport, cookiesChanged } from "../android/cookies.ts";
-import { useGeolocation } from "../android/locationmanager.ts";
+import { broadcastResult, deliverBroadcast as deliverQueued, resultData } from "../android/server/broadcastqueue.ts";
+import { deliverRemoteResult, startActivityInProcess, taskVisibility } from "../android/server/atm.ts";
+import { setDisplayShown } from "../android/vsync.ts";
+import { executePendingIntent, publishedProvider } from "../android/server/am.ts";
+import { stopSettingsUpdates } from "../android/settings.ts";
+import { stopAccountUpdates } from "../android/accounts.ts";
+import { awaited, type Gen } from "../jvm/runtime.ts";
+import { cookiesChanged } from "../android/cookies.ts";
 import { useFocusedUid } from "../android/clipboard.ts";
-import { useHostUi } from "./host-ui.ts";
-import { packageDataTransport } from "../android/appdata.ts";
 import { storageChanged } from "./device-storage.ts";
 import { unregisterPackage } from "../android/installpackage.ts";
-import { asBroker, brokerMethods, javaFailure, receivers, type BroadcastData, type BrokerCalls, type ProcessEndpoint } from "./broker-contract.ts";
+import { asBroker, brokerMethods, javaFailure, type BroadcastData, type BrokerCalls, type ProcessEndpoint } from "./broker-contract.ts";
+import { connectBroker, processLife } from "./broker-access.ts";
 import type { ProcessBroker } from "./processes.ts";
 import { callProxy, closePort } from "./rpc.ts";
-import { setDisplayShown } from "../android/vsync.ts";
 import { procIdentity } from "./procfs.ts";
 
-let calls: ReturnType<typeof callProxy<BrokerCalls>> | undefined;
-const brokerCalls = (): BrokerCalls => calls!.endpoint;
-const life = remoteProcessLife(() => brokerCalls().process, logUncaught);
-/** what both realms ask the broker for: other processes' services, providers, broadcasts, binders
- *  and lives, SQLite, cookies, WebView storage, PendingIntents, service starts and package data changes */
-function connectCommandTransports(broker: BrokerCalls): void {
-  const service = broker.service;
-  serviceTransport.bind = driven(function* (owner, process, cls, intent, key, flags) {
-    yield service(owner.pkg, process, { kind: "bind", cls, intent: yield* awaited(encodeIntent(intent)), key, flags });
-  });
-  serviceTransport.unbind = async (owner, process, key) => { await service(owner.pkg, process, { kind: "unbind", key }); };
-  serviceTransport.start = driven(function* (owner, process, intent, foreground) { yield service(owner.pkg, process, { kind: "start", intent: yield* awaited(encodeIntent(intent)), foreground }); });
-  serviceTransport.stop = driven(function* (owner, process, cls, intent) { yield service(owner.pkg, process, { kind: "stop", cls, intent: yield* awaited(encodeIntent(intent)) }); });
-  serviceTransport.peek = driven(function* (owner, process, intent) {
-    return yield* awaited(importBinder(yield* awaited(service(owner.pkg, process, { kind: "peek", intent: yield* awaited(encodeIntent(intent)) }))));
-  });
-  providerProcesses.get = (pkg, process, authority) => after(broker.contentProvider(pkg, process, authority), importBinder);
-  broadcastTransport.send = driven(function* (intent, permissions, ordered, initial) {
-    const data = yield* awaited(encodeIntent(intent)), targets = yield* receivers(intent), from = initial && (yield* awaited(resultData(initial)));
-    return yield* awaited(broadcastResult(yield* awaited(broker.broadcast(data, targets, permissions, ordered, from))));
-  });
-  binderTransport.transact = broker.transact;
-  sqliteTransport.call = broker.sqlite;
-  cookieTransport.calls = brokerCalls;
-  webStorageTransport.calls = () => broker.webStorage;
-  Object.assign(pendingTransport, broker.pending);
-  serviceTransport.starts = () => broker.starts;
-  serviceTransport.connected = (key, binder, dead) => broker.serviceConnected(key, exportBinder(binder), dead);
-  packageDataTransport.change = broker.packageDataChange;
-  processTransport.signal = life.signal;
-  binderTransport.alive = life.alive;
-  binderTransport.watch = life.watch;
-}
-/** the stores and system services a Worker reaches through the broker, which system_server's realm holds */
-function connectRemoteStores(broker: BrokerCalls): void {
-  useSystemServiceAccess(SYSTEM_SERVICES, broker.systemService);
-  systemProviderTransport.lookup = broker.systemProvider;
-  notificationTransport.foreground = broker.notificationForeground;
-  useSettingsAccess(broker.settings);
-  usePathOwner(broker);
-  releaseFiles = vfs.useOwner({ prepare: broker.files.filePrepare });
-  useHostUi(() => broker.ui);
-  usePermissionAccess(broker.permissions);
-  exitRecordTransport.records = broker.exitRecords;
-  exitRecordTransport.publish = broker.processExited;
-  Object.assign(uriGrantTransport, broker.uriGrants);
-}
-let releaseFiles = () => {};
-export function closeProcessBrokerPort(): void {
-  calls?.close();
-  life.close();
-  releaseFiles();
-  activityResults.clear();
-  // its presence routes system providers to system_server, which a closed port no longer reaches
-  systemProviderTransport.lookup = undefined;
-}
-/** each launch's result delivery, by request */
-const activityResults = new Map<number, ResultDelivery["deliver"]>();
-function connectActivityCommands({ activity }: BrokerCalls): void {
-  let nextRequest = 1;
-  activityTransport.presentation = translucent => {
-    detached(() => activity.presentation(translucent), logUncaught);
-  };
-  activityTransport.launch = async (pkg, process, component, intent, result) => {
-    const request = nextRequest++;
-    if (result) activityResults.set(request, result.deliver);
-    try { await activity.launch(pkg, process, component, await encodeIntent(intent), request, result?.caller.cls ?? null); }
-    catch (error) { activityResults.delete(request); throw error; }
-  };
-  activityTransport.finished = (id, code, data) => {
-    setDisplayShown(false);
-    detached(() => after(data && encodeIntent(data), encoded => activity.finish(id, code, encoded)), logUncaught);
-  };
-}
-/** this process's command port: the one transferred to a Worker, whose stores system_server's realm
- *  holds behind it, or the page's own */
-export function attachProcessBrokerPort(port: MessagePort, remoteStores = true): BrokerCalls {
+
+let calls: ReturnType<typeof callProxy<BrokerCalls>> | undefined, releaseFiles = () => {};
+function attach(port: MessagePort, worker: boolean): BrokerCalls {
   if (calls) { closePort(port); throw new Error("Process command port already attached"); }
   calls = callProxy<BrokerCalls>(port, brokerMethods, { notifications: ["processExited", "storageWrite"], makeError: javaFailure });
-  const broker = calls.endpoint;
-  connectCommandTransports(broker);
-  connectActivityCommands(broker);
-  if (remoteStores) connectRemoteStores(broker);
+  connectBroker(calls.endpoint, worker);
+  return calls.endpoint;
+}
+/** a Worker's command port, behind which system_server's realm holds the stores */
+export function attachProcessBrokerPort(port: MessagePort): BrokerCalls {
+  const broker = attach(port, true);
+  releaseFiles = vfs.useOwner({ prepare: broker.files.filePrepare });
   return broker;
 }
-
-const resultData = (result: BroadcastResult): BroadcastData | Promise<BroadcastData> =>
-  after(result.extras && parcelled(result.extras), (extras) => ({ ...result, extras }));
-const broadcastResult = (data: BroadcastData): BroadcastResult | Promise<BroadcastResult> =>
-  after(data.extras && unparcelled("android/os/Bundle", data.extras), (extras) => ({ ...data, extras }));
+export function closeProcessBrokerPort(): void {
+  calls?.close();
+  connectBroker(undefined, true);
+  processLife.close();
+  releaseFiles();
+}
 /** system_server's realm: it asks the broker over its own command port as a Worker does, but holds
  *  the stores and its descriptors itself */
 export function connectProcess(broker: ProcessBroker): ProcessEndpoint {
   onProcessExit((status) => broker.fail(procIdentity.pid, `Process has died: ${status.signal !== undefined ? "signal " + status.signal : "exit " + status.code}`, deathOf(lastExit)));
-  attachProcessBrokerPort(broker.brokerPort(procIdentity.pid), false);
+  attach(broker.brokerPort(procIdentity.pid), false);
   broker.files.attach(procIdentity.pid, vfs);
   descriptorTransport.local = broker.descriptorRights(procIdentity.pid);
-  useNotificationStore(broker.notifications);
-  usePermissionStore(broker.permissions);
   useFocusedUid(() => broker.foregroundUid());
   useAlarmIntents(broker.intents);
-  useGeolocation(broker.location);
   // system_server announces the stores' changes, and its watches of them end with it
-  const stops = [useAccountStore(broker.accounts), useSettingsStore(broker.settings)];
-  if (broker.alive(procIdentity.pid)) for (const stop of stops) broker.watch(procIdentity.pid, stop);
+  if (broker.alive(procIdentity.pid)) for (const stop of [stopAccountUpdates, stopSettingsUpdates]) broker.watch(procIdentity.pid, stop);
   return createProcessEndpoint();
 }
 
 /** JVM callbacks are local to this realm; constructing the endpoint needs no live broker. */
 export function createProcessEndpoint(): ProcessEndpoint {
   return {
-    processDied: async token => life.died(token),
+    processDied: async token => processLife.died(token),
     cookiesChanged: async () => cookiesChanged(),
     storageChanged: async (key, value) => storageChanged(key, value),
     packageRemoved: async pkg => unregisterPackage(pkg),
+    packageAdded: async snapshot => (await import("./process-packages.ts")).registerSnapshot(snapshot),
     kill: (signal, note) => { if (note) noteAppKill(note); exitProcess({ signal }); },
     activity: async (request) => {
       if (request.kind === "back") return (await import("./device.ts")).pressBack();
@@ -165,11 +78,7 @@ export function createProcessEndpoint(): ProcessEndpoint {
         } else if (request.kind === "launch") {
           yield startActivityInProcess(request.component, yield* awaited(decodeIntent(request.intent)), request.id, request.caller);
           setDisplayShown(true);
-        } else {
-          const deliver = activityResults.get(request.request);
-          activityResults.delete(request.request);
-          deliver?.(request.code, request.data ? yield* awaited(decodeIntent(request.data)) : null);
-        }
+        } else deliverRemoteResult(request.request, request.code, request.data ? yield* awaited(decodeIntent(request.data)) : null);
       }());
     },
     transact: receiveTransaction,

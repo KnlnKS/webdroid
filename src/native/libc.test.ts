@@ -2,12 +2,12 @@ import { expect, test } from "vite-plus/test";
 import { JThread } from "../jvm/natives/jentry.ts";
 import { Cpu, setA64 } from "./cpu.ts";
 import { defineHost, lookupHost } from "./host.ts";
-import { libcInit } from "./libc.ts";
+import { libcInit } from "./libc32/libc.ts";
 import { kernelInit, rawSyscall } from "./syscall.ts";
 import { mem } from "./mem.ts";
 import { E } from "./abi.ts";
-import { fdFile, javaOpenFd } from "./fs.ts";
-import { javaCloseFd } from "./fd.ts";
+import { fdFile, localOpen } from "./fs.ts";
+import { closeFd } from "./fd.ts";
 import { vfs } from "../shell/vfs.ts";
 import { kernel } from "./calls.testkit.ts";
 import { procIdentity } from "../shell/procfs.ts";
@@ -92,14 +92,14 @@ test("raw ARM32 calls take the kernel's arguments, a svc's fifth on in r4", asyn
   mem.u32.set([0xe92d40b0, 0xe3a04a02, 0xe3a05000, 0xe3007160, 0xef000000, 0xe8bd80b0], code >>> 2);
   mem.u8.set(new TextEncoder().encode("/dev/urandom\0"), path);
   vfs.write("/fallocate-test", new Uint8Array(0));
-  const fd = javaOpenFd("/fallocate-test", 2);
+  const fd = localOpen("/fallocate-test", 2);
   try {
     expect(await cpu.call(lookupHost("syscall", "libc.so")!, [334, -100, path, 0, 0x4000])).toBe(0);
     expect(await cpu.call(code, [fd, 0, 0x1000, 0])).toBe(0);
     expect(fdFile(fd)!.len).toBe(0x3000);
     expect(await cpu.call(code, [fd, 1, 0, 0])).toBe(-E.NOTSUP);
     expect(await cpu.call(syscall, [124])).toBe(-E.NOSYS);                                // adjtimex
-  } finally { javaCloseFd(fd); mem.free(path); cpu.dispose(); }
+  } finally { closeFd(fd); mem.free(path); cpu.dispose(); }
 });
 
 test("ARM64 syncfs and ioctl tell an open descriptor from an invalid one", async () => {

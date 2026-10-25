@@ -24,7 +24,7 @@ let dbReady: Promise<Database> | null = null;
 /** pending, trashed and favourite paths: MediaProvider's own columns, kept across reloads */
 type Flag = "is_pending" | "is_trashed" | "is_favorite";
 const FLAGS: Flag[] = ["is_pending", "is_trashed", "is_favorite"];
-const savedFlags = persisted("wd:media:", (saved) => saved && typeof saved === "object" ? saved as Partial<Record<Flag, string[]>> : null);
+const savedFlags = persisted("wd:media:", (saved) => saved && typeof saved === "object" ? saved as Partial<Record<Flag, string[]>> : null, { scope: "device-write" });
 let flags: Record<Flag, Set<string>> | null = null;
 function mediaFlags(): Record<Flag, Set<string>> {
   if (flags) return flags;

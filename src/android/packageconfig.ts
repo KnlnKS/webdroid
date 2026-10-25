@@ -11,7 +11,7 @@ const saved = persisted<PackageConfig>("wd:package-config:", (value) => {
   if (!value || typeof value !== "object") return null;
   const { night, locales } = value as Record<string, unknown>;
   return { ...typeof night === "number" ? { night } : {}, ...typeof locales === "string" ? { locales } : {} };
-});
+}, { scope: "package" });
 export const packageConfig = (pkg: string): PackageConfig => saved.get(pkg) ?? {};
 export const setPackageConfig = (pkg: string, change: PackageConfig): void => { saved.set(pkg, { ...packageConfig(pkg), ...change }); };
 export const packageConfigData: PackageState = { clear(pkg) { saved.remove(pkg); }, packages: () => saved.packages() };

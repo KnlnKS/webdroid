@@ -40,6 +40,9 @@ function installEnvironment(cfg: EnvironmentConfig): void {
 }
 
 export const environmentScript = (cfg: EnvironmentConfig): string => `(${installEnvironment.toString()})(${JSON.stringify(cfg)})`;
+/** a page without the host's file pickers: a document or folder request takes the app's private storage */
+export const NO_PICKERS = `for (const name of ["showDirectoryPicker", "showOpenFilePicker", "showSaveFilePicker"])
+  Object.defineProperty(window, name, { value: undefined, configurable: true });`;
 
 // Self-contained because Playwright and the probe serialize this function into the page.
 export async function performAction(input: { a: Act; screen: Screen; deadlineMs: number; controlled?: boolean }): Promise<boolean | undefined> {

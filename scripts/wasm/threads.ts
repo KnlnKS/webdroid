@@ -39,7 +39,7 @@ type LoopProbe = { turns: number; yield?: HostLoop["yield"] };
 let probe: LoopProbe | undefined;
 const w = world([dex, ...CORE_PATHS], { natives: new Natives({
   ...nativeSource,
-  find: (cls, key, isStatic, hasBody) => cls === "Th" ? TH[key] : nativeSource.find(cls, key, isStatic, hasBody),
+  find: (cls, key, isStatic, hasBody) => cls === "Th" ? rt.jniNative(cls, key) ?? undefined : nativeSource.find(cls, key, isStatic, hasBody),
 } satisfies NativeSource), loop: { ...hostLoop, due: () => !!probe || hostLoop.due(), yield: (soon) => {
   if (probe) probe.turns++;
   return (probe?.yield ?? hostLoop.yield)(soon);
@@ -84,6 +84,7 @@ const TH: Record<string, HostFn> = {
   "gapAlias([B[BZ)I": async (a: Int8Array, b: Int8Array, fail: boolean) => { await sleep(1); a[0] += 2; b[0] += 1; if (fail) throw rt.mkThrowable("java/lang/IllegalArgumentException", "array changed"); return a === b ? 9 : -1; },
   "viaJs(I)I": (x: number) => w.entry("Th", "trap", "(I)I")(x),
 };
+rt.registerJnis("Th", TH);
 const gaps: string[] = [];
 w.onGap = (gap) => gaps.push(gap);
 await mountPlatform(ROOT);

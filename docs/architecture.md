@@ -31,11 +31,9 @@ App DEX (unchanged)
 Browser: Canvas2D / WebGL, OPFS / IndexedDB, CORS proxy and TCP relay, Workers
 ```
 
-- **Bytecode by default.** `src/jvm/provenance.ts` is the one place that decides whether a class runs AOSP's
-  bytecode or a TS spec. Elsewhere a spec implements natives only; `TS_SPECS` lists the only classes where it may
-  stand in for bytecode bodies, each a boundary (HTTP over the fetch proxy, TLS at the relay, GL over WebGL, the
-  WebView provider). `?bytecode=<prefixes>` (`WEBDROID_BYTECODE`) cuts more prefixes over for one load, to A/B a
-  change against the same bundle.
+- **Bytecode by default.** AOSP's bytecode answers for every class; a spec implements natives only. `TS_SPECS`
+  (`src/jvm/provenance.ts`) lists the only classes where it may stand in for bytecode bodies, each a boundary
+  (HTTP over the fetch proxy, TLS at the relay, GL over WebGL, the WebView provider).
 - **A missing API is fixed at the boundary** with the native, service method or VM built-in that AOSP's body
   needs, never by reimplementing the Java method in TS or returning a constant to satisfy a query.
 - **No fabricated success.** An entry that cannot be supported throws or returns the error AOSP documents for an
@@ -105,7 +103,7 @@ is how host code calls Java.
   (`host/warm-worker.ts` over `host/warmshim.ts`), and a spare process Worker stands ready for the next launch
   (`src/shell/process-host.ts`).
 - **App:** after a first launch, a compile Worker builds the methods the app ran, ordered by the APK's own ART
-  baseline profile (`src/jvm/baselineprof.ts`) and then their call closure (`src/jvm/reach.ts`), and persists the
+  baseline profile (`src/jvm/baselineprof.ts`) and then their call closure (`host/compile-serve.ts`), and persists the
   build (`host/appcode.ts`, `host/persist.ts`); the first process of an app to launch makes it. Bundled builds cover the gate apps
   (`vendor/wasm-aot/*/apps.json`). The build is refined once new demand reaches `REFINE_SHARE` (an eighth) of
   what it covers. A warm launch links the app's default namespace statically under a standard app loader.
@@ -133,20 +131,22 @@ events reach `MotionEvent`/`KeyEvent` through AOSP's input stages, and `ViewRoot
 `drawSoftware` onto the page canvas.
 
 A service whose state is the device's (notification, mount, audio, media_session, media_router, clipboard, alarm,
-location, account, content, jobscheduler, shortcut: `SYSTEM_SERVICES` in `binder.ts`) is hosted once, in
+location, account, content, jobscheduler, shortcut, uri_grants: `SYSTEM_SERVICES` in `binder.ts`) is hosted once, in
 system_server, and app processes reach it by Binder through the broker; a service that holds the process's own
 state (activity, window, input_method) or answers from the device profile or a broker-owned store is hosted in
 each process. Each is hosted with `hostService` by the module that owns it. A Worker reaches the broker through the domains of
-`src/shell/broker-contract.ts` and never bundles `processes.ts`; a transport that is not connected throws
-RemoteException rather than answering from a local copy. Path operations and descriptors of another realm's files
-go through one `pathOwner()` (`src/shell/file-path.ts`).
+`src/shell/broker-contract.ts` and never bundles `processes.ts`. Each realm reaches them through one `broker()`
+(`src/shell/broker-access.ts`), which throws RemoteException before the realm connects and after its port
+closes; a Worker reaches system_server's stores and services through it rather than answering from a local
+copy, while the page and a realm that never connects hold them. Path operations and descriptors of another
+realm's files go through one `pathOwner()` (`src/shell/file-path.ts`).
 
 ## Native code
 
 ARM32 and A64 execute in `src/native/core/` (Zig compiled to Wasm), with an interpreter and a JIT whose results
 must agree; `src/native/cpu.ts` drives asynchronous exits, and host calls exit `run_slice`. 64-bit processes run
-the reference build's bionic as guest code (decision below). 32-bit processes keep the HLE libc, because the
-reference build ships no 32-bit bionic. EGL/GLES (onto WebGL), audio, media codecs and DRM stay high-level
+the reference build's bionic as guest code (decision below). 32-bit processes keep the HLE libc
+(`src/native/libc32/`), because the reference build ships no 32-bit bionic. EGL/GLES (onto WebGL), audio, media codecs and DRM stay high-level
 emulation. Networking goes through the dev server's or Worker's HTTP proxy, DNS lookup and TCP WebSocket relay.
 
 ## Rendering and text
@@ -167,7 +167,7 @@ Path ops use Skia through CanvasKit (decision below). Resources drive widget def
 - **Recorded device answers:** reference-AVD results checked into fixtures and replayed in `pnpm test`
   (`scripts/simd-oracle.ts` for SIMD, `pnpm textcmp` for text layout).
 - **Flows:** `pnpm e2e` against device goldens ([tests/e2e/README.md](../tests/e2e/README.md)), `pnpm corpus`
-  over the APK corpus, `pnpm fwtest` for framework delegates, `pnpm smoke` compiling an APK's every method.
+  over the APK corpus, `pnpm fwtest` for framework delegates, `pnpm wasm sweep <apk>` compiling an APK's every method.
 - **Telemetry for silent failures:** `run.json` records `newMissing`, `newErrors`, `nativeRequired`,
   `newPlaceholders` and the Java callers of missing entries, from every process.
 - Not built: a boundary-trace differential against the device (JVMTI or Frida on the reference AVD), which would

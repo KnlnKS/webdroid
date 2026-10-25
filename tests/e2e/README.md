@@ -38,7 +38,6 @@ in a step (max 240) as `<dir>/<flow>/<NN-id>/fNNN.png`; wiped per run, gitignore
 | Env | Effect |
 |---|---|
 | `WEBDROID_SCREEN=WxH@dpi` | geometry: flows are not scored, visual checks fail |
-| `WEBDROID_BYTECODE` | `?bytecode=` provenance cut |
 | `WEBDROID_CPU_THROTTLE=N` | CDP CPU slowdown (load races) |
 | `WEBDROID_CORES=N` | the page and its workers see N cores (`pnpm check` gives each flow 8) |
 | `WEBDROID_SITE_ISOLATION=0` | WebView shares the app's renderer (as Safari/Android; also `lat`) |
@@ -56,7 +55,7 @@ diagnostics, `.ui.json` and a frame hash. Live steps use `liveAction` (else `web
 
 **Scored** flows have a full `golden/<flow>/manifest.json` at the run's geometry: every step is
 captured, waits as the reference did (its horizon, 4 equal samples 250 ms apart) and is scored in
-a subprocess once the flow has run. Other flows are smoke: a step captures a PNG only at a
+a worker thread once the flow has run. Other flows are smoke: a step captures a PNG only at a
 `visual`/`motion` check, and a semantic step settles as soon as the screen holds still (50 ms x 2;
 on a real clock without its horizon, except `launch`).
 
@@ -163,7 +162,7 @@ too; plain sessions: 0). Mismatched insets are rejected, not shifted, stretched 
   excluded) missing or more than 2 px off; tap anchors stand in without hierarchy files.
 - A wedged step scores 100% content; `rawContentDiffPct`, strict and tolerant stay raw.
 
-Output: `report/index.html`, `report/report.json`, `report/<flow>.json`, `report/<flow>-sxs/`
+Output: `report/index.html`, `report/report.json`, `report/<flow>-sxs/`
 (golden, actual, diff).
 
 ## Re-recording goldens

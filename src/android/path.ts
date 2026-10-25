@@ -1,20 +1,28 @@
-// The native half of android.graphics.Path (the geometry behind mNativePath), PathMeasure and
-// PathIterator, following SkPath, SkContourMeasure and AOSP's PathUtils.
+// The native half of android.graphics.Path (the geometry behind mNativePath) and PathIterator,
+// following SkPath and AOSP's PathUtils. PathMeasure is pathmeasure.ts; Path.op and the stroker
+// are CanvasKit's (skia.ts).
 //
-// Compound shapes stay whole in the op list so Path2D can draw them natively; `Pen` expands them
-// into the verbs and point order SkPath stores (a conic becomes the cubic that approximates it),
-// which is what iteration, measurement, bounds and every non-native Path2D build read.
+// A path is one flat list of ops, each a numeric tag and its arguments. Compound shapes (rect,
+// round rect, oval, arc) stay whole so Path2D can draw them natively; `Pen` expands them into the
+// verbs and point order SkPath stores (a conic becomes the cubic that approximates it), in the
+// same flat form, which iteration, measurement, bounds and every non-native Path2D build read.
 
 import { rt, noops, peerField } from "../jvm/runtime.ts";
-import { deref, handle, ownedHandle, release, FINALIZER } from "./handles.ts";
+import { deref, handle, release, FINALIZER } from "./handles.ts";
 import { type Mat, mapPoint, matrixAt, snap } from "./matrix.ts";
-import { after } from "../jvm/natives/jentry.ts";
-import { type PathCommands, pathOp as skiaPathOp } from "./skia.ts";
 import { setEdges, type Box } from "./graphics.ts";
+import type { Ctx2D } from "./recording.ts";
+import { conicToQuads } from "./scan.ts";
 
-type PathOp = [string, ...number[]];
-/** [verb, ...floats]: Move its point; Line/Quad/Cubic the current point then 1/2/3 points; Close none */
-export type Verb = number[];
+/** SkPath::Verb, which PathIterator reports; a path's ops extend them with the compound shapes:
+ *  RECT l t r b dir start, RRECT l t r b (8 radii) dir, OVAL l t r b dir start, ARC l t r b start sweep forceMoveTo */
+export const MOVE = 0, LINE = 1, QUAD = 2, CONIC = 3, CUBIC = 4, CLOSE = 5, DONE = 6;
+export const RECT = 7, RRECT = 8, OVAL = 9, ARC = 10;
+/** each op's argument count, and how many leading (x, y) pairs of them are points */
+const ARGS = [2, 2, 4, 5, 6, 0, 0, 6, 13, 6, 7];
+const PAIRS = [1, 1, 2, 2, 3, 0, 0, 2, 2, 2, 2];
+/** how many numbers SkPath::RawIter gives a verb: its points from the segment's start, a conic's weight after them */
+export const RAW_SIZE = [2, 4, 6, 7, 8, 0];
 /** what the pen writes to: Path2D itself, the verb list, or a scan converter */
 export interface Sink {
   moveTo(x: number, y: number): void;
@@ -26,8 +34,6 @@ export interface Sink {
   closePath(): void;
 }
 
-/** SkPath::Verb, which PathIterator reports */
-export const MOVE = 0, LINE = 1, QUAD = 2, CUBIC = 4, CLOSE = 5, DONE = 6;
 /** Path$Direction.nativeInt */
 const CW = 0, CCW = 1;
 const NEARLY_ZERO = 1 / 4096;
@@ -46,13 +52,13 @@ function rrY(i: number, t: number, b: number, q: number[]) {
 }
 
 /**
- * SkRRect::setRectRadii's radii for an "rrect" op (l, t, r, b, eight radii, direction): a corner
- * with either radius not positive is square, and every radius shrinks by the one factor that keeps
- * each edge's pair of corners within its length.
+ * SkRRect::setRectRadii's radii for the RRECT op at `i` of a w x h rect: a corner with either
+ * radius not positive is square, and every radius shrinks by the one factor that keeps each
+ * edge's pair of corners within its length.
  */
-function rrRadii(op: PathOp, w: number, h: number): number[] {
-  const q = op.slice(5, 13) as number[];
-  for (let i = 0; i < 8; i += 2) if (!(q[i] > 0 && q[i + 1] > 0 && Number.isFinite(q[i]) && Number.isFinite(q[i + 1]))) q[i] = q[i + 1] = 0;
+function rrRadii(o: number[], i: number, w: number, h: number): number[] {
+  const q = o.slice(i + 5, i + 13);
+  for (let k = 0; k < 8; k += 2) if (!(q[k] > 0 && q[k + 1] > 0 && Number.isFinite(q[k]) && Number.isFinite(q[k + 1]))) q[k] = q[k + 1] = 0;
   let f = 1;
   const fit = (sum: number, ext: number) => { if (sum > ext) f = Math.min(f, ext / sum); };
   fit(q[0] + q[2], w); fit(q[3] + q[5], h); fit(q[4] + q[6], w); fit(q[7] + q[1], h);
@@ -127,12 +133,13 @@ class Pen {
     }
     this.close();
   }
-  /** SkPath::addRRect with its default start (the left edge's lower end clockwise, upper counterclockwise) */
-  rrect(op: PathOp) {
-    const l = Math.min(op[1], op[3]), r = Math.max(op[1], op[3]), t = Math.min(op[2], op[4]), b = Math.max(op[2], op[4]);
-    const dir = op[13], start = dir === CW ? 6 : 7, q = rrRadii(op, r - l, b - t);
+  /** SkPath::addRRect of the RRECT op at `i`, with its default start (the left edge's lower end
+   *  clockwise, upper counterclockwise) */
+  rrect(o: number[], i: number) {
+    const l = Math.min(o[i + 1], o[i + 3]), r = Math.max(o[i + 1], o[i + 3]), t = Math.min(o[i + 2], o[i + 4]), b = Math.max(o[i + 2], o[i + 4]);
+    const dir = o[i + 13], start = dir === CW ? 6 : 7, q = rrRadii(o, i, r - l, b - t);
     if (r === l || b === t || q.every((v) => v === 0)) return this.rect(l, t, r, b, dir, (start + 1) >> 1);
-    if (q.every((v, i) => v === q[i & 1]) && q[0] >= (r - l) / 2 && q[1] >= (b - t) / 2) return this.oval(l, t, r, b, dir, start >> 1);
+    if (q.every((v, k) => v === q[k & 1]) && q[0] >= (r - l) / 2 && q[1] >= (b - t) / 2) return this.oval(l, t, r, b, dir, start >> 1);
     const step = dir === CW ? 1 : 7, cstep = dir === CW ? 1 : 3;
     // from an edge's end: that edge, then the corner conic, four times over
     let p = start, c = (start >> 1) + (dir === CW ? 0 : 1);
@@ -195,91 +202,81 @@ class Pen {
       }
     }
   }
-  op(op: PathOp) {
-    switch (op[0]) {
-      case "m": this.move(op[1], op[2]); break;
-      case "l": this.line(op[1], op[2]); break;
-      case "q": this.quad(op[1], op[2], op[3], op[4]); break;
-      case "c": this.cubic(op[1], op[2], op[3], op[4], op[5], op[6]); break;
-      case "z": this.close(); break;
-      case "rect": this.rect(op[1], op[2], op[3], op[4], op[5], op[6]); break;
-      case "rrect": this.rrect(op); break;
-      case "oval": this.oval(op[1], op[2], op[3], op[4], op[5], op[6]); break;
-      case "arc": this.arc(op[1], op[2], op[3], op[4], op[5], op[6], !!op[7]); break;
+  /** the op at `i` of `o` */
+  op(o: number[], i: number) {
+    switch (o[i]) {
+      case MOVE: this.move(o[i + 1], o[i + 2]); break;
+      case LINE: this.line(o[i + 1], o[i + 2]); break;
+      case QUAD: this.quad(o[i + 1], o[i + 2], o[i + 3], o[i + 4]); break;
+      case CONIC: this.conic(o[i + 1], o[i + 2], o[i + 3], o[i + 4], o[i + 5]); break;
+      case CUBIC: this.cubic(o[i + 1], o[i + 2], o[i + 3], o[i + 4], o[i + 5], o[i + 6]); break;
+      case CLOSE: this.close(); break;
+      case RECT: this.rect(o[i + 1], o[i + 2], o[i + 3], o[i + 4], o[i + 5], o[i + 6]); break;
+      case RRECT: this.rrect(o, i); break;
+      case OVAL: this.oval(o[i + 1], o[i + 2], o[i + 3], o[i + 4], o[i + 5], o[i + 6]); break;
+      case ARC: this.arc(o[i + 1], o[i + 2], o[i + 3], o[i + 4], o[i + 5], o[i + 6], !!o[i + 7]); break;
     }
   }
 }
 /** the unit quadrant conics' points: (1,0) (1,1) (0,1) (-1,1) (-1,0) (-1,-1) (0,-1) (1,-1) */
 const QUADRANT_PTS = [1, 0, 1, 1, 0, 1, -1, 1, -1, 0, -1, -1, 0, -1, 1, -1];
 
-class VerbSink implements Sink {
-  verbs: Verb[] = [];
-  private x = 0; private y = 0;
-  moveTo(x: number, y: number) { this.verbs.push([MOVE, x, y]); this.x = x; this.y = y; }
-  lineTo(x: number, y: number) { this.verbs.push([LINE, this.x, this.y, x, y]); this.x = x; this.y = y; }
-  quadraticCurveTo(a: number, b: number, x: number, y: number) { this.verbs.push([QUAD, this.x, this.y, a, b, x, y]); this.x = x; this.y = y; }
-  bezierCurveTo(a: number, b: number, c: number, d: number, x: number, y: number) { this.verbs.push([CUBIC, this.x, this.y, a, b, c, d, x, y]); this.x = x; this.y = y; }
-  closePath() { this.verbs.push([CLOSE]); }
-}
-function walkOps(ops: PathOp[], pen: Pen) { for (const op of ops) pen.op(op); }
-function pathVerbs(ops: PathOp[]): Verb[] {
-  const sink = new VerbSink();
-  walkOps(ops, new Pen(sink));
-  return sink.verbs;
-}
-/** the inverse of pathVerbs: a flattened path back as ops */
-function verbsToOps(vs: Verb[]): PathOp[] {
-  const out: PathOp[] = [];
-  for (const v of vs) {
-    if (v[0] === MOVE) out.push(["m", v[1], v[2]]);
-    else if (v[0] === LINE) out.push(["l", v[3], v[4]]);
-    else if (v[0] === QUAD) out.push(["q", v[3], v[4], v[5], v[6]]);
-    else if (v[0] === CUBIC) out.push(["c", v[3], v[4], v[5], v[6], v[7], v[8]]);
-    else if (v[0] === CLOSE) out.push(["z"]);
-  }
+function walk(ops: number[], pen: Pen) { for (let i = 0; i < ops.length; i += 1 + ARGS[ops[i]]) pen.op(ops, i); }
+/** the verbs SkPath stores for ops, in the ops' flat form: a conic as its cubic, or with
+ *  `conics` as itself (CanvasKit's commands) */
+export function expand(ops: number[], conics = false): number[] {
+  const out: number[] = [];
+  walk(ops, new Pen(conics ? {
+    moveTo: (x, y) => out.push(MOVE, x, y), lineTo: (x, y) => out.push(LINE, x, y), quadraticCurveTo: (a, b, x, y) => out.push(QUAD, a, b, x, y),
+    conicTo: (a, b, x, y, w) => out.push(CONIC, a, b, x, y, w), bezierCurveTo: (a, b, c, d, x, y) => out.push(CUBIC, a, b, c, d, x, y), closePath: () => out.push(CLOSE),
+  } : {
+    moveTo: (x, y) => out.push(MOVE, x, y), lineTo: (x, y) => out.push(LINE, x, y), quadraticCurveTo: (a, b, x, y) => out.push(QUAD, a, b, x, y),
+    bezierCurveTo: (a, b, c, d, x, y) => out.push(CUBIC, a, b, c, d, x, y), closePath: () => out.push(CLOSE),
+  }));
   return out;
 }
-/** the points SkPath stores for these verbs (a segment's start is the previous verb's end) */
-const verbPoints = (vs: Verb[]) => vs.flatMap((v) => (v[0] === MOVE ? v.slice(1) : v.slice(3)));
+const compound = (ops: number[]) => { for (let i = 0; i < ops.length; i += 1 + ARGS[ops[i]]) if (ops[i] > DONE) return true; return false; };
 
-/** Leading (x,y) pairs each op carries; everything after them is a scalar (radius, angle, direction). */
-const opPairs: Record<string, number> = { m: 1, l: 1, q: 2, c: 3, z: 0, rect: 2, rrect: 2, oval: 2, arc: 2 };
-/** an op's numbers, index for index */
-const nums = (op: PathOp) => op as unknown as number[];
-function offsetOps(ops: PathOp[], dx: number, dy: number) {
-  for (const op of ops) for (let i = 1, n = opPairs[op[0]], v = nums(op); n--; i += 2) { v[i] += dx; v[i + 1] += dy; }
+function offsetOps(ops: number[], dx: number, dy: number) {
+  for (let i = 0; i < ops.length; i += 1 + ARGS[ops[i]]) for (let k = i + 1, n = PAIRS[ops[i]]; n--; k += 2) { ops[k] += dx; ops[k + 1] += dy; }
 }
 /**
  * SkPath::transform. A positive scale and translation keeps every compound op (an arc's angles
  * are parametric, so they survive a non-uniform scale); anything else expands them into the
  * curves Skia holds and maps each point, projectively under perspective.
  */
-function transformOps(ops: PathOp[], m: Mat): PathOp[] {
-  if (m[1] === 0 && m[3] === 0 && m[6] === 0 && m[7] === 0 && m[8] === 1 && m[0] > 0 && m[4] > 0) {
-    for (const op of ops) {
-      const v = nums(op);
-      for (let i = 1, n = opPairs[op[0]]; n--; i += 2) { v[i] = m[0] * v[i] + m[2]; v[i + 1] = m[4] * v[i + 1] + m[5]; }
-      if (op[0] === "rrect") for (let i = 5; i < 13; i++) v[i] *= i & 1 ? m[0] : m[4];
+function transformOps(ops: number[], m: Mat): number[] {
+  const kept = m[1] === 0 && m[3] === 0 && m[6] === 0 && m[7] === 0 && m[8] === 1 && m[0] > 0 && m[4] > 0;
+  const out = kept ? ops : expand(ops);
+  for (let i = 0; i < out.length; i += 1 + ARGS[out[i]]) {
+    for (let k = i + 1, n = PAIRS[out[i]]; n--; k += 2) {
+      if (kept) { out[k] = m[0] * out[k] + m[2]; out[k + 1] = m[4] * out[k + 1] + m[5]; }
+      else [out[k], out[k + 1]] = mapPoint(m, out[k], out[k + 1]);
     }
-    return ops;
+    if (out[i] === RRECT) for (let k = 0; k < 8; k++) out[i + 5 + k] *= k & 1 ? m[4] : m[0];
   }
-  const out = verbsToOps(pathVerbs(ops));
-  for (const op of out) for (let i = 1, n = opPairs[op[0]], v = nums(op); n--; i += 2) [v[i], v[i + 1]] = mapPoint(m, v[i], v[i + 1]);
   return out;
 }
 
-/** Path2D forms of the compound ops it can draw itself */
-function drawNative(p: Path2D, op: PathOp): boolean {
-  const [k, l, t, r, b] = op;
-  if (k === "rect" && op[5] === CW && op[6] === 0) p.rect(l, t, r - l, b - t);
-  else if (k === "rrect" && op[13] === CW) {
-    const x = Math.min(l, r), y = Math.min(t, b), w = Math.abs(r - l), h = Math.abs(b - t), q = rrRadii(op, w, h);
+/** Path2D forms of the compound op at `i` it can draw itself */
+function drawNative(p: Path2D, o: number[], i: number): boolean {
+  const k = o[i], l = o[i + 1], t = o[i + 2], r = o[i + 3], b = o[i + 4];
+  if (k === RECT && o[i + 5] === CW && o[i + 6] === 0) p.rect(l, t, r - l, b - t);
+  else if (k === RRECT && o[i + 13] === CW) {
+    const x = Math.min(l, r), y = Math.min(t, b), w = Math.abs(r - l), h = Math.abs(b - t), q = rrRadii(o, i, w, h);
     p.roundRect(x, y, w, h, [{ x: q[0], y: q[1] }, { x: q[2], y: q[3] }, { x: q[4], y: q[5] }, { x: q[6], y: q[7] }]);
-  } else if (k === "oval" && l <= r && t <= b) {
-    const a = (op[6] - 1) * Math.PI / 2, ccw = op[5] === CCW;
-    p.moveTo(ovalX(op[6], l, r), ovalY(op[6], t, b));
+  } else if (k === OVAL && l <= r && t <= b) {
+    const start = o[i + 6], a = (start - 1) * Math.PI / 2, ccw = o[i + 5] === CCW;
+    p.moveTo(ovalX(start, l, r), ovalY(start, t, b));
     p.ellipse((l + r) / 2, (t + b) / 2, (r - l) / 2, (b - t) / 2, 0, a, ccw ? a - 2 * Math.PI : a + 2 * Math.PI, ccw);
     p.closePath();
+  } else if (k === ARC && l < r && t < b && o[i + 6] !== 0 && Math.abs(o[i + 6]) <= 359) {
+    // a sweep near a whole turn is left to the pen, which snaps its ends as SkPath::arcTo does
+    const start = o[i + 5] * Math.PI / 180, end = (o[i + 5] + o[i + 6]) * Math.PI / 180;
+    const cx = (l + r) / 2, cy = (t + b) / 2, rx = (r - l) / 2, ry = (b - t) / 2;
+    // Path2D's ellipse lines to the arc from the last point, or starts the first subpath at it
+    if (o[i + 7] && i > 0) p.moveTo(cx + rx * Math.cos(start), cy + ry * Math.sin(start));
+    p.ellipse(cx, cy, rx, ry, 0, start, end, o[i + 6] < 0);
   } else return false;
   return true;
 }
@@ -287,37 +284,50 @@ function drawNative(p: Path2D, op: PathOp): boolean {
 let generations = 1;
 /** SkPath: the geometry a Java Path's mNativePath names */
 export class NativePath {
-  ops: PathOp[] = [];
+  /** the ops, flat: each tag, then its arguments */
+  ops: number[] = [];
   fillRule: CanvasFillRule = "nonzero";
   inverseFill = false;
   /** where the next verb starts */
   readonly pen = new Pen();
   private p2d: Path2D | null = null;
-  private vs: Verb[] | null = null;
+  private vs: number[] | null = null;
   /** SkPathRef's generation ID, assigned when asked after a change; the empty path's is 1 */
   private gen = 1;
 
   path(): Path2D {
     if (!this.p2d) {
-      const p = new Path2D(), pen = new Pen(p);
-      for (const op of this.ops) {
-        if (!drawNative(p, op)) { pen.op(op); continue; }
-        pen.sink = null; pen.op(op); pen.sink = p;
+      const p = new Path2D(), pen = new Pen(p), ops = this.ops;
+      for (let i = 0; i < ops.length; i += 1 + ARGS[ops[i]]) {
+        if (!drawNative(p, ops, i)) { pen.op(ops, i); continue; }
+        pen.sink = null; pen.op(ops, i); pen.sink = p;
       }
       this.p2d = p;
     }
     return this.p2d;
   }
+  /** the path filled on `ctx` by its fill rule, whatever its inverseness; a lone rect by fillRect */
+  fill(ctx: Ctx2D): void {
+    const o = this.ops;
+    if (o.length === 7 && o[0] === RECT && o[5] === CW && o[6] === 0) ctx.fillRect(o[1], o[2], o[3] - o[1], o[4] - o[2]);
+    else ctx.fill(this.path(), this.fillRule);
+  }
+  stroke(ctx: Ctx2D): void {
+    const o = this.ops;
+    if (o.length === 7 && o[0] === RECT && o[5] === CW && o[6] === 0) ctx.strokeRect(o[1], o[2], o[3] - o[1], o[4] - o[2]);
+    else ctx.stroke(this.path());
+  }
+  readonly clips = true;
+  clip(ctx: Ctx2D): void { ctx.clip(this.path(), this.fillRule); }
   /** the verbs SkPath stores, until the path changes; they are not to be modified */
-  verbs(): Verb[] { return this.vs ??= pathVerbs(this.ops); }
+  verbs(): number[] { return this.vs ??= expand(this.ops); }
   private changed() { this.p2d = null; this.vs = null; this.gen = 0; }
-  private add(op: PathOp) { this.ops.push(op); this.pen.op(op); this.changed(); }
   /** SkPath::injectMoveToIfNeeded: a segment with no open contour starts one where the pen is */
   private begin() { if (!this.pen.open) this.moveTo(this.pen.x, this.pen.y); }
-  private replaceOps(ops: PathOp[]) {
+  private replaceOps(ops: number[]) {
     this.ops = ops;
     this.pen.clear();
-    walkOps(ops, this.pen);
+    walk(ops, this.pen);
     this.changed();
   }
 
@@ -331,39 +341,43 @@ export class NativePath {
   fillType(): number { return (this.fillRule === "evenodd" ? 1 : 0) | (this.inverseFill ? 2 : 0); }
   setFillType(ft: number) { this.fillRule = ft & 1 ? "evenodd" : "nonzero"; this.inverseFill = !!(ft & 2); this.p2d = null; }
 
-  moveTo(x: number, y: number) { this.add(["m", x, y]); }
-  lineTo(x: number, y: number) { this.begin(); this.add(["l", x, y]); }
-  quadTo(x1: number, y1: number, x2: number, y2: number) { this.begin(); this.add(["q", x1, y1, x2, y2]); }
-  cubicTo(x1: number, y1: number, x2: number, y2: number, x3: number, y3: number) { this.begin(); this.add(["c", x1, y1, x2, y2, x3, y3]); }
-  /** SkPath::conicTo, with the rational quadratic subdivided into quadratics by Skia's error estimate */
+  moveTo(x: number, y: number) { this.ops.push(MOVE, x, y); this.pen.move(x, y); this.changed(); }
+  lineTo(x: number, y: number) { this.begin(); this.ops.push(LINE, x, y); this.pen.line(x, y); this.changed(); }
+  quadTo(x1: number, y1: number, x2: number, y2: number) { this.begin(); this.ops.push(QUAD, x1, y1, x2, y2); this.pen.quad(x1, y1, x2, y2); this.changed(); }
+  cubicTo(x1: number, y1: number, x2: number, y2: number, x3: number, y3: number) {
+    this.begin(); this.ops.push(CUBIC, x1, y1, x2, y2, x3, y3); this.pen.cubic(x1, y1, x2, y2, x3, y3); this.changed();
+  }
+  /** SkPath::conicTo, the rational quadratic kept as the quadratics SkAutoConicToQuads makes of it */
   conicTo(x1: number, y1: number, x2: number, y2: number, w: number) {
     if (!(w > 0)) return this.lineTo(x2, y2);
     if (!Number.isFinite(w)) { this.lineTo(x1, y1); return this.lineTo(x2, y2); }
     if (w === 1) return this.quadTo(x1, y1, x2, y2);
     this.begin();
-    const chop = (a: number, b: number, c: number, d: number, e: number, f: number, weight: number, depth: number) => {
-      const error = Math.abs((weight - 1) / (4 * (weight + 1))) * Math.hypot(a - 2 * c + e, b - 2 * d + f);
-      if (!(error > 0.25) || depth === 5) { this.add(["q", c, d, e, f]); return; }
-      const s = 1 / (1 + weight), ws = weight * s;
-      const ax = a * s + c * ws, ay = b * s + d * ws;
-      const bx = e * s + c * ws, by = f * s + d * ws;
-      const mx = (ax + bx) / 2, my = (ay + by) / 2, next = Math.sqrt((1 + weight) / 2);
-      chop(a, b, ax, ay, mx, my, next, depth + 1);
-      chop(mx, my, bx, by, e, f, next, depth + 1);
-    };
-    chop(this.pen.x, this.pen.y, x1, y1, x2, y2, w, 0);
+    const q = conicToQuads(this.pen.x, this.pen.y, x1, y1, x2, y2, w);
+    for (let i = 0; i < q.length; i += 4) this.quadTo(q[i], q[i + 1], q[i + 2], q[i + 3]);
   }
-  close() { if (this.pen.open) this.add(["z"]); else this.pen.close(); }
-  addRect(l: number, t: number, r: number, b: number, dir: number) { this.add(["rect", l, t, r, b, dir, 0]); }
-  addOval(l: number, t: number, r: number, b: number, dir: number, start = 1) { this.add(["oval", l, t, r, b, dir, start]); }
+  close() {
+    if (this.pen.open) { this.ops.push(CLOSE); this.changed(); }
+    this.pen.close();
+  }
+  addRect(l: number, t: number, r: number, b: number, dir: number) { this.ops.push(RECT, l, t, r, b, dir, 0); this.pen.rect(l, t, r, b, dir, 0); this.changed(); }
+  addOval(l: number, t: number, r: number, b: number, dir: number, start = 1) {
+    this.ops.push(OVAL, l, t, r, b, dir, start); this.pen.oval(l, t, r, b, dir, start); this.changed();
+  }
   addCircle(x: number, y: number, r: number, dir: number) { if (r > 0) this.addOval(x - r, y - r, x + r, y + r, dir); }
   /** radii: (x, y) per corner, clockwise from top-left */
   addRoundRect(l: number, t: number, r: number, b: number, radii: ArrayLike<number>, dir: number) {
-    this.add(["rrect", l, t, r, b, radii[0], radii[1], radii[2], radii[3], radii[4], radii[5], radii[6], radii[7], dir]);
+    const i = this.ops.length;
+    this.ops.push(RRECT, l, t, r, b, radii[0], radii[1], radii[2], radii[3], radii[4], radii[5], radii[6], radii[7], dir);
+    this.pen.rrect(this.ops, i);
+    this.changed();
   }
   arcTo(l: number, t: number, r: number, b: number, start: number, sweep: number, force: boolean) {
     if (r - l < 0 || b - t < 0) return;
-    this.add(["arc", l, t, r, b, start, sweep, force || !this.ops.length ? 1 : 0]);
+    force ||= !this.ops.length;
+    this.ops.push(ARC, l, t, r, b, start, sweep, +force);
+    this.pen.arc(l, t, r, b, start, sweep, force);
+    this.changed();
   }
   /** SkPath::addArc: a whole turn from a quadrant point is an oval; anything else a new contour */
   addArc(l: number, t: number, r: number, b: number, start: number, sweep: number) {
@@ -375,14 +389,14 @@ export class NativePath {
     this.arcTo(l, t, r, b, start, sweep, true);
   }
   reset() {
-    this.ops = [];
+    this.ops.length = 0;
     this.fillRule = "nonzero"; this.inverseFill = false;
     this.pen.clear();
     this.p2d = this.vs = null; this.gen = 1;
   }
   set(src: NativePath) {
     if (src === this) return;
-    this.ops = src.ops.map((op) => op.slice() as PathOp);
+    this.ops = src.ops.slice();
     this.fillRule = src.fillRule; this.inverseFill = src.inverseFill;
     this.pen.copy(src.pen);
     this.changed();
@@ -390,10 +404,13 @@ export class NativePath {
   /** SkPath::addPath in append mode, through `m` when given */
   append(src: NativePath, m?: Mat, dx = 0, dy = 0) {
     if (!src.ops.length) return;
-    let ops = src.ops.map((op) => op.slice() as PathOp);
+    let ops = src.ops.slice();
     if (m) ops = transformOps(ops, m);
     if (dx || dy) offsetOps(ops, dx, dy);
-    for (const op of ops) { this.ops.push(op); this.pen.op(op); }
+    for (let i = 0; i < ops.length; i += 1 + ARGS[ops[i]]) {
+      for (let k = i, end = i + 1 + ARGS[ops[i]]; k < end; k++) this.ops.push(ops[k]);
+      this.pen.op(ops, i);
+    }
     this.changed();
   }
   offset(dx: number, dy: number) {
@@ -412,17 +429,17 @@ export class NativePath {
   /** SkPath::setLastPt: moves the last stored point, or starts the path there */
   setLastPoint(x: number, y: number) {
     if (!this.ops.length) return this.moveTo(x, y);
-    const ops = this.ops.some((op) => !(op[0] in SIMPLE)) ? verbsToOps(this.verbs()) : this.ops;
-    let i = ops.length - 1;
-    while (ops[i][0] === "z") i--;
-    const op = ops[i];
-    op[op.length - 2] = x; op[op.length - 1] = y;
+    const ops = compound(this.ops) ? expand(this.ops) : this.ops;
+    let last = 0;
+    for (let i = 0; i < ops.length; i += 1 + ARGS[ops[i]]) if (ops[i] !== CLOSE) last = i;
+    const at = last + 2 * PAIRS[ops[last]] - 1;
+    ops[at] = x; ops[at + 1] = y;
     this.replaceOps(ops);
   }
   /** SkPath::getBounds: every stored point, conic control points included */
   bounds(): Box {
     const box = { left: Infinity, top: Infinity, right: -Infinity, bottom: -Infinity };
-    walkOps(this.ops, new Pen(null, box));
+    walk(this.ops, new Pen(null, box));
     return box.left === Infinity ? { left: 0, top: 0, right: 0, bottom: 0 } : box;
   }
   /** SkPath::isFinite */
@@ -434,14 +451,14 @@ export class NativePath {
   isRect(): Box | null {
     const vs = this.verbs(), xs: number[] = [], ys: number[] = [];
     let i = 0;
-    for (; i < vs.length; i++) {
+    for (; i < vs.length; i += 1 + ARGS[vs[i]]) {
       const v = vs[i];
-      if (v[0] === MOVE) { if (xs.length) break; xs.push(v[1]); ys.push(v[2]); }
-      else if (v[0] === LINE) { if (v[3] !== xs.at(-1) || v[4] !== ys.at(-1)) { xs.push(v[3]); ys.push(v[4]); } }
-      else if (v[0] === CLOSE) { i++; break; }
+      if (v === MOVE) { if (xs.length) break; xs.push(vs[i + 1]); ys.push(vs[i + 2]); }
+      else if (v === LINE) { if (vs[i + 1] !== xs.at(-1) || vs[i + 2] !== ys.at(-1)) { xs.push(vs[i + 1]); ys.push(vs[i + 2]); } }
+      else if (v === CLOSE) { i++; break; }
       else return null;
     }
-    for (; i < vs.length; i++) if (vs[i][0] !== MOVE) return null;
+    for (; i < vs.length; i += 1 + ARGS[vs[i]]) if (vs[i] !== MOVE) return null;
     if (xs.length > 1 && xs[0] === xs.at(-1) && ys[0] === ys.at(-1)) { xs.pop(); ys.pop(); }
     const dirs: number[] = [];
     for (let k = 0; k < xs.length; k++) {
@@ -457,98 +474,86 @@ export class NativePath {
   /** SkPath::isInterpolatable: the same verbs */
   isInterpolatable(o: NativePath): boolean {
     const a = this.verbs(), b = o.verbs();
-    return a.length === b.length && a.every((v, i) => v[0] === b[i][0]);
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i += 1 + ARGS[a[i]]) if (a[i] !== b[i]) return false;
+    return true;
   }
   /** SkPath::interpolate: out holds this path's verbs over points weighted `w` toward this path */
   interpolate(end: NativePath, w: number, out: NativePath): boolean {
-    const verbs = this.verbs(), a = verbPoints(verbs), b = verbPoints(end.verbs());
-    if (a.length !== b.length) return false;
-    if (!a.length) return true;
-    let k = 0;
-    const ops = verbsToOps(verbs);
-    for (const op of ops) for (let i = 1; i < op.length; i++, k++) op[i] = Math.fround(b[k] + (a[k] - b[k]) * w);
+    const a = this.verbs(), b = pointsOf(end.verbs());
+    if (pointsOf(a).length !== b.length) return false;
+    if (!b.length) return true;
+    const ops = a.slice();
+    for (let i = 0, k = 0; i < ops.length; i += 1 + ARGS[ops[i]]) {
+      for (let j = i + 1, n = 2 * PAIRS[ops[i]]; n--; j++, k++) ops[j] = Math.fround(b[k] + (ops[j] - b[k]) * w);
+    }
     out.reset();
     out.replaceOps(ops);
     return true;
   }
 }
-const SIMPLE: Record<string, true> = { m: true, l: true, q: true, c: true, z: true };
+/** the points of flat ops, x and y in turn */
+function pointsOf(ops: number[]): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < ops.length; i += 1 + ARGS[ops[i]]) for (let k = i + 1, n = 2 * PAIRS[ops[i]]; n--; k++) out.push(ops[k]);
+  return out;
+}
 /** a path's verbs, as SkPath stores them, into `sink` */
-export const walkPath = (path: NativePath, sink: Sink) => walkOps(path.ops, new Pen(sink));
+export const walkPath = (path: NativePath, sink: Sink) => walk(path.ops, new Pen(sink));
+
+/** SkPath::RawIter over a snapshot of the verbs, as PathIterator, androidx's pre-34 iterator and
+ *  the measures walk them: each verb with its RAW_SIZE numbers */
+export class VerbIterator {
+  private readonly vs: number[];
+  private i = 0;
+  /** the point a segment starts from */
+  private x = 0; private y = 0;
+  constructor(p: NativePath) { this.vs = p.verbs(); }
+  peek(): number { return this.i < this.vs.length ? this.vs[this.i] : DONE; }
+  /** how many verbs there are */
+  get count(): number {
+    let n = 0;
+    for (let i = 0; i < this.vs.length; i += 1 + ARGS[this.vs[i]]) n++;
+    return n;
+  }
+  next(pts: { [k: number]: number }, off = 0): number {
+    const vs = this.vs, i = this.i;
+    if (i >= vs.length) return DONE;
+    const verb = vs[i], n = ARGS[verb];
+    this.i = i + 1 + n;
+    if (verb === CLOSE) return verb;
+    let k = off;
+    if (verb !== MOVE) { pts[k++] = this.x; pts[k++] = this.y; }
+    for (let j = i + 1; j <= i + n; j++) pts[k++] = vs[j];
+    const end = i + 2 * PAIRS[verb] - 1;
+    this.x = vs[end]; this.y = vs[end + 1];
+    return verb;
+  }
+}
 
 export const pathAt = (h: bigint) => deref<NativePath>(h);
 const mNativePath = peerField<bigint>("android/graphics/Path", "mNativePath");
 /** the geometry behind a Java Path */
 export const nativePathOf = (p: object): NativePath => pathAt(mNativePath(p));
 
-// ── Path.op: SkPathOps, through the tab's CanvasKit
-/** the path as CanvasKit's commands */
-export function skCommands(path: NativePath): number[] {
-  const cmds: number[] = [];
-  walkPath(path, {
-    moveTo: (x, y) => cmds.push(0, x, y), lineTo: (x, y) => cmds.push(1, x, y), quadraticCurveTo: (a, b, x, y) => cmds.push(2, a, b, x, y),
-    conicTo: (a, b, x, y, w) => cmds.push(3, a, b, x, y, w), bezierCurveTo: (a, b, c, d, x, y) => cmds.push(4, a, b, c, d, x, y), closePath: () => cmds.push(5),
-  });
-  return cmds;
-}
-/** `dst` set to CanvasKit's commands */
-export function setSkCommands(dst: NativePath, cmds: PathCommands): void {
-  dst.reset();
-  for (let i = 0; i < cmds.length;) {
-    const verb = cmds[i++];
-    if (verb === 0) dst.moveTo(cmds[i++], cmds[i++]);
-    else if (verb === 1) dst.lineTo(cmds[i++], cmds[i++]);
-    else if (verb === 2) { dst.quadTo(cmds[i], cmds[i + 1], cmds[i + 2], cmds[i + 3]); i += 4; }
-    else if (verb === 3) { dst.conicTo(cmds[i], cmds[i + 1], cmds[i + 2], cmds[i + 3], cmds[i + 4]); i += 5; }
-    else if (verb === 4) { dst.cubicTo(cmds[i], cmds[i + 1], cmds[i + 2], cmds[i + 3], cmds[i + 4], cmds[i + 5]); i += 6; }
-    else dst.close();
-  }
-}
-/** SkPathOp, which Path$Op's ordinals follow */
-const DIFFERENCE = 0;
-/** Path.op: Skia's result and its fill type into `dst`; false where Skia finds none */
-export function pathOp(dst: NativePath, a: NativePath, b: NativePath, op: number): boolean | Promise<boolean> {
-  return after(skiaPathOp(skCommands(a), a.fillType(), skCommands(b), b.fillType(), op), (r) => {
-    if (!r) return false;
-    setSkCommands(dst, r.cmds);
-    dst.setFillType(r.fill);
-    return true;
-  });
-}
-
-/** a path's inverse fill within [l, t, r, b], as Canvas2D can fill it, once CanvasKit (which the page loads before anything draws) can subtract it */
-export function inversePath(path: NativePath, l: number, t: number, r: number, b: number): [Path2D, CanvasFillRule] | Promise<[Path2D, CanvasFillRule]> {
-  if (path.fillRule === "evenodd") {
-    const inverse = new Path2D();
-    inverse.rect(l, t, r - l, b - t);
-    inverse.addPath(path.path());
-    return [inverse, "evenodd"];
-  }
-  // the bounds less the path under its plain fill
-  const outer = new NativePath(), plain = new NativePath(), result = new NativePath();
-  outer.addRect(l, t, r, b, CW);
-  plain.set(path);
-  plain.setFillType(path.fillType() & 1);
-  return after(pathOp(result, outer, plain, DIFFERENCE), (): [Path2D, CanvasFillRule] => [result.path(), result.fillRule]);
-}
-
 type Pt = [number, number];
+const scratch = new Float64Array(8);
 // Skia tests the control polygon, including implicit closure, rather than sampling curves.
 export function pathIsConvex(path: NativePath): boolean {
-  const points: Pt[] = [];
+  const points: Pt[] = [], it = new VerbIterator(path), v = scratch;
   let start: Pt = [0, 0], ended = false;
-  for (const verb of path.verbs()) {
-    if (verb.slice(1).some(value => !Number.isFinite(Math.fround(value)))) return false;
-    if (verb[0] === MOVE) {
+  for (let verb; (verb = it.next(v)) !== DONE;) {
+    for (let k = 0; k < RAW_SIZE[verb]; k++) if (!Number.isFinite(Math.fround(v[k]))) return false;
+    if (verb === MOVE) {
       if (points.length) ended = true;
-      start = [Math.fround(verb[1]), Math.fround(verb[2])];
+      start = [Math.fround(v[0]), Math.fround(v[1])];
       continue;
     }
     if (ended) return false;
     if (!points.length) points.push(start);
-    if (verb[0] === CLOSE) { ended = true; continue; }
-    for (let i = 3; i < verb.length; i += 2) {
-      const x = Math.fround(verb[i]), y = Math.fround(verb[i + 1]), last = points[points.length - 1];
+    if (verb === CLOSE) { ended = true; continue; }
+    for (let k = 2; k < 2 + 2 * PAIRS[verb]; k += 2) {
+      const x = Math.fround(v[k]), y = Math.fround(v[k + 1]), last = points[points.length - 1];
       if (last[0] !== x || last[1] !== y) points.push([x, y]);
     }
   }
@@ -599,29 +604,29 @@ export function approximate(p: NativePath, error: number): Float32Array {
     if (lx === x && ly === y) return;
     lens.push(lens.at(-1)! + Math.hypot(x - lx, y - ly)); xs.push(x); ys.push(y);
   };
-  const verbs = p.verbs();
+  const vs = p.verbs(), it = new VerbIterator(p), v = scratch;
   let mx = 0, my = 0;
-  for (let i = 0; i < verbs.length; i++) {
-    const v = verbs[i];
-    switch (v[0]) {
+  for (let verb; (verb = it.next(v)) !== DONE;) {
+    switch (verb) {
       // SkPath::Iter reports no trailing moveTo
-      case MOVE: if (i < verbs.length - 1) { move(mx = v[1], my = v[2]); } break;
-      case LINE: line(v[3], v[4]); break;
+      case MOVE: if (it.peek() !== DONE) { move(mx = v[0], my = v[1]); } break;
+      case LINE: line(v[2], v[3]); break;
       case QUAD: case CUBIC: {
-        const at = v[0] === QUAD ? quadAt : cubicAt;
+        const at = verb === QUAD ? quadAt : cubicAt, end = 2 * PAIRS[verb];
         const sub = (t0: number, x0: number, y0: number, t1: number, x1: number, y1: number) => {
           const tm = (t0 + t1) / 2, xm = at(v, tm, 0), ym = at(v, tm, 1);
           const dx = (x0 + x1) / 2 - xm, dy = (y0 + y1) / 2 - ym;
           if (dx * dx + dy * dy > err2) { sub(t0, x0, y0, tm, xm, ym); sub(tm, xm, ym, t1, x1, y1); }
           else line(x1, y1);
         };
-        sub(0, v[1], v[2], 1, v[v.length - 2], v[v.length - 1]);
+        sub(0, v[0], v[1], 1, v[end], v[end + 1]);
         break;
       }
       case CLOSE: line(mx, my); break;
     }
   }
-  if (!xs.length) move(verbs.length === 1 ? verbs[0][1] : 0, verbs.length === 1 ? verbs[0][2] : 0);
+  const lone = vs.length === 3;
+  if (!xs.length) move(lone ? vs[1] : 0, lone ? vs[2] : 0);
   let total = lens.at(-1)!;
   // a lone point still animates, holding its value
   if (total === 0) { xs.push(xs.at(-1)!); ys.push(ys.at(-1)!); lens.push(total = 1); }
@@ -629,284 +634,17 @@ export function approximate(p: NativePath, error: number): Float32Array {
   for (let i = 0; i < xs.length; i++) { out[i * 3] = lens[i] / total; out[i * 3 + 1] = xs[i]; out[i * 3 + 2] = ys[i]; }
   return out;
 }
-/** coordinate `c` (0 = x, 1 = y) of a quadratic or cubic verb at t */
-function quadAt(v: Verb, t: number, c: number) {
+/** coordinate `c` (0 = x, 1 = y) of a quadratic or cubic's raw points at t */
+function quadAt(v: Float64Array, t: number, c: number) {
   const u = 1 - t;
-  return u * (u * v[1 + c] + t * v[3 + c]) + t * (u * v[3 + c] + t * v[5 + c]);
+  return u * (u * v[c] + t * v[2 + c]) + t * (u * v[2 + c] + t * v[4 + c]);
 }
-function cubicAt(v: Verb, t: number, c: number) {
+function cubicAt(v: Float64Array, t: number, c: number) {
   const u = 1 - t;
-  return u * u * u * v[1 + c] + 3 * u * u * t * v[3 + c] + 3 * u * t * t * v[5 + c] + t * t * t * v[7 + c];
+  return u * u * u * v[c] + 3 * u * u * t * v[2 + c] + 3 * u * t * t * v[4 + c] + t * t * t * v[6 + c];
 }
 
-// ── PathMeasure: SkContourMeasure over a snapshot of the path's verbs
-const LINE_SEG = 0, QUAD_SEG = 1, CUBIC_SEG = 2;
-/** SkContourMeasure's fixed-point t, which bounds subdivision */
-const MAX_T = 0x3fffffff;
-/** CHEAP_DIST_LIMIT at a resolution scale of 1 */
-const TOLERANCE = 0.5;
-class Contour {
-  /** per segment: distance at its end, index of its curve's first point, type and end t */
-  d: number[] = []; pi: number[] = []; ty: number[] = []; tv: number[] = [];
-  /** the contour's points, x and y interleaved; curves share their end points */
-  pts: number[] = [];
-  length = 0;
-  closed = false;
-  seg(d: number, pi: number, ty: number, tv: number) { this.d.push(d); this.pi.push(pi); this.ty.push(ty); this.tv.push(tv); }
-}
-function lineSeg(c: Contour, x0: number, y0: number, x1: number, y1: number, d: number, pi: number) {
-  const next = d + Math.hypot(x1 - x0, y1 - y0);
-  if (next > d) c.seg(next, pi, LINE_SEG, MAX_T);
-  return next;
-}
-function quadSegs(c: Contour, x0: number, y0: number, x1: number, y1: number, x2: number, y2: number, d: number, mint: number, maxt: number, pi: number): number {
-  const dx = x1 / 2 - (x0 + x2) / 4, dy = y1 / 2 - (y0 + y2) / 4;
-  if (maxt - mint >= 1024 && Math.max(Math.abs(dx), Math.abs(dy)) > TOLERANCE) {
-    const half = (mint + maxt) >>> 1;
-    const ax = (x0 + x1) / 2, ay = (y0 + y1) / 2, bx = (x1 + x2) / 2, by = (y1 + y2) / 2, mx = (ax + bx) / 2, my = (ay + by) / 2;
-    d = quadSegs(c, x0, y0, ax, ay, mx, my, d, mint, half, pi);
-    return quadSegs(c, mx, my, bx, by, x2, y2, d, half, maxt, pi);
-  }
-  const next = d + Math.hypot(x2 - x0, y2 - y0);
-  if (next > d) c.seg(next, pi, QUAD_SEG, maxt);
-  return next;
-}
-const tooFar = (x: number, y: number, px: number, py: number) => Math.max(Math.abs(px - x), Math.abs(py - y)) > TOLERANCE;
-function cubicSegs(c: Contour, x0: number, y0: number, x1: number, y1: number, x2: number, y2: number, x3: number, y3: number, d: number, mint: number, maxt: number, pi: number): number {
-  if (maxt - mint >= 1024 && (tooFar(x1, y1, x0 + (x3 - x0) / 3, y0 + (y3 - y0) / 3) || tooFar(x2, y2, x0 + (x3 - x0) * 2 / 3, y0 + (y3 - y0) * 2 / 3))) {
-    const half = (mint + maxt) >>> 1;
-    const abx = (x0 + x1) / 2, aby = (y0 + y1) / 2, bcx = (x1 + x2) / 2, bcy = (y1 + y2) / 2, cdx = (x2 + x3) / 2, cdy = (y2 + y3) / 2;
-    const abcx = (abx + bcx) / 2, abcy = (aby + bcy) / 2, bcdx = (bcx + cdx) / 2, bcdy = (bcy + cdy) / 2;
-    const mx = (abcx + bcdx) / 2, my = (abcy + bcdy) / 2;
-    d = cubicSegs(c, x0, y0, abx, aby, abcx, abcy, mx, my, d, mint, half, pi);
-    return cubicSegs(c, mx, my, bcdx, bcdy, cdx, cdy, x3, y3, d, half, maxt, pi);
-  }
-  const next = d + Math.hypot(x3 - x0, y3 - y0);
-  if (next > d) c.seg(next, pi, CUBIC_SEG, maxt);
-  return next;
-}
-/** SkScalarInterp, in float as Skia's geometry is */
-export const lerp = (a: number, b: number, t: number) => Math.fround(a + Math.fround(Math.fround(b - a) * t));
-
-export class PathMeasure {
-  private verbs: Verb[] = [];
-  private i = 0;
-  private forceClosed = false;
-  private contour: Contour | null = null;
-  /** position and unit tangent from the last posTan */
-  private readonly pt = new Float64Array(4);
-  /** the t distanceToSegment found */
-  private t = 0;
-  private readonly chop = new Float64Array(14);
-  private readonly chop2 = new Float64Array(14);
-
-  /** SkPathMeasure::setPath: the path is copied, and the first contour with length measured */
-  setPath(p: NativePath | undefined, forceClosed: boolean) {
-    this.verbs = p ? p.verbs() : [];
-    this.i = 0;
-    this.forceClosed = forceClosed;
-    this.nextContour();
-  }
-  /** SkContourMeasureIter::next skips contours of zero length */
-  nextContour(): boolean {
-    this.contour = null;
-    while (!this.contour && this.i < this.verbs.length) this.contour = this.build();
-    return !!this.contour;
-  }
-  length(): number { return this.contour?.length ?? 0; }
-  isClosed(): boolean { return !!this.contour?.closed; }
-  private build(): Contour | null {
-    const c = new Contour(), vs = this.verbs;
-    let pi = -1, d = 0, seenClose = this.forceClosed, seenMove = false;
-    for (; this.i < vs.length; this.i++) {
-      const v = vs[this.i];
-      if (seenMove && v[0] === MOVE) break;
-      const prev = d;
-      switch (v[0]) {
-        case MOVE: pi++; c.pts.push(v[1], v[2]); seenMove = true; break;
-        case LINE:
-          d = lineSeg(c, v[1], v[2], v[3], v[4], d, pi);
-          if (d > prev) { c.pts.push(v[3], v[4]); pi++; }
-          break;
-        case QUAD:
-          d = quadSegs(c, v[1], v[2], v[3], v[4], v[5], v[6], d, 0, MAX_T, pi);
-          if (d > prev) { c.pts.push(v[3], v[4], v[5], v[6]); pi += 2; }
-          break;
-        case CUBIC:
-          d = cubicSegs(c, v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], d, 0, MAX_T, pi);
-          if (d > prev) { c.pts.push(v[3], v[4], v[5], v[6], v[7], v[8]); pi += 3; }
-          break;
-        case CLOSE: seenClose = true; break;
-      }
-    }
-    if (!Number.isFinite(d) || !c.d.length) return null;
-    if (seenClose) {
-      const prev = d, fx = c.pts[0], fy = c.pts[1];
-      d = lineSeg(c, c.pts[pi * 2], c.pts[pi * 2 + 1], fx, fy, d, pi);
-      if (d > prev) c.pts.push(fx, fy);
-    }
-    c.length = d;
-    c.closed = seenClose;
-    return c;
-  }
-  /** SkContourMeasure::distanceToSegment: the first segment reaching `d`, and the t there in this.t */
-  private segAt(c: Contour, d: number): number {
-    let lo = 0, hi = c.d.length - 1;
-    while (lo < hi) { const mid = (lo + hi) >> 1; if (c.d[mid] < d) lo = mid + 1; else hi = mid; }
-    let startT = 0, startD = 0;
-    if (lo > 0) { startD = c.d[lo - 1]; if (c.pi[lo - 1] === c.pi[lo]) startT = c.tv[lo - 1] / MAX_T; }
-    this.t = startT + (c.tv[lo] / MAX_T - startT) * (d - startD) / (c.d[lo] - startD);
-    return lo;
-  }
-  /** compute_pos_tan into this.pt */
-  private posTan(c: Contour, seg: number, t: number) {
-    const p = c.pts, i = c.pi[seg] * 2, out = this.pt;
-    const x0 = p[i], y0 = p[i + 1], x1 = p[i + 2], y1 = p[i + 3];
-    let tx: number, ty: number;
-    if (c.ty[seg] === LINE_SEG) {
-      out[0] = lerp(x0, x1, t); out[1] = lerp(y0, y1, t);
-      tx = x1 - x0; ty = y1 - y0;
-    } else if (c.ty[seg] === QUAD_SEG) {
-      const x2 = p[i + 4], y2 = p[i + 5];
-      out[0] = ((x2 - 2 * x1 + x0) * t + 2 * (x1 - x0)) * t + x0;
-      out[1] = ((y2 - 2 * y1 + y0) * t + 2 * (y1 - y0)) * t + y0;
-      // SkEvalQuadTangentAt: an end whose control point coincides takes the chord
-      if ((t === 0 && x0 === x1 && y0 === y1) || (t === 1 && x1 === x2 && y1 === y2)) { tx = x2 - x0; ty = y2 - y0; }
-      else { tx = (x2 - 2 * x1 + x0) * t + (x1 - x0); ty = (y2 - 2 * y1 + y0) * t + (y1 - y0); }
-    } else {
-      const x2 = p[i + 4], y2 = p[i + 5], x3 = p[i + 6], y3 = p[i + 7];
-      const ax = x3 + 3 * (x1 - x2) - x0, ay = y3 + 3 * (y1 - y2) - y0;
-      const bx = 3 * (x2 - 2 * x1 + x0), by = 3 * (y2 - 2 * y1 + y0);
-      const cx = 3 * (x1 - x0), cy = 3 * (y1 - y0);
-      out[0] = ((ax * t + bx) * t + cx) * t + x0;
-      out[1] = ((ay * t + by) * t + cy) * t + y0;
-      // SkEvalCubicAt: at an end whose neighbour coincides, the next control point or the chord
-      if ((t === 0 && x0 === x1 && y0 === y1) || (t === 1 && x2 === x3 && y2 === y3)) {
-        if (t === 0) { tx = x2 - x0; ty = y2 - y0; } else { tx = x3 - x1; ty = y3 - y1; }
-        if (!tx && !ty) { tx = x3 - x0; ty = y3 - y0; }
-      } else { tx = (ax * t + bx * 2 / 3) * t + cx / 3; ty = (ay * t + by * 2 / 3) * t + cy / 3; }
-    }
-    const len = Math.hypot(tx, ty);
-    out[2] = len > 0 && Number.isFinite(len) ? tx / len : 0;
-    out[3] = len > 0 && Number.isFinite(len) ? ty / len : 0;
-  }
-  /** SkContourMeasure::getPosTan into this.pt, the distance pinned to the contour */
-  private at(d: number): boolean {
-    const c = this.contour;
-    if (!c || !c.length) return false;
-    const seg = this.segAt(c, d < 0 ? 0 : d > c.length ? c.length : d);
-    if (!Number.isFinite(this.t)) return false;
-    this.posTan(c, seg, this.t);
-    return true;
-  }
-  getPosTan(d: number, pos: Float32Array | null, tan: Float32Array | null): boolean {
-    if (!this.at(d)) return false;
-    if (pos) { pos[0] = this.pt[0]; pos[1] = this.pt[1]; }
-    if (tan) { tan[0] = this.pt[2]; tan[1] = this.pt[3]; }
-    return true;
-  }
-  /** SkContourMeasure::getMatrix: flags 1 = position, 2 = tangent */
-  getMatrix(d: number, m: Mat, flags: number): boolean {
-    if (!this.at(d)) return false;
-    const [x, y, tx, ty] = this.pt;
-    m.set(flags & 2 ? [tx, -ty, 0, ty, tx, 0, 0, 0, 1] : [1, 0, 0, 0, 1, 0, 0, 0, 1]);
-    if (flags & 1) { m[2] = x; m[5] = y; }
-    return true;
-  }
-  /** SkContourMeasure::getSegment */
-  getSegment(startD: number, stopD: number, dst: NativePath, moveTo: boolean): boolean {
-    const c = this.contour;
-    if (!c) return false;
-    if (startD < 0) startD = 0;
-    if (stopD > c.length) stopD = c.length;
-    if (!(startD <= stopD)) return false;
-    let seg = this.segAt(c, startD), startT = this.t;
-    if (!Number.isFinite(startT)) return false;
-    const stop = this.segAt(c, stopD), stopT = this.t;
-    if (!Number.isFinite(stopT)) return false;
-    if (moveTo) { this.posTan(c, seg, startT); dst.moveTo(this.pt[0], this.pt[1]); }
-    if (c.pi[seg] === c.pi[stop]) {
-      this.segTo(c, seg, startT, stopT, dst);
-      return true;
-    }
-    do {
-      this.segTo(c, seg, startT, 1, dst);
-      const pi = c.pi[seg];
-      do seg++; while (c.pi[seg] === pi);
-      startT = 0;
-    } while (c.pi[seg] < c.pi[stop]);
-    this.segTo(c, seg, 0, stopT, dst);
-    return true;
-  }
-  /** SkContourMeasure_segTo: the part of a segment's curve between two t, appended */
-  private segTo(c: Contour, seg: number, startT: number, stopT: number, dst: NativePath) {
-    if (startT === stopT) {
-      // a zero-length piece still carries its end caps
-      if (dst.ops.length) dst.lineTo(dst.pen.x, dst.pen.y);
-      return;
-    }
-    const p = c.pts, i = c.pi[seg] * 2, a = this.chop, b = this.chop2;
-    switch (c.ty[seg]) {
-      case LINE_SEG:
-        dst.lineTo(stopT === 1 ? p[i + 2] : lerp(p[i], p[i + 2], stopT), stopT === 1 ? p[i + 3] : lerp(p[i + 1], p[i + 3], stopT));
-        break;
-      case QUAD_SEG:
-        for (let k = 0; k < 6; k++) a[k] = p[i + k];
-        if (startT === 0) {
-          if (stopT === 1) return dst.quadTo(a[2], a[3], a[4], a[5]);
-          chopQuadAt(a, stopT, b);
-          return dst.quadTo(b[2], b[3], b[4], b[5]);
-        }
-        chopQuadAt(a, startT, b);
-        if (stopT === 1) return dst.quadTo(b[6], b[7], b[8], b[9]);
-        chopQuadAt(b.subarray(4), (stopT - startT) / (1 - startT), a);
-        return dst.quadTo(a[2], a[3], a[4], a[5]);
-      case CUBIC_SEG:
-        for (let k = 0; k < 8; k++) a[k] = p[i + k];
-        if (startT === 0) {
-          if (stopT === 1) return dst.cubicTo(a[2], a[3], a[4], a[5], a[6], a[7]);
-          chopCubicAt(a, stopT, b);
-          return dst.cubicTo(b[2], b[3], b[4], b[5], b[6], b[7]);
-        }
-        chopCubicAt(a, startT, b);
-        if (stopT === 1) return dst.cubicTo(b[8], b[9], b[10], b[11], b[12], b[13]);
-        chopCubicAt(b.subarray(6), (stopT - startT) / (1 - startT), a);
-        return dst.cubicTo(a[2], a[3], a[4], a[5], a[6], a[7]);
-    }
-  }
-}
-/** SkChopQuadAt: the quad src[0..6) split at t into the five points dst[0..10), the middle one shared */
-export function chopQuadAt(src: ArrayLike<number>, t: number, dst: Float64Array) {
-  const x0 = src[0], y0 = src[1], x1 = src[2], y1 = src[3], x2 = src[4], y2 = src[5];
-  const ax = lerp(x0, x1, t), ay = lerp(y0, y1, t), bx = lerp(x1, x2, t), by = lerp(y1, y2, t);
-  dst[0] = x0; dst[1] = y0; dst[2] = ax; dst[3] = ay; dst[4] = lerp(ax, bx, t); dst[5] = lerp(ay, by, t);
-  dst[6] = bx; dst[7] = by; dst[8] = x2; dst[9] = y2;
-}
-/** SkChopCubicAt: the cubic src[0..8) split at t into the seven points dst[0..14) */
-export function chopCubicAt(src: ArrayLike<number>, t: number, dst: Float64Array) {
-  const x0 = src[0], y0 = src[1], x1 = src[2], y1 = src[3], x2 = src[4], y2 = src[5], x3 = src[6], y3 = src[7];
-  const abx = lerp(x0, x1, t), aby = lerp(y0, y1, t), bcx = lerp(x1, x2, t), bcy = lerp(y1, y2, t), cdx = lerp(x2, x3, t), cdy = lerp(y2, y3, t);
-  const abcx = lerp(abx, bcx, t), abcy = lerp(aby, bcy, t), bcdx = lerp(bcx, cdx, t), bcdy = lerp(bcy, cdy, t);
-  dst[0] = x0; dst[1] = y0; dst[2] = abx; dst[3] = aby; dst[4] = abcx; dst[5] = abcy; dst[6] = lerp(abcx, bcdx, t); dst[7] = lerp(abcy, bcdy, t);
-  dst[8] = bcdx; dst[9] = bcdy; dst[10] = cdx; dst[11] = cdy; dst[12] = x3; dst[13] = y3;
-}
-
-/** SkPath::RawIter over a snapshot of the verbs, as PathIterator and androidx's pre-34 iterator walk them */
-export class VerbIterator {
-  private i = 0;
-  readonly verbs: Verb[];
-  constructor(p: NativePath) { this.verbs = p.verbs(); }
-  peek(): number { return this.verbs[this.i]?.[0] ?? DONE; }
-  next(pts: Float32Array, off: number): number {
-    const v = this.verbs[this.i];
-    if (!v) return DONE;
-    this.i++;
-    for (let k = 1; k < v.length; k++) pts[off + k - 1] = v[k];
-    return v[0];
-  }
-}
-
-// ── the natives of Path, PathMeasure and PathIterator
+// ── the natives of Path and PathIterator
 rt.registerJnis("android/graphics/Path", {
   "nInit()J": () => handle(new NativePath()),
   // a null source is an empty path
@@ -915,7 +653,7 @@ rt.registerJnis("android/graphics/Path", {
   "nReset(J)V": (h: bigint) => pathAt(h).reset(),
   "nRewind(J)V": (h: bigint) => pathAt(h).reset(),
   "nSet(JJ)V": (h: bigint, s: bigint) => pathAt(h).set(pathAt(s)),
-  "nIsEmpty(J)Z": (h: bigint) => (pathAt(h).ops.length ? 0 : 1),
+  "nIsEmpty(J)Z": (h: bigint) => +!pathAt(h).ops.length,
   "nGetGenerationID(J)I": (h: bigint) => pathAt(h).generation(),
   "nGetFillType(J)I": (h: bigint) => pathAt(h).fillType(),
   "nSetFillType(JI)V": (h: bigint, ft: number) => pathAt(h).setFillType(ft),
@@ -972,31 +710,11 @@ rt.registerJnis("android/graphics/Path", {
     if (b) setEdges(r, b);
     return +!!b;
   },
-  "nIsConvex(J)Z": (h: bigint) => (pathIsConvex(pathAt(h)) ? 1 : 0),
-  "nOp(JJIJ)Z": (a: bigint, b: bigint, op: number, dst: bigint) => after(pathOp(pathAt(dst), pathAt(a), pathAt(b), op), (done) => +done),
-  "nIsInterpolatable(JJ)Z": (a: bigint, b: bigint) => (pathAt(a).isInterpolatable(pathAt(b)) ? 1 : 0),
-  "nInterpolate(JJFJ)Z": (a: bigint, b: bigint, t: number, out: bigint) => (pathAt(a).interpolate(pathAt(b), t, pathAt(out)) ? 1 : 0),
+  "nIsConvex(J)Z": (h: bigint) => +pathIsConvex(pathAt(h)),
+  "nIsInterpolatable(JJ)Z": (a: bigint, b: bigint) => +pathAt(a).isInterpolatable(pathAt(b)),
+  "nInterpolate(JJFJ)Z": (a: bigint, b: bigint, t: number, out: bigint) => +pathAt(a).interpolate(pathAt(b), t, pathAt(out)),
   "nApproximate(JF)[F": (h: bigint, error: number) => approximate(pathAt(h), error),
   ...noops("nIncReserve(JI)V"),
-});
-
-// PathMeasure frees its native state from finalize(), which never runs here
-const measure = (h: bigint) => deref<PathMeasure>(h);
-rt.registerJnis("android/graphics/PathMeasure", {
-  "native_create(JZ)J": (p: bigint, forceClosed: number) => {
-    const m = new PathMeasure();
-    m.setPath(p ? pathAt(p) : undefined, !!forceClosed);
-    return ownedHandle(m);
-  },
-  "native_setPath(JJZ)V": (h: bigint, p: bigint, forceClosed: number) => measure(h).setPath(p ? pathAt(p) : undefined, !!forceClosed),
-  "native_getLength(J)F": (h: bigint) => measure(h).length(),
-  "native_getPosTan(JF[F[F)Z": (h: bigint, d: number, pos: Float32Array | null, tan: Float32Array | null) => (measure(h).getPosTan(d, pos, tan) ? 1 : 0),
-  "native_getMatrix(JFJI)Z": (h: bigint, d: number, m: bigint, flags: number) => (measure(h).getMatrix(d, matrixAt(m), flags) ? 1 : 0),
-  "native_getSegment(JFFJZ)Z": (h: bigint, start: number, stop: number, dst: bigint, moveTo: number) =>
-    (measure(h).getSegment(start, stop, pathAt(dst), !!moveTo) ? 1 : 0),
-  "native_isClosed(J)Z": (h: bigint) => (measure(h).isClosed() ? 1 : 0),
-  "native_nextContour(J)Z": (h: bigint) => (measure(h).nextContour() ? 1 : 0),
-  "native_destroy(J)V": release,
 });
 
 // nNext writes into the non-movable float[8] whose address is its handle (VMRuntime.addressOf)
@@ -1014,10 +732,10 @@ rt.registerJnis("android/graphics/PathIterator", {
 rt.registerJnis("androidx/graphics/path/PathIteratorPreApi34Impl", {
   "createInternalPathIterator(Landroid/graphics/Path;IF)J": (p: object) => handle(new VerbIterator(nativePathOf(p))),
   "destroyInternalPathIterator(J)V": release,
-  "internalPathIteratorHasNext(J)Z": (h: bigint) => (iter(h).peek() !== DONE ? 1 : 0),
+  "internalPathIteratorHasNext(J)Z": (h: bigint) => +(iter(h).peek() !== DONE),
   "internalPathIteratorPeek(J)I": (h: bigint) => iter(h).peek(),
   "internalPathIteratorNext(J[FI)I": (h: bigint, pts: Float32Array, off: number) => iter(h).next(pts, off),
-  "internalPathIteratorSize(J)I": (h: bigint) => iter(h).verbs.length,
-  "internalPathIteratorRawSize(J)I": (h: bigint) => iter(h).verbs.length,
+  "internalPathIteratorSize(J)I": (h: bigint) => iter(h).count,
+  "internalPathIteratorRawSize(J)I": (h: bigint) => iter(h).count,
 });
 rt.claimNativeLib("androidx.graphics.path");

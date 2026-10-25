@@ -1,21 +1,22 @@
 // The files the kernel's descriptors (fd.ts) open by path: regular files over the JVM vfs,
-// directories, procfs snapshots and devices; the path calls, each where its path lives
-// (file-path.ts); and the read/write family over guest memory.
+// directories, procfs snapshots and devices; the path operations, each where its path lives
+// (file-path.ts), as JS values or -errno for the guest's calls here and libcore's natives alike;
+// and the guest's calls over guest memory.
 
-import { mem, anchor, wrote } from "./mem.ts";
-import { type HostFn, PTR, ldp, ldLong, ARG0, complete } from "./host.ts";
+import { mem, anchor } from "./mem.ts";
+import { type HostFn, PTR, ldp, ldLong, stLong, complete } from "./host.ts";
 import { E, AT_FDCWD, O_ACCMODE, O_APPEND, O_CLOEXEC, O_CREAT, O_DIRECTORY, O_EXCL, O_NONBLOCK, O_RDONLY, O_RDWR, O_TRUNC, O_WRONLY,
   POLLERR, POLLHUP, POLLIN, S_IFCHR, S_IFDIR, S_IFIFO, S_IFREG } from "./abi.ts";
 import type { Cpu } from "./cpu.ts";
-import { DIRENT64, fillStat, fillStatfs, logLine, offArg, putDirent, randomBytes, readTs, KLAYOUT } from "./kernel.ts";
+import { DIRENT64, fillStat, fullStat, logLine, offArg, putDirent, randomBytes, readTs, KLAYOUT, type Stat } from "./kernel.ts";
 import { vfs, EMPTY, storageEstimate, type VfsFile } from "../shell/vfs.ts";
 import { filePaths, changeOpenFile, isRandomDevice, openFileStat, type AttributeChange } from "../shell/file-path.ts";
 import { procMemory, procText, procWritable, procWrite } from "../shell/procfs.ts";
 import { readAt, writable, type FileSource } from "../shell/lazyfile.ts";
 import { utf8 } from "../jvm/abi.ts";
-import { ANON, FIONREAD, installFile, newFile, openFd, placeFile, refused, woken, javaAllocateFd, javaChangeFdAttributes, javaCloseFd, javaDup2Fd,
-  javaDupFd, javaFcntlFd, javaIoctlIntFd, javaLseekFd, javaSyncFd, javaTruncateFd, type FdStat, type FileOps, type OpenFile } from "./fd.ts";
-import { fifoOf, holdFifo, javaPipeFds, openFifo } from "./pipe.ts";
+import { ANON, FIONREAD, installFile, newFile, openFd, placeFile, readFd, preadFd, pwriteFd, writeFd, allocateFd, changeFdAttributes, closeFd, dup2Fd,
+  dupFd, fcntlFd, ioctlIntFd, seekFd, syncFd, truncateFd, type FdStat, type FileOps, type OpenFile } from "./fd.ts";
+import { fifoOf, holdFifo, pipeFds, openFifo } from "./pipe.ts";
 import { closedWrite, hookInotify } from "./inotify.ts";
 import { gather, MSG_NOSIGNAL } from "./socket/abi.ts";
 import { SIGPIPE } from "./signals.ts";
@@ -77,7 +78,7 @@ function contentStat(f: OpenFile): FdStat {
   const content = f.content, attributes = content.attributes ?? vfs.attributes(content.path);
   return openFileStat(content.path, S_IFREG | attributes.mode, content.len, attributes);
 }
-/** bytes read whole when opened: a procfs file's text, whose writes procfs takes, or libcore's (javaBytesFd) */
+/** bytes read whole when opened: a procfs file's text, whose writes procfs takes, or libcore's (bytesFd) */
 const SNAPSHOT: FileOps = {
   ...ANON,
   mode: S_IFREG,
@@ -141,7 +142,7 @@ const RANDOM: FileOps = {
 };
 
 /** an open of a file this realm holds */
-export function javaOpenFd(name: string, flags: number): number {
+export function localOpen(name: string, flags: number): number {
   const path = vfs.norm(name), access = flags & O_ACCMODE, status = flags & (O_ACCMODE | O_APPEND | O_NONBLOCK), cloexec = !!(flags & O_CLOEXEC);
   if (isRandomDevice(path)) return access ? -E.ACCES : installFile(newFile(RANDOM, path, status, undefined), cloexec);
   const s = procText(path);
@@ -165,43 +166,26 @@ export function javaOpenFd(name: string, flags: number): number {
   return installFile(newFile(FILE, path, status, undefined, vfs.open(path)!), cloexec);
 }
 /** a Java-side open of `bytes` into the descriptor table native code reads, so a fd handed across JNI is live */
-export const javaBytesFd = (bytes: Uint8Array): number => installFile(newFile(SNAPSHOT, "", O_RDONLY, undefined, { path: null, data: bytes, len: bytes.length }));
+export const bytesFd = (bytes: Uint8Array): number => installFile(newFile(SNAPSHOT, "", O_RDONLY, undefined, { path: null, data: bytes, len: bytes.length }));
 /** a descriptor, close-on-exec, on `content`, a file without a name (ashmem) */
-export const javaAnonymousFd = (content: VfsFile): number => installFile(newFile(FILE, "", O_RDWR, undefined, content), true);
+export const anonymousFd = (content: VfsFile): number => installFile(newFile(FILE, "", O_RDWR, undefined, content), true);
 /** the file a descriptor reads and writes, which a shared mapping of it shares */
 export function fdFile(fd: number): VfsFile | null {
   const f = openFd(fd);
   return f?.ops === FILE ? f.content : null;
 }
 
-/** read(2), or pread(2) at `off`, into guest memory: in place, or once the bytes come */
-export function fdRead(fd: number, p: number, n: number, off = -1): number | Promise<number> {
-  const f = openFd(fd), error = refused(f, off, false);
-  if (error) return error;
-  const at = mem.reach(p, n), r = f!.ops.read(f!, mem.u8, at, n, off, fd);
-  if (typeof r !== "number") {
-    const dst = anchor(p);
-    return r.then((v) => typeof v === "number" ? v : (mem.write(dst(), v), v.length));
-  }
-  if (r > 0) wrote(p, r);
-  else if (r === -E.AGAIN && !(f!.statusFlags & O_NONBLOCK)) { const dst = anchor(p); return woken(f!).then(() => fdRead(fd, dst(), n, off)); }
-  return r;
-}
-export const pread = (fd: number, p: number, n: number, off: number): number | Promise<number> => off < 0 ? -E.INVAL : fdRead(fd, p, n, off);
 /** EPIPE's signal: a write to a pipe or stream socket no one reads any more raises SIGPIPE in the
  *  writer, unless the call passed MSG_NOSIGNAL */
 export function written(cpu: Cpu | null, f: OpenFile, r: number, flags = 0): number {
   if (r === -E.PIPE && cpu && !(flags & MSG_NOSIGNAL) && !f.ops.messages(f)) cpu.kill(SIGPIPE);
   return r;
 }
-/** write(2), or pwrite(2) at `off`, of guest memory */
-export function fdWrite(cpu: Cpu | null, fd: number, p: number, n: number, off = -1): number | Promise<number> {
-  const f = openFd(fd), error = refused(f, off, true);
-  if (error) return error;
-  const r = f!.ops.write(f!, mem.u8.subarray(p, p + n), off);
-  return typeof r === "number" ? written(cpu, f!, r) : r;
+/** write(2) of `n` bytes of guest memory at `p` */
+export function fdWrite(cpu: Cpu | null, fd: number, p: number, n: number): number | Promise<number> {
+  const r = writeFd(fd, mem.u8.subarray(p, p + n));
+  return r === -E.PIPE ? written(cpu, openFd(fd)!, r) : r;
 }
-export const pwrite = (fd: number, p: number, n: number, off: number): number | Promise<number> => off < 0 ? -E.INVAL : fdWrite(null, fd, p, n, off);
 /** readv/writev: each iovec in turn until a transfer comes up short, as the kernel does. `op` is
  *  told what the call has moved so far: a read that would then have to wait moves nothing. */
 function vectored(iov: number, count: number, op: (p: number, n: number, moved: number) => number | Promise<number>): number | Promise<number> {
@@ -225,14 +209,16 @@ function readWouldWait(fd: number): boolean {
   const f = openFd(fd);
   return !!f && !(f.ops.poll(f, POLLIN) & (POLLIN | POLLHUP | POLLERR));
 }
-/** fstat(2) */
-function statFd(fd: number, buf: number): number | Promise<number> {
+/** fstat(2): the descriptor's record, or -errno */
+export function statFd(fd: number): Stat | number | Promise<Stat | number> {
   const f = openFd(fd);
-  if (!f) return -E.BADF;
-  const stat = f.ops.stat(f);
-  if (!(stat instanceof Promise)) { fillStat(buf, stat.path ?? f.path, stat); return 0; }
+  return f ? complete(f.ops.stat(f), (s) => s ? fullStat(s.path ?? f.path, s) : -E.BADF) : -E.BADF;
+}
+/** a stat call's record into the struct stat at `buf` */
+export function putStat(buf: number, stat: Stat | number | Promise<Stat | number>): number | Promise<number> {
+  if (!(stat instanceof Promise)) { if (typeof stat !== "number") { fillStat(buf, stat); return 0; } return stat; }
   const at = anchor(buf);
-  return stat.then((s) => { if (!s) return -E.BADF; fillStat(at(), s.path ?? f.path, s); return 0; });
+  return stat.then((s) => { if (typeof s === "number") return s; fillStat(at(), s); return 0; });
 }
 /** getdents64: linux_dirent64 records from the fd's position on */
 export function getdents64(fd: number, buf: number, size: number): number | Promise<number> {
@@ -254,53 +240,66 @@ function dirents(f: OpenFile, entries: string[], buf: number, size: number): num
   return at || f.pos >= entries.length ? at : -E.INVAL;
 }
 /** fallocate(2): mode 0 allocates; punching holes and collapsing ranges are not supported */
-export const fallocate = (fd: number, mode: number, off: number, length: number): number | Promise<number> => mode ? -E.NOTSUP : javaAllocateFd(fd, off, length);
+export const fallocate = (fd: number, mode: number, off: number, length: number): number | Promise<number> => mode ? -E.NOTSUP : allocateFd(fd, off, length);
 export function makePipe(out: number, flags: number): number {
-  const [read, write] = javaPipeFds(flags);
+  const [read, write] = pipeFds(flags);
   mem.st32(out, read); mem.st32(out + 4, write);
   return 0;
 }
+/** statfs and statvfs of the one filesystem: the storage estimate in 4K blocks, 0x10000 inodes and
+ *  half of them free, 255-byte names */
+type StorageStat = { bsize: number; blocks: number; bfree: number; files: number; ffree: number; namemax: number };
+export const storageStat = (): Promise<StorageStat> => storageEstimate().then(({ total, free }) =>
+  ({ bsize: 4096, blocks: Math.floor(total / 4096), bfree: Math.floor(free / 4096), files: 0x10000, ffree: 0x8000, namemax: 255 }));
+/** statfs(2) into `buf`: f_type and f_bsize are longs; the counts after them are 64-bit on both ABIs
+ *  (the ILP32 struct is the kernel's statfs64), then fsid, f_namelen and f_frsize */
 function statfs(buf: number): Promise<number> {
   const at = anchor(buf);
-  return storageEstimate().then((estimate) => fillStatfs(at(), estimate));
+  return storageStat().then((s) => {
+    const b = at(), counts = b + 2 * PTR;
+    mem.memset(b, 0, KLAYOUT.STATFS_SIZE);
+    stLong(b + PTR, s.bsize);
+    [s.blocks, s.bfree, s.bfree, s.files, s.ffree].forEach((n, i) => mem.st64(counts + i * 8, BigInt(n)));
+    stLong(counts + 48, s.namemax); stLong(counts + 48 + PTR, s.bsize);
+    return 0;
+  });
 }
 
-// The path calls, where each path lives
-function atPath(dirfd: number, path: string): string | number {
-  if (path.startsWith("/") || dirfd === AT_FDCWD) return path;
+// The path operations, where each path lives
+/** a name relative to directory descriptor `dirfd`, as the *at calls resolve it, or -errno */
+export function resolveAt(dirfd: number, name: string): string | number {
+  if (name.startsWith("/") || dirfd === AT_FDCWD) return name;
   const dir = openFd(dirfd);
   if (!dir) return -E.BADF;
-  return dir.dir ? dir.path + "/" + path : -E.NOTDIR;
+  return dir.dir ? dir.path + "/" + name : -E.NOTDIR;
 }
+/** stat(2) of a path: its record, or -errno */
+export function statAt(path: string): Stat | number | Promise<Stat | number> {
+  const p = vfs.norm(path);
+  return complete(filePaths(p).fileStat(p), ({ errno, value }) => value ? fullStat(p, value) : -(errno || E.NOENT));
+}
+/** readlink(2): no path here is a symbolic link */
+export const readlinkAt = (path: string): number | Promise<number> => complete(statAt(path), (s) => typeof s === "number" ? s : -E.INVAL);
 export function faccessatPath(dirfd: number, name: string, mode: number, flags: number): number | Promise<number> {
-  const path = atPath(dirfd, name);
+  const path = resolveAt(dirfd, name);
   if (flags & ~(0x100 | 0x200) || mode & ~7) return -E.INVAL;
   return typeof path === "string" ? filePaths(path).fileAccess(path, mode) : path;
 }
-export const mkdirProcess = (path: string): number | Promise<number> => filePaths(path).fileMkdir(path);
-export const renameProcess = (from: string, to: string): number | Promise<number> => filePaths(from, to).fileRename(from, to);
-export const removeProcess = (path: string, directory?: boolean): number | Promise<number> => filePaths(path).fileRemove(path, directory);
 /** mknod(2) unprivileged: a fifo or an empty regular file; device nodes need CAP_MKNOD */
-export function mknodProcess(path: string, mode: number): number | Promise<number> {
+export function mknodAt(path: string, mode: number): number | Promise<number> {
   const type = mode & 0xf000;
   if (type === S_IFIFO) return filePaths(path).fileFifo(path);
   if (type === 0 || type === S_IFREG) return filePaths(path).fileCreate(path);
   return -(type === S_IFCHR || type === 0x6000 ? E.PERM : E.INVAL);
 }
-export function statProcess(path: string, buf: number): number | Promise<number> {
-  const p = vfs.norm(path), destination = anchor(buf);
-  return complete(filePaths(p).fileStat(p), ({ errno, value }) => {
-    if (!value) return -(errno || E.NOENT);
-    fillStat(destination(), p, value);
-    return 0;
-  });
-}
-/** a directory's entries as readdir lists them, or a negative errno */
-export const listProcess = (path: string): string[] | number | Promise<string[] | number> =>
+/** a directory's entries as readdir lists them, or -errno */
+export const listAt = (path: string): string[] | number | Promise<string[] | number> =>
   complete(filePaths(path).fileList(path), ({ errno, value }) => value ? [".", "..", ...value] : -(errno || E.NOENT));
-/** chmod, chown and utimes of a path */
-export const changeProcess = (path: string, change: AttributeChange): number | Promise<number> =>
-  filePaths(path).fileSetAttributes(path, change);
+/** the *at calls' path, resolved: `op`'s answer, or the resolution's -errno */
+const inDir = <T>(dirfd: number, name: string, op: (path: string) => T): T | number => {
+  const path = resolveAt(dirfd, name);
+  return typeof path === "string" ? op(path) : path;
+};
 const UTIME_NOW = 0x3fffffff, UTIME_OMIT = 0x3ffffffe;
 /** the modification time utimensat's `times` (struct timespec[2]) sets: now without them, none when omitted */
 export function modifiedTime(times: number): AttributeChange {
@@ -320,53 +319,44 @@ export function fsInit(): void {
 }
 
 export const FS_SYSCALLS: Record<string, HostFn> = {
-  openat: (_c, a) => {
-    const dirfd = a.i(), path = a.str(), flags = a.i();
-    const resolved = atPath(dirfd, path);
-    return typeof resolved === "string" ? processOpenFd(resolved, flags) : resolved;
-  },
-  close: (_c, a) => javaCloseFd(a.i()),
-  read: (_c, a) => fdRead(a.i(), a.p(), a.u()),
+  openat: (_c, a) => { const dirfd = a.i(), name = a.str(), flags = a.i(); return inDir(dirfd, name, (path) => processOpenFd(path, flags)); },
+  close: (_c, a) => closeFd(a.i()),
+  read: (_c, a) => readFd(a.i(), a.p(), a.u()),
   write: (cpu, a) => fdWrite(cpu, a.i(), a.p(), a.u()),
-  readv: (_c, a) => { const fd = a.i(); return vectored(a.p(), a.i(), (p, n, moved) => moved && readWouldWait(fd) ? 0 : fdRead(fd, p, n)); },
+  readv: (_c, a) => { const fd = a.i(); return vectored(a.p(), a.i(), (p, n, moved) => moved && readWouldWait(fd) ? 0 : readFd(fd, p, n)); },
   writev: (cpu, a) => {
     const fd = a.i(), iov = a.p(), count = a.i(), f = openFd(fd);
     if (f?.ops.messages(f)) return complete(f.ops.write(f, gather(iov, count), -1), (r) => written(cpu, f, r));
     return vectored(iov, count, (p, n) => fdWrite(cpu, fd, p, n));
   },
-  pread64: (_c, a) => pread(a.i(), a.p(), a.u(), Number(a.l())),
-  pwrite64: (_c, a) => pwrite(a.i(), a.p(), a.u(), Number(a.l())),
-  lseek: (_c, a) => {
-    const wide = PTR === 8, fd = a.i(), offset = wide ? Number(a.l()) : a.i(), whence = a.i();
-    return complete(javaLseekFd(fd, offset, whence), result => wide ? BigInt(result) : result);
-  },
-  fstat: (_c, a) => statFd(a.i(), a.p()),
+  pread64: (_c, a) => preadFd(a.i(), a.p(), a.u(), Number(a.l())),
+  pwrite64: (_c, a) => { const fd = a.i(), p = a.p(), n = a.u(); return pwriteFd(fd, mem.u8.subarray(p, p + n), Number(a.l())); },
+  lseek: (_c, a) => seekFd(a.i(), offArg(a), a.i()),
+  fstat: (_c, a) => { const fd = a.i(); return putStat(a.p(), statFd(fd)); },
   fstatat: (_c, a) => {
     const fd = a.i(), name = a.str(), buf = a.p(), flags = a.i();
     if (flags & ~(0x100 | 0x1000)) return -E.INVAL;
-    if (!name) return flags & 0x1000 ? statFd(fd, buf) : -E.NOENT;
-    const path = atPath(fd, name);
-    return typeof path === "string" ? statProcess(path, buf) : path;
+    if (!name) return flags & 0x1000 ? putStat(buf, statFd(fd)) : -E.NOENT;
+    return inDir(fd, name, (path) => putStat(buf, statAt(path)));
   },
-  fchmod: (_c, a) => javaChangeFdAttributes(a.i(), { mode: a.i() }),
-  fchown: (_c, a) => javaChangeFdAttributes(a.i(), { uid: a.i(), gid: a.i() }),
+  fchmod: (_c, a) => changeFdAttributes(a.i(), { mode: a.i() }),
+  fchown: (_c, a) => changeFdAttributes(a.i(), { uid: a.i(), gid: a.i() }),
   umask: () => 0o22,
   renameat: (_c, a) => {
-    const from = atPath(a.i(), a.str());
+    const from = resolveAt(a.i(), a.str());
     if (typeof from !== "string") return from;
-    const to = atPath(a.i(), a.str());
-    return typeof to !== "string" ? to : renameProcess(from, to);
+    return inDir(a.i(), a.str(), (to) => filePaths(from, to).fileRename(from, to));
   },
-  mkdirat: (_c, a) => { const path = atPath(a.i(), a.str()); return typeof path === "string" ? mkdirProcess(path) : path; },
-  mknodat: (_c, a) => { const path = atPath(a.i(), a.str()); return typeof path === "string" ? mknodProcess(path, a.i()) : path; },
-  ftruncate: (_c, a) => javaTruncateFd(a.i(), offArg(a)),
+  mkdirat: (_c, a) => inDir(a.i(), a.str(), (path) => filePaths(path).fileMkdir(path)),
+  mknodat: (_c, a) => { const dirfd = a.i(), name = a.str(), mode = a.i(); return inDir(dirfd, name, (path) => mknodAt(path, mode)); },
+  ftruncate: (_c, a) => truncateFd(a.i(), offArg(a)),
   fallocate: (_c, a) => { const fd = a.i(), mode = a.i(), off = Number(a.l()); return fallocate(fd, mode, off, Number(a.l())); },
-  // the raw call has no flags, libc's (stdio.ts) has
+  // the raw call has no flags, libc's (libc32/stdio.ts) has
   faccessat: (_c, a) => faccessatPath(a.i(), a.str(), a.i(), 0),
   getdents64: (_c, a) => getdents64(a.i(), a.p(), a.u()),
   truncate: (_c, a) => {
     const path = a.str(), n = offArg(a);
-    return complete(processOpenFd(path, 1), fd => fd < 0 ? fd : complete(javaTruncateFd(fd, n), r => complete(javaCloseFd(fd), () => r)));
+    return complete(processOpenFd(path, 1), fd => fd < 0 ? fd : complete(truncateFd(fd, n), r => complete(closeFd(fd), () => r)));
   },
   fcntl: (_c, a) => {
     const fd = a.i(), cmd = a.i();
@@ -376,32 +366,31 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
       mem.st16(lock, 2);
       return 0;
     }
-    return javaFcntlFd(fd, cmd, a.i());
+    return fcntlFd(fd, cmd, a.i());
   },
-  fsync: (_c, a) => javaSyncFd(a.i()), fdatasync: (_c, a) => javaSyncFd(a.i()),
+  fsync: (_c, a) => syncFd(a.i()), fdatasync: (_c, a) => syncFd(a.i()),
   syncfs: (_c, a) => openFd(a.i()) ? 0 : -E.BADF,
-  dup: (_c, a) => javaDupFd(a.i()),
+  dup: (_c, a) => dupFd(a.i()),
   dup3: (_c, a) => {
     const fd = a.i(), to = a.i(), flags = a.i();
     if (fd === to || (flags & ~O_CLOEXEC)) return -E.INVAL;
-    return javaDup2Fd(fd, to, !!(flags & O_CLOEXEC));
+    return dup2Fd(fd, to, !!(flags & O_CLOEXEC));
   },
   pipe2: (_c, a) => makePipe(a.p(), a.i()),
   sendfile: () => -E.NOSYS,
   flock: () => 0,
-  unlinkat: (_c, a) => { const path = atPath(a.i(), a.str()), flags = a.i(); return typeof path === "string" ? removeProcess(path, !!(flags & 0x200)) : path; },
+  unlinkat: (_c, a) => { const dirfd = a.i(), name = a.str(), flags = a.i(); return inDir(dirfd, name, (path) => filePaths(path).fileRemove(path, !!(flags & 0x200))); },
   // no links to follow, so fchmodat's flags change nothing
-  fchmodat: (_c, a) => { const path = atPath(a.i(), a.str()), mode = a.i(); return typeof path === "string" ? changeProcess(path, { mode }) : path; },
+  fchmodat: (_c, a) => { const dirfd = a.i(), name = a.str(), mode = a.i(); return inDir(dirfd, name, (path) => filePaths(path).fileSetAttributes(path, { mode })); },
   utimensat: (_c, a) => {
     const dirfd = a.i(), name = a.p(), change = modifiedTime(a.p());
-    if (!name) return javaChangeFdAttributes(dirfd, change);
-    const path = atPath(dirfd, mem.cstr(name));
-    return typeof path === "string" ? changeProcess(path, change) : path;
+    if (!name) return changeFdAttributes(dirfd, change);
+    return inDir(dirfd, mem.cstr(name), (path) => filePaths(path).fileSetAttributes(path, change));
   },
   // the int a request answers into its argument: FIONREAD's, the one request files take
   ioctl: (_c, a) => {
     const fd = a.i(), request = a.i(), destination = request === FIONREAD ? anchor(a.p()) : null;
-    return complete(javaIoctlIntFd(fd, request), n => {
+    return complete(ioctlIntFd(fd, request), n => {
       if (n < 0) return n;
       mem.st32(destination!(), n);
       return 0;
@@ -411,7 +400,8 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
   fstatfs: (_c, a) => { a.i(); return statfs(a.p()); },
   statfs64: (_c, a) => { a.str(); return statfs(a.p()); },
   fstatfs64: (_c, a) => { a.i(); return statfs(a.p()); },
-  getcwd: (_c, a) => { const b = a.p(), n = a.u(); mem.putCstr(b, "/", n); return ARG0; },
+  // the length with its NUL
+  getcwd: (_c, a) => { const b = a.p(), n = a.u(); return n < 2 ? -E.RANGE : mem.putCstr(b, "/", n) + 1; },
   chdir: () => 0,
-  readlinkat: () => -E.INVAL,
+  readlinkat: (_c, a) => inDir(a.i(), a.str(), readlinkAt),
 };

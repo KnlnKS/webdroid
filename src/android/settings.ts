@@ -21,22 +21,17 @@ import { notifyContent } from "./server/content.ts";
 import { locationEnabled } from "./locationmanager.ts";
 import { holdsPlatformPermission, notHeld } from "./permissions.ts";
 import { SettingsStore, type SettingsTable, type SettingsAccess } from "../shell/settings.ts";
+import { broker, remoteSystem } from "../shell/broker-access.ts";
 import { registerSystemProvider, matrixCursor } from "./systemproviders.ts";
 
 const SETTINGS_AUTHORITY = "settings";
-let store = new SettingsStore(), stopWatching = store.watch(settingsChanged);
-let access: SettingsAccess = store;
-/** the broker's store, shared by every process */
-export function useSettingsStore(shared: SettingsStore): () => void {
-  stopWatching(); store = shared; access = shared;
-  return stopWatching = shared.watch(settingsChanged);
-}
+const store = new SettingsStore();
+/** the broker's store, shared by every process: system_server's realm holds it */
 export const settingsStore = (): SettingsStore => store;
-/** the settings this process reads: its store, or the broker's */
-export const settingsAccess = (): SettingsAccess => access;
-export function useSettingsAccess(shared: SettingsAccess): void {
-  stopWatching(); access = shared;
-}
+/** system_server announces the store's changes until this is called */
+export const stopSettingsUpdates = store.watch(settingsChanged);
+/** the settings this process reads: its realm's store, or the broker's from a Worker */
+export const settingsAccess = (): SettingsAccess => remoteSystem() ? broker().settings : store;
 /** SettingsProvider.notifyForSettingsChange: notifyChange(uri, null, syncToNetwork) as the system */
 function settingsChanged(table: SettingsTable, name: string): void {
   detached(() => asSystem(() => notifyContent(`content://settings/${table}/${name}`, null, false, 1)), logUncaught);
@@ -45,8 +40,8 @@ function settingsChanged(table: SettingsTable, name: string): void {
 /** UiModeManagerService persists the device's night mode as Secure.UI_NIGHT_MODE once it is set:
  *  MODE_NIGHT_YES (2) while dark, MODE_NIGHT_NO (1) after it was dark */
 export function deviceNightMode(night: boolean): void | Promise<void> {
-  return after(night ? "2" : access.get("secure", "ui_night_mode"), value =>
-    value === null ? undefined : after(access.put("secure", "ui_night_mode", night ? "2" : "1"), () => {}));
+  return after(night ? "2" : settingsAccess().get("secure", "ui_night_mode"), value =>
+    value === null ? undefined : after(settingsAccess().put("secure", "ui_night_mode", night ? "2" : "1"), () => {}));
 }
 
 type Table = "system" | "secure" | "global";
@@ -130,11 +125,11 @@ const DERIVED: Partial<Record<Table, Record<string, (stored: string | null) => u
 };
 const valueOf = (table: Table, name: string): unknown => {
   const derive = DERIVED[table]?.[name];
-  return after(access.get(table, name), stored => derive ? derive(stored) : stored);
+  return after(settingsAccess().get(table, name), stored => derive ? derive(stored) : stored);
 };
 /** the table's settings in SettingsState order, with the derived ones */
 function namesOf(table: Table): string[] | Promise<string[]> {
-  return after(access.entries(table), entries => {
+  return after(settingsAccess().entries(table), entries => {
     const names = entries.map(([name]) => name);
     for (const name of Object.keys(DERIVED[table] ?? {})) if (!names.includes(name)) names.push(name);
     return names;
@@ -156,7 +151,7 @@ const ssaids = new Map<number, Promise<string>>();
 function ssaid(record: PackageRecord): Promise<string> {
   let id = ssaids.get(record.uid);
   if (!id) ssaids.set(record.uid, id = (async () => {
-    const key = await crypto.subtle.importKey("raw", hexBytes(await access.ssaidKey()), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const key = await crypto.subtle.importKey("raw", hexBytes(await settingsAccess().ssaidKey()), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
     const parts: Uint8Array[] = [];
     for (const cert of await record.visibleCertificates()) {
       const prefix = new Uint8Array(4);
@@ -222,7 +217,7 @@ const validKey = (name: string | null): name is string =>
 function* writeSetting(c: Caller, table: Table, name: string, value: string | null, operation: number): Gen<boolean> {
   if (table === "system") yield* enforceSystemWrite(c, operation, name);
   else enforceSecureWrite(c);
-  return (yield* awaited(access.put(table, name, operation === SYSTEM_DELETE ? null : value))) || operation !== SYSTEM_DELETE;
+  return (yield* awaited(settingsAccess().put(table, name, operation === SYSTEM_DELETE ? null : value))) || operation !== SYSTEM_DELETE;
 }
 
 // ── the provider's operations
@@ -239,16 +234,16 @@ const call = driven(function* call$(method: string, name: string | null, args: J
   const table = /^(?:GET|PUT|DELETE|LIST|RESET)_(system|secure|global|config)$/.exec(method)?.[1] as Table | "config" | undefined;
   const verb = method.slice(0, method.indexOf("_")), key = name ?? "";
   if (table === "config") {
-    if (verb === "GET") return yield* bundle([["String", "value", yield* awaited(access.get("config", key))]]);
+    if (verb === "GET") return yield* bundle([["String", "value", yield* awaited(settingsAccess().get("config", key))]]);
     if (verb === "LIST") {
       const prefix: string | null = args ? yield string(args, "_prefix") : null;
       const map = yield newObj("java/util/HashMap", "()V");
-      for (const [k, value] of yield* awaited(access.entries("config"))) if (!prefix || k.startsWith(prefix)) yield vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", k, value);
+      for (const [k, value] of yield* awaited(settingsAccess().entries("config"))) if (!prefix || k.startsWith(prefix)) yield vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", k, value);
       return yield* bundle([["Serializable", "value", map]]);
     }
     enforceConfigWrite(c);
-    if (verb === "PUT") { yield* awaited(access.put("config", key, args ? yield string(args, "value") : null)); return null; }
-    if (verb === "DELETE") return yield* bundle([["Int", "result_rows_deleted", (yield* awaited(access.put("config", key, null))) ? 1 : 0]]);
+    if (verb === "PUT") { yield* awaited(settingsAccess().put("config", key, args ? yield string(args, "value") : null)); return null; }
+    if (verb === "DELETE") return yield* bundle([["Int", "result_rows_deleted", (yield* awaited(settingsAccess().put("config", key, null))) ? 1 : 0]]);
     return yield* reset(c, args);
   }
   if (table) {

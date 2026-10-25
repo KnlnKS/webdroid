@@ -6,7 +6,8 @@ import { once } from "../jvm/suspend.ts";
 import { arrayMapEntries } from "../jvm/natives/jcoll.ts";
 import { unbox, boxLong, boxDouble } from "../jvm/natives/jbox.ts";
 import { i8, jarray, strArray } from "../jvm/abi.ts";
-import { newStub, importBinder, type BinderHandle } from "./binder.ts";
+import { newStub, importBinder } from "./binder.ts";
+import { broker, remoteSystem } from "../shell/broker-access.ts";
 import { mkUri, uriText, type JUri } from "./net.ts";
 
 const AS = "Landroid/content/AttributionSource;", URI = "Landroid/net/Uri;", B = "Landroid/os/Bundle;",
@@ -145,12 +146,10 @@ export function registerSystemProvider(authority: string, p: Omit<SystemProvider
 /** the system providers by authority, which the package manager lists before the installed ones */
 export const systemProviders: ReadonlyMap<string, Readonly<SystemProvider>> = providers;
 
-/** the broker's lookup of system_server's binder for a systemRealm provider, set in a process Worker */
-export const systemProviderTransport: { lookup?: (authority: string) => Promise<BinderHandle | null> } = {};
 /** this realm's binder for a system provider, or system_server's when its state lives there */
 function* providerBinder$(authority: string, p: SystemProvider): Gen<JObj> {
-  if (!p.systemRealm || !systemProviderTransport.lookup) return yield* awaited(p.binder());
-  const binder = yield* awaited(importBinder(yield* awaited(systemProviderTransport.lookup(authority))));
+  if (!p.systemRealm || !remoteSystem()) return yield* awaited(p.binder());
+  const binder = yield* awaited(importBinder(yield* awaited(broker().systemProvider(authority))));
   return yield scall("android/content/ContentProviderNative", "asInterface", "(Landroid/os/IBinder;)Landroid/content/IContentProvider;", binder);
 }
 

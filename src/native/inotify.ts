@@ -7,7 +7,7 @@ import { utf8 } from "../jvm/abi.ts";
 import type { HostFn } from "./host.ts";
 
 /** an inotify instance's watches, and the pipe its events queue on */
-export interface Inotify { watches: Map<number, { path: string; mask: number; dir: boolean }>; nextWd: number; pipe: Pipe }
+interface Inotify { watches: Map<number, { path: string; mask: number; dir: boolean }>; nextWd: number; pipe: Pipe }
 const IN_MODIFY = 0x2, IN_CLOSE_WRITE = 0x8, IN_CREATE = 0x100, IN_DELETE = 0x200, IN_DELETE_SELF = 0x400, IN_IGNORED = 0x8000;
 const IN_NONBLOCK = 0x800, IN_CLOEXEC = 0x80000, IN_MASK_ADD = 0x20000000, IN_ONLYDIR = 0x01000000;
 const inotifies = new Set<Inotify>();
@@ -75,7 +75,7 @@ function makeInotify(flags: number): number {
   inotifies.add(state);
   return installFile(newFile(INOTIFY, "inotify", flags & IN_NONBLOCK, state), !!(flags & O_CLOEXEC));
 }
-export function javaInotifyAddWatch(fd: number, name: string, mask: number): number {
+export function inotifyAddWatch(fd: number, name: string, mask: number): number {
   const path = vfs.norm(name), state = inotifyOf(fd);
   if (typeof state === "number") return state;
   if (!vfs.exists(path)) return -E.NOENT;
@@ -90,7 +90,7 @@ export function javaInotifyAddWatch(fd: number, name: string, mask: number): num
   state.watches.set(wd, { path, mask: events, dir });
   return wd;
 }
-export function javaInotifyRmWatch(fd: number, wd: number): number {
+export function inotifyRmWatch(fd: number, wd: number): number {
   const state = inotifyOf(fd);
   if (typeof state === "number") return state;
   if (!state.watches.delete(wd)) return -E.INVAL;
@@ -98,11 +98,11 @@ export function javaInotifyRmWatch(fd: number, wd: number): number {
   return 0;
 }
 /** inotify_init for libcore's callers (FileObserver), whose changes the VFS reports from now on */
-export function javaInotifyInit(): number { hookInotify(); return makeInotify(IN_CLOEXEC); }
+export function inotifyInit(): number { hookInotify(); return makeInotify(IN_CLOEXEC); }
 
 export const INOTIFY_SYSCALLS: Record<string, HostFn> = {
   inotify_init: () => makeInotify(0),
   inotify_init1: (_c, a) => makeInotify(a.i()),
-  inotify_add_watch: (_c, a) => javaInotifyAddWatch(a.i(), a.str(), a.u()),
-  inotify_rm_watch: (_c, a) => javaInotifyRmWatch(a.i(), a.i()),
+  inotify_add_watch: (_c, a) => inotifyAddWatch(a.i(), a.str(), a.u()),
+  inotify_rm_watch: (_c, a) => inotifyRmWatch(a.i(), a.i()),
 };

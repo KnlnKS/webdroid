@@ -2,24 +2,23 @@
 // syscall(2) reach, each ABI's numbering over the body of the same name in an owning module's record
 // (KERNEL_SYSCALLS). Each answers -errno on failure, as the kernel does.
 
-import { calledMissing, markKernelEntries, type HostFn, type HostRet, type ArgReader } from "./host.ts";
+import { calledMissing, type HostFn, type HostRet, type ArgReader } from "./host.ts";
 import { E } from "./abi.ts";
 import { setRawSyscall, type Cpu } from "./cpu.ts";
 import { installDebuggerdHandlers } from "./crash.ts";
 import { SIGNAL_SYSCALLS } from "./signals.ts";
-import { kernelResult } from "./kernel.ts";
 import { VM_SYSCALLS } from "./vm.ts";
 import { FS_SYSCALLS, fsInit } from "./fs.ts";
 import { EVENTFD_SYSCALLS } from "./eventfd.ts";
 import { INOTIFY_SYSCALLS } from "./inotify.ts";
-import { PTHREAD_SYSCALLS } from "./pthread.ts";
+import { THREAD_SYSCALLS } from "./thread.ts";
 import { NET_SYSCALLS } from "./socket/syscalls.ts";
 import { POLL_SYSCALLS } from "./poll.ts";
 import { PROC_SYSCALLS } from "./proc.ts";
 import { TIMER_SYSCALLS } from "./timers.ts";
 
 /** the kernel's calls by name, which the ARM32 libc's wrappers of the same names answer too */
-export const KERNEL_SYSCALLS: Record<string, HostFn> = { ...VM_SYSCALLS, ...FS_SYSCALLS, ...EVENTFD_SYSCALLS, ...INOTIFY_SYSCALLS, ...PTHREAD_SYSCALLS, ...NET_SYSCALLS, ...POLL_SYSCALLS, ...PROC_SYSCALLS, ...SIGNAL_SYSCALLS, ...TIMER_SYSCALLS };
+export const KERNEL_SYSCALLS: Record<string, HostFn> = { ...VM_SYSCALLS, ...FS_SYSCALLS, ...EVENTFD_SYSCALLS, ...INOTIFY_SYSCALLS, ...THREAD_SYSCALLS, ...NET_SYSCALLS, ...POLL_SYSCALLS, ...PROC_SYSCALLS, ...SIGNAL_SYSCALLS, ...TIMER_SYSCALLS };
 
 /** each ABI's numbers for the body of the same name and arguments (an offset in a register on LP64
  *  makes mmap direct; ILP32's mmap2 counts pages and _llseek splits the offset, so neither is here) */
@@ -62,21 +61,9 @@ function table(numbers: Record<number, string>): (HostFn | undefined)[] {
 }
 const TABLE64 = table(NUMBERS64), TABLE32 = table(NUMBERS32);
 
-/** bionic's functions that hand their pointers straight to the kernel, so a bad one fails with
- *  EFAULT: its syscall stubs and the functions that only tail-call them (from the reference
- *  libc.so's code), and the few whose C body passes the pointer through untouched (open, creat,
- *  chmod, readlink, statfs, connect). Only those with a host body are listed. */
-const WRAPPERS = ("access bind capget chdir chmod chown connect creat epoll_ctl epoll_pwait epoll_wait faccessat fchmodat fchown " +
-  "fdatasync flock fstat fstat64 fstatat fstatat64 fstatfs fsync ftruncate ftruncate64 futimens getpeername getrlimit getsockname " +
-  "getsockopt inotify_add_watch inotify_rm_watch link listen lstat lstat64 madvise mkdir mkdirat mkfifo mlock mmap mmap64 mprotect " +
-  "mremap msync munlock munmap nanosleep open openat prctl pread pread64 prlimit64 pwrite pwrite64 read readlink readlinkat readv " +
-  "recv recvfrom rename renameat rmdir sched_getparam sched_setaffinity sched_setscheduler sendfile setgroups setrlimit setsockopt " +
-  "stat stat64 statfs symlink sysinfo timerfd_gettime timerfd_settime times truncate uname unlink unlinkat utimensat write writev").split(" ");
-
-/** The kernel every process has, whichever libc it runs: the entries a bad pointer fails with
- *  EFAULT, and its file system's first descriptors. */
+/** The kernel every process has, whichever libc it runs: its raw system calls, the crash
+ *  reporter's handlers and its file system's first descriptors. */
 export function kernelInit(): void {
-  markKernelEntries([...Object.keys(KERNEL_SYSCALLS), ...WRAPPERS, "syscall"]);
   setRawSyscall(rawSyscall);
   installDebuggerdHandlers();
   fsInit();
@@ -89,5 +76,3 @@ export function rawSyscall(cpu: Cpu, nr: number, a: ArgReader): HostRet | Promis
   calledMissing.add("syscall " + nr);
   return -E.NOSYS;
 }
-/** libc's syscall(2), -1 with errno set on failure */
-export const syscallEntry: HostFn = (cpu, a) => kernelResult(cpu, rawSyscall(cpu, a.i(), a));

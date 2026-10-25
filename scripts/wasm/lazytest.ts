@@ -32,12 +32,12 @@ for (const own of [false, true]) {
 
 for (const [hot, own] of [[false, false], [true, false], [true, true]]) {
   let loading = !hot;
-  const late = Object.assign(() => {
+  const late = { fn: () => {
     if (!loading) return w.entry("Lz", "first", "()LLz$A;")();
     const loader = own ? w.prog.newLoader(w.prog.root, null) : w.prog.root;
     w.addDexes(loadDexes(join(out, "out2/classes.dex")), loader);
     return w.entry(own ? `Lz2@${loader.id}` : "Lz2", "make", "()LLz$A;")();
-  }, { javaValues: true });
+  }, raw: true };
   const w = lz({ natives: new Natives({
     find: (cls, key) => cls === "Lz" && key === "late()LLz$A;" ? late : undefined,
     thrown: () => undefined,

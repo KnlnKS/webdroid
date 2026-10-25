@@ -1,5 +1,5 @@
-// Which natives wait, and how they are imported. A native written as a generator that yields Java results (`driven`), an async function
-// or one marked where it is registered (`waits`) is a Suspending import: the Wasm stack that called it waits for the Promise and other strands run
+// How natives that wait are imported. A native whose registration says it may wait (NativeImpl.wait: `driven`, an async function
+// or `waits`) is a Suspending import: the Wasm stack that called it waits for the Promise and other strands run
 // meanwhile. Every other native is a plain import, since a Suspending import suspends even when its function answers a value (about 50 ns against 4).
 // A plain native that answers a Promise anyway parks its strand (natives.ts `parkable`), and is reported; its arrays are views of linear memory, which may grow
 // (detaching them) while it waits, so a native with arrays that may wait has to be declared: `waits`, or `retries` when it can simply be called again.
@@ -7,18 +7,9 @@
 // Wasm side of an import must not call Java through a plain call and expect that Java to block.
 import type { HostContext, HostFn } from "../link/hostapi.ts";
 import { count } from "./stats.ts";
-import { isWaiting } from "../../jvm/runtime.ts";
 
-const AsyncFunction = (async () => {}).constructor;
-type Native = HostFn & { $g?: (...a: unknown[]) => Generator<unknown, unknown, unknown> };
-
-/** whether native `fn` is declared to wait, which makes it a Suspending import */
-export const mayWait = (fn: HostFn): boolean => (fn as Native).$g !== undefined || fn.constructor === AsyncFunction || isWaiting(fn);
 /** natives found answering a Promise from a plain import: the report in run.json (`nativeSuspended`) */
 export const suspendedNatives = new Set<string>();
-
-/** whether native `fn` answers a Promise on every call, which only a Suspending import can take */
-export const waitsAlways = (fn: HostFn): boolean => fn.constructor === AsyncFunction;
 
 /** a plain import answered a Promise: it is reported, as a native that waits is declared */
 export function reportSuspended(id: string): void {

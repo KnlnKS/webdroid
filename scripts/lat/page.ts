@@ -2,14 +2,17 @@
 // globalThis.__wdLatConfig (and __wdProfiling, __wdDemand): it installs the presentation observer, and once the app page has loaded drives the
 // scenario, leaves the capture in globalThis.__wdLat and sets document.title to DONE.
 import { installLatencyObserver } from "./observe.ts";
-import { compileDeltas, matchesState, type Expectation } from "./expect.ts";
+import type { compileDeltas } from "./compile.ts";
+import type { Expectation, Step } from "./scenarios.ts";
 import type { Ev } from "../../src/timeline.ts";
+import { performAction } from "../../tests/e2e/lib/actions.ts";
+import { stateMatches } from "../../tests/e2e/lib/settle.ts";
+import type { Screen, UiNode } from "../../tests/e2e/types.ts";
 import { ERROR_LINE, STARTING_MS, appUp, pageDiagnostics, workerDiagnostics, workerRows, type ProcessSnapshot, type WorkerProcess } from "../../tests/e2e/lib/processes.ts";
 
-/** what run.ts hands a launch's page: `steps` are the scenario's (scripts/lat/scenarios); `E` is the timeline's events, passed rather than
+/** what run.ts hands a launch's page: `steps` are the scenario's (scenarios.ts) on `screen`; `E` is the timeline's events, passed rather than
  *  imported so the bundle leaves out the timeline's ring */
-export type LatConfig = { steps: any[]; counters: string[]; save: boolean; replay: boolean; expectedLaunch: Expectation; E: typeof Ev };
-type UiNodes = Parameters<typeof matchesState>[0];
+export type LatConfig = { steps: Step[]; screen: Screen; counters: string[]; save: boolean; replay: boolean; expectedLaunch: Expectation; E: typeof Ev };
 
 /** the first-response clock: pointerup to the first answering frame and to the frame the response settled in,
  *  with the presentation intervals between them */
@@ -27,7 +30,9 @@ export type Capture = { launch?: Launch; taps: Tap[]; fps?: Fps[]; processesBefo
   codeReadiness?: { phase: "saved" | "attached"; realms: unknown[] }; error?: string };
 
 const w = globalThis as any;
-const { steps, counters, save, replay, expectedLaunch, E }: LatConfig = w.__wdLatConfig;
+const { steps, screen: device, counters, save, replay, expectedLaunch, E }: LatConfig = w.__wdLatConfig;
+/** whether a UI tree shows what `expectation` wants */
+const shows = (nodes: unknown, expectation: Expectation) => !!nodes && stateMatches(expectation.state, device, nodes as UiNode[], null);
 installLatencyObserver(counters);
 
 async function run() {
@@ -219,7 +224,7 @@ async function run() {
         }
         if (w.wd && !candidates.length) {
           nodes = await state();
-          if (nodes && matchesState(nodes as UiNodes, expectation)) stateAt ??= performance.now(); else stateAt = null;
+          if (shows(nodes, expectation)) stateAt ??= performance.now(); else stateAt = null;
         }
       } catch (e) { error = String(e); break; }
       // the next probe follows the next app frame: probing runs Java on the app's main looper
@@ -338,37 +343,14 @@ async function run() {
   // a gesture goes to the element under its press, as the browser's hit test sends it
   let target: Element | null = null;
   const ev = (type: string, x: number, y: number) => {
-    const r = screen().getBoundingClientRect(), clientX = r.left + x * r.width / 1080, clientY = r.top + y * r.height / 2160;
+    const r = screen().getBoundingClientRect(), clientX = r.left + x * r.width / device.width, clientY = r.top + y * r.height / device.height;
     if (type === "pointerdown") target = document.elementFromPoint(clientX, clientY) ?? screen();
     target!.dispatchEvent(new PointerEvent(type, { clientX, clientY, pointerId: 1, isPrimary: true, bubbles: true, pointerType: "touch" }));
   };
   const out = result.taps;
   for (const s of steps) {
-    if (s.wait) { await sleep(s.wait); await idle(); continue; }
-    if (s.back) { await w.wd.back(); await sleep(300); await idle(); continue; }
-    // as the e2e driver's privateStorage: without the host's pickers, a document or folder request takes the private storage
-    if (s.privateStorage) { for (const name of ["showDirectoryPicker", "showOpenFilePicker", "showSaveFilePicker"]) Object.defineProperty(window, name, { value: undefined, configurable: true }); continue; }
-    if (s.pick) {
-      // a synthetic photo, so the picker has an image to hand the app
-      const img = new OffscreenCanvas(1600, 1200), g = img.getContext("2d")!, grad = g.createLinearGradient(0, 0, 1600, 1200);
-      grad.addColorStop(0, "#3a6ea5"); grad.addColorStop(1, "#f2c14e");
-      g.fillStyle = grad; g.fillRect(0, 0, 1600, 1200);
-      const bytes = new Uint8Array(await (await img.convertToBlob({ type: "image/jpeg", quality: 0.9 })).arrayBuffer());
-      const d = await (await navigator.storage.getDirectory()).getDirectoryHandle("lat-picked", { create: true });
-      const h = await d.getFileHandle(s.pick, { create: true }), wr = await h.createWritable();
-      await wr.write(bytes); await wr.close();
-      w.showOpenFilePicker = async () => [h];
-      continue;
-    }
-    if (s.swipe) {
-      const [x1, y1, x2, y2, ms] = s.swipe, n = Math.max(2, Math.round(ms / 8));
-      ev("pointerdown", x1, y1);
-      for (let i = 1; i <= n; i++) { await sleep(ms / n); ev("pointermove", x1 + (x2 - x1) * i / n, y1 + (y2 - y1) * i / n); }
-      ev("pointerup", x2, y2);
-      await sleep(300); await idle();
-      continue;
-    }
-    if (s.fps) {
+    if ("wait" in s) { await sleep(s.wait); await idle(); continue; }
+    if ("fps" in s) {
       // continuous scrolling for s.ms: app presentation intervals and page long tasks, no readback in the window
       const [x1, y1, x2, y2] = s.fps, long: number[] = [];
       const lt = new PerformanceObserver(list => { for (const e of list.getEntries()) long.push(e.duration); });
@@ -394,56 +376,55 @@ async function run() {
       await idle();
       continue;
     }
-    let [x, y] = s.tap ?? [], pressed: number[] | undefined;
-    if (s.text) {
-      let at = null;
-      for (let tries = 0; !at && tries < 30; tries++) { at = await w.wd.locateText(s.text); if (!at) await sleep(100); }
-      if (!at) throw new Error(`no text "${s.text}" on screen`);
-      ({ x, y } = at); pressed = at.bounds;
-    }
-    const processesBefore = s.m ? await diagnostics() : undefined;
-    if (s.m) {
-      // nothing reaches the app between pointerdown and the window's close but the pointer itself
-      const pid = appCanvas().dataset.pid ?? null, before = await snapshot(), mark = w.__wdDemand ? (await w.wd.foreground()?.demandMark()) ?? null : null;
-      watch(s.expect);
-      await sleep(50);
-      const longTasks: [number, number][] = [], lto = new PerformanceObserver((list) => { for (const e of list.getEntries()) longTasks.push([e.startTime, e.duration]); });
-      try { lto.observe({ type: "longtask" }); } catch { /* not every engine reports long tasks */ }
-      const t0 = performance.now();
-      ev("pointerdown", x, y);
-      await sleep(s.hold ?? 60);
-      if (w.__wdProfiling) (function __wdMarkUp() { const t = performance.now(); while (performance.now() - t < 1); })();
-      const compileBefore = observer.snapshot(), tu = performance.now();
-      // a trace (blink.user_timing) places the tap by this mark
-      performance.mark("lat:" + s.m);
-      ev("pointerup", x, y);
-      // the window closes once the app has presented nothing for 800 ms
-      for (let last = tu; performance.now() - last < 800 && performance.now() - t0 < 8000;) {
-        await sleep(20);
-        last = Math.max(last, (shots as Shot[] | null)?.at(-1)?.t ?? 0);
-      }
-      const compileAfter = observer.snapshot(), compileAt = performance.now(), window = unwatch();
-      const topPid = appCanvas().dataset.pid ?? pid;
-      const response = firstResponse(s.expect, window, tu, pressed ?? [x - 48, y - 48, x + 48, y + 48], topPid);
-      window.forEach(shot => shot.crops.forEach(c => c.close()));
-      const after = await snapshot(), timeline = await frameReport(t0, compileAt, response.first === null ? undefined : [tu, tu + response.first]).catch(e => ({ error: String(e) }));
-      lto.disconnect();
-      const page = timeline && "raw" in timeline ? { raw: (await w.wd.page.timeline(performance.timeOrigin + t0) as number[][]).map(([t, e, a]) => [Math.round((t - performance.timeOrigin) * 100) / 100, e, a]).filter(([t]) => t <= compileAt), longTasks } : undefined;
-      await idle();
-      const processesAfter = await diagnostics(), nodes = await state(), demanded = mark ? (await w.wd.foreground()?.demandSince(mark)) ?? null : undefined;
-      const { last, still, ...first } = response;
-      let error = first.error ?? frameError ?? null;
-      if (!error && (!nodes || !matchesState(nodes as UiNodes, s.expect))) error = "the settled UI state does not match the scenario";
-      if (!error && last && !pixelsMatch(s.expect, last.pixels, still?.pixels ?? [])) error = "the settled response pixels do not match the scenario";
-      out.push({ intended: error ? null : first.first, response: { ...first, ...(error ? { error } : {}) }, timeline, page, semantic: { nodes, at: performance.now() },
-        compileBefore, compileAfter, compileWindow: { origin: performance.timeOrigin, up: tu, end: compileAt }, m: s.m, frames: first.frames, demandMark: mark ?? undefined, demand: demanded,
-        perf: Object.fromEntries(counters.map((k) => [k, Math.round((after[k] - before[k]) * 10) / 10]).filter(([, v]) => v)) as Record<string, number>, processesBefore, processesAfter });
+    if (!("m" in s)) {
+      // as the e2e driver acts
+      await performAction({ a: s.act, screen: device, deadlineMs: 10_000 });
+      await sleep(300); await idle();
       continue;
     }
+    let x = 0, y = 0, pressed: number[] | undefined;
+    if (s.act.type === "tapText") {
+      let at = null;
+      for (let tries = 0; !at && tries < 30; tries++) { at = await w.wd.locateText(s.act.text); if (!at) await sleep(100); }
+      if (!at) throw new Error(`no text "${s.act.text}" on screen`);
+      ({ x, y } = at); pressed = at.bounds;
+    } else { x = s.act.x * device.width; y = s.act.y * device.height; }
+    const processesBefore = await diagnostics();
+    // nothing reaches the app between pointerdown and the window's close but the pointer itself
+    const pid = appCanvas().dataset.pid ?? null, before = await snapshot(), mark = w.__wdDemand ? (await w.wd.foreground()?.demandMark()) ?? null : null;
+    watch(s.expect);
+    await sleep(50);
+    const longTasks: [number, number][] = [], lto = new PerformanceObserver((list) => { for (const e of list.getEntries()) longTasks.push([e.startTime, e.duration]); });
+    try { lto.observe({ type: "longtask" }); } catch { /* not every engine reports long tasks */ }
+    const t0 = performance.now();
     ev("pointerdown", x, y);
-    await sleep(s.hold ?? 60);
+    await sleep(60);
+    if (w.__wdProfiling) (function __wdMarkUp() { const t = performance.now(); while (performance.now() - t < 1); })();
+    const compileBefore = observer.snapshot(), tu = performance.now();
+    // a trace (blink.user_timing) places the tap by this mark
+    performance.mark("lat:" + s.m);
     ev("pointerup", x, y);
-    await sleep(300); await idle();
+    // the window closes once the app has presented nothing for 800 ms
+    for (let last = tu; performance.now() - last < 800 && performance.now() - t0 < 8000;) {
+      await sleep(20);
+      last = Math.max(last, (shots as Shot[] | null)?.at(-1)?.t ?? 0);
+    }
+    const compileAfter = observer.snapshot(), compileAt = performance.now(), window = unwatch();
+    const topPid = appCanvas().dataset.pid ?? pid;
+    const response = firstResponse(s.expect, window, tu, pressed ?? [x - 48, y - 48, x + 48, y + 48], topPid);
+    window.forEach(shot => shot.crops.forEach(c => c.close()));
+    const after = await snapshot(), timeline = await frameReport(t0, compileAt, response.first === null ? undefined : [tu, tu + response.first]).catch(e => ({ error: String(e) }));
+    lto.disconnect();
+    const page = timeline && "raw" in timeline ? { raw: (await w.wd.page.timeline(performance.timeOrigin + t0) as number[][]).map(([t, e, a]) => [Math.round((t - performance.timeOrigin) * 100) / 100, e, a]).filter(([t]) => t <= compileAt), longTasks } : undefined;
+    await idle();
+    const processesAfter = await diagnostics(), nodes = await state(), demanded = mark ? (await w.wd.foreground()?.demandSince(mark)) ?? null : undefined;
+    const { last, still, ...first } = response;
+    let error = first.error ?? frameError ?? null;
+    if (!error && !shows(nodes, s.expect)) error = "the settled UI state does not match the scenario";
+    if (!error && last && !pixelsMatch(s.expect, last.pixels, still?.pixels ?? [])) error = "the settled response pixels do not match the scenario";
+    out.push({ intended: error ? null : first.first, response: { ...first, ...(error ? { error } : {}) }, timeline, page, semantic: { nodes, at: performance.now() },
+      compileBefore, compileAfter, compileWindow: { origin: performance.timeOrigin, up: tu, end: compileAt }, m: s.m, frames: first.frames, demandMark: mark ?? undefined, demand: demanded,
+      perf: Object.fromEntries(counters.map((k) => [k, Math.round((after[k] - before[k]) * 10) / 10]).filter(([, v]) => v)) as Record<string, number>, processesBefore, processesAfter });
   }
   result.processesAfter = await diagnostics(true);
   if (save) result.codeReadiness = { phase: "saved", realms: [await workerReadiness(true)] };

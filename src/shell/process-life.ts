@@ -10,8 +10,8 @@ export function remoteProcessLife(calls: () => ProcessLifeCalls, failed: (error:
   const recipients = new Map<number, () => void>();
   let nextToken = 1;
   return {
-    alive: (pid: number) => calls().processAlive(pid),
-    signal: (pid: number, signal: number) => calls().processSignal(pid, signal),
+    alive: async (pid: number) => calls().processAlive(pid),
+    signal: async (pid: number, signal: number) => calls().processSignal(pid, signal),
     watch: async (pid: number, died: () => void): Promise<() => void> => {
       const token = nextToken++;
       recipients.set(token, died);

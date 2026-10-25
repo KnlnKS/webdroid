@@ -32,7 +32,7 @@ export type Storage = { immutable: true; format: number; width: number; height: 
 /** what is known of a texture for judging whether WebGL accepts a call on it: nothing (made
  *  elsewhere, or changed by a call WebGL may have rejected), not yet bound (glGenTextures made it),
  *  or its target and storage */
-export type Tracking = { kind: "unknown" } | { kind: "unbound" } | Bound;
+type Tracking = { kind: "unknown" } | { kind: "unbound" } | Bound;
 export type Bound = { kind: "bound"; target: number; storage: Storage };
 export interface TexRec { channels: [number, number, number, number]; code: number; deleted: boolean; tracking: Tracking }
 export const UNKNOWN: Tracking = { kind: "unknown" }, UNBOUND: Tracking = { kind: "unbound" };

@@ -9,15 +9,15 @@ import { handle, deref, FINALIZER } from "./handles.ts";
 import { device } from "../shell/config.ts";
 import { type NativeTypeface, type FakedFont, resolveDefault } from "./fonts.ts";
 import type { FaceMetrics } from "./sfnt.ts";
-import { COMPOSITE, BLEND_MODES, cssColor, setEdges, emptyBox } from "./graphics.ts";
+import { CLEAR, SRC, DST, SRC_OVER, DST_OVER, SRC_IN, DST_IN, SRC_OUT, SRC_ATOP, DST_ATOP, XOR, cssColor, setEdges, emptyBox } from "./graphics.ts";
 import type { NativeColorFilter } from "./colorfilter.ts";
 import type { NativeShader } from "./shader.ts";
 import { colorLongAt } from "./bitmap.ts";
-import { NativePath, skCommands, setSkCommands, pathAt } from "./path.ts";
+import { NativePath, pathAt } from "./path.ts";
 import { type NativeMaskFilter, maskFilterAt } from "./maskfilter.ts";
 import { type NativePathEffect, DashEffect, effectAt, strokeRec } from "./patheffect.ts";
 import { shapeTextRun, layoutOutlines, layoutBounds, hasGlyph } from "./shaping.ts";
-import { strokeCommands } from "./skia.ts";
+import { strokePath } from "./skia.ts";
 import { deviceScale } from "./matrix.ts";
 import { recordOrRun, transformOf, type Ctx2D } from "./recording.ts";
 
@@ -32,12 +32,10 @@ const DEFAULT_FLAGS = 0x503;
 const ELEGANT = 0;
 export const CAPS: readonly CanvasLineCap[] = ["butt", "round", "square"];
 export const JOINS: readonly CanvasLineJoin[] = ["miter", "round", "bevel"];
-/** Canvas2D's composite ops that blend over the whole clip, clearing what a draw does not cover,
- *  where SkBlendMode leaves it */
-export const UNBOUNDED: ReadonlySet<string> = new Set(["copy", "source-in", "destination-in", "source-out", "destination-atop"]);
-/** for an opaque colour, the bounded mode that blends it as the unbounded one does where it covers
- *  (DST_IN then changes nothing); a transparent colour clears what any of them covers */
-const OPAQUE_MODES: Record<string, string | null> = { SRC: null, SRC_IN: "SRC_ATOP", DST_IN: "DST", SRC_OUT: "XOR", DST_ATOP: "DST_OVER" };
+/** the modes whose Canvas2D ops blend over the whole clip, clearing what a draw does not cover where
+ *  SkBlendMode leaves it, each to the bounded mode that blends an opaque colour as it does where it
+ *  covers (DST_IN then changes nothing); a transparent colour clears what any of them covers */
+const OPAQUE_MODES: Partial<Record<number, number>> = { [SRC]: SRC_OVER, [SRC_IN]: SRC_ATOP, [DST_IN]: DST, [SRC_OUT]: XOR, [DST_ATOP]: DST_OVER };
 
 /** hwui's Paint. The Java side keeps its own copies of the objects it was given (mShader,
  *  mTypeface, mColor as a ColorLong, the shadow layer); this is what a draw and a measure read. */
@@ -57,9 +55,8 @@ export class NativePaint {
   /** the path effect when it is a dash alone, which a Canvas2D stroke draws itself */
   dash: number[] | null = null;
   dashPhase = 0;
-  /** the blend mode by BlendMode's name, and its Canvas2D form; null = plain source-over */
-  blendName: string | null = null;
-  blend: GlobalCompositeOperation | null = null;
+  /** the SkBlendMode */
+  blend = SRC_OVER;
   shadowRadius = 0; shadowDx = 0; shadowDy = 0; shadowColor = 0;
   /** null for the default typeface */
   tf: NativeTypeface | null = null;
@@ -86,7 +83,6 @@ export class NativePaint {
   get linearText() { return (this.flags & LINEAR) !== 0; }
   get subpixelText() { return (this.flags & SUBPIXEL) !== 0; }
   setFlag(bit: number, on: boolean) { this.flags = on ? this.flags | bit : this.flags & ~bit; }
-  setBlendName(name: string | null) { this.blendName = name; this.blend = name ? COMPOSITE[name] ?? null : null; }
   setPathEffect(e: NativePathEffect | null) {
     this.pathEffect = e;
     this.dash = e instanceof DashEffect ? e.intervals : null;
@@ -94,16 +90,16 @@ export class NativePaint {
   }
   /** SkPaint::setAlpha: an out-of-range value is pinned, and a negative one reads as unsigned */
   setAlpha(a: number) { this.color = ((a < 0 || a > 255 ? 255 : a) << 24 | (this.color & 0xffffff)) | 0; }
-  /** the mode a draw of this paint blends by (null for SRC_OVER): an unbounded mode (UNBOUNDED) of
-   *  a solid colour gives way to the bounded mode that draws it alike */
-  drawMode(): string | null {
-    const name = this.blendName, blend = this.blend;
-    if (name === null || blend === null || this.shader || !UNBOUNDED.has(blend)) return name;
+  /** the mode a draw of this paint blends by: an unbounded mode (OPAQUE_MODES) of a solid colour
+   *  gives way to the bounded mode that draws it alike */
+  drawMode(): number {
+    const mode = this.blend, opaque = OPAQUE_MODES[mode];
+    if (opaque === undefined || this.shader) return mode;
     const alpha = this.filteredColor() >>> 24;
-    return alpha === 255 ? OPAQUE_MODES[name] : alpha === 0 ? "CLEAR" : name;
+    return alpha === 255 ? opaque : alpha === 0 ? CLEAR : mode;
   }
   /** whether a draw clears what it covers, whatever its colour */
-  clears(): boolean { return this.blendName !== null && this.drawMode() === "CLEAR"; }
+  clears(): boolean { return this.blend !== SRC_OVER && this.drawMode() === CLEAR; }
 
   // the primary font is a pure function of the typeface; text ops and metrics ask for it often
   private pTf: NativeTypeface | null | undefined = undefined;
@@ -128,7 +124,7 @@ export function copyPaint(src: NativePaint, dst: NativePaint) {
   dst.color = src.color; dst.flags = src.flags; dst.style = src.style; dst.strokeWidth = src.strokeWidth; dst.strokeMiter = src.strokeMiter;
   dst.strokeCapN = src.strokeCapN; dst.strokeJoinN = src.strokeJoinN;
   dst.shader = src.shader; dst.colorFilter = src.colorFilter; dst.maskFilter = src.maskFilter; dst.setPathEffect(src.pathEffect);
-  dst.blendName = src.blendName; dst.blend = src.blend;
+  dst.blend = src.blend;
   dst.shadowRadius = src.shadowRadius; dst.shadowDx = src.shadowDx; dst.shadowDy = src.shadowDy; dst.shadowColor = src.shadowColor;
   copyTextState(src, dst);
   dst.textSize = src.textSize; dst.textScaleX = src.textScaleX; dst.textSkewX = src.textSkewX; dst.hinting = src.hinting;
@@ -231,8 +227,7 @@ function fillPath(p: NativePaint, src: NativePath, dst: NativePath): boolean | P
   const rec = strokeRec(p), tmp = new NativePath();
   const path = p.pathEffect?.filter(tmp, src, rec) ? tmp : src;
   if (rec.fill || rec.width === 0) { dst.set(path); return rec.fill; }
-  return after(strokeCommands(skCommands(path), rec.width, p.strokeMiter, CAPS.indexOf(p.strokeCapN), JOINS.indexOf(p.strokeJoinN)), (out) => {
-    if (out) setSkCommands(dst, out); else dst.reset();
+  return after(strokePath(dst, path, rec.width, p.strokeMiter, CAPS.indexOf(p.strokeCapN), JOINS.indexOf(p.strokeJoinN)), () => {
     if (rec.strokeAndFill) dst.append(path);
     return true;
   });
@@ -316,8 +311,8 @@ rt.registerJnis(PAINT, {
   "nSetColorFilter(JJ)J": (h: bigint, f: bigint) => { paintAt(h).colorFilter = f ? deref<NativeColorFilter>(f) : null; return f; },
   "nSetMaskFilter(JJ)J": (h: bigint, f: bigint) => { paintAt(h).maskFilter = maskFilterAt(f); return f; },
   "nSetPathEffect(JJ)J": (h: bigint, e: bigint) => { paintAt(h).setPathEffect(effectAt(e)); return e; },
-  // Xfermode.porterDuffMode is an SkBlendMode; SRC_OVER is plain drawing
-  "nSetXfermode(JI)V": (h: bigint, mode: number) => paintAt(h).setBlendName(mode === 3 ? null : BLEND_MODES[mode] ?? null),
+  // Xfermode.porterDuffMode is an SkBlendMode
+  "nSetXfermode(JI)V": (h: bigint, mode: number) => { paintAt(h).blend = mode; },
   // a BlurDrawLooper: any positive radius, whatever the colour
   "nSetShadowLayer(JFFFJJ)V": (h: bigint, radius: number, dx: number, dy: number, cs: bigint, color: bigint) => {
     const p = paintAt(h);

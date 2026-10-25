@@ -6,11 +6,12 @@ import { Resources, resString } from "../android/res.ts";
 import { deviceQualifiers } from "../android/configuration.ts";
 import { packages, componentState } from "../android/packages.ts";
 import { registerPackage } from "../android/installpackage.ts";
+import { restorePackages } from "./packages.ts";
 import { mkComponentName, newIntent, putExtra } from "../android/intent.ts";
 import { vcall } from "../jvm/natives/jentry.ts";
 import { awaited, rt, type Gen } from "../jvm/runtime.ts";
 import { asSystem } from "../android/binder.ts";
-import { serviceTransport } from "../android/server/activeservices.ts";
+import { startRemoteService } from "../android/server/activeservices.ts";
 import { hexBytes } from "../jvm/abi.ts";
 
 let ready: Promise<void> | null = null;
@@ -31,7 +32,8 @@ export function provisionPackages(): Promise<void> {
       const component = { pkg: record.pkg, cls: name };
       if (componentState.get(component) === null) componentState.set(component, 2);
     }
-  })).then(() => {});
+  // the packages the installer committed, which no system package replaces
+  })).then(restorePackages);
 }
 /** the system starting each package's provisioning service */
 export const provisionServices = (options: { attestationEnabled: boolean }): Promise<void> => asSystem(() => rt.drive(function* (): Gen<void> {
@@ -44,6 +46,6 @@ export const provisionServices = (options: { attestationEnabled: boolean }): Pro
     const extras = { ...spec.provision.extras,
       ...(options.attestationEnabled && "attestationExtras" in spec.provision ? spec.provision.attestationExtras : {}) };
     for (const [key, value] of Object.entries(extras)) yield putExtra(intent, key, +value, "Z");
-    yield serviceTransport.start(owner, owner.process(component), intent, false);
+    yield startRemoteService(owner.pkg, owner.process(component), intent, false);
   }
 }()));

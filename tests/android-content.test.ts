@@ -31,12 +31,12 @@ import { ProcessBroker } from "../src/shell/processes.ts";
 import { brokerMethods, type BrokerCalls } from "../src/shell/broker-contract.ts";
 import { NOT_CRASHED } from "../src/android/server/appexitinfo.ts";
 import { PendingIntents } from "../src/shell/pendingintents.ts";
-import { pendingTransport, sendIntent, type PendingAccess } from "../src/android/pendingintent.ts";
+import { sendIntent } from "../src/android/pendingintent.ts";
 import { removeAlarm, setOperationAlarm, useAlarmIntents } from "../src/android/alarm.ts";
 import { callProxy } from "../src/shell/rpc.ts";
-import { javaReadFd } from "../src/native/fd.ts";
+import { readFd } from "../src/native/fd.ts";
 import { Arsc } from "../src/android/arsc.ts";
-import { scall, bootApp, packageRecord, loadPlatform, thrown } from "./java.ts";
+import { scall, bootApp, packageRecord, loadPlatform, thrown, useTestBroker } from "./java.ts";
 import { procIdentity } from "../src/shell/procfs.ts";
 
 describe("android-uri-permission", () => {
@@ -411,11 +411,11 @@ describe("pending-intents", () => {
   test("PendingIntent reports its stored operation type", async () => {
     const context = await app(), intent = await newIntent();
     const broker = new ProcessBroker(), { pid } = broker.register(PKG, PKG, 4321);
-    const client = callProxy<BrokerCalls>(broker.brokerPort(pid), brokerMethods), records = client.endpoint, owner = { ...pendingTransport };
+    const client = callProxy<BrokerCalls>(broker.brokerPort(pid), brokerMethods), records = client.endpoint;
     let release!: () => void, entered!: () => void;
     const waiting = new Promise<void>(resolve => { entered = resolve; });
     const acknowledgment = new Promise<void>(resolve => { release = resolve; });
-    Object.assign(pendingTransport, { ...records.pending, cancel: async (id: number) => { entered(); await acknowledgment; await records.pending.cancel(id); } } satisfies PendingAccess);
+    const restore = useTestBroker({ pending: { ...records.pending, cancel: async (id: number) => { entered(); await acknowledgment; await records.pending.cancel(id); } } });
     useAlarmIntents(broker.intents);
     try {
       const path = "/data/data/test/pending-fd.bin";
@@ -463,7 +463,7 @@ describe("pending-intents", () => {
       const error = await Promise.resolve(sendIntent(activity)).then(() => null, error => error);
       expect(iof(error, "android/app/PendingIntent$CanceledException")).toBe(true);
     } finally {
-      release(); client.close(); Object.assign(pendingTransport, owner); useAlarmIntents({ get: unconnected, watch: unconnected, send: notConnected });
+      release(); client.close(); restore(); useAlarmIntents({ get: unconnected, watch: unconnected, send: notConnected });
       broker.fail(pid, "pending fixture cleanup", NOT_CRASHED); broker.intents.remove(PKG);
     }
   });
@@ -480,7 +480,7 @@ describe("resolver-file", () => {
       await vcall(stream, "close", "()V");
       const pfd = await vcall(resolver, "openFileDescriptor", "(Landroid/net/Uri;Ljava/lang/String;)Landroid/os/ParcelFileDescriptor;", uri, "r");
       const fd = await vcall(pfd, "getFd", "()I"), data = new Uint8Array(2);
-      expect(await javaReadFd(fd, data)).toBe(2);
+      expect(await readFd(fd, data, data.length)).toBe(2);
       expect([...data]).toEqual([7, 8]);
       await vcall(pfd, "close", "()V");
       vfs.delete(path);

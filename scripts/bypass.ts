@@ -6,7 +6,7 @@
 // --corpus rescans apks/ into the fixture; --write-baseline accepts the current findings.
 import { globSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
-import { rt } from "../src/jvm/runtime.ts";
+import { bodyOf, rt } from "../src/jvm/runtime.ts";
 import { ACC } from "../src/jvm/dex.ts";
 import { descToName } from "../src/jvm/abi.ts";
 import type { ClassDef } from "../src/jvm/dex.ts";
@@ -105,7 +105,7 @@ export function selfCallsSkipped(defs = platformDefs()): Map<string, string[]> {
       const m = def.virtualMethods.find((e) => signature(def, e.methodIdx) === key);
       if (!m?.codeOff || typeof impl !== "function") continue;
       const code = def.dex.code(m.codeOff), self = code.regs - code.ins;
-      const source = withHelpers(spec.name, String((impl as { $g?: unknown }).$g ?? impl));
+      const source = withHelpers(spec.name, String(bodyOf(impl)));
       const skipped = new Set<string>();
       for (const ins of prepareMethod(code).instructions) {
         if (!/^invoke-(virtual|interface)/.test(ins.name) || ins.regs[0] !== self) continue;

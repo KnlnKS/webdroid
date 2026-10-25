@@ -4,7 +4,7 @@
 // holds is owned by it and freed when the NativeRef is collected. TLS stays at the relay (jnet.ts),
 // so the SSL natives are not implemented.
 
-import { rt, peerField, waits, type JObj } from "../runtime.ts";
+import { rt, peerField, waits, ranged, type JObj } from "../runtime.ts";
 import { handle, ownedHandle, weakHandle, deref, release } from "../../android/handles.ts";
 import { DIGESTS, Hmac, deferred, type Deferred, type Hash } from "../../crypto/digest.ts";
 import { aes, des, ctr, cbc, ecb, pkcs7Pad, pkcs7Unpad, Rc4, AesGcm, ChaCha20Poly1305, chacha20, type BlockCipher, type Aead } from "../../crypto/ciphers.ts";
@@ -19,7 +19,8 @@ import {
   parsePublicKey, parsePrivateKey, marshalPublicKey, marshalPrivateKey, EVP_PKEY_RSA, EVP_PKEY_EC, EVP_PKEY_X25519,
   type Curve, type Point, type Rsa, type RsaPad, type PKey,
 } from "../../crypto/pkey.ts";
-import { bigToBytes, fromSigned, parseOne, DerError, orDer, oid as oidDer } from "../../crypto/der.ts";
+import { fromSigned, parseOne, DerError, orDer, oid as oidDer } from "../../crypto/der.ts";
+import { bigToBytes } from "../../crypto/bigint.ts";
 
 const NC = "com/android/org/conscrypt/NativeCrypto";
 export const nc = (sig: string, fn: (...a: never[]) => unknown) => rt.registerJni(NC, sig, fn);
@@ -92,7 +93,7 @@ const liveHash = (ref: JObj): Deferred => {
   if (!c.hash) throw runtimeError("EVP_MD_CTX not initialized");
   return c.hash;
 };
-const digestUpdate = (ref: JObj, b: Int8Array, off: number, len: number) => { liveHash(ref).update(region(b, off, len)); };
+const digestUpdate = ranged((ref: JObj, b: Int8Array, off: number, len: number) => { liveHash(ref).update(region(b, off, len)); }, [1, 2, 3]);
 for (const n of ["EVP_DigestUpdate", "EVP_DigestSignUpdate", "EVP_DigestVerifyUpdate"])
   nc(`${n}(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;[BII)V`, digestUpdate);
 nc("EVP_DigestFinal_ex(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;[BI)I", waits((ref: JObj, out: Int8Array, off: number) => {
@@ -122,9 +123,9 @@ const liveMac = (ref: JObj): Hmac => {
   if (!c.mac) throw runtimeError("HMAC_CTX not initialized");
   return c.mac;
 };
-nc("HMAC_Update(Lcom/android/org/conscrypt/NativeRef$HMAC_CTX;[BII)V", (ref: JObj, b: Int8Array, off: number, len: number) => {
+nc("HMAC_Update(Lcom/android/org/conscrypt/NativeRef$HMAC_CTX;[BII)V", ranged((ref: JObj, b: Int8Array, off: number, len: number) => {
   liveMac(ref).update(region(b, off, len));
-});
+}, [1, 2, 3]));
 nc("HMAC_Final(Lcom/android/org/conscrypt/NativeRef$HMAC_CTX;)[B", (ref: JObj) => i8(liveMac(ref).digest()));
 nc("HMAC_Reset(Lcom/android/org/conscrypt/NativeRef$HMAC_CTX;)V", (ref: JObj) => liveMac(ref).reset());
 
@@ -225,13 +226,13 @@ function cipherUpdate(c: CipherCtx, input: Uint8Array): Uint8Array {
   else c.finalUsed = false;
   return result;
 }
-nc("EVP_CipherUpdate(Lcom/android/org/conscrypt/NativeRef$EVP_CIPHER_CTX;[BI[BII)I", (ref: JObj, out: Int8Array, outOff: number, input: Int8Array, inOff: number, inLen: number) => {
+nc("EVP_CipherUpdate(Lcom/android/org/conscrypt/NativeRef$EVP_CIPHER_CTX;[BI[BII)I", ranged((ref: JObj, out: Int8Array, outOff: number, input: Int8Array, inOff: number, inLen: number) => {
   const c = ptr<CipherCtx>(ref);
   if (!c.desc || (!c.bc && !c.rc4)) throw runtimeError("EVP_CipherUpdate: not initialized");
   const r = cipherUpdate(c, region(input, inOff, inLen).slice());
   region(out, outOff, r.length).set(r);
   return r.length;
-});
+}, [3, 4, 5]));
 nc("EVP_CipherFinal_ex(Lcom/android/org/conscrypt/NativeRef$EVP_CIPHER_CTX;[BI)I", (ref: JObj, out: Int8Array, outOff: number) => {
   const c = ptr<CipherCtx>(ref), n = c.desc?.block ?? 1;
   let r: Uint8Array | null = new Uint8Array(0);
@@ -484,14 +485,14 @@ nc("EVP_DigestSignFinal(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;)[B", wa
   if ("wrapper" in key) return scall(UPCALLS, "rsaSignDigestWithPrivateKey", "(Ljava/security/PrivateKey;I[B)[B", key.wrapper, RSA_NO_PADDING, i8(em));
   return i8(rsaRun(r, em, true));
 }));
-nc("EVP_DigestVerifyFinal(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;[BII)Z", (ref: JObj, sig: Int8Array, off: number, len: number) => {
+nc("EVP_DigestVerifyFinal(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;[BII)Z", ranged((ref: JObj, sig: Int8Array, off: number, len: number) => {
   const c = ptr<SignCtx>(ref), s = c.sign;
   if (!s || s.signing) throw runtimeError("EVP_DigestVerifyFinal: not initialized for verifying");
   const digest = liveHash(ref).digest(), key = s.key, p = s.params, sg = region(sig, off, len);
   c.hash = deferred(c.md!.name);
   if (key.type === EVP_PKEY_EC) return +(!("wrapper" in key) && ecdsaVerify(key.ec.curve, key.ec.pub, digest, sg));
   return +rsaVerify(rsaKey(key), padOf(p, c.md!.name), digest, sg);
-});
+}, [1, 2, 3]));
 
 // ── EC groups, points and keys
 type Group = { curve: Curve };

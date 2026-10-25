@@ -6,7 +6,7 @@
 
 import { type Band, devicePoint, hairlineLine, hairlineRect, scan } from "./scan.ts";
 import { MAX_SAMPLED_PIXELS } from "./skia.ts";
-import { NativePath } from "./path.ts";
+import { type NativePath, OVAL } from "./path.ts";
 import { type Ctx2D, isInvertible } from "./recording.ts";
 import type { NativePaint } from "./paint.ts";
 import type { NativeCanvas } from "./canvas.ts";
@@ -35,7 +35,6 @@ function deviceHairline(canvas: NativeCanvas, paint: NativePaint, op: GlobalComp
 
 /** a fill: a stroke-and-fill without width fills only */
 const fills = (paint: NativePaint) => paint.style === 0 || paint.style === 2 && paint.strokeWidth === 0;
-const shape = (build: (p: NativePath) => void) => { const p = new NativePath(); build(p); return p; };
 const target: Box = { left: 0, top: 0, right: 0, bottom: 0 };
 const spans = (bands: readonly Band[]): Path2D => {
   const pixels = new Path2D();
@@ -78,26 +77,27 @@ export function tryBitmapRect(canvas: NativeCanvas, paint: NativePaint, op: Glob
   if (paint.antiAlias || !fills(paint)) return false;
   // SkDraw::drawRect: under a matrix that keeps rects rects, SkScan::FillRect of the rounded device
   // rect; under any other, the rect's path
-  if (!(m.b === 0 && m.c === 0 || m.a === 0 && m.d === 0)) return scanFill(canvas, paint, op, shape((p) => p.addRect(left, top, right, bottom, 0)));
+  if (!(m.b === 0 && m.c === 0 || m.a === 0 && m.d === 0)) {
+    const path = canvas.shape();
+    path.addRect(left, top, right, bottom, 0);
+    return scanFill(canvas, paint, op, path);
+  }
   const [x0, y0] = devicePoint(m, left, top), [x1, y1] = devicePoint(m, right, bottom);
   const l = round(Math.min(x0, x1)), t = round(Math.min(y0, y1)), r = round(Math.max(x0, x1)), b = round(Math.max(y0, y1));
   if (l < r && t < b) inDevice(canvas, paint, op, (ctx) => { ctx.fillStyle = paint.fillStyle(ctx); ctx.fillRect(l, t, r - l, b - t); });
   return true;
 }
 
-export function tryBitmapOval(canvas: NativeCanvas, paint: NativePaint, op: GlobalCompositeOperation, left: number, top: number,
-  right: number, bottom: number, sweep: number): boolean {
-  if (Math.abs(sweep) < 360) return false;
-  const oval = () => shape((p) => p.addOval(left, top, right, bottom, 0));
-  if (!paint.antiAlias && fills(paint)) return scanFill(canvas, paint, op, oval());
-  // an oval at most a pixel tall, whose coverage the 2D context's anti-aliasing misses: SkScan_AntiPath's
-  // 4x4 supersamples, each pixel's supersample rows adding 16 per covered sample, or for a whole row
-  // of the pixel 64 (63 on its last)
-  if (!(paint.antiAlias && paint.style === 0 && bottom > top && bottom - top <= 1)) return false;
+/** an anti-aliased fill of a lone oval at most a pixel tall, whose coverage the 2D context's
+ *  anti-aliasing misses: SkScan_AntiPath's 4x4 supersamples, each pixel's supersample rows adding
+ *  16 per covered sample, or for a whole row of the pixel 64 (63 on its last) */
+function thinOval(canvas: NativeCanvas, paint: NativePaint, op: GlobalCompositeOperation, path: NativePath): boolean {
+  const o = path.ops;
+  if (!(o.length === 7 && o[0] === OVAL && paint.style === 0 && o[4] > o[2] && o[4] - o[2] <= 1)) return false;
   const w = canvas.w;
   target.right = w * 4; target.bottom = canvas.h * 4;
   const alpha = new Map<number, number>();
-  for (const { top: y0, bottom: y1, xs } of scan(oval(), target, canvas.ctx.getTransform(), 2)) for (let y = y0; y < y1; y++) {
+  for (const { top: y0, bottom: y1, xs } of scan(path, target, canvas.ctx.getTransform(), 2)) for (let y = y0; y < y1; y++) {
     const row = (y >> 2) * w, whole = (y & 3) === 3 ? 63 : 64;
     for (let i = 0; i < xs.length; i += 2) for (let x = xs[i]; x < xs[i + 1];) {
       const px = x >> 2, end = Math.min(xs[i + 1], px * 4 + 4), n = end - x;
@@ -116,12 +116,6 @@ export function tryBitmapOval(canvas: NativeCanvas, paint: NativePaint, op: Glob
     for (const [a, pixels] of levels) { ctx.globalAlpha = a / 255; ctx.fill(pixels); }
   });
   return true;
-}
-
-export function tryBitmapRoundRect(canvas: NativeCanvas, paint: NativePaint, op: GlobalCompositeOperation, left: number, top: number,
-  right: number, bottom: number, rx: number, ry: number): boolean {
-  if (paint.antiAlias || !fills(paint)) return false;
-  return scanFill(canvas, paint, op, shape((p) => p.addRoundRect(left, top, right, bottom, [rx, ry, rx, ry, rx, ry, rx, ry], 0)));
 }
 
 export function tryBitmapLine(canvas: NativeCanvas, paint: NativePaint, op: GlobalCompositeOperation,
@@ -163,7 +157,7 @@ function inverseCoverage(nc: NativeCanvas, path: NativePath, stroke: NativePaint
 export function tryBitmapPath(canvas: NativeCanvas, paint: NativePaint, op: GlobalCompositeOperation, path: NativePath): boolean {
   if (fills(paint)) {
     if (!paint.antiAlias) return scanFill(canvas, paint, op, path);
-    if (!path.inverseFill) return false;
+    if (!path.inverseFill) return thinOval(canvas, paint, op, path);
     canvas.drawMask(paint, op, (nc) => inverseCoverage(nc, path, null));
     return true;
   }

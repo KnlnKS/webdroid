@@ -26,6 +26,7 @@ import { appHost } from "./apphost.ts";
 import { coverTop, foreground } from "./server/atm.ts";
 import { permissionGranted, grantPrompted, checkUidPermission, notHeld } from "./permissions.ts";
 import { procIdentity } from "../shell/procfs.ts";
+import { broker, remoteSystem } from "../shell/broker-access.ts";
 
 const N = "android/app/Notification", CHANNEL = "android/app/NotificationChannel", GROUP = "android/app/NotificationChannelGroup";
 const DEFAULT_CHANNEL = "miscellaneous", RANKER_GROUP = "ranker_group";
@@ -61,10 +62,10 @@ function brokerScope() {
 /** each package's PreferencesHelper record, by key: a channel or group as its parcel in base64, the delegate's package */
 const savedPolicies = persisted<Map<string, string>>("wd:notification-policy:", (saved) =>
   saved && typeof saved === "object" && !Array.isArray(saved) && Object.values(saved).every((value) => typeof value === "string")
-    ? new Map(Object.entries(saved as Record<string, string>)) : null, (policy) => Object.fromEntries(policy));
+    ? new Map(Object.entries(saved as Record<string, string>)) : null, { encode: (policy) => Object.fromEntries(policy) });
 /** NotificationManagerService's notification list, the state its posting rules keep and each
  *  package's channels, groups and delegate, shared by every process through the broker */
-export class NotificationStore {
+class NotificationStore {
   private kernel = new FileDescriptors();
   private epochs = new Map<string, number>();
   private policies = new Map<string, Map<string, string>>();
@@ -111,8 +112,7 @@ export class NotificationStore {
     await Promise.all(removed.map(r => r.data.close()));
   }
 }
-export let notificationStore = new NotificationStore();
-export function useNotificationStore(store: NotificationStore): void { notificationStore = store; }
+export const notificationStore = new NotificationStore();
 
 const fail = (cls: string, message: string | null): never => { throw rt.mkThrowable(cls, message); };
 /** ArrayMap iterates string keys by their Java hash. */
@@ -615,7 +615,6 @@ const foregroundKey = (pkg: string, id: number) => `${pkg}|${id}`;
  *  FLAG_FOREGROUND_SERVICE, which no app may set itself */
 export type ForegroundNotificationRequest = { kind: "start"; id: number; data: ParcelData | null }
   | { kind: "stop"; id: number; remove: boolean };
-export const notificationTransport = { foreground: null as ((request: ForegroundNotificationRequest) => Promise<void>) | null };
 export function receiveForegroundNotification(pkg: string, caller: Caller, request: ForegroundNotificationRequest): Promise<void> {
   return withCallingIdentity(caller, () => withParcelScope(() => rt.drive(function* (): Gen<void> {
     if (request.kind === "stop") return yield* stopForeground(pkg, request.id, request.remove);
@@ -625,9 +624,9 @@ export function receiveForegroundNotification(pkg: string, caller: Caller, reque
   }())));
 }
 export const startForegroundNotification = driven(function* (id: number, notification: JObj | null): Gen<void> {
-  if (notificationTransport.foreground) {
+  if (remoteSystem()) {
     const data = notification && (yield* awaited(parcelled(notification, processRights)));
-    try { yield* awaited(notificationTransport.foreground({ kind: "start", id, data })); }
+    try { yield* awaited(broker().notificationForeground({ kind: "start", id, data })); }
     finally { if (data) yield* awaited(releaseRights(data, processRights, true)); }
     return;
   }
@@ -641,8 +640,8 @@ function* startForeground(pkg: string | undefined, id: number, notification: JOb
 }
 /** stopForeground, and the service's end: removed, or left behind without FLAG_FOREGROUND_SERVICE */
 export const stopForegroundNotification = driven(function* (id: number, remove: boolean): Gen<void> {
-  if (notificationTransport.foreground) {
-    yield* awaited(notificationTransport.foreground({ kind: "stop", id, remove }));
+  if (remoteSystem()) {
+    yield* awaited(broker().notificationForeground({ kind: "stop", id, remove }));
     return;
   }
   yield* awaited(withParcelScope(() => rt.drive(stopForeground(appHost?.pkg, id, remove))));

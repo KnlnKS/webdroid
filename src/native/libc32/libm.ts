@@ -1,9 +1,9 @@
 // libm: what Math answers directly, with the C signatures, for an ARM32 process (a 64-bit one runs
 // bionic's). Registered under libm.so and libc.so (bionic exports both).
 
-import { mem } from "./mem.ts";
-import { hostLib, type HostFn, retF, retD, SERVED, fbits, bitsf, dbits, bitsd } from "./host.ts";
-import type { Cpu } from "./cpu.ts";
+import { mem } from "../mem.ts";
+import { type HostFn, retF, retD, SERVED, fbits, bitsf, dbits, bitsd } from "../host.ts";
+import type { Cpu } from "../cpu.ts";
 
 /** a long result */
 const retLong = (x: number) => Math.trunc(x) | 0;
@@ -19,7 +19,7 @@ function rint(c: Cpu, x: number): number {
   }
 }
 
-export function libmInit(): void {
+export function libmLibc(): Record<string, HostFn> {
   const d1 = (f: (x: number) => number): HostFn => (c, a) => retD(c, f(a.d()));
   const d2 = (f: (x: number, y: number) => number): HostFn => (c, a) => retD(c, f(a.d(), a.d()));
   const f1 = (f: (x: number) => number): HostFn => (c, a) => retF(c, f(a.f()));
@@ -91,8 +91,7 @@ export function libmInit(): void {
     ldiv: (c, a) => M.div(c, a),
     lldiv: (_c, a) => lldiv(a),
   } satisfies Record<string, HostFn>);
-  hostLib("libm.so", M);
-  hostLib("libc.so", M);
+  return M;
 }
 
 function lldiv(a: { l(): bigint; p(): number }): number {

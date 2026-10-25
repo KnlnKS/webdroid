@@ -1,4 +1,4 @@
-import { isPlaceholderMethod, type Runtime } from "../src/jvm/runtime.ts";
+import type { Runtime } from "../src/jvm/runtime.ts";
 
 export const FRAMEWORK_RE = /^(android|java|javax|dalvik|sun|libcore|com\/android\/internal|org\/xmlpull|org\/json|org\/apache\/http)\//;
 
@@ -16,12 +16,9 @@ export function nativeClassSupport(runtime: Runtime, cls: string): NativeSupport
 /** a JNI function, else the spec method of `cls` or of a spec superclass, as the Wasm host binds them (nativesource.ts) */
 export function nativeMethodSupport(runtime: Runtime, key: string): NativeSupport {
   const [cls, signature] = splitMember(key);
-  let fn: unknown = runtime.jniFn(cls, signature);
-  for (let c: string | undefined = cls; !fn && c; c = runtime.natives.get(c)?.sup) {
-    const methods = runtime.natives.get(c)?.methods;
-    fn = methods?.[signature] ?? methods?.["static " + signature];
-  }
-  return typeof fn !== "function" ? "missing" : isPlaceholderMethod(fn) ? "placeholder" : "delegate";
+  let impl = runtime.jniNative(cls, signature) ?? undefined;
+  for (let c: string | undefined = cls; !impl && c; c = runtime.natives.get(c)?.sup) impl = runtime.specNative(c, signature, false) ?? runtime.specNative(c, signature, true);
+  return !impl ? "missing" : impl.placeholder ? "placeholder" : "delegate";
 }
 
 export function nativeFieldSupport(runtime: Runtime, key: string): NativeSupport {

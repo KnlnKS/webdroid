@@ -4,46 +4,50 @@
 import { rt } from "../jvm/runtime.ts";
 import { handle, deref, FINALIZER } from "./handles.ts";
 import type { NativeBitmap } from "./bitmap.ts";
-import { COMPOSITE, BLEND_MODES, cssColor } from "./graphics.ts";
+import { CLEAR, DST, SRC_IN, PLUS, MODULATE, compositeOf, cssColor } from "./graphics.ts";
 
 /**
  * A ColorFilter's native instance, as hwui builds its SkColorFilter: AOSP's row-major 4x5 colour
  * `matrix` with its offsets in 0..255 (SkColorFilters::Matrix and Lighting), or, when that is null,
- * `color` blended into what is drawn by the mode named `mode` (SkColorFilters::Blend).
+ * `color` blended into what is drawn by the SkBlendMode `mode` (SkColorFilters::Blend).
  * The Lighting and ColorMatrix setters update `matrix` in place, and a paint holding it sees them.
  */
 export class NativeColorFilter {
-  readonly matrix: Float32Array | null; readonly color: number; readonly mode: string;
+  readonly matrix: Float32Array | null; readonly color: number; readonly mode: number;
   /** the last colour a blend filtered and what it made: a paint asks for one colour draw after draw */
   private input = 0; private output: number | null = null;
-  constructor(matrix: Float32Array | null, color = 0, mode = "DST") { this.matrix = matrix; this.color = color; this.mode = mode; }
+  constructor(matrix: Float32Array | null, color = 0, mode = DST) { this.matrix = matrix; this.color = color; this.mode = mode; }
   /** SkColorFilter::filterColor: `argb` through the filter, blended as recolor blends a bitmap */
   filter(argb: number): number {
     if (this.matrix) return matrixColor(this.matrix, argb);
     const tint = this.color, mode = this.mode;
-    if (mode === "DST") return argb;
+    if (mode === DST) return argb;
     // how Material tints every shape it draws: the filter's colour, keeping the alpha the two agree on
-    if (mode === "SRC_IN") return ((tint & 0xffffff) | ((((tint >>> 24) * (argb >>> 24) / 255) | 0) << 24)) | 0;
+    if (mode === SRC_IN) return ((tint & 0xffffff) | ((((tint >>> 24) * (argb >>> 24) / 255) | 0) << 24)) | 0;
     if (this.output === null || this.input !== argb) {
       const c = pixel ??= new OffscreenCanvas(1, 1).getContext("2d", { willReadFrequently: true })!;
       c.globalCompositeOperation = "copy";
       c.fillStyle = cssColor(argb);
       c.fillRect(0, 0, 1, 1);
       c.globalCompositeOperation = "source-over";
-      recolor(c, 1, 1, tint, null, mode);
+      this.apply(c, 1, 1);
       const d = c.getImageData(0, 0, 1, 1).data;
       this.input = argb;
       this.output = (d[3] << 24 | d[0] << 16 | d[1] << 8 | d[2]) | 0;
     }
     return this.output;
   }
+  /** the filter applied in place to the w x h pixels `c` holds at (x, y) */
+  apply(c: OffscreenCanvasRenderingContext2D, w: number, h: number, x = 0, y = 0): void { recolor(c, w, h, this.color, this.matrix, this.mode, x, y); }
+  /** `b` through the filter */
+  image(b: NativeBitmap): CanvasImageSource { return tintedBmp(b, this.color, this.matrix, this.mode); }
 }
 let pixel: OffscreenCanvasRenderingContext2D | null = null;
 const tintCache = new WeakMap<NativeBitmap, { generation: number; images: Map<number | string, OffscreenCanvas> }>();
-/** `b` through a colour filter — `tint` blended by the BlendMode named `mode`, or every pixel through
+/** `b` through a colour filter — `tint` blended by the SkBlendMode `mode`, or every pixel through
  *  a 4x5 colour `matrix` — cached per (bitmap, filter); the bitmap itself when there is none */
-export function tintedBmp(b: NativeBitmap, tint: number | null, matrix: Float32Array | null = null, mode = "SRC_IN"): CanvasImageSource {
-  if (matrix === null && (tint === null || mode === "DST" || mode === "PLUS" && !(tint >>> 24))) return b.image;
+export function tintedBmp(b: NativeBitmap, tint: number | null, matrix: Float32Array | null = null, mode = SRC_IN): CanvasImageSource {
+  if (matrix === null && (tint === null || mode === DST || mode === PLUS && !(tint >>> 24))) return b.image;
   let cache = tintCache.get(b);
   if (!cache || cache.generation !== b.genId) tintCache.set(b, cache = { generation: b.genId, images: new Map() });
   const m = cache.images, key = matrix ? matrix.join(",") : `${mode}:${tint}`;
@@ -52,13 +56,12 @@ export function tintedBmp(b: NativeBitmap, tint: number | null, matrix: Float32A
     t = new OffscreenCanvas(b.w, b.h);
     const c = t.getContext("2d")!;
     c.drawImage(b.image, 0, 0);
-    recolor(c, b.w, b.h, tint, matrix, mode);
+    recolor(c, b.w, b.h, tint, matrix, mode, 0, 0);
     m.set(key, t);
   }
   return t;
 }
-/** a colour filter applied in place to the w x h pixels `c` holds at (x, y) */
-export function recolor(c: OffscreenCanvasRenderingContext2D, w: number, h: number, tint: number | null, matrix: Float32Array | null, mode = "SRC_IN", x = 0, y = 0) {
+function recolor(c: OffscreenCanvasRenderingContext2D, w: number, h: number, tint: number | null, matrix: Float32Array | null, mode: number, x: number, y: number) {
   if (matrix) {
     const img = c.getImageData(x, y, w, h), d = img.data, k = matrix;
     for (let i = 0; i < d.length; i += 4) {
@@ -69,16 +72,15 @@ export function recolor(c: OffscreenCanvasRenderingContext2D, w: number, h: numb
       d[i + 3] = k[15] * r + k[16] * g + k[17] * bl + k[18] * a + k[19];
     }
     c.putImageData(img, x, y);
-  } else if (tint === null || mode === "DST") return;
-  else if (mode === "CLEAR") c.clearRect(x, y, w, h);
-  else if (mode === "MODULATE") {
+  } else if (tint === null || mode === DST) return;
+  else if (mode === CLEAR) c.clearRect(x, y, w, h);
+  else if (mode === MODULATE) {
     const img = c.getImageData(x, y, w, h), d = img.data;
     const r = (tint >>> 16 & 255) / 255, g = (tint >>> 8 & 255) / 255, blue = (tint & 255) / 255, alpha = (tint >>> 24) / 255;
     for (let i = 0; i < d.length; i += 4) { d[i] *= r; d[i + 1] *= g; d[i + 2] *= blue; d[i + 3] *= alpha; }
     c.putImageData(img, x, y);
   } else {
-    const composite = COMPOSITE[mode];
-    if (!composite) throw rt.mkThrowable("java/lang/UnsupportedOperationException", `bitmap tint mode ${mode}`);
+    const composite = compositeOf(mode)!;
     c.save();
     c.setTransform(1, 0, 0, 1, 0, 0);
     c.globalCompositeOperation = composite;
@@ -97,7 +99,7 @@ export function matrixColor(k: Float32Array, color: number): number {
 
 // Lighting and ColorMatrix filters change their native instance in place.
 const colorFilter = (h: bigint) => deref<NativeColorFilter>(h);
-const blendFilter = (color: number, mode: number) => handle(new NativeColorFilter(null, color, BLEND_MODES[mode]));
+const blendFilter = (color: number, mode: number) => handle(new NativeColorFilter(null, color, mode));
 /** SkColorFilters::Lighting: each RGB channel scaled by `mul`'s and offset by `add`'s */
 const setMul = (k: Float32Array, mul: number) => { k[0] = (mul >>> 16 & 255) / 255; k[6] = (mul >>> 8 & 255) / 255; k[12] = (mul & 255) / 255; };
 const setAdd = (k: Float32Array, add: number) => { k[4] = add >>> 16 & 255; k[9] = add >>> 8 & 255; k[14] = add & 255; };

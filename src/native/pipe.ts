@@ -64,7 +64,7 @@ function pipeFile(path: string, pipe: Pipe, statusFlags: number, content?: VfsFi
   return newFile(PIPE, path, statusFlags, { read: access !== O_WRONLY ? pipe : null, write: access !== O_RDONLY ? pipe : null }, content);
 }
 /** pipe2(2): the read end, then the write end */
-export function javaPipeFds(flags: number): [number, number] {
+export function pipeFds(flags: number): [number, number] {
   const pipe = newPipe(1), nonblock = flags & O_NONBLOCK, cloexec = !!(flags & O_CLOEXEC);
   return [installFile(pipeFile("pipe", pipe, O_RDONLY | nonblock), cloexec), installFile(pipeFile("pipe", pipe, O_WRONLY | nonblock), cloexec)];
 }

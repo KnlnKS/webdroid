@@ -13,37 +13,34 @@
 // in one browser profile and gates the second: it starts from fresh app data (wd.reset) but with
 // the compiled code the first launch persisted. `--ecores` (macOS) runs Chrome under a background QoS clamp, so every thread, the app Workers included,
 // runs on the efficiency cores: a slower device (a busy loop ran about 6x slower on an M4 Pro). CDP CPU throttling slows only pages, never Workers.
-// A scenario is scripts/lat/scenarios/<name>.json:
-//   { "apk": "FitNotes.apk", "steps": [{"tap":[x,y]} | {"text":"Save"} | {"m":"name","tap":[x,y] | "text":…} | {"wait":ms}
-//     | {"swipe":[x1,y1,x2,y2,ms]} | {"fps":[x1,y1,x2,y2],"ms":8000,"name":"…"} | {"pick":"photo.jpg"} | {"privateStorage":true} | {"back":true}],
-//     "repeat": [steps] }   (pick offers a synthetic photo; fps scrolls back and forth for ms and reports presentation intervals and page long tasks;
-//     --repeat N appends "repeat" N times and reports the median of its taps' third and later visits)
-// "gate": false makes a scenario a report, run only when named (heavy apps: YouTube, Reddit, ChatGPT, TikTok).
-// Coordinates are in the fixed 1080x2160@480 screen. Only "m" taps are gated, and a scenario also fails when its launch loaded no build
-// module or a realm reported an uncaught error; each launch also
+// The scenarios are scenarios.ts's; --repeat N appends a scenario's `repeat` N times and reports the median of its taps' third and later visits.
+// Only "m" taps are gated, and a scenario also fails when its launch loaded no build module or a realm reported an uncaught error; each launch also
 // reports root frame proxies and actual app presentation separately. --cpuprofile writes
 // the gated launch's V8 profile; each gated pointerup then runs __wdMarkUp (1 ms) so
 // scripts/lat/profsum.ts can window the profile to one tap. --trace writes the gated launch's browser-wide trace (every
 // thread: page, Workers, GPU, V8 collections), for chrome://tracing or Perfetto; WEBDROID_TRACE_CATEGORIES (comma-separated) replaces
 // its categories, e.g. disabled-by-default-v8.gc,v8 for a small GC-only trace; each gated pointerup is a `lat:<name>` user-timing mark in it. WEBDROID_JS_FLAGS and WEBDROID_CHROME_ARGS (space-separated)
-// pass V8 flags and Chrome arguments for A/B runs. With --timeline, --json taps carry the Worker's and the page's timelines and the page's long tasks.
+// pass V8 flags and Chrome arguments for A/B runs. Chrome runs as the harnesses run it (../page.ts), on SwiftShader unless --gpu, as lat's
+// baselines were measured. With --timeline, --json taps carry the Worker's and the page's timelines and the page's long tasks.
 import { spawn } from "node:child_process";
-import { closeSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { chromium, webkit } from "playwright";
-import { compileDeltas, type Expectation } from "./expect.ts";
+import { compileDeltas } from "./compile.ts";
 import type { Capture, Diagnostics, LatConfig, Tap } from "./page.ts";
+import { SCENARIOS, type Expectation, type Step } from "./scenarios.ts";
 import { cli } from "../args.ts";
 import { Ev } from "../../src/timeline.ts";
 import { bundle } from "../bundle.ts";
-import { BASE_URL, CONTEXT_OPTS, HOST_GL, SOFTWARE_GL, chromeArgs } from "../page.ts";
+import { CONTEXT_OPTS, HOST_GL, SOFTWARE_GL, launchOptions, webdroidUrl } from "../page.ts";
+import { NO_PICKERS } from "../../tests/e2e/lib/actions.ts";
 import { diagnosticErrors } from "../../tests/e2e/lib/processes.ts";
+import { deviceScreen, screenParam } from "../../tests/e2e/types.ts";
 
 const LIMIT_MS = 150;
-const SCREEN = "1080x2160@480";
-const SCENARIOS = join(import.meta.dirname, "scenarios");
+const SCREEN = deviceScreen();
 
 const flag = { type: "boolean", default: false } as const, value = { type: "string" } as const;
 const { values: { heapsample: heapSample, gpu, warm, demand, timeline, json: jsonOut, query, cpuprofile: cpuProfile, trace: traceOut, engine, ecores, repeat: repeatArg }, positionals: args } = cli(
@@ -56,9 +53,11 @@ const launchQuery = new URLSearchParams(query);
 if (!launchQuery.has("perfProbe")) launchQuery.set("perfProbe", "1");
 // a cold launch is a first launch of any app: the platform build's bundled app builds stay out unless asked for
 if (!launchQuery.has("bundles")) launchQuery.set("bundles", "0");
-/** a scenario with "gate": false (a heavy app whose launch waits on live content) is a report: run only when named, and its taps and failures do not fail the gate */
-const gates = (name: string): boolean => JSON.parse(readFileSync(join(SCENARIOS, name + ".json"), "utf8")).gate !== false;
-const names = args.length ? args : readdirSync(SCENARIOS).filter((f) => f.endsWith(".json")).map((f) => basename(f, ".json")).filter(gates);
+const unknown = args.filter((name) => !SCENARIOS[name]);
+if (unknown.length) throw new Error(`no lat scenario ${unknown.join(", ")}; known: ${Object.keys(SCENARIOS).join(", ")}`);
+/** a report scenario's taps and failures do not fail the gate */
+const gates = (name: string): boolean => SCENARIOS[name].gate !== false;
+const names = args.length ? args : Object.keys(SCENARIOS).filter(gates);
 
 /** the wd.perf counters a tap's breakdown reports, as deltas from pointerup to the response */
 const COUNTERS = ["inputMs", "resParseMs", "drawMs", "frameMs", "presentations", "presentLagMs",
@@ -88,9 +87,10 @@ async function openWebkit(profile: string): Promise<Browser> {
 async function openChrome(profile: string): Promise<Browser> {
   const chromeLog = process.env.WEBDROID_CHROME_LOG;
   const [command, ...argv] = [...ecores ? ["taskpolicy", "-c", "background"] : [], chromium.executablePath(), "--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`,
-    ...chromeArgs(), "--autoplay-policy=no-user-gesture-required",
+    // without a mock keychain (as Playwright's launches pass) macOS Chrome's first cookie waits on a keychain prompt no one answers
+    ...launchOptions(undefined, gpu ? HOST_GL : SOFTWARE_GL).args, "--use-mock-keychain", "--autoplay-policy=no-user-gesture-required",
     `--window-size=${CONTEXT_OPTS.viewport.width},${CONTEXT_OPTS.viewport.height}`, "--no-first-run", "--no-default-browser-check",
-    ...(gpu ? HOST_GL : SOFTWARE_GL), ...(process.env.WEBDROID_CHROME_ARGS?.split(" ").filter(Boolean) ?? []), "about:blank"];
+    ...(process.env.WEBDROID_CHROME_ARGS?.split(" ").filter(Boolean) ?? []), "about:blank"];
   // Chrome's own output (with WEBDROID_JS_FLAGS=--trace-gc, each V8 collection)
   const logs = chromeLog ? [openSync(chromeLog, "w"), openSync(chromeLog + ".err", "w")] : ["ignore", "ignore"] as const;
   const proc = spawn(command, argv, { stdio: ["ignore", ...logs] });
@@ -185,13 +185,13 @@ function profiler({ send, events }: Cdp, file: string) {
 }
 
 const PAGE = await bundle(join(import.meta.dirname, "page.ts"), { format: "iife" });
-/** one launch of `apk` through `steps`: `profile` writes its CPU profile, `save` keeps the code it compiles, `replay` starts from the code kept, `trace` writes a browser trace */
-async function launch(browser: Browser, apk: string, steps: unknown[], expectedLaunch: Expectation,
-  { profile, save = false, replay = false, trace }: { profile?: string; save?: boolean; replay?: boolean; trace?: string } = {}): Promise<Capture> {
-  const config: LatConfig = { steps, counters: COUNTERS, save, replay, expectedLaunch, E: Ev };
-  const injection = `globalThis.__wdLatConfig=${JSON.stringify(config)};${profile ? "globalThis.__wdProfiling=1;" : ""}${demand && !save ? "globalThis.__wdDemand=1;" : ""}${PAGE}`;
-  const url = new URL("/", BASE_URL);
-  url.search = new URLSearchParams({ ...Object.fromEntries(launchQuery), apk, screen: SCREEN }).toString();
+/** one launch of `apk` through `steps`: `profile` writes its CPU profile, `save` keeps the code it compiles, `replay` starts from the code kept, `trace`
+ *  writes a browser trace, and `privateStorage` leaves the page without file pickers */
+async function launch(browser: Browser, apk: string, steps: Step[], expectedLaunch: Expectation,
+  { profile, save = false, replay = false, trace, privateStorage = false }: { profile?: string; save?: boolean; replay?: boolean; trace?: string; privateStorage?: boolean } = {}): Promise<Capture> {
+  const config: LatConfig = { steps, screen: SCREEN, counters: COUNTERS, save, replay, expectedLaunch, E: Ev };
+  const injection = `globalThis.__wdLatConfig=${JSON.stringify(config)};${profile ? "globalThis.__wdProfiling=1;" : ""}${demand && !save ? "globalThis.__wdDemand=1;" : ""}${privateStorage ? NO_PICKERS : ""}${PAGE}`;
+  const url = webdroidUrl({ ...Object.fromEntries(launchQuery), apk, screen: screenParam(SCREEN) });
   // only Chrome is profiled or traced
   const { cdp } = browser, profiling = profile && cdp ? profiler(cdp, profile) : undefined;
   const tab = await browser.open(url.href, injection, async (session) => {
@@ -227,7 +227,7 @@ async function writeTrace({ send, events }: Cdp, file: string): Promise<void> {
 
 /** wipe app data (installs, preferences, databases, files) and keep everything else */
 async function resetData(browser: Browser): Promise<void> {
-  const tab = await browser.open(`${BASE_URL}/?screen=${encodeURIComponent(SCREEN)}`, `addEventListener("DOMContentLoaded", async () => {
+  const tab = await browser.open(webdroidUrl({ screen: screenParam(SCREEN) }).href, `addEventListener("DOMContentLoaded", async () => {
     while (!globalThis.wd) await new Promise((r) => setTimeout(r, 50));
     await globalThis.wd.reset(); document.title = "RESET"; });`);
   try { if (await outcome(tab, "RESET", 60_000) !== "done") throw new Error("reset did not finish"); }
@@ -257,21 +257,19 @@ for (const name of names) {
   let profile: string | undefined, browser: Browser | undefined;
   const gated = gates(name);
   try {
-    const { apk, steps: scenarioSteps, launch: expectedLaunch, responses, repeat: again = [] } = JSON.parse(readFileSync(join(SCENARIOS, name + ".json"), "utf8"));
-    const steps = [...scenarioSteps, ...Array.from({ length: repeat }, () => again).flat()].map((step: any) => step.m ? { ...step, expect: responses?.[step.expect ?? step.m] } : step);
-    const validExpectation = (e: Expectation | undefined) => !!e?.nodes?.length && !!e.pixels?.length;
-    if (!validExpectation(expectedLaunch) || steps.some((step: any) => step.m && !validExpectation(step.expect))) throw new Error("scenario intended-state expectations missing");
+    const { apk, steps: scenarioSteps, launch: expectedLaunch, repeat: again = [], privateStorage } = SCENARIOS[name];
+    const steps = [...scenarioSteps, ...Array.from({ length: repeat }, () => again).flat()];
     if (engine === "webkit" && (cpuProfile || traceOut)) throw new Error("WebKit profiling and tracing require a separate protocol");
-    row.apk = apk; row.expectedTaps = steps.flatMap((step: { m?: string }) => step.m ? [step.m] : []);
+    row.apk = apk; row.expectedTaps = steps.flatMap((step) => "m" in step ? [step.m] : []);
     profile = mkdtempSync(join(tmpdir(), "wdlat-"));
     browser = await (engine === "webkit" ? openWebkit : openChrome)(profile); row.browser = browser.version;
     if (warm) {
-      row.preparation = await launch(browser, apk, steps, expectedLaunch, { save: true });
+      row.preparation = await launch(browser, apk, steps, expectedLaunch, { save: true, privateStorage });
       if (row.preparation.error) throw new Error("warm preparation: " + row.preparation.error);
       await resetData(browser);
     }
     Object.assign(row, await launch(browser, apk, steps, expectedLaunch, { profile: cpuProfile && `${cpuProfile.replace(/\.cpuprofile$/, "")}-${name}.cpuprofile`,
-      replay: warm, trace: traceOut && `${traceOut.replace(/\.json$/, "")}-${name}.json` }));
+      replay: warm, trace: traceOut && `${traceOut.replace(/\.json$/, "")}-${name}.json`, privateStorage }));
     if (row.error) throw new Error(row.error);
     const { launch: started, taps } = row;
     if (!started || taps.length !== row.expectedTaps!.length || taps.some((tap, i) => tap.m !== row.expectedTaps![i])) throw new Error("incomplete scenario capture");

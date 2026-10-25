@@ -12,7 +12,8 @@ import { NativeCanvas, drawingCanvas } from "./canvas.ts";
 import { drawBitmap, drawPath } from "./canvas-draw.ts";
 import { NativeBitmap } from "./bitmap.ts";
 import { CAPS, JOINS, NativePaint } from "./paint.ts";
-import { NativePath, PathMeasure } from "./path.ts";
+import { NativePath } from "./path.ts";
+import { PathMeasure } from "./pathmeasure.ts";
 import { PathData, parsePathData, throwParseFailure, verbsToPath } from "./pathparser.ts";
 
 /** hwui's applyAlpha: the colour's alpha byte scaled, truncated as SkColorSetA takes it */

@@ -3,12 +3,10 @@ import { after, vcall } from "../jvm/natives/jentry.ts";
 import { boxBool } from "../jvm/natives/jbox.ts";
 import type { CookieCalls } from "../shell/cookie-access.ts";
 import { postMain } from "./mainloop.ts";
+import { broker } from "../shell/broker-access.ts";
 
 /** The process's CookieManager and WebViews reach the package's one jar, the broker's, through acknowledged operations. */
-export const cookieTransport: { calls: () => CookieCalls } = {
-  calls: () => { throw rt.mkThrowable("android/os/RemoteException", "Process transport unavailable"); },
-};
-const calls = () => cookieTransport.calls();
+const calls = (): CookieCalls => broker();
 const watchers = new Set<() => void>();
 let watching = false;
 /** `f` after each change to the jar, until the returned function is called */

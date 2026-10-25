@@ -3,8 +3,9 @@ import { writeWhole } from "./generated.ts";
 import { openInstall } from "../src/shell/install.ts";
 import type { XmlNode } from "../src/android/axml.ts";
 import type { DexFile } from "../src/jvm/dex.ts";
-import type { Program } from "../src/jvm/reach.ts";
-import { reflectiveRoots, rootsOf } from "../src/jvm/roots.ts";
+import type { Program } from "./reach.ts";
+import { slashName } from "../src/jvm/abi.ts";
+import { CLASS_NAME, rootClasses } from "../src/jvm/roots.ts";
 
 type Zip = Record<string, Uint8Array>;
 
@@ -36,3 +37,41 @@ export function writeGenerated(file: string, header: string, decls: string, summ
 /** `export const name: type = {` with a line per entry, its key and value as given */
 export const constObject = (name: string, type: string, entries: (readonly [string, string | number])[]): string =>
   `export const ${name}: ${type} = {\n${entries.map(([k, v]) => `  ${k}: ${v},\n`).join("")}};\n`;
+
+function rootsOf(manifestBytes: Uint8Array, p: Program, services: Record<string, string> = {}): { classes: string[]; methods: string[]; why: Map<string, string> } {
+  const { classes, why } = rootClasses(manifestBytes, services);
+  // A component's whole surface is a root: the platform calls onCreate/onBind/onReceive/
+  // query/... and nothing in the apk does.
+  const methods: string[] = [];
+  for (const c of classes) {
+    const def = p.def(c);
+    const dex = p.dexOf(c);
+    if (!def || !dex) continue;
+    for (const m of [...def.directMethods, ...def.virtualMethods]) {
+      methods.push(c + "." + dex.method(m.methodIdx).name + dex.methodDesc(m.methodIdx));
+    }
+  }
+  return { classes, methods, why };
+}
+
+/** Classes named by a string constant that also exist in the program. Over-approximate on
+ *  purpose — it does not check that the string reaches Class.forName — because a missed
+ *  root silently shrinks the work queue, while a spurious one only adds code that compiles.
+ *  This is what covers reflection, DI graphs and ServiceLoader lookups spelled in code. */
+function reflectiveRoots(p: Program, dexes: { stringCount: number; stringLen(i: number): number; string(i: number): string }[]): string[] {
+  const out = new Set<string>();
+  for (const dex of dexes) {
+    for (let i = 0; i < dex.stringCount; i++) {
+      // cheap shape tests before the decode, the regex and the map lookup
+      const len = dex.stringLen(i);
+      if (len < 5 || len > 200) continue;
+      const s = dex.string(i);
+      if (s.charCodeAt(0) > 122 || !s.includes(".")) continue;
+      if (!CLASS_NAME.test(s)) continue;
+      const n = slashName(s);
+      if (p.has(n)) out.add(n);
+    }
+  }
+  return [...out];
+}
+

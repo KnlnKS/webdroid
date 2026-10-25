@@ -6,11 +6,11 @@
 import { awaited, JObj, rt, noops, getDeclared, driven, type Gen } from "../jvm/runtime.ts";
 import { jarray } from "../jvm/abi.ts";
 import { newObj, scall, vcall, after } from "../jvm/natives/jentry.ts";
-import { logUncaught, detached, unconnected } from "../jvm/natives/jthrowable.ts";
+import { logUncaught, detached } from "../jvm/natives/jthrowable.ts";
 import { boxInt } from "../jvm/natives/jbox.ts";
 import { toJsArray } from "../jvm/natives/jcoll.ts";
 import { packages, qualifyComponent, ownedBy, uidPackages } from "./packages.ts";
-import type { AccountKey, AccountStore, StoredAccount } from "../shell/accounts.ts";
+import { AccountStore, type AccountKey, type StoredAccount } from "../shell/accounts.ts";
 import { attr, attrStr, parseAXML, TV } from "./axml.ts";
 import { servicesMatching } from "./pm.ts";
 import { resolved, resString } from "./res.ts";
@@ -43,18 +43,15 @@ function authenticators(): Authenticator[] {
 const authenticatorFor = (type: string) => authenticators().find((a) => a.type === type);
 
 // ── the store, and what a caller may see and change of it
-let accounts: AccountStore | null = null, stopAccountUpdates = () => {};
-const store = (): AccountStore => accounts ?? unconnected();
+/** the device's accounts, which system_server's service keeps */
+export const accountStore = new AccountStore();
 /** AccountManagerService's broadcasts on a change, which AccountManager's listeners hear */
 const CHANGED = ["android.accounts.action.VISIBLE_ACCOUNTS_CHANGED", "android.accounts.LOGIN_ACCOUNTS_CHANGED"];
 function accountsChanged(): void {
   for (const action of CHANGED) asSystem(() => after(newIntent(action), (intent) => broadcastIntent(intent, [], false))).catch(logUncaught);
 }
-/** the broker's store, which system_server's service keeps */
-export function useAccountStore(shared: AccountStore): () => void {
-  stopAccountUpdates(); accounts = shared;
-  return stopAccountUpdates = shared.watch(accountsChanged);
-}
+/** system_server announces the store's changes until this is called */
+export const stopAccountUpdates = accountStore.watch(accountsChanged);
 /** the calling uid's package, as getPackageNameForUid picks one */
 const caller = (uid = callingIdentity().uid) => uidPackages(uid)[0]?.pkg ?? "";
 const sameUid = (a: string, b: string) => ownedBy(b, packages.get(a)?.uid ?? -1);
@@ -72,11 +69,11 @@ function owned(account: JObj | null): StoredAccount | null {
   if (!account) throw rt.mkThrowable("java/lang/IllegalArgumentException", "account is null");
   const key = keyOf(account);
   if (!manages(key.type)) denied(key.type);
-  return store().find(key) ?? null;
+  return accountStore.find(key) ?? null;
 }
 /** the accounts of `type` (any, for null) that `pkg` sees, or that the caller manages */
 const listed = (type: string | null, pkg: string, managed = false) =>
-  store().records.filter((s) => (type === null || s.type === type) && (managed ? manages(s.type) : visible(s, pkg)));
+  accountStore.records.filter((s) => (type === null || s.type === type) && (managed ? manages(s.type) : visible(s, pkg)));
 const javaAccount = (s: AccountKey) => newObj("android/accounts/Account", "(Ljava/lang/String;Ljava/lang/String;)V", s.name, s.type);
 const accountArray = driven(function* (list: StoredAccount[]): Gen<JObj[]> {
   const out: JObj[] = [];
@@ -86,11 +83,11 @@ const accountArray = driven(function* (list: StoredAccount[]): Gen<JObj[]> {
 const byType = (type: string | null, pkg = caller()) => accountArray(listed(type, pkg));
 /** `apply` to an account the store still holds, persisted unless it declines: whether it changed */
 function changed(s: StoredAccount | null, apply: (s: StoredAccount) => boolean | void): number {
-  if (!s || !store().records.includes(s) || apply(s) === false) return 0;
-  store().persist();
+  if (!s || !accountStore.records.includes(s) || apply(s) === false) return 0;
+  accountStore.persist();
   return 1;
 }
-const drop = (s: StoredAccount | null) => changed(s, (s) => store().drop(s));
+const drop = (s: StoredAccount | null) => changed(s, (s) => accountStore.drop(s));
 const setPassword = (account: JObj, value: string | null) => changed(owned(account), (s) => { s.password = value; s.tokens = Object.create(null); });
 const setEntry = (account: JObj, field: "data" | "tokens", name: string, value: string | null) =>
   changed(owned(account), (s) => { if (value === null) delete s[field][name]; else s[field][name] = value; });
@@ -215,7 +212,7 @@ hostService("account", "webdroid/AccountManagerService", "android/accounts/IAcco
   [`addAccountExplicitlyWithVisibility(${A}${S}${B}Ljava/util/Map;${S})Z`]: driven(addExplicitly),
   [`removeAccountExplicitly(${A})Z`]: (account: JObj) => drop(owned(account)),
   [`accountAuthenticated(${A})Z`]: (account: JObj) => +!!owned(account),
-  [`someUserHasAccount(${A})Z`]: (account: JObj) => account ? +!!store().find(keyOf(account)) : 0,
+  [`someUserHasAccount(${A})Z`]: (account: JObj) => account ? +!!accountStore.find(keyOf(account)) : 0,
   [`hasAccountAccess(${A}${S}Landroid/os/UserHandle;)Z`]: (account: JObj, pkg: string) => account ? +listed(field(account, "type"), pkg).some((s) => s.name === field(account, "name")) : 0,
   [`getPassword(${A})${S}`]: (account: JObj) => owned(account)?.password ?? null,
   [`setPassword(${A}${S})V`]: setPassword,
@@ -225,8 +222,8 @@ hostService("account", "webdroid/AccountManagerService", "android/accounts/IAcco
   [`peekAuthToken(${A}${S})${S}`]: (account: JObj, type: string) => owned(account)?.tokens[type] ?? null,
   [`setAuthToken(${A}${S}${S})V`]: (account: JObj, type: string, token: string | null) => setEntry(account, "tokens", type, token),
   [`invalidateAuthToken(${S}${S})V`]: (type: string, token: string | null) => {
-    for (const s of store().records) if (s.type === type) for (const name of Object.keys(s.tokens)) if (s.tokens[name] === token) delete s.tokens[name];
-    store().persist();
+    for (const s of accountStore.records) if (s.type === type) for (const name of Object.keys(s.tokens)) if (s.tokens[name] === token) delete s.tokens[name];
+    accountStore.persist();
   },
   [`getPreviousName(${A})${S}`]: (account: JObj) => owned(account)?.previousName ?? null,
   [`getAccountVisibility(${A}${S})I`]: (account: JObj, pkg: string) => { const s = owned(account); return s ? visibilityFor(s, pkg) : 0; },
@@ -300,9 +297,9 @@ function* addExplicitly(account: JObj, password: string | null, extras: JObj | n
   // the type's authenticator went, or the account came, while the extras were read
   const key = keyOf(account), owner = authenticatorFor(key.type)?.pkg;
   if (!owner || !manages(key.type)) denied(key.type);
-  if (store().find(key)) return 0;
-  store().add({ ...key, owner, password, data, tokens: Object.create(null), visibility: visibilities });
-  store().persist();
+  if (accountStore.find(key)) return 0;
+  accountStore.add({ ...key, owner, password, data, tokens: Object.create(null), visibility: visibilities });
+  accountStore.persist();
   return 1;
 }
 function* addAccount(response: JObj, type: string, tokenType: string | null, features: string[] | null, expectActivityLaunch: number, options: JObj | null): Gen<void> {
@@ -312,7 +309,7 @@ function* addAccount(response: JObj, type: string, tokenType: string | null, fea
 }
 /** a cached token answers at once unless the authenticator keeps its own; a new one is cached */
 function* getAuthToken(response: JObj, account: JObj, tokenType: string, notifyOnFailure: number, expectActivityLaunch: number, options: JObj | null): Gen<void> {
-  const identity = callingIdentity(), type = field(account, "type"), custom = !!authenticatorFor(type)?.customTokens, s = store().find(keyOf(account));
+  const identity = callingIdentity(), type = field(account, "type"), custom = !!authenticatorFor(type)?.customTokens, s = accountStore.find(keyOf(account));
   if (!s || !visible(s, caller())) { yield fail(response, ERROR_BAD_ARGUMENTS, "account doesn't exist"); return; }
   const cached = custom ? undefined : s.tokens[tokenType];
   if (cached !== undefined) { yield reply(response, yield* bundle({ authtoken: cached, authAccount: s.name, accountType: s.type })); return; }
@@ -329,7 +326,7 @@ function* getAuthToken(response: JObj, account: JObj, tokenType: string, notifyO
       // the authenticator caches a token for an account of its own type only
       const owner = authenticatorFor(type)?.pkg;
       if (!owner || owner !== authenticatorFor(resultType)?.pkg) denied(resultType);
-      changed(store().find({ name, type: resultType }) ?? null, (target) => {
+      changed(accountStore.find({ name, type: resultType }) ?? null, (target) => {
         if (!visible(target, caller())) return false;
         target.tokens[tokenType] = token;
       });

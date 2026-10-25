@@ -10,8 +10,9 @@ import { entryCases, entryDex } from "./entrycases.ts";
 import { checker } from "./tools.ts";
 import { classNameOf, newObj, scall, staticField, vcall } from "../../src/jvm/natives/jentry.ts";
 import { FileDescriptors, type DescriptorCalls } from "../../src/shell/file-descriptors.ts";
-import { brokerMethods } from "../../src/shell/broker-contract.ts";
-import { canonicalFilePaths, usePathOwner } from "../../src/shell/file-path.ts";
+import { canonicalFilePaths } from "../../src/shell/file-path.ts";
+import { connectBroker } from "../../src/shell/broker-access.ts";
+import { brokerMethods, type BrokerCalls } from "../../src/shell/broker-contract.ts";
 import { callProxy, serveCalls } from "../../src/shell/rpc.ts";
 import { writeBufferBytes } from "../../src/jvm/natives/jnio.ts";
 
@@ -33,7 +34,7 @@ async function inMemoryControl(): Promise<void> {
   const stop = serveCalls(ports.port1, owner.session(2001, () => 0)), proxy = callProxy<DescriptorCalls>(ports.port2, brokerMethods.descriptors);
   let shared, mapped;
   try {
-    usePathOwner({ files: canonicalFilePaths(() => 0), descriptors: proxy.endpoint });
+    connectBroker({ files: canonicalFilePaths(() => 0), descriptors: proxy.endpoint } as unknown as BrokerCalls, true);
     shared = await scall("android/os/SharedMemory", "create", "(Ljava/lang/String;I)Landroid/os/SharedMemory;", "dex", Math.ceil(padded.length / 4096) * 4096);
     mapped = await vcall(shared, "mapReadWrite", "()Ljava/nio/ByteBuffer;");
     await writeBufferBytes(mapped, bytes, 8);
@@ -68,7 +69,7 @@ async function inMemoryControl(): Promise<void> {
   } finally {
     if (mapped) await scall("android/os/SharedMemory", "unmap", "(Ljava/nio/ByteBuffer;)V", mapped);
     if (shared) await vcall(shared, "close", "()V");
-    usePathOwner(null);
+    connectBroker(undefined, false);
     proxy.close(); stop(); owner.close(2001);
   }
   console.log("in-memory DEX: actual heap/RPC buffer slices, copied code, defining loaders and bootstrap superclass");

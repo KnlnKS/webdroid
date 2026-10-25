@@ -13,10 +13,8 @@ import { NativePath } from "./path.ts";
 import { perf } from "../perf.ts";
 import { type NativeRenderEffect, sized } from "./rendereffect.ts";
 import { NativePaint, copyPaint, paintAt } from "./paint.ts";
-import { COMPOSITE } from "./graphics.ts";
-import type { NativeColorFilter } from "./colorfilter.ts";
 import { Camera3D, type Mat, IDENTITY, identity, mul, translateM, scaleM, about, setPivotedTransform, invert, isIdentity, applyMatrix, matrixAt, deviceBounds } from "./matrix.ts";
-import { NativeCanvas, canvasAt, drawInLayer, clipRoundRect } from "./canvas.ts";
+import { NativeCanvas, canvasAt, drawInLayer, clipRoundRect, layerStyle, type LayerStyle } from "./canvas.ts";
 import { drawCircle, drawRoundRect } from "./canvas-draw.ts";
 import { addAnimator, endAnimators } from "./rtanimator.ts";
 import type { RuntimeShaderBuilder } from "./runtime-shader.ts";
@@ -55,7 +53,7 @@ export class NativeRenderNode {
   revealClip = false; revealX = 0; revealY = 0; revealRadius = 0;
   ambientColor = 0xff000000 | 0; spotColor = 0xff000000 | 0;
   /** LayerProperties: LayerType (0 none, 1 software, 2 render layer) and what setFromPaint takes */
-  layerType = 0; layerAlpha = 255; layerBlend: string | null = null; layerFilter: NativeColorFilter | null = null;
+  layerType = 0; layerStyle: LayerStyle = layerStyle(null);
   effect: NativeRenderEffect | null = null; backdrop: NativeRenderEffect | null = null;
   projectBackwards = false; projectionReceiver = false; forceDark = true; usageHint = 0;
   stretch: { x: number; y: number; maxX: number; maxY: number } | null = null;
@@ -110,10 +108,8 @@ export class NativeRenderNode {
   get cameraZ(): number { return f32(this.camera.location[2] / 72); }
   /** LayerProperties::setFromPaint */
   setLayerPaint(p: NativePaint | null): number {
-    const alpha = p ? p.color >>> 24 : 255, blend = p?.blendName ?? null, filter = p?.colorFilter ?? null;
-    const changed = alpha !== this.layerAlpha || blend !== this.layerBlend || filter !== this.layerFilter;
-    this.layerAlpha = alpha; this.layerBlend = blend; this.layerFilter = filter;
-    return +changed;
+    const old = this.layerStyle, style = this.layerStyle = layerStyle(p);
+    return +(style.alpha !== old.alpha || style.blend !== old.blend || style.filter !== old.filter);
   }
   /** Outline::getPath is non-null for a round rect or path outline, which a shadow needs */
   get hasShadow(): boolean { return this.z > 0 && (this.outline === Outline.RoundRect || this.outline === Outline.Path) && this.outlineAlpha !== 0; }
@@ -202,8 +198,8 @@ export function drawNodeInto(ctx: Ctx2D, n: NativeRenderNode) {
       ctx.globalAlpha *= n.alpha;
       effect.draw(ctx, surface);
     } else if (layer) {
-      const blend = n.layerBlend && n.layerBlend !== "SRC_OVER" ? COMPOSITE[n.layerBlend] ?? null : null;
-      drawInLayer(ctx, { left: 0, top: 0, right: w, bottom: h }, { alpha: n.layerAlpha * n.alpha, blend, filter: n.layerFilter }, ops);
+      ctx.globalAlpha *= n.alpha;
+      drawInLayer(ctx, { left: 0, top: 0, right: w, bottom: h }, n.layerStyle, ops);
     } else {
       ctx.globalAlpha *= n.alpha;
       replay(ctx, ops);

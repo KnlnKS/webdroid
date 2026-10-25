@@ -11,9 +11,9 @@ import { longVersionCode, queryReceivers } from "./pm.ts";
 import { packages } from "./packages.ts";
 import { checkUidPermission, notHeld } from "./permissions.ts";
 import { sendIntent } from "./pendingintent.ts";
-import type { PackageDataChange } from "../shell/packagedata.ts";
 import type { Receiver } from "../shell/broker-contract.ts";
-import { detached, notConnected } from "../jvm/natives/jthrowable.ts";
+import { detached } from "../jvm/natives/jthrowable.ts";
+import { broker } from "../shell/broker-access.ts";
 
 const S = "Ljava/lang/String;";
 type Broadcast = { data: ParcelData; targets: Receiver[] };
@@ -27,17 +27,13 @@ function* packageBroadcast$(action: string, pkg: string, uid: number, flags: str
   const targets = (yield* awaited(queryReceivers(intent))).filter((r) => r.owner.pkg !== pkg).map((r) => ({ pkg: r.owner.pkg, cls: r.name, priority: r.priority }));
   return { data: yield* awaited(encodeIntent(intent)), targets };
 }
-/** a process's route to the broker, which runs the change as system_server does: whether it ran, with
- *  a `prompt` only once the user agreed to it */
-export const packageDataTransport: { change: (pkg: string, how: PackageDataChange, broadcasts: Broadcast[], prompt?: string) => Promise<boolean> } = { change: notConnected };
-
 /** clearApplicationUserData of an installed package, `fromApp` when it clears its own: its processes
  *  are killed and its data cleared, then ACTION_PACKAGE_DATA_CLEARED goes out and `observer` hears
  *  the result (when its process lives); `done` settles with it */
 export const clearUserData = driven(function* (pkg: string, fromApp: boolean, keepState: boolean, observer: JObj | null): Gen<{ done: Promise<boolean> }> {
   const record = packages.get(pkg);
   const cleared = record && (yield* packageBroadcast$("android.intent.action.PACKAGE_DATA_CLEARED", pkg, record.uid));
-  const done = !cleared ? Promise.resolve(false) : packageDataTransport.change(pkg, { kind: "clear", fromApp, keepState }, [cleared])
+  const done = !cleared ? Promise.resolve(false) : (async () => broker().packageDataChange(pkg, { kind: "clear", fromApp, keepState }, [cleared]))()
     .then(() => true, (error) => { console.error("[clear data]", pkg, error); return false; });
   void done.then((ok) => { if (observer) detached(() => vcall(observer, "onRemoveCompleted", `(${S}Z)V`, pkg, ok ? 1 : 0), binderEscape()); });
   return { done };
@@ -47,13 +43,13 @@ const RESULT_FIRST_USER = 1, DELETE_SUCCEEDED = 1, DELETE_FAILED_INTERNAL_ERROR 
 /** deletePackageX for a package the user installed: its processes die, it goes with all its data,
  *  and ACTION_PACKAGE_REMOVED and ACTION_PACKAGE_FULLY_REMOVED go out. A system package answers
  *  DELETE_FAILED_INTERNAL_ERROR, as one without an update does. */
-export const deletePackage = driven(function* (pkg: string, prompt?: string): Gen<number> {
+const deletePackage = driven(function* (pkg: string, prompt?: string): Gen<number> {
   const record = packages.get(pkg);
   if (!record || record.system) return DELETE_FAILED_INTERNAL_ERROR;
   const flags = ["android.intent.extra.DATA_REMOVED", "android.intent.extra.REMOVED_FOR_ALL_USERS"];
   const broadcasts = [yield* packageBroadcast$("android.intent.action.PACKAGE_REMOVED", pkg, record.uid, flags),
     yield* packageBroadcast$("android.intent.action.PACKAGE_FULLY_REMOVED", pkg, record.uid, flags)];
-  return (yield* awaited(packageDataTransport.change(pkg, { kind: "remove" }, broadcasts, prompt))) ? DELETE_SUCCEEDED : DELETE_FAILED_ABORTED;
+  return (yield* awaited(broker().packageDataChange(pkg, { kind: "remove" }, broadcasts, prompt))) ? DELETE_SUCCEEDED : DELETE_FAILED_ABORTED;
 });
 
 const DELETE_PACKAGES = "android.permission.DELETE_PACKAGES";

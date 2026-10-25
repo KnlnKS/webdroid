@@ -10,6 +10,7 @@ import { appHost } from "./apphost.ts";
 import { registerSystemActivity, newIntent, putExtra, type JIntent } from "./intent.ts";
 import { type PackageRecord, packages, usesSdk } from "./packages.ts";
 import { persisted } from "../shell/device-storage.ts";
+import { broker, remoteSystem } from "../shell/broker-access.ts";
 import { SYSTEM_PACKAGES } from "../shell/system-packages.ts";
 import { hostService } from "./binder.ts";
 import { permissionInfo$ } from "./pm.ts";
@@ -60,10 +61,10 @@ export function canonicalPermissionCommands(store: PermissionStore, authorize: (
     permissionGrant: (pkg, names) => { authorize(pkg); store.grant(pkg, names); },
   };
 }
-// only the canonical commands read the store: a process without it asks the broker's
-let permissionAccess = canonicalPermissionCommands(new PermissionStore(), () => {});
-export function usePermissionStore(store: PermissionStore) { permissionAccess = canonicalPermissionCommands(store, () => {}); }
-export function usePermissionAccess(access: PermissionAccess): void { permissionAccess = access; }
+/** the runtime grants system_server holds; only the canonical commands read it, a Worker asking the broker's */
+export const permissionStore = new PermissionStore();
+const ownPermissions = canonicalPermissionCommands(permissionStore, () => {});
+const permissionAccess = (): PermissionAccess => remoteSystem() ? broker().permissions : ownPermissions;
 /** signature|appop|pre23 permissions, the special access a user grants in Settings */
 const SPECIAL_ACCESS = new Set(["android.permission.SYSTEM_ALERT_WINDOW", "android.permission.WRITE_SETTINGS"]);
 // granted by the app's own request, or to a system package by the default grant policy
@@ -76,7 +77,7 @@ function permissionHeld(store: PermissionStore, pkg: string, name: string): bool
   if (SPECIAL_ACCESS.has(name)) return specialAtInstall(record, name) || !!record?.requested.has(name) && store.get(pkg).has(name);
   return !RUNTIME_PERMISSIONS.has(name) || store.get(pkg).has(name) || !!record?.grants.has(name);
 }
-const permissionsGranted = (pkg: string, names: string[]): boolean[] | Promise<boolean[]> => permissionAccess.permissionCheck(pkg, names);
+const permissionsGranted = (pkg: string, names: string[]): boolean[] | Promise<boolean[]> => permissionAccess().permissionCheck(pkg, names);
 /** a permission a user grants (runtime, or special access) is read from the store; any other is held */
 export const permissionGranted = (pkg: string, name: string): boolean | Promise<boolean> =>
   RUNTIME_PERMISSIONS.has(name) || SPECIAL_ACCESS.has(name) ? after(permissionsGranted(pkg, [name]), values => values[0]) : true;
@@ -93,11 +94,11 @@ export function grantPermissions(names: string[]): Int32Array | Promise<Int32Arr
   // Android 13 cannot ask for POST_NOTIFICATIONS: the system prompts for it (notification.ts)
   const below33 = !!record && usesSdk(record.root).target < 33;
   const asked = names.filter((name) => RUNTIME_PERMISSIONS.has(name) && !(below33 && name === "android.permission.POST_NOTIFICATIONS"));
-  return after(permissionAccess.permissionGrant(pkg, asked), () =>
+  return after(permissionAccess().permissionGrant(pkg, asked), () =>
     after(permissionsGranted(pkg, names), values => Int32Array.from(values, value => value ? 0 : -1)));
 }
 /** a permission the system's own prompt asked for, answered by the same policy */
-export const grantPrompted = (pkg: string, name: string): void | Promise<void> => permissionAccess.permissionGrant(pkg, [name]);
+export const grantPrompted = (pkg: string, name: string): void | Promise<void> => permissionAccess().permissionGrant(pkg, [name]);
 // GrantPermissionsActivity, which Activity.requestPermissions starts: asking grants, and the
 // answer is the names with their results
 const PERMISSIONS = "android.content.pm.extra.REQUEST_PERMISSIONS_";

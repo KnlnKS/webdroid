@@ -1,7 +1,6 @@
-// Every native module, in dependency order. The browser shell and scripts/audit.ts import
+// Every native module, in dependency order. The tier, the workers and the scripts import
 // THIS, never their own copy of the list — a drifted copy makes audit report implemented
-// classes as missing. nrun.ts loads java.lang's and java.io's alone: it runs an app's own
-// bytecode, whose methods a spec (rt.register) of the same class would replace.
+// classes as missing.
 import "./jvm/natives/jstring.ts";
 import "./jvm/natives/jlang.ts";
 import "./jvm/natives/fdlibm.ts";
@@ -19,11 +18,11 @@ import "./jvm/natives/conscrypt.ts";
 import "./jvm/natives/conscrypt-x509.ts";
 import "./jvm/natives/jnet.ts";
 import "./jvm/natives/jzip.ts";
+import "./jvm/natives/linux.ts";
 import "./android/gl.ts";
 import "./android/glsurface.ts";
 import "./android/os.ts";
 import "./android/storage.ts";
-import "./android/socket.ts";
 import "./android/keyevent.ts";
 import "./android/util.ts";
 import "./android/accounts.ts";

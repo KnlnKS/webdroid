@@ -4,7 +4,8 @@
 import { rt, JObj } from "../runtime.ts";
 import { Strand } from "../suspend.ts";
 import { processExited } from "../../process-exit.ts";
-import { callOn, classNameOf, curThread, javaRuns, mainThread, vcall, vcallOn, type JThread } from "./jentry.ts";
+import { callOn, classNameOf, curThread, mainThread, vcall, vcallOn, type JThread } from "./jentry.ts";
+import { javaRuns } from "../javahost.ts";
 
 /** what host code holds of a Java throwable: a TS native's (wasm/host/entry.ts hostThrowable), or a facade over Java's (bridge.ts) */
 export class JThrowable extends JObj {

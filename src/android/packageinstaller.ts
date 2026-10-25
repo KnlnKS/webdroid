@@ -1,13 +1,13 @@
 // IPackageInstaller and IPackageInstallerSession, under AOSP's PackageInstaller and its Session:
 // a session stages each written file under /data/app/vmdl<id>.tmp, as PackageInstallerSession
-// does, and its commit installs a single base APK through the package registry.
+// does, and its commit has system_server install a single base APK.
 import { awaited, JObj, rt, noops, setDeclared, getDeclared, driven, type Gen } from "../jvm/runtime.ts";
 import { scall, vcall, after, newObj } from "../jvm/natives/jentry.ts";
 import { logUncaught, detached } from "../jvm/natives/jthrowable.ts";
 import { jarray } from "../jvm/abi.ts";
 import { newFile } from "../jvm/natives/jio.ts";
 import { vfs } from "../shell/vfs.ts";
-import { installPackageArchive } from "./pm.ts";
+import { broker } from "../shell/broker-access.ts";
 import { broadcastIntent } from "./server/broadcastqueue.ts";
 import { sendIntent } from "./pendingintent.ts";
 import { callingIdentity, newStub, binderEscape, parceledList } from "./binder.ts";
@@ -53,7 +53,7 @@ function* commit$(s: Session, sender: JObj): Gen<void> {
     if (s.mode !== MODE_FULL_INSTALL || s.names.length !== 1) throw new Error("Install requires one base APK");
     const bytes = vfs.read(stageDir(s.id) + "/" + s.names[0]);
     if (!bytes) throw new Error("Session file was not written");
-    installed = yield* awaited(installPackageArchive(bytes, s.packageName));
+    installed = yield* awaited(broker().installPackage(bytes, s.packageName));
   } catch (error) {
     failure = error instanceof Error ? error.message : (error as { msg?: string } | null)?.msg ?? String(error);
   }

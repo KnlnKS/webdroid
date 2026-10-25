@@ -5,9 +5,29 @@ import { E } from "../abi.ts";
 import { utf8 } from "../../jvm/abi.ts";
 import { logLine } from "../kernel.ts";
 import { complete } from "../host.ts";
-import { AF_INET, AF_INET6, HOST_NOT_FOUND, familyOf, resolveHost, hostOf, parseIpv4, parseIpv6 } from "../net-address.ts";
-import { sockaddrOf } from "./abi.ts";
-import { AI_CANONNAME, addrinfoCandidates } from "./resolver.ts";
+import { AF_UNSPEC, AF_INET, AF_INET6, AI_NUMERICHOST, EAI_FAMILY, EAI_SERVICE, EAI_SOCKTYPE, HOST_NOT_FOUND, familyOf, resolveHost, hostOf, parseIpv4, parseIpv6 } from "../net-address.ts";
+import { SOCK_STREAM, SOCK_DGRAM, SOCK_RAW, sockaddrOf } from "./abi.ts";
+import { IPPROTO_TCP, IPPROTO_UDP } from "./inet.ts";
+
+const AI_PASSIVE = 1, AI_NUMERICSERV = 8, AI_ADDRCONFIG = 0x400;
+export const AI_CANONNAME = 2;
+const EAI_BADFLAGS = 3, EAI_PROTOCOL = 13;
+/** getaddrinfo's hints checked: the port, and the socket types with their protocols to answer,
+ *  stream before datagram (SOCK_RAW only when asked for, as bionic's explore table matches it); or an EAI_* code */
+export function addrinfoCandidates(flags: number, family: number, socktype: number, protocol: number, service: string | null): { port: number; kinds: number[][] } | number {
+  if (flags & ~(AI_PASSIVE | AI_CANONNAME | AI_NUMERICHOST | AI_NUMERICSERV | AI_ADDRCONFIG)) return EAI_BADFLAGS;
+  if (family !== AF_UNSPEC && family !== AF_INET && family !== AF_INET6) return EAI_FAMILY;
+  if (socktype !== 0 && socktype !== SOCK_STREAM && socktype !== SOCK_DGRAM && socktype !== SOCK_RAW) return EAI_SOCKTYPE;
+  if (socktype !== SOCK_RAW && protocol !== 0 && protocol !== IPPROTO_TCP && protocol !== IPPROTO_UDP) return EAI_PROTOCOL;
+  const kinds = socktype === SOCK_RAW ? [[SOCK_RAW, protocol]]
+    : [[SOCK_STREAM, IPPROTO_TCP], [SOCK_DGRAM, IPPROTO_UDP]].filter(([type, proto]) => (!socktype || socktype === type) && (!protocol || protocol === proto));
+  if (!kinds.length) return EAI_SOCKTYPE;
+  // of the services table, the names a client here asks for
+  const named = service === "http" ? 80 : service === "https" ? 443 : -1;
+  const port = service === null ? 0 : /^\d+$/.test(service) ? Number(service) : flags & AI_NUMERICSERV ? -1 : named;
+  if (port < 0 || port > 65535 || service !== null && socktype === SOCK_RAW) return EAI_SERVICE;
+  return { port, kinds };
+}
 
 /** a daemon's end of a connection: each write whole, and how it replies */
 export type Daemon = (bytes: Uint8Array, reply: (bytes: Uint8Array) => void) => void;

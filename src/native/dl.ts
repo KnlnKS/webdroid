@@ -5,6 +5,7 @@
 import { mapElf, symbolize, nearestSymbol, type Module } from "./elf.ts";
 import { mem } from "./mem.ts";
 import { defineHost, probeHost, hostLib, lookupHost, hostLibNames, missingStub, slotName, isTrampPc, PTR, stp, cstr, type HostFn } from "./host.ts";
+import { KLAYOUT } from "./kernel.ts";
 import { cpuFor, cpus, setSymbolizeHook, isA64, type Cpu } from "./cpu.ts";
 import type { TombstoneFrame } from "./tombstone.ts";
 import { trampSlot, RET_SENTINEL } from "./abi.ts";
@@ -282,7 +283,7 @@ export const libdl: Record<string, HostFn> = {
   // PT_GNU_EH_FRAME, so it is the C++ throw path.
   dl_iterate_phdr: async (cpu, a) => {
     const cb = a.p(), data = a.va();
-    const size = PTR === 8 ? 64 : 32;
+    const size = KLAYOUT.DL_PHDR_INFO;
     const info = mem.malloc(size);
     try {
       for (const m of [...modules]) {

@@ -3,7 +3,8 @@
 
 import { rt } from "../jvm/runtime.ts";
 import { handle, deref, release } from "./handles.ts";
-import { NativePath, PathMeasure, MOVE, LINE, QUAD, CUBIC, CLOSE } from "./path.ts";
+import { NativePath, VerbIterator, RAW_SIZE, MOVE, LINE, QUAD, CUBIC, CLOSE, DONE } from "./path.ts";
+import { PathMeasure } from "./pathmeasure.ts";
 import type { NativePaint } from "./paint.ts";
 
 /** SkStrokeRec's part the effects read and change: fill, or a stroke of `width` (0 a hairline) */
@@ -15,7 +16,9 @@ export abstract class NativePathEffect {
 /** SkPath::Iter over the verbs: a close reports the line back to the contour's start first */
 function* iterate(p: NativePath): Generator<number[]> {
   let mx = 0, my = 0, x = 0, y = 0;
-  for (const v of p.verbs()) {
+  const it = new VerbIterator(p), pts = new Float64Array(8);
+  for (let verb; (verb = it.next(pts)) !== DONE;) {
+    const v = [verb, ...pts.subarray(0, RAW_SIZE[verb])];
     if (v[0] === MOVE) { mx = x = v[1]; my = y = v[2]; } else if (v[0] === CLOSE) {
       if (x !== mx || y !== my) yield [LINE, x, y, mx, my];
       x = mx; y = my;

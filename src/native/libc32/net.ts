@@ -1,24 +1,25 @@
-// The ARM32 libc's resolver functions over guest memory: getaddrinfo, getnameinfo, gethostby*,
-// getifaddrs, gai_strerror and inet_pton/ntop/aton, over net-address.ts's resolver and interfaces; and getaddrinfo's
-// hints, which netd's dnsproxyd (daemons.ts) checks alike for a 64-bit process's bionic.
+// The ARM32 libc's network functions over guest memory: send, recv, poll and select over the
+// kernel's calls, and the resolver's getaddrinfo, getnameinfo, gethostby*, getifaddrs, gai_strerror
+// and inet_pton/ntop/aton over net-address.ts's resolver and interfaces.
 
 import { E } from "../abi.ts";
 import { utf8 } from "../../jvm/abi.ts";
 import type { Cpu } from "../cpu.ts";
-import { stp, ptr, cstr, complete, type HostFn } from "../host.ts";
+import { stp, ldLong, ptr, cstr, complete, type HostFn } from "../host.ts";
 import { mem, anchor } from "../mem.ts";
-import { fail } from "../kernel.ts";
+import { fail, readTs, wrapped, KLAYOUT } from "../kernel.ts";
 import {
-  AF_UNSPEC, AF_INET, AF_INET6, AI_NUMERICHOST, NI_NUMERICHOST, NI_NAMEREQD, EAI_NONAME, EAI_FAMILY, EAI_SERVICE, EAI_SOCKTYPE, V4_LOOPBACK,
+  AF_UNSPEC, AF_INET, AF_INET6, AI_NUMERICHOST, NI_NUMERICHOST, NI_NAMEREQD, EAI_NONAME, EAI_FAMILY, V4_LOOPBACK,
   HOST_NOT_FOUND, familyOf, parseIpv4, parseIpv6, addressText, resolveHost, hostOf, gaiText, INTERFACES,
 } from "../net-address.ts";
-import { SOCK_STREAM, SOCK_DGRAM, SOCK_RAW, sockaddrOf, readEndpoint } from "./abi.ts";
-import { record } from "./core.ts";
-import { IPPROTO_TCP, IPPROTO_UDP } from "./inet.ts";
+import { sockaddrOf, readEndpoint } from "../socket/abi.ts";
+import { record } from "../socket/core.ts";
+import { AI_CANONNAME, addrinfoCandidates } from "../socket/daemons.ts";
+import { recvfrom, sendto } from "../socket/syscalls.ts";
+import { nativePoll, nativeSelect } from "../poll.ts";
 
-const AI_PASSIVE = 1, AI_NUMERICSERV = 8, AI_ADDRCONFIG = 0x400;
-export const AI_CANONNAME = 2;
-const EAI_BADFLAGS = 3, EAI_SYSTEM = 11, EAI_PROTOCOL = 13, EAI_OVERFLOW = 14;
+const AI_PASSIVE = 1;
+const EAI_SYSTEM = 11, EAI_OVERFLOW = 14;
 
 /** the ARM32 struct ifaddrs: its size and the offsets of what getifaddrs fills */
 const IFADDRS = { size: 28, name: 4, flags: 8, addr: 12, netmask: 16 };
@@ -38,23 +39,6 @@ function getifaddrs(cpu: Cpu, result: number): number {
   mem.u8.set([...utf8.enc.encode(lo.name), 0], name);
   stp(result, entry);
   return 0;
-}
-
-/** getaddrinfo's hints checked: the port, and the socket types with their protocols to answer,
- *  stream before datagram (SOCK_RAW only when asked for, as bionic's explore table matches it); or an EAI_* code */
-export function addrinfoCandidates(flags: number, family: number, socktype: number, protocol: number, service: string | null): { port: number; kinds: number[][] } | number {
-  if (flags & ~(AI_PASSIVE | AI_CANONNAME | AI_NUMERICHOST | AI_NUMERICSERV | AI_ADDRCONFIG)) return EAI_BADFLAGS;
-  if (family !== AF_UNSPEC && family !== AF_INET && family !== AF_INET6) return EAI_FAMILY;
-  if (socktype !== 0 && socktype !== SOCK_STREAM && socktype !== SOCK_DGRAM && socktype !== SOCK_RAW) return EAI_SOCKTYPE;
-  if (socktype !== SOCK_RAW && protocol !== 0 && protocol !== IPPROTO_TCP && protocol !== IPPROTO_UDP) return EAI_PROTOCOL;
-  const kinds = socktype === SOCK_RAW ? [[SOCK_RAW, protocol]]
-    : [[SOCK_STREAM, IPPROTO_TCP], [SOCK_DGRAM, IPPROTO_UDP]].filter(([type, proto]) => (!socktype || socktype === type) && (!protocol || protocol === proto));
-  if (!kinds.length) return EAI_SOCKTYPE;
-  // of the services table, the names a client here asks for
-  const named = service === "http" ? 80 : service === "https" ? 443 : -1;
-  const port = service === null ? 0 : /^\d+$/.test(service) ? Number(service) : flags & AI_NUMERICSERV ? -1 : named;
-  if (port < 0 || port > 65535 || service !== null && socktype === SOCK_RAW) return EAI_SERVICE;
-  return { port, kinds };
 }
 
 /** the ARM32 struct addrinfo: its size and the offsets of its fields */
@@ -127,7 +111,7 @@ function getnameinfo(sockaddr: number, length: number, host: number, hostLength:
 const HOSTENT = { size: 20, aliases: 4, type: 8, length: 12, list: 16 };
 const NO_RECOVERY = 3;
 /** gethostbyname and gethostbyaddr, and the h_errno they set: one for the process, where bionic keeps one per thread */
-export function hostLookups(): Record<string, HostFn> {
+function hostLookups(): Record<string, HostFn> {
   const hostErrno = mem.hostAlloc(4);
   let entry = 0;
   const noHost = (code = HOST_NOT_FOUND): number => { mem.st32(hostErrno, code); return 0; };
@@ -158,7 +142,7 @@ export function hostLookups(): Record<string, HostFn> {
   };
 }
 
-export const RESOLVER: Record<string, HostFn> = {
+const RESOLVER: Record<string, HostFn> = {
   getaddrinfo: (cpu, args) => getaddrinfo(cpu, args.p(), args.p(), args.p(), args.p()),
   freeaddrinfo: (_cpu, args) => { const address = args.p(); if (address) mem.free(address); },
   getifaddrs: (cpu, args) => getifaddrs(cpu, args.p()),
@@ -183,3 +167,19 @@ export const RESOLVER: Record<string, HostFn> = {
     return ptr(destination);
   },
 };
+/** the ARM32 libc's network functions */
+export function netLibc(): Record<string, HostFn> {
+  return {
+    ...RESOLVER, ...hostLookups(),
+    send: wrapped((cpu, a) => sendto(cpu, a.i(), a.p(), a.u(), a.i(), 0, 0)),
+    recv: wrapped((_c, a) => recvfrom(a.i(), a.p(), a.u(), a.i())),
+    poll: wrapped((_c, a) => nativePoll(a.p(), a.u(), a.i())),
+    select: wrapped((_c, a) => {
+      const count = a.i(), r = a.p(), w = a.p(), x = a.p(), timeout = a.p();
+      if (!timeout) return nativeSelect(count, r, w, x, -1);
+      const sec = ldLong(timeout + KLAYOUT.TS_SEC), usec = ldLong(timeout + KLAYOUT.TS_NSEC);
+      if (sec < 0 || usec < 0 || usec >= 1_000_000) return -E.INVAL;
+      return nativeSelect(count, r, w, x, readTs(timeout, 1e3));
+    }),
+  };
+}

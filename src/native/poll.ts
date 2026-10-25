@@ -133,7 +133,7 @@ export function nativeSelect(count: number, readSet: number, writeSet: number, e
 // ── epoll: an open file of watched descriptors, each entry woken through the descriptor's watch
 const EPOLLET = 0x80000000, EPOLLONESHOT = 0x40000000;
 interface EpollEntry { events: number; data: bigint; pending: number; disabled: boolean; cancel: () => void }
-export interface Epoll { entries: Map<number, EpollEntry>; wake: WaitQueue }
+interface Epoll { entries: Map<number, EpollEntry>; wake: WaitQueue }
 const EPOLL: FileOps<Epoll> = {
   ...ANON,
   poll: () => 0,

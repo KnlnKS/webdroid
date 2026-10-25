@@ -2,11 +2,11 @@
 // (values, bundles, parcelables, exceptions) runs from AOSP bytecode. AOSP's wire layout (4-byte
 // cells, UTF-16 strings, 24-byte flat objects) so dataSize/dataPosition agree with a device. What
 // has no byte form here — a binder, a descriptor — rides in a side table keyed by its position.
-import { JObj, rt, getDeclared } from "../jvm/runtime.ts";
+import { JObj, rt, getDeclared, ranged } from "../jvm/runtime.ts";
 import { utf8, u8, encodeModifiedUtf8 } from "../jvm/abi.ts";
 import { scall, iof } from "../jvm/natives/jentry.ts";
 import { fdInt, mkFd } from "../jvm/natives/jio.ts";
-import { javaCloseFd, javaDupFd } from "../native/fd.ts";
+import { closeFd, dupFd } from "../native/fd.ts";
 import { fdLease, type FdScope } from "./fd-scope.ts";
 import { ownedHandle, deref, release } from "./handles.ts";
 
@@ -169,7 +169,7 @@ const isFd = (o: unknown) => o instanceof OwnedFd;
 /** a side-table entry's removal, closing the descriptor it owned */
 function dropObject(p: NativeParcel, at: number) {
   const o = p.objects.get(at);
-  if (o instanceof OwnedFd) javaCloseFd(o.fd);
+  if (o instanceof OwnedFd) closeFd(o.fd);
   p.objects.delete(at);
 }
 /** closing what a parcel owns: the descriptors written into it */
@@ -233,16 +233,16 @@ rt.registerJnis("android/os/Parcel", {
   },
   "nativePushAllowFds(JZ)Z": (ptr: bigint, allow: number) => { const p = parcelAt(ptr), was = p.allowFds; p.allowFds = !!allow && was; return +was; },
   "nativeRestoreAllowFds(JZ)V": (ptr: bigint, allow: number) => { parcelAt(ptr).allowFds = !!allow; },
-  "nativeWriteByteArray(J[BII)V": (ptr: bigint, b: Int8Array | null, off: number, len: number) => b ? writeBytes(parcelAt(ptr), b, off, len) : writeInt(parcelAt(ptr), -1),
+  "nativeWriteByteArray(J[BII)V": ranged((ptr: bigint, b: Int8Array | null, off: number, len: number) => b ? writeBytes(parcelAt(ptr), b, off, len) : writeInt(parcelAt(ptr), -1), [1, 2, 3]),
   // a blob always travels in place: ashmem descriptors are what this host cannot share
-  "nativeWriteBlob(J[BII)V": (ptr: bigint, b: Int8Array | null, off: number, len: number) => {
+  "nativeWriteBlob(J[BII)V": ranged((ptr: bigint, b: Int8Array | null, off: number, len: number) => {
     const p = parcelAt(ptr);
     if (!b) return writeInt(p, -1);
     writeInt(p, len); writeInt(p, 0);
     const to = writeInplace(p, len);
     p.buf.set(u8(b, off, len), to);
     outOfLine(p, to);
-  },
+  }, [1, 2, 3]),
   "nativeReadBlob(J)[B": (ptr: bigint) => {
     const p = parcelAt(ptr), len = readInt(p);
     if (len < 0) return null;
@@ -265,7 +265,7 @@ rt.registerJnis("android/os/Parcel", {
   "nativeWriteFileDescriptor(JLjava/io/FileDescriptor;)V": (ptr: bigint, d: JObj | null) => {
     const p = parcelAt(ptr);
     if (!p.allowFds) throw status(FDS_NOT_ALLOWED);
-    const fd = javaDupFd(fdInt(d));
+    const fd = dupFd(fdInt(d));
     if (fd < 0) throw status(BAD_VALUE);
     writeObject(p, new OwnedFd(fd));
   },
@@ -290,17 +290,17 @@ rt.registerJnis("android/os/Parcel", {
   },
   "nativeReadFileDescriptor(J)Ljava/io/FileDescriptor;": (ptr: bigint) => {
     const o = readObject(parcelAt(ptr));
-    return o instanceof OwnedFd ? mkFd(javaDupFd(o.fd)) : null;
+    return o instanceof OwnedFd ? mkFd(dupFd(o.fd)) : null;
   },
   "nativeMarshall(J)[B": (ptr: bigint) => {
     const p = parcelAt(ptr);
     if (p.objects.size) throw rt.mkThrowable("java/lang/RuntimeException", "Tried to marshall a Parcel that contained Binder objects.");
     return new Int8Array(p.buf.slice(0, p.size).buffer);
   },
-  "nativeUnmarshall(J[BII)V": (ptr: bigint, b: Int8Array, off: number, len: number) => {
+  "nativeUnmarshall(J[BII)V": ranged((ptr: bigint, b: Int8Array, off: number, len: number) => {
     if ((off | len) < 0 || off > b.length - len) throw rt.mkThrowable("java/lang/RuntimeException", "Illegal array bounds");
     setParcelBytes(parcelAt(ptr), u8(b, off, len));
-  },
+  }, [1, 2, 3]),
   "nativeCompareData(JJ)I": (a: bigint, b: bigint) => {
     const x = parcelAt(a), y = parcelAt(b), n = Math.min(x.size, y.size);
     for (let i = 0; i < n; i++) if (x.buf[i] !== y.buf[i]) return x.buf[i] - y.buf[i];
@@ -319,7 +319,7 @@ rt.registerJnis("android/os/Parcel", {
     reserve(p, len);
     const to = advance(p, len);
     p.buf.set(o.buf.subarray(off, off + len), to);
-    for (const [k, v] of o.objects) if (k >= off && k < off + len) p.objects.set(to + k - off, v instanceof OwnedFd ? new OwnedFd(javaDupFd(v.fd)) : v);
+    for (const [k, v] of o.objects) if (k >= off && k < off + len) p.objects.set(to + k - off, v instanceof OwnedFd ? new OwnedFd(dupFd(v.fd)) : v);
     for (const [k, n] of o.ashmem) if (k >= off && k + n <= off + len) p.ashmem.set(to + k - off, n);
   },
   "nativeHasBinders(J)Z": (ptr: bigint) => +inRange(parcelAt(ptr), isBinder),

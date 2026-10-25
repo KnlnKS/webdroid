@@ -7,13 +7,12 @@
 import type { ChildProcess } from "node:child_process";
 import { createServer } from "node:net";
 import { availableParallelism, totalmem } from "node:os";
-import { join } from "node:path";
-import { AOT_ROOT, type AotManifest } from "./aot-key.ts";
 import { aotManifest } from "./aot-serve.ts";
 import { cli } from "./args.ts";
 import { output, run, type Ran } from "./node.ts";
 import { pool, timings, type PoolJob } from "./util.ts";
 import { allParts, label, runPart } from "./wasm/parts.ts";
+import type { Flow } from "../tests/e2e/types.ts";
 
 const { values: { "no-e2e": noE2e, corpus }, positionals: named } = cli("pnpm check [--no-e2e | --corpus] [flow ...]", { "no-e2e": { type: "boolean" }, corpus: { type: "boolean" } });
 const children: ChildProcess[] = [], started = (c: ChildProcess) => children.push(c), t0 = performance.now();
@@ -59,25 +58,21 @@ function task(name: string, cores: number, gb: number, failure: () => Promise<st
 process.env.WEBDROID_JOBS = String(PART_JOBS);
 const url = noE2e ? undefined : server(), stale = !aotManifest().ok;
 const aot = stale ? task("aot", 2, 2.5, async () => failure(await pnpm(["aot"]))) : undefined;
-// the AOT suites run over the build the flows load
-let aotDir: string | undefined;
-const builtDir = async () => aotDir ??= join(AOT_ROOT, (await aotManifest().json() as AotManifest).key);
 const tasks: PoolJob<void>[] = [
   ...aot ? [aot] : [],
   task("typecheck", 2, 1.5, async () => failure(await pnpm(["typecheck"]))),
   ...Array.from({ length: SHARDS }, (_, i) => task(`test ${i + 1}/${SHARDS}`, 4, 2.5, async () => failure(await pnpm(["test", `--shard=${i + 1}/${SHARDS}`, "--maxWorkers=4"])))),
   ...allParts().map((p) => task(`wasm ${label(p)}`, p.jobs ? PART_JOBS : 1, p.jobs ? 1.5 : 0.8,
-    async () => failure(await runPart(p, false, p.aot ? await builtDir() : undefined)), { after: p.aot ? aot : undefined })),
+    async () => failure(await runPart(p, false)), { after: p.aot ? aot : undefined })),
 ];
 let summary: (() => Promise<string>) | undefined;
 /** corpus apks that drew and the baseline does not hold */
 const newly: string[] = [];
 if (url) {
   process.env.WEBDROID_URL = await url;
-  const [{ FLOWS, flowsNamed }, { flowEstimate, runFlow, summarize }] = await Promise.all([import("../tests/e2e/flows/index.ts"), import("../tests/e2e/run-flows.ts")]);
-  const unknown = named.filter((name) => !flowsNamed(name).length);
-  if (unknown.length) { console.log(`no flow is named ${unknown.join(", ")}`); stop(2); }
-  const flows = named.length ? [...new Set(named.flatMap(flowsNamed))] : FLOWS.filter((flow) => flow.clock !== "live");
+  const [{ selectFlows }, { flowEstimate, runFlow, summarize }] = await Promise.all([import("../tests/e2e/flows/index.ts"), import("../tests/e2e/run-flows.ts")]);
+  let flows: Flow[] = [];
+  try { flows = selectFlows(named, { apks: true }); } catch (error) { console.log((error as Error).message); stop(2); }
   const outcomes: Awaited<ReturnType<typeof runFlow>>[] = [];
   const ready = answering(process.env.WEBDROID_URL);
   for (const flow of flows) {

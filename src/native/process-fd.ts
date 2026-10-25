@@ -1,8 +1,8 @@
 // The open files another realm owns: a process Worker's descriptors on the page's mutable files,
 // whose position, flags and bytes live with their owner, so every operation is a request to it.
 import { E, O_CLOEXEC, S_IFMT, S_IFDIR, S_IFREG } from "./abi.ts";
-import { ANON, installFile, isKind, newFile, openFd, javaCloseFd, javaFdBytes, type FdStat, type FileOps } from "./fd.ts";
-import { javaOpenFd, listProcess } from "./fs.ts";
+import { ANON, installFile, isKind, newFile, openFd, closeFd, readRest, type FdStat, type FileOps } from "./fd.ts";
+import { localOpen, listAt } from "./fs.ts";
 import { openRemoteFifo } from "./pipe.ts";
 import type { FileSource } from "../shell/lazyfile.ts";
 import { pathOwner } from "../shell/file-path.ts";
@@ -82,7 +82,7 @@ const REMOTE: FileOps<Remote> = {
   entries(f) {
     if (!f.dir) return -E.NOTDIR;
     if (f.pos && f.state.entries) return f.state.entries;
-    return Promise.resolve(listProcess(f.path)).then(entries => typeof entries === "number" ? entries : f.state.entries = entries);
+    return Promise.resolve(listAt(f.path)).then(entries => typeof entries === "number" ? entries : f.state.entries = entries);
   },
   close(f) {
     const closing = f.state.remote.calls.close(f.state.remote.token);
@@ -126,7 +126,7 @@ export const processRights: DescriptorRights = {
 
 export function processOpenFd(path: string, flags: number): number | Promise<number> {
   const normalized = vfs.norm(path), calls = pathOwner(normalized)?.descriptors;
-  if (!calls) return javaOpenFd(normalized,flags);
+  if (!calls) return localOpen(normalized,flags);
   return calls.open(normalized, flags).then(reply =>
     typeof reply === "number" ? reply : reply === "fifo" ? openRemoteFifo(normalized,flags) : installRemote(reply.token,calls,normalized,flags,reply.dir));
 }
@@ -136,7 +136,7 @@ export async function processFileBytes(path: string): Promise<Uint8Array | null>
   if (!pathOwner(path)) return vfs.readFile(path);
   const fd = await processOpenFd(path, 0);
   if (fd < 0) return null;
-  try { return await javaFdBytes(fd); } finally { await javaCloseFd(fd); }
+  try { return await readRest(fd); } finally { await closeFd(fd); }
 }
 
 /** An owner's lease on a range of a file, which outlives the descriptor that took it; `region` names the file. */

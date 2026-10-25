@@ -1,8 +1,7 @@
 import { processExited } from "../process-exit.ts";
-import { hostLib, PTR, ldp, ldLong, stLong, type HostFn } from "./host.ts";
-import { clockTime, readTs, writeTs, wrapped, KLAYOUT } from "./kernel.ts";
+import { PTR, ldp, ldLong, stLong, type HostFn } from "./host.ts";
+import { clockTime, readTs, writeTs, KLAYOUT } from "./kernel.ts";
 import { mem } from "./mem.ts";
-import { startThread, threadAttr } from "./pthread.ts";
 import { E } from "./abi.ts";
 import { cpuByOsTid, cpus, type Cpu } from "./cpu.ts";
 import { blocked } from "./signals.ts";
@@ -51,8 +50,10 @@ function validTime(p: number): boolean {
   const nanos = ldLong(p + PTR);
   return ldLong(p) >= 0 && nanos >= 0 && nanos < 1e9;
 }
-/** timer_create(2), and the HLE libc's, which runs SIGEV_THREAD's function on a thread of its own */
-function createTimer(cpu: Cpu, clock: number, event: number, out: number, libcThreads: boolean): number {
+/** SIGEV_THREAD's notification: a libc's, which starts `fn(value)` on a thread with `attributes` */
+type ThreadNotify = (fn: number, attributes: number, value: bigint) => () => void;
+/** timer_create(2), and a libc's over it when it gives SIGEV_THREAD's threads */
+export function createTimer(cpu: Cpu, clock: number, event: number, out: number, thread?: ThreadNotify): number {
   if (![0, 1, 7].includes(clock) || !out) return -E.INVAL;
   const id = nextTimerId, at = event + PTR;
   const mode = event ? mem.ld32(at + SIGEVENT.notify) : SIGEV_SIGNAL, sig = event ? mem.ld32(at + SIGEVENT.signo) : SIGALRM;
@@ -65,11 +66,10 @@ function createTimer(cpu: Cpu, clock: number, event: number, out: number, libcTh
     // a process-directed signal goes to a thread that does not block it
     const thread = (): Cpu => target ?? [...cpus].find((c) => !c.finished && !blocked(c.signalMask, sig)) ?? cpu;
     notify = () => thread().kill(sig, { code: SI_TIMER, addr: 0n, timer: { id, overrun: timer.overrun, value } });
-  } else if (mode === SIGEV_THREAD && libcThreads) {
-    const fn = ldp(at + SIGEVENT.union), attributes = ldp(at + SIGEVENT.union + PTR);
+  } else if (mode === SIGEV_THREAD && thread) {
+    const fn = ldp(at + SIGEVENT.union);
     if (!fn) return -E.INVAL;
-    const attr = threadAttr(attributes, true);
-    notify = () => { startThread(cpu, fn, value, attr); };
+    notify = thread(fn, ldp(at + SIGEVENT.union + PTR), value);
   } else if (mode !== SIGEV_NONE) return -E.INVAL;
   const timer: Timer = { clock, next: 0, interval: 0, overrun: 0, notify };
   timers.set(id, timer); nextTimerId++;
@@ -77,7 +77,7 @@ function createTimer(cpu: Cpu, clock: number, event: number, out: number, libcTh
 }
 /** the kernel's clock and POSIX timer calls */
 export const TIMER_SYSCALLS: Record<string, HostFn> = {
-  timer_create: (cpu, a) => createTimer(cpu, a.i(), a.p(), a.p(), false),
+  timer_create: (cpu, a) => createTimer(cpu, a.i(), a.p(), a.p()),
   timer_settime: (_c, a) => {
     const timer = timers.get(a.i()), flags = a.i(), value = a.p(), old = a.p();
     if (!timer || flags & ~1 || !setClockTimer(timer, flags, value, old)) return -E.INVAL;
@@ -90,6 +90,3 @@ export const TIMER_SYSCALLS: Record<string, HostFn> = {
   clock_getres: (_c, a) => { a.i(); const ts = a.p(); if (ts) { stLong(ts + KLAYOUT.TS_SEC, 0); stLong(ts + KLAYOUT.TS_NSEC, 1000); } return 0; },
   timer_delete: (_c, a) => { const id = a.i(), timer = timers.get(id); if (!timer) return -E.INVAL; disarmClockTimer(timer); timers.delete(id); return 0; },
 };
-export function timersInit(): void {
-  hostLib("libc.so", { timer_create: wrapped((cpu, a) => createTimer(cpu, a.i(), a.p(), a.p(), true)) });
-}

@@ -2,7 +2,6 @@
 // and arrays are reached through generated Wasm functions (Bridge.call, read, write, and the runtime functions of link/guest.ts), never through a facade.
 import { rt } from "../../jvm/runtime.ts";
 import { PRIMS } from "../../jvm/abi.ts";
-import { stringMethods } from "../../jvm/natives/jstring.ts";
 import { newInstance, refOf, type Bridge } from "./bridge.ts";
 import { idOfClass } from "../link/classes.ts";
 
@@ -120,11 +119,11 @@ export function wasmJni(w: World): JniVm {
     construct(c, sig, args) {
       if (c.name === STRING) {
         // a String is built by String's host constructors out of host values, then made a Java String
-        const make = stringMethods.get("<init>" + sig);
+        const make = rt.jniNative(STRING, "<init>" + sig);
         if (!make) return noSuchMethod("<init>", sig);
         const mark = bridge.begin();
         try {
-          const made = make.apply("", args.map((a) => bridge.toHost(a))) as string | Promise<string>;
+          const made = make.fn(...args.map((a) => bridge.toHost(a))) as string | Promise<string>;
           return made instanceof Promise ? made.then((s) => w.javaString(s)) : w.javaString(made);
         } finally { bridge.end(mark); }
       }

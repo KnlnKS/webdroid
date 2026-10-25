@@ -5,7 +5,7 @@ import { after, callOn, scall, vcall, JThread } from "../jvm/natives/jentry.ts";
 import { dispatchUncaught } from "../jvm/natives/jthrowable.ts";
 import { processExited } from "../process-exit.ts";
 import { binderThread } from "./binder.ts";
-import { javaFdSource } from "../native/fd.ts";
+import { fdSource } from "../native/fd.ts";
 import { SliceFile, type FileSource } from "../shell/lazyfile.ts";
 import { postMain } from "./mainloop.ts";
 
@@ -59,7 +59,7 @@ export function postNativeEvent(to: JObj | [string, JObj], live: (() => boolean)
 
 /** At most `length` bytes of a descriptor from `offset`, or null when it is not a readable file or
  *  the range is empty or starts outside it */
-export const fdSlice = (fd: number, offset: bigint, length: bigint): FileSource | null | Promise<FileSource | null> => after(javaFdSource(fd), file => {
+export const fdSlice = (fd: number, offset: bigint, length: bigint): FileSource | null | Promise<FileSource | null> => after(fdSource(fd), file => {
   if (!file || offset < 0n || length <= 0n || offset >= BigInt(file.size)) return null;
   const start = Number(offset);
   return new SliceFile(file, start, Math.min(Number(length), file.size - start));

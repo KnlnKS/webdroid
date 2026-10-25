@@ -11,7 +11,7 @@ import { cli, jobsOf } from "../args.ts";
 import type { Shard, Swept } from "./sweepworker.ts";
 
 const KNOWN = [/^native: /];
-const { values: { verbose, jobs }, positionals: args } = cli("pnpm smoke [path ...] [-v] [--jobs n]", { verbose: { type: "boolean", short: "v" }, jobs: { type: "string" } });
+const { values: { verbose, jobs }, positionals: args } = cli("pnpm wasm sweep [path ...] [-v] [--jobs n]", { verbose: { type: "boolean", short: "v" }, jobs: { type: "string" } });
 // Check methods separately as well as in their AOT groups, since grouping changes inlining and imports.
 const targets = args.length ? args.map((a) => resolve(a)) : [...platformJars("core-oj", "core-libart", "okhttp", "bouncycastle", "apache-xml", "framework"), join(ROOT, "apks/FitNotes.apk")];
 const of = jobsOf(jobs, Math.min(availableParallelism(), 8));

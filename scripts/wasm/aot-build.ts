@@ -1,9 +1,9 @@
 // Builds the ahead-of-time assets (aot.ts) of the platform jars: one D (data) module per class group and one C (code) module per group,
 // and the index that numbers everything.
-//   pnpm aot [--out dir] [--jars N | --only jar,jar] [--d class|outer|pkg|pkgN|all] [--c class|outer|pkg|pkgN|all] [--max-module KiB] [--max-hot KiB] [--no-validate] [--force]
-// Without --out the build goes to vendor/wasm-aot/<key> (../aot-key.ts) and is skipped when that exists; the default jars are the platform's code: the libcore jars and framework.jar.
-// The Program holds every platform jar (class-hierarchy decisions are made over all of them); the chosen jars are numbered and compiled.
-// A group is the classes of a package (or of the mode's unit) up to --max-module KiB of estimated module size: Chrome compiles a module above 8 MiB asynchronously only,
+//   pnpm aot [--out dir] [--max-module KiB] [--no-validate] [--force]
+// Without --out the build goes to vendor/wasm-aot/<key> (../aot-key.ts) and is skipped when that exists. It compiles the platform's code: the libcore jars
+// and framework.jar. The Program holds every platform jar (class-hierarchy decisions are made over all of them); those jars are numbered and compiled.
+// A group is the classes of a package up to --max-module KiB of estimated module size: Chrome compiles a module above 8 MiB asynchronously only,
 // and a page fetches and compiles what a start needs, so no module should be much larger than that.
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -16,20 +16,19 @@ import { AotBuilder, codeBytes, codeFile, dataBytes, dataModule, invalidFunction
 import type { MethodInfo } from "../../src/wasm/compiler/program.ts";
 import { AOT_ROOT, buildKey, sourceKey } from "../aot-key.ts";
 
-const { values: opts } = cli("pnpm aot [--out dir] [--jars N | --only jar,jar] [--d mode] [--c mode] [--max-module KiB] [--max-hot KiB] [--no-validate] [--app app.dex] [--force]", {
-  out: { type: "string", default: "" }, jars: { type: "string", default: "" }, only: { type: "string" }, d: { type: "string", default: "pkg" }, c: { type: "string", default: "pkg" },
-  "max-module": { type: "string", default: "3072" }, "max-hot": { type: "string", default: "1024" }, "no-validate": { type: "boolean" }, app: { type: "string", default: "" }, force: { type: "boolean" } });
-const PLATFORM = ["core-oj", "core-libart", "okhttp", "bouncycastle", "apache-xml", "conscrypt", "core-icu4j", "framework"];
-const nJars = opts.jars, dMode = opts.d, cMode = opts.c, maxModule = +opts["max-module"] * 1024, maxHot = +opts["max-hot"] * 1024;
-const jarNames = (opts.only ?? (nJars ? "" : PLATFORM.join(","))).split(",").filter(Boolean);
-const jars = PLATFORM_JARS.filter((j, i) => (jarNames.length ? jarNames.some((n) => j.endsWith("/" + n + ".jar") || j === n + ".jar") : i < +nJars));
+const { values: opts } = cli("pnpm aot [--out dir] [--max-module KiB] [--no-validate] [--force]", {
+  out: { type: "string", default: "" }, "max-module": { type: "string", default: "3072" }, "no-validate": { type: "boolean" }, force: { type: "boolean" } });
+// a build of every boot jar slowed a gated tap for a cause not found (docs/implementation-history.md, every boot jar in the platform build)
+const BUILT = ["core-oj", "core-libart", "okhttp", "bouncycastle", "apache-xml", "conscrypt", "core-icu4j", "framework"];
+const jars = PLATFORM_JARS.filter((j) => BUILT.some((n) => j.endsWith("/" + n + ".jar") || j === n + ".jar"));
+const maxModule = +opts["max-module"] * 1024, MAX_HOT = 1024 * 1024;
 const hot = existsSync(join(AOT_ROOT, "hot.json")) ? JSON.parse(readFileSync(join(AOT_ROOT, "hot.json"), "utf8")) as { linked: string[]; called: string[] } : { linked: [], called: [] };
 
 // ---- where it goes
 let out = opts.out;
 if (!out) {
   const nativeKeys = [...rt.jni.keys(), ...[...rt.natives].flatMap(([cls, spec]) => Object.keys(spec.methods ?? {}).map((k) => `${cls}|${k}`))].sort();
-  const source = sourceKey(), key = buildKey(source, nativeKeys, JSON.stringify([jars, dMode, cMode, maxModule, maxHot, hot]));
+  const source = sourceKey(), key = buildKey(source, nativeKeys, JSON.stringify([jars, maxModule, hot]));
   out = join(AOT_ROOT, key);
   mkdirSync(AOT_ROOT, { recursive: true });
   writeFileSync(join(AOT_ROOT, "latest.json"), JSON.stringify({ key, source }));
@@ -39,19 +38,12 @@ if (!out) {
 /** whether the build compiles `m`: it has bytecode or an implementation of its own (the rest stay abstract, or become a gap on demand) */
 const aotCompiles = (m: MethodInfo): boolean => !!m.codeOff || !!w.intrinsic(m);
 
-/** the group key of a class: its own, its outermost class's, its package, or the first N components of the package */
-function keyOf(mode: string, name: string): string {
-  if (mode === "class") return name;
-  if (mode === "outer") return name.split("$")[0];
-  if (mode === "all") return "all";
-  const pkg = name.slice(0, name.lastIndexOf("/") + 1), m = /^pkg(\d+)$/.exec(mode);
-  return m ? pkg.split("/").slice(0, +m[1]).join("/") : pkg;
-}
-/** keys that start a new group when the one being filled would pass `limit` (an estimate of the module's bytes: `size` of each class, called in definition order) */
-function chunked(mode: string, size: (name: string) => number, limit: number): (name: string) => string {
+/** a class's package, as a group key that starts a new group when the one being filled would pass `limit` (an estimate of the module's bytes: `size`
+ *  of each class, called in definition order) */
+function chunked(size: (name: string) => number, limit: number): (name: string) => string {
   const open = new Map<string, { n: number; bytes: number }>();
   return (name) => {
-    const key = keyOf(mode, name), bytes = size(name), g = open.get(key) ?? (open.set(key, { n: 0, bytes: 0 }), open.get(key)!);
+    const key = name.slice(0, name.lastIndexOf("/") + 1), bytes = size(name), g = open.get(key) ?? (open.set(key, { n: 0, bytes: 0 }), open.get(key)!);
     if (g.bytes && g.bytes + bytes > limit) { g.n++; g.bytes = 0; }
     g.bytes += bytes;
     return g.n ? `${key}#${g.n}` : key;
@@ -92,7 +84,7 @@ const prog = platform();
 rmSync(out, { recursive: true, force: true }); mkdirSync(out, { recursive: true });
 // the build is numbered without the host's classes, which a page's World adds after the build's (boot.ts createWorld)
 const w = world(prog, { hostClasses: false, build: true });
-const aot = new AotBuilder(w, { dGroup: hotChunked(withSupers(hot.linked.length ? hot.linked : hot.called), classSize("d"), maxHot, "hotD", chunked(dMode, classSize("d"), maxModule)), cGroup: hotChunked(hot.called.filter((n) => prog.get(n)?.dex), classSize("c"), maxHot, "hotC", chunked(cMode, classSize("c"), maxModule)), dexes: new Set(platformDexes(jars)) });
+const aot = new AotBuilder(w, { dGroup: hotChunked(withSupers(hot.linked.length ? hot.linked : hot.called), classSize("d"), MAX_HOT, "hotD", chunked(classSize("d"), maxModule)), cGroup: hotChunked(hot.called.filter((n) => prog.get(n)?.dex), classSize("c"), MAX_HOT, "hotC", chunked(classSize("c"), maxModule)), dexes: new Set(platformDexes(jars)) });
 const t0 = performance.now();
 let cBytes = 0, dBytes = 0, nMethods = 0, mapBytes = 0, largest = 0;
 /** a module the estimate let grow past what Chrome compiles on the main thread (8 MiB) is a build error: the estimates (link/aotbuild.ts) need re-measuring */

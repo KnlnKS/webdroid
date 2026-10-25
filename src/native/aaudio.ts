@@ -72,7 +72,7 @@ class Stream {
   async close(): Promise<number> {
     this.change(AAUDIO_STREAM_STATE_CLOSED); this.track.release();
     await this.pumping;
-    this.cpu.dispose(); mem.free(this.buffer); mem.free(this.handle);
+    await this.cpu.endThread(); this.cpu.dispose(); mem.free(this.buffer); mem.free(this.handle);
     streams.delete(this.handle); return 0;
   }
   /** AAudioStream_waitForStateChange: the timeout is the app's, on the guest clock; the changes

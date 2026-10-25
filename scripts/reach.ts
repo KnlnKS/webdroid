@@ -7,9 +7,9 @@
 // Interface dispatch — the thing a constant-pool walk cannot speak to at all — falls out of
 // the same rule, with no special case.
 
-import { ACC, type DexFile, NO_INDEX, type ClassDef, type EncodedMethod } from "./dex.ts";
-import { walkRefs } from "./opcodes.ts";
-import { descToName } from "./abi.ts";
+import { ACC, type DexFile, NO_INDEX, type ClassDef, type EncodedMethod } from "../src/jvm/dex.ts";
+import { walkRefs } from "../src/jvm/opcodes.ts";
+import { descToName } from "../src/jvm/abi.ts";
 
 /** "cls.name(desc)ret" — the identity a call site and a definition agree on */
 type MemberKey = string;

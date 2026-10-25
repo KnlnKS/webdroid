@@ -86,6 +86,3 @@ export interface JniVm {
   host(o: unknown): unknown;
 }
 
-/** the World's, which useWorld installs */
-export let vm: JniVm = null!;
-export function useJniVm(next: JniVm): void { vm = next; }

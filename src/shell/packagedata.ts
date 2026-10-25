@@ -14,6 +14,7 @@ import { alarmData } from "../android/alarm.ts";
 import { shortcutData } from "../android/shortcuts.ts";
 import { installData, installedPath, knownUid, packages } from "../android/packages.ts";
 import { packageConfigData } from "../android/packageconfig.ts";
+import { allowlistData } from "../android/power.ts";
 import { legacyPreferenceData } from "../android/sharedprefs.ts";
 import { forgetPackage } from "./packages.ts";
 
@@ -33,7 +34,7 @@ const owners = (broker: Broker): PackageState[] => [
   alarmData, jobData, shortcutData, keystoreData, broker.notifications, uriGrantData, broker.permissions, legacyPreferenceData,
   { clear: async (pkg) => (await broker.cookies(pkg)).remove(), remove: async (pkg) => (await broker.cookies(pkg)).forget(),
     packages: async () => (await import("./webcookies.ts")).WebCookies.packages() },
-  broker.files, webData, broker.intents, broker.accounts, exitRecordData, packageConfigData, installData,
+  broker.files, webData, broker.intents, broker.accounts, exitRecordData, packageConfigData, allowlistData, installData,
 ];
 
 export async function clearAppData(broker: Broker, pkg: string, how: DataClear): Promise<void> {

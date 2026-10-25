@@ -3,7 +3,7 @@ import { mainThread } from "../jvm/natives/jentry.ts";
 import { Cpu, setA64 } from "./cpu.ts";
 import { defineHost, ldp, lookupHost, stp } from "./host.ts";
 import { libCalls } from "./calls.testkit.ts";
-import { libcInit, TM } from "./libc.ts";
+import { libcInit, TM } from "./libc32/libc.ts";
 import { KLAYOUT, readTs, writeTs } from "./kernel.ts";
 import { kernelInit } from "./syscall.ts";
 import { mem } from "./mem.ts";
