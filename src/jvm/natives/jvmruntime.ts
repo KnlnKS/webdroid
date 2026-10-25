@@ -1,5 +1,5 @@
 // ART's process configuration boundaries.
-import { rt, noEffect } from "../runtime.ts";
+import { rt, noEffect, javaValues } from "../runtime.ts";
 import { jarray } from "../abi.ts";
 import { libraryAbi } from "./jlang.ts";
 import { ABIS_32 } from "../../shell/properties.ts";
@@ -56,7 +56,7 @@ rt.registerJnis("dalvik/system/VMRuntime", {
   "vmVersion()Ljava/lang/String;": () => "2.1.0",
   "properties()[Ljava/lang/String;": () => jarray([`user.locale=${device.locale}`], "Ljava/lang/String;"),
   // the address of a Java array that is not a direct buffer's: the handle of the array itself, which `deref` gives natives as a view that is stored back (wasm/host/bridge.ts)
-  "addressOf(Ljava/lang/Object;)J": Object.assign((array: object) => handle(array), { javaValues: true }),
+  "addressOf(Ljava/lang/Object;)J": javaValues((array: object) => handle(array)),
 });
 /** archives the host adds to the boot class path after the platform's, for the resources of classes it runs on it (conformance suites) */
 export const extraBootEntries: string[] = [];

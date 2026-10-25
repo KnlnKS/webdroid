@@ -6,6 +6,8 @@
  *  initializations with every chain of that thread. */
 export class Strand {
   readonly thread: unknown; readonly root: boolean;
+  /** the tier's strand this one is the host's side of (host/entry.ts), which no other strand has */
+  tier: unknown = null;
   constructor(thread: unknown, root = false) { this.thread = thread; this.root = root; }
 }
 

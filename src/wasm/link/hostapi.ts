@@ -6,10 +6,11 @@ import type { Code } from "../compiler/code.ts";
 import type { ProxyDefinition } from "./proxy.ts";
 import type { World } from "./world.ts";
 import type { DexFile } from "../../jvm/dex.ts";
+import type { NativeImpl } from "../../jvm/abi.ts";
 import type { Sched, Strand } from "./sched.ts";
 
-/** a native; one marked `javaValues` is given and answers Java values as the tier holds them (references as they are: no String is converted, no array copied, no object wrapped) */
-export type HostFn = ((...a: any[]) => unknown) & { javaValues?: boolean };
+/** a function the host gives a Wasm module as an import */
+export type HostFn = (...a: any[]) => unknown;
 
 /** a Java class a registered spec implements in the host (rt.register outside the VM's own classes): its Java objects have a host object of `ctor` beside them, which its natives take as `this` */
 export interface HostSpec {
@@ -33,9 +34,9 @@ export const specClass = (cls: string): string => (cls.endsWith(HOSTED) ? cls.sl
 export interface NativeSource {
   /** the registered implementation of `cls`.`key` (name+descriptor); an instance method's `this` is its receiver. A String
    *  constructor's key is `<init>desc` and its implementation answers the String */
-  find(cls: string, key: string, isStatic: boolean, hasBody: boolean): HostFn | undefined;
+  find(cls: string, key: string, isStatic: boolean, hasBody: boolean): NativeImpl | undefined;
   /** a stand-in for native `cls`.`key` that has no implementation yet: it finds one when it is called, as a JNI library registers its natives when it is loaded */
-  late?(cls: string, key: string): HostFn;
+  late?(cls: string, key: string): NativeImpl;
   /** a Java throwable raised by a native, by class and message */
   thrown(e: unknown): { cls: string; msg: string | null; obj?: object; java?: object } | undefined;
   /** the Java class name of an object a native made, if `v` is one: a native result the Bridge copies into the Wasm heap */

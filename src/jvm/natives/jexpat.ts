@@ -3,7 +3,7 @@
 // with its names. Input is consumed a whole token at a time as it arrives; a partial token waits
 // for the next append. External entities are not fetched, as expat does not by default.
 
-import { rt, driven, type Gen } from "../runtime.ts";
+import { rt, driven, ranged, type Gen } from "../runtime.ts";
 import { vcall } from "./jentry.ts";
 import { charsToString } from "../abi.ts";
 import { handle, ownedHandle, deref, release } from "../../android/handles.ts";
@@ -202,12 +202,12 @@ const parserNatives: Record<string, (...args: never[]) => unknown> = {
   "appendChars(J[CII)V": function (this: unknown, pointer: bigint, text: Uint16Array, offset: number, length: number) {
     return append(this, pointer, charsToString(text, offset, length), false);
   },
-  "appendBytes(J[BII)V": function (this: unknown, pointer: bigint, bytes: Int8Array, offset: number, length: number) {
+  "appendBytes(J[BII)V": ranged(function (this: unknown, pointer: bigint, bytes: Int8Array, offset: number, length: number) {
     const c = context(pointer), view = new Uint8Array(bytes.buffer, bytes.byteOffset + offset, length);
     // expat's own detection: a byte order mark names UTF-16, else the declared or default encoding
     c.decoder ??= new TextDecoder(view[0] === 0xfe && view[1] === 0xff ? "utf-16be" : view[0] === 0xff && view[1] === 0xfe ? "utf-16le" : c.encoding);
     return append(this, pointer, c.decoder.decode(view, { stream: true }), false);
-  },
+  }, [1, 2, 3]),
   "line(J)I": (pointer: bigint) => context(pointer).line,
   "column(J)I": (pointer: bigint) => context(pointer).column,
   "cloneAttributes(JI)J": (pointer: bigint, count: number) => ownedHandle(at(pointer).slice(0, count)),

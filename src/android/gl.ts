@@ -4,7 +4,7 @@
 // Buffer its memory from the position (a heap buffer's remaining bytes, copied into guest memory and
 // back after a query), a String[] a char*[] of its elements.
 
-import { rt, noEffect } from "../jvm/runtime.ts";
+import { rt, noEffect, javaValues } from "../jvm/runtime.ts";
 import { curThread, newObj } from "../jvm/natives/jentry.ts";
 import { parseMethodDesc, utf8 } from "../jvm/abi.ts";
 import { addressOf, bufferBytes, elementShift, isExternal, limit, position, type JBuffer } from "../jvm/natives/jnio.ts";
@@ -213,11 +213,11 @@ function adapter(P: HostFn, name: string, params: string[], ret: string, special
   if (!make) makers.set(body, make = new Function(...Object.keys(HELPERS), "P", "S", body) as (...h: unknown[]) => Native);
   const fn = make(...Object.values(HELPERS), P, special);
   // primitives in and out: the Wasm tier passes them as they are, with no bridge scope
-  return params.every((d) => d.length === 1) && ret.length === 1 ? Object.assign(fn, { javaValues: true }) : fn;
+  return params.every((d) => d.length === 1) && ret.length === 1 ? javaValues(fn) : fn;
 }
 function resolve(sig: string): Native | null {
   const open = sig.indexOf("("), name = sig.slice(0, open);
-  if (name === "_nativeClassInit") return Object.assign(() => {}, { javaValues: true });
+  if (name === "_nativeClassInit") return javaValues(() => {});
   const P = glProc(name.replace(/^_/, "").replace(/Bounds$/, ""));
   const { params, ret } = parseMethodDesc(sig.slice(open));
   // glgen's Buffer overloads that take the name buffer as a byte cannot pass it, on a device either

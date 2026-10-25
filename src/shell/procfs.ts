@@ -1,4 +1,5 @@
 import { device } from "./config.ts";
+import { java } from "../jvm/javahost.ts";
 import { DEVICE_PROPERTIES, UNAME } from "./device-properties.ts";
 
 /** the process's identity: name is what the activity manager knows it by, argv0 its command line, which
@@ -44,11 +45,12 @@ function statLine(id: number): string {
 }
 const cpuList = () => device.cpu.cores === 1 ? "0\n" : `0-${device.cpu.cores - 1}\n`;
 
-/** the process's live threads by tid, what /proc/self/task lists, and their native names, which the Wasm tier's entry assigns (src/wasm/host/entry.ts) */
-export const procTasks = { tids: (): number[] => [procIdentity.pid], name: (_tid: number): string | null => null, rename: (_tid: number, _name: string): boolean => false };
+/** the process's live threads by tid, what /proc/self/task lists, and their native names, as the Wasm tier knows them (src/wasm/host/entry.ts); the main thread alone before */
+const procTasks = () => java.tasks ?? mainOnly;
+const mainOnly = { tids: (): number[] => [procIdentity.pid], name: (): string | null => null, rename: (): boolean => false };
 const TASK = /^\/proc\/(?:self|thread-self|(\d+))(?:\/task\/(\d+))?\/(\w+)$/;
 /** a task's comm: the main thread's is the process's, another's its own name, as prctl(PR_SET_NAME) leaves it */
-const taskComm = (id: number) => (id === procIdentity.pid ? null : procTasks.name(id))?.slice(0, 15) ?? comm();
+const taskComm = (id: number) => (id === procIdentity.pid ? null : procTasks().name(id))?.slice(0, 15) ?? comm();
 /** the task a /proc comm path names: writing it renames the task, as pthread_setname_np does for
  *  another thread; no other /proc file is writable */
 function commTask(path: string): number | null {
@@ -58,15 +60,15 @@ function commTask(path: string): number | null {
 export const procWritable = (path: string): boolean => commTask(path) !== null;
 export function procWrite(path: string, text: string): boolean {
   const tid = commTask(path);
-  return tid !== null && procTasks.rename(tid, text.replace(/\n$/, "").slice(0, 15));
+  return tid !== null && procTasks().rename(tid, text.replace(/\n$/, "").slice(0, 15));
 }
 /** a /proc directory's entries: the process's own, its task/ and each task's; null for any other path */
 export function procList(path: string): string[] | null {
   const m = /^\/proc\/(?:self|thread-self|(\d+))(\/task(?:\/(\d+))?)?$/.exec(path);
   if (!m || m[1] && +m[1] !== procIdentity.pid) return null;
   if (!m[2]) return ["task", "cmdline", "comm", "maps", "stat", "statm", "status"];
-  if (m[3] === undefined) return procTasks.tids().map(String);
-  return procTasks.tids().includes(+m[3]) ? ["comm", "stat", "status"] : null;
+  if (m[3] === undefined) return procTasks().tids().map(String);
+  return procTasks().tids().includes(+m[3]) ? ["comm", "stat", "status"] : null;
 }
 
 export function procText(path: string): string | null {

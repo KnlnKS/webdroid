@@ -38,7 +38,6 @@ in a step (max 240) as `<dir>/<flow>/<NN-id>/fNNN.png`; wiped per run, gitignore
 | Env | Effect |
 |---|---|
 | `WEBDROID_SCREEN=WxH@dpi` | geometry: flows are not scored, visual checks fail |
-| `WEBDROID_BYTECODE` | `?bytecode=` provenance cut |
 | `WEBDROID_CPU_THROTTLE=N` | CDP CPU slowdown (load races) |
 | `WEBDROID_CORES=N` | the page and its workers see N cores (`pnpm check` gives each flow 8) |
 | `WEBDROID_SITE_ISOLATION=0` | WebView shares the app's renderer (as Safari/Android; also `lat`) |

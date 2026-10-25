@@ -217,3 +217,16 @@ export function stringHash(s: string): number {
   for (let i = 0; i < s.length; i++) h = (Math.imul(h, 31) + s.charCodeAt(i)) | 0;
   return h;
 }
+
+/** A registered native as the Wasm tier imports it, normalized once by its registration (runtime.ts). `wait`: "maybe" answers a Promise for some
+ *  calls, "always" for every call (an async function), "retry" only while something it reads loads, having had no other effect, so it is called again
+ *  once that settles. `raw`: it takes and answers Java values as the tier holds them (no String converted, no array copied, no object wrapped).
+ *  `ranges`: the (array, offset, length) parameter positions, receiver not counted, of an array it touches only in [offset, offset + length) */
+export interface NativeImpl {
+  fn: (...a: any[]) => unknown;
+  wait?: "maybe" | "always" | "retry";
+  raw?: boolean;
+  ranges?: readonly (readonly [number, number, number])[];
+  /** a stand-in (`stubs`/`noops`) reaching which is a gap */
+  placeholder?: boolean;
+}

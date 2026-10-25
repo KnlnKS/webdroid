@@ -70,7 +70,7 @@ const containsInstalled = (w: ReturnType<typeof world>) => installed(w, slotOf(w
 
 // A class the host implements takes the place of the build's code for the methods it names, however the module that holds them is loaded.
 {
-  const host = new Natives({ ...nativeSource, find: (cls, k, isStatic, hasBody) => (cls === "java/util/ArrayList" && k === key.slice(key.indexOf(".") + 1) ? () => 42 : nativeSource.find(cls, k, isStatic, hasBody)) });
+  const host = new Natives({ ...nativeSource, find: (cls, k, isStatic, hasBody) => (cls === "java/util/ArrayList" && k === key.slice(key.indexOf(".") + 1) ? { fn: () => 42 } : nativeSource.find(cls, k, isStatic, hasBody)) });
   const w = world([join(out, "classes.dex"), ...jars], { natives: host });
   w.addHostClass({ name: "java/util/ArrayList", sup: null, ifaces: [], methods: [key.slice(key.indexOf(".") + 1)], fields: [], ctor: class {} });
   check("the host's indexOf answers where the build's code would", w.entry("Aot", "plain", "()I")(), 1);

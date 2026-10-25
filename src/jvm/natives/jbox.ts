@@ -2,6 +2,7 @@
 // class's own `value` field.
 import { PRIMS, mangleField } from "../abi.ts";
 import { classNameOf } from "./jentry.ts";
+import { java } from "../javahost.ts";
 
 type Obj = Record<string, any>;
 export type BoxDesc = "I" | "J" | "F" | "D" | "Z" | "C" | "B" | "S";
@@ -19,11 +20,9 @@ export function unbox(o: unknown): number | bigint | undefined {
   return d === null ? undefined : (o as Obj)[VALUE[d]];
 }
 
-/** Java's own boxes, which valueOf makes without suspending (wasm/host/boot.ts) */
-export const wasmBox = { make: null as ((desc: BoxDesc, v: number | bigint) => unknown) | null };
-/** the box `valueOf(v)` of the `desc` class gives */
+/** the box `valueOf(v)` of the `desc` class gives, made without suspending */
 export function box(desc: BoxDesc, v: number | bigint | boolean): Obj {
-  return wasmBox.make!(desc, typeof v === "boolean" ? +v : v) as Obj;
+  return java.box(desc, typeof v === "boolean" ? +v : v) as Obj;
 }
 export const boxInt = (v: number) => box("I", v);
 export const boxLong = (v: bigint) => box("J", v);

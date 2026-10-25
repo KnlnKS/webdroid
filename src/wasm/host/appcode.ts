@@ -12,7 +12,7 @@ import type { FetchStore } from "./aotstore.ts";
 import { buildFiles, appKey, LaunchRecord, SavedBuild, type Persist } from "./persist.ts";
 import { fetchBundle } from "./bundle.ts";
 import { switchOn } from "../../switches.ts";
-import { CompileClient, containers, dexesByLoader, type WorkerPort } from "./compiler.ts";
+import { CompileClient, CompileSession, containers, dexesByLoader, transferOf, type WorkerPort } from "./compiler.ts";
 import type { WarmAnswer, WarmRequest } from "./warm-worker.ts";
 import type { BuildRoots, CompileRequest, CompileResponse, Containers } from "./compile-serve.ts";
 import { mergeApp } from "../link/apps.ts";
@@ -257,8 +257,7 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
   return code;
 }
 
-type RootLibraries = { loaders: LoaderSnapshot; scopes: [LoaderId, Containers][] };
-/** the loaders of the libraries the app's loader searches, and theirs */
+type RootLibraries = { loaders: LoaderSnapshot; scopes: [LoaderId, DexFile[]][] };
 /** The libraries the app's loader searches, which code built for it resolves through: the loader numbering, their graph and their dexes. */
 function rootLibraries(world: World): RootLibraries | undefined {
   const prog = world.prog, closure = libraryLoaders(prog);
@@ -267,7 +266,7 @@ function rootLibraries(world: World): RootLibraries | undefined {
   const groups = dexesByLoader(prog, (l) => closure.has(l));
   const ids = new Set<LoaderId>([0, ...[...closure].map(l => prog.loaderId(l))]), snapshot = prog.loaderSnapshot();
   return { loaders: { ...snapshot, libraries: snapshot.libraries.filter(([id]) => ids.has(id)), initiated: snapshot.initiated.filter(([id]) => ids.has(id)) },
-    scopes: [...groups].map(([id, dexes]) => [id, containers(dexes)]) };
+    scopes: [...groups] };
 }
 
 /** A build owns fresh numbering contexts, one per shard; each worker is retired once it has transferred its part. A build nobody waits for has one, leaving the other
@@ -276,7 +275,7 @@ class Builder {
   private req: AppCodeRequest; private key: string; private roots: BuildRoots;
   private closed = false;
   /** the build being made: its workers, and how to fail it */
-  private running?: { ports: WorkerPort[]; fail(error: Error): void };
+  private running?: { sessions: CompileSession[]; fail(error: Error): void };
   private lease?: AbortController;
   constructor(req: AppCodeRequest, key: string, roots: BuildRoots) { this.req = req; this.key = key; this.roots = roots; }
   get busy(): boolean { return !!this.running; }
@@ -285,14 +284,14 @@ class Builder {
     if (this.closed) return Promise.reject(new Error("App code closed"));
     if (this.running) return Promise.reject(new Error("An app build is already pending"));
     let fail!: (error: Error) => void;
-    const failed = new Promise<never>((_, reject) => { fail = reject; }), run = this.running = { ports: [] as WorkerPort[], fail };
+    const failed = new Promise<never>((_, reject) => { fail = reject; }), run = this.running = { sessions: [] as CompileSession[], fail };
     failed.catch(() => {});
     const make = async (): Promise<Made> => {
       if (this.running !== run) throw new Error("App code closed");
       const t0 = performance.now(), init = (shard: number): [CompileRequest, Transferable[]] => {
-        const dexes = containers(this.req.dexes), scopes = libraries?.scopes.map(([id, dexes]): [LoaderId, Containers] => [id, dexes.map(([name, bytes]) => [name, bytes.slice()])]);
+        const dexes = containers(this.req.dexes), scopes = libraries?.scopes.map(([id, dexes]): [LoaderId, Containers] => [id, containers(dexes)]);
         return [{ type: "build", dexes, aot: { base: this.req.aot.base, index: this.req.aot.bytes("index.json") }, prefix: this.req.prefix, hostClasses, roots: this.roots, demand,
-          shard: [shard, shards], ...libraries && { loaders: libraries.loaders, scopes } }, [dexes, ...scopes?.map(([, dexes]) => dexes) ?? []].flatMap((dexes) => dexes.map(([, b]) => b.buffer as ArrayBuffer))];
+          shard: [shard, shards], ...libraries && { loaders: libraries.loaders, scopes } }, transferOf(dexes, ...scopes?.map(([, dexes]) => dexes) ?? [])];
       };
       const [lead, ...rest] = await Promise.race([Promise.all(Array.from({ length: shards }, (_, shard) => this.runShard(run, init(shard)))), failed]);
       if (!("index" in lead.part)) throw new Error("the first shard's part has no index");
@@ -307,21 +306,18 @@ class Builder {
   /** has a worker of its own make a shard's part from `init` */
   private runShard(run: NonNullable<Builder["running"]>, [init, transfer]: [CompileRequest, Transferable[]]): Promise<Extract<CompileResponse, { type: "built" }>> {
     return new Promise((resolve, reject) => {
-      const port = this.req.spawn();
-      run.ports.push(port);
-      port.onmessage = ({ data }: MessageEvent<CompileResponse>) => {
-        if (!run.ports.includes(port)) return;
-        if (data.type === "loaded") port.postMessage(init, transfer);
-        else if (data.type === "failed") reject(new Error(data.message));
-        else if (data.type === "built") { this.stop(run, [port]); resolve(data); }
-      };
-      port.onerror = (e) => reject(new Error(e.message));
+      const session: CompileSession = new CompileSession(this.req.spawn(), (data) => {
+        if (data.type === "failed") reject(new Error(data.message));
+        else if (data.type === "built") { this.stop(run, [session]); resolve(data); }
+      }, (message) => reject(new Error(message)));
+      run.sessions.push(session);
+      session.post(init, transfer);
     });
   }
-  /** retires `run`'s workers, or those of `ports` */
-  private stop(run: NonNullable<Builder["running"]>, ports = run.ports): void {
-    for (const port of ports) { port.onmessage = null; port.onerror = null; port.terminate(); }
-    run.ports = run.ports.filter((port) => !ports.includes(port));
+  /** retires `run`'s workers, or those of `sessions` */
+  private stop(run: NonNullable<Builder["running"]>, sessions = run.sessions): void {
+    for (const session of sessions) session.close();
+    run.sessions = run.sessions.filter((session) => !sessions.includes(session));
   }
   close(error = new Error("App code closed"), terminal = true): void {
     if (this.closed) return;

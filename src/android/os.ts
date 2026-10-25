@@ -4,7 +4,7 @@ import { processEnv } from "../shell/environment.ts";
 import { appUserName, procIdentity, processTid, sysconf, uname } from "../shell/procfs.ts";
 import { guestAt, mem } from "../native/mem.ts";
 import { syncShared, trackSharedMap, trackPrivateMap } from "../native/mappings.ts";
-import { awaited, rt, type JObj, noops, noEffect, driven, getDeclared, setDeclared, waits, type Gen } from "../jvm/runtime.ts";
+import { awaited, rt, type JObj, noops, noEffect, driven, getDeclared, setDeclared, waits, ranged, type Gen } from "../jvm/runtime.ts";
 import { i8, jarray, utf8 } from "../jvm/abi.ts";
 import { once } from "../jvm/suspend.ts";
 import { exitProcess, never } from "../process-exit.ts";
@@ -325,14 +325,14 @@ const linux: Record<string, (...args: never[]) => unknown> = {
       if (!st) throw errno("fstat", E.BADF);
       return yield* awaited(statOf(st));
     }),
-    [`readBytes(${FD}Ljava/lang/Object;II)I`]: waits((d: JObj | null, buffer: IoBuffer, offset: number, count: number) =>
-      readBytes("read", buffer, offset, count, (target) => javaReadFd(fdInt(d), target))),
-    [`preadBytes(${FD}Ljava/lang/Object;IIJ)I`]: waits((d: JObj | null, buffer: IoBuffer, offset: number, count: number, position: bigint) =>
-      readBytes("pread", buffer, offset, count, (target) => javaPreadFd(fdInt(d), target, Number(position)))),
-    [`writeBytes(${FD}Ljava/lang/Object;II)I`]: waits((d: JObj | null, buffer: IoBuffer, offset: number, count: number) =>
-      writeBytes(buffer, offset, count, (bytes) => after(javaWriteFd(fdInt(d), bytes), n => ioResult("write", n)))),
-    [`pwriteBytes(${FD}Ljava/lang/Object;IIJ)I`]: waits((d: JObj | null, buffer: IoBuffer, offset: number, count: number, position: bigint) =>
-      writeBytes(buffer, offset, count, (bytes) => after(javaPwriteFd(fdInt(d), bytes, Number(position)), n => ioResult("pwrite", n)))),
+    [`readBytes(${FD}Ljava/lang/Object;II)I`]: ranged(waits((d: JObj | null, buffer: IoBuffer, offset: number, count: number) =>
+      readBytes("read", buffer, offset, count, (target) => javaReadFd(fdInt(d), target))), [1, 2, 3]),
+    [`preadBytes(${FD}Ljava/lang/Object;IIJ)I`]: ranged(waits((d: JObj | null, buffer: IoBuffer, offset: number, count: number, position: bigint) =>
+      readBytes("pread", buffer, offset, count, (target) => javaPreadFd(fdInt(d), target, Number(position)))), [1, 2, 3]),
+    [`writeBytes(${FD}Ljava/lang/Object;II)I`]: ranged(waits((d: JObj | null, buffer: IoBuffer, offset: number, count: number) =>
+      writeBytes(buffer, offset, count, (bytes) => after(javaWriteFd(fdInt(d), bytes), n => ioResult("write", n)))), [1, 2, 3]),
+    [`pwriteBytes(${FD}Ljava/lang/Object;IIJ)I`]: ranged(waits((d: JObj | null, buffer: IoBuffer, offset: number, count: number, position: bigint) =>
+      writeBytes(buffer, offset, count, (bytes) => after(javaPwriteFd(fdInt(d), bytes, Number(position)), n => ioResult("pwrite", n)))), [1, 2, 3]),
     [`ftruncate(${FD}J)V`]: (d: JObj | null, length: bigint) => after(javaTruncateFd(fdInt(d), Number(length)), n => sys("ftruncate", n)),
     [`fsync(${FD})V`]: (d: JObj | null) => after(javaSyncFd(fdInt(d)), n => sys("fsync", n)),
     [`fdatasync(${FD})V`]: (d: JObj | null) => after(javaSyncFd(fdInt(d)), n => sys("fdatasync", n)),

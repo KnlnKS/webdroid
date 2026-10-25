@@ -1,7 +1,7 @@
 // NativeCrypto's certificate natives: X509 handles, their fields, signature checks, the BIO
 // streams conscrypt's CertificateFactory reads PEM and DER through, and PKCS#7/PkiPath bundles.
 
-import { rt, driven, waits, type Gen, type JObj } from "../runtime.ts";
+import { rt, driven, waits, ranged, type Gen, type JObj } from "../runtime.ts";
 import { ownedHandle, handle, weakHandle, deref, release } from "../../android/handles.ts";
 import { concat, i8, jarray, u8, sameBytes } from "../abi.ts";
 import { vcall } from "./jentry.ts";
@@ -197,7 +197,7 @@ nc("PEM_read_bio_PUBKEY(J)J", driven(function* (h: bigint): Gen {
   return decoded(() => newKey(parsePublicKey(der)));
 }));
 nc("BIO_read(J[B)I", driven(function* (h: bigint, buf: Int8Array): Gen { const r = yield* readExact(bioOf(h), buf.length); region(buf, 0, r.length).set(r); return r.length; }));
-nc("BIO_write(J[BII)V", waits((h: bigint, buf: Int8Array, off: number, len: number) => vcall(bioOf(h).out, "write", "([BII)V", buf, off, len)));
+nc("BIO_write(J[BII)V", ranged(waits((h: bigint, buf: Int8Array, off: number, len: number) => vcall(bioOf(h).out, "write", "([BII)V", buf, off, len)), [1, 2, 3]));
 
 // ── certificate bundles: PkiPath (SEQUENCE OF Certificate) and PKCS#7 SignedData's certificates
 const OID_SIGNED_DATA = "1.2.840.113549.1.7.2", OID_DATA = "1.2.840.113549.1.7.1";

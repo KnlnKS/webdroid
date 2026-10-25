@@ -4,10 +4,9 @@ import { mark, perf } from "../../perf.ts";
 import { switchValue } from "../../switches.ts";
 import { wallMillis } from "../../guest-clock.ts";
 import { note } from "../../timeline.ts";
-import { FetchStore } from "./aotstore.ts";
+import { FetchStore, decodeJson } from "./aotstore.ts";
 import { rt } from "../../jvm/runtime.ts";
-import type { Entry } from "../../jvm/natives/jentry.ts";
-import { useJavaHost, type JavaHost } from "../../jvm/javahost.ts";
+import { java, useJavaHost, type JavaHost } from "../../jvm/javahost.ts";
 import type { TierBackend, TierPorts } from "../../jvm/tier.ts";
 import { dexesIn, dexesOfZip, type DexFile } from "../../jvm/dex.ts";
 import { vfs } from "../../shell/vfs.ts";
@@ -26,9 +25,9 @@ import { endWaits } from "../link/module.ts";
 import { hostNet } from "./inet.ts";
 import { guestMemory } from "./guest.ts";
 import { wasmJni } from "./jni.ts";
-import { useJniVm, vm } from "../../native/jnivm.ts";
 import { boxRef, classRef, hostObject, hostThrowable, fieldNamesOf, wasmEntry } from "./entry.ts";
-import { attachHostClasses, natives } from "./nativesource.ts";
+import { addHostSpec, attachHostClasses, natives } from "./nativesource.ts";
+import { claimHandle } from "../../android/handles.ts";
 import { wasmThreadStates, bindWorld, count, heapUsed } from "./stats.ts";
 import { prepareApp, type AppCode, type AppCodeRequest, type Built } from "./appcode.ts";
 import { prefetchInWorker, serveStore } from "./aotload.ts";
@@ -36,7 +35,7 @@ import { openPersist } from "./persist.ts";
 import { spawnCompileWorker, type CompileClient } from "./compiler.ts";
 import { WORKER_SCRIPTS } from "../../worker-scripts.ts";
 import { onProcessExit, processExited } from "../../process-exit.ts";
-import type { WarmAnswer } from "./warm-worker.ts";
+import type { WarmAnswer, WarmStart } from "./warm-worker.ts";
 
 /** what the JS heap of a tab, which every process's Java heap and the program models share, may grow by before an allocation fails */
 const TAB_HEAP = 2048 * 1024 * 1024;
@@ -72,7 +71,7 @@ export const hostLoop: HostLoop = {
 };
 
 /** the options of every World that runs Java in a realm, the tier's own and the harnesses': the registered natives and the host's network, loop and native memory */
-export const worldOptions = (): WorldOptions => ({ intrinsics, natives, heapUsed, net: hostNet, loop: hostLoop, guest: guestMemory, claim: (owner, handle) => rt.claimHandle?.(owner, handle) });
+export const worldOptions = (): WorldOptions => ({ intrinsics, natives, heapUsed, net: hostNet, loop: hostLoop, guest: guestMemory, claim: claimHandle });
 /** a World over `prog`, with the registered natives and the host's resolver; `extra` is what the app's code adds (appcode.ts) */
 function createWorld(prog: Program, extra: Partial<WorldOptions> = {}): World {
   const w = new World(prog, { ...worldOptions(), holdUpgrades: () => starting, answering: () => answeringFor() > 0, heapLimit: TAB_HEAP, note: note as (ev: number, arg?: number) => void, ...extra });
@@ -126,7 +125,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
   // profiled launches numbered (scripts/wasm/aot-profile.ts; null when they disagree or none ran), so its app's build can begin before the zygote has run.
   const persisting = openPersist();
   const remembered = Promise.all([opening, persisting]).then(async ([[aot], persist]) =>
-    aot && (await persist?.prefix(aot.key) ?? JSON.parse(new TextDecoder().decode(await aot.fetchBytes("prefix.json"))) as Numbering | null)).catch(() => null);
+    aot && (await persist?.prefix(aot.key) ?? decodeJson<Numbering | null>(await aot.fetchBytes("prefix.json")))).catch(() => null);
   let seen: Numbering | undefined;
   /** the app code beginAppCode asked for, and the code it began preparing under the prefix it took */
   let asked: Asked | undefined, begun: { prefix: string; code: Promise<AppCode> } | undefined;
@@ -216,37 +215,34 @@ export async function bootWasmTier(): Promise<TierBackend> {
     },
   };
 }
-/** `make()`'s value, made when a member is first read; `install` puts it where later reads find it without this */
-const lazy = <T extends object>(make: () => T, install?: (v: T) => void): T => {
-  let v: T | undefined;
-  return new Proxy({} as T, { get: (_, k) => { if (!v) { v = make(); install?.(v); } return (v as Record<PropertyKey, unknown>)[k]; } });
-};
 let using: World | undefined;
-/** makes `w` the realm's Java: what jentry, JNI and the runtime's natives reach (JNI once it is first used: a World without the platform has none) */
+/** makes `w` the realm's Java: what jentry, JNI and the runtime's natives reach */
 export function useWorld(w: World): World {
   if (using === w) return w;
   using = w;
+  let jni: JavaHost["jni"] | undefined;
   useJavaHost({
-    ...objectsIn(() => w), entry: wasmEntry(w), jni: lazy(() => wasmJni(w), useJniVm), fieldName: fieldNamesOf(w),
+    ...wasmEntry(w), ...objectsIn(() => w),
+    // made when first used: a World without the platform has none
+    get jni() { return jni ??= wasmJni(w); },
+    fieldName: fieldNamesOf(w),
     // the frames of Java code: a method the host implements is not one
     javaFrames: () => w.stacks.callerFrames(16).filter((f) => w.prog.get(f.cls)?.dex !== null).map((f) => dotName(f.cls) + "." + f.method),
     userClassLoader: () => {
       const f = w.stacks.callerFrame((f) => w.prog.loaderOf(f.cls) !== w.prog.boot);
       return f ? w.bridge.toHost(objectOfLoader(w, w.prog.loaderOf(f.cls))) as object | null : null;
     },
+    toHost: (o) => w.bridge.toHost(o),
+    registered: (spec) => addHostSpec(w, spec),
   });
   return w;
 }
-/** the realm's Java until its World is made: whatever first reaches Java makes it (`world`), and useWorld installs it in place of this */
+/** the realm's Java until its World is made: whatever first reaches Java makes it (`world`), and useWorld installs its host in place of this one */
 function usePending(world: () => World): void {
-  useJavaHost({
-    ...objectsIn(world),
-    entry: new Proxy({} as Entry, { get: (_, name) => (...args: unknown[]) => (wasmEntry(world())[name as keyof Entry] as Function)(...args) }),
-    jni: lazy(() => { world(); return vm; }),
-    fieldName: (cls, name) => fieldNamesOf(world())(cls, name),
-    // no Java has run
-    javaFrames: () => [], userClassLoader: () => null,
-  });
+  const made = (): JavaHost => { world(); return java; };
+  // no Java has run
+  const own: Partial<JavaHost> = { ...objectsIn(world), javaFrames: () => [], userClassLoader: () => null, toHost: (o) => o, registered() {}, contended: () => false, tasks: undefined };
+  useJavaHost(new Proxy(own as JavaHost, { get: (_, k: keyof JavaHost) => k in own ? own[k] : made()[k] }));
 }
 /** the Java objects the runtime makes, in the World `world()` answers */
 const objectsIn = (world: () => World): Pick<JavaHost, "throwable" | "make" | "classFor" | "box"> => ({
@@ -294,10 +290,10 @@ export function serveWarm(port: MessagePort): void {
     warmer = warming() ? new Worker(WORKER_SCRIPTS.warm.url, { type: "module" }) : null;
     if (warmer) {
       warmer.onmessage = ({ data }: MessageEvent<WarmAnswer>) => countWarm(data);
-      void openAot().then((store) => { if (store) warmer!.postMessage({ base: store.base }); });
+      void openAot().then((store) => { if (store) warmer!.postMessage({ base: store.base } satisfies WarmStart); });
     }
   }
-  if (warmer) warmer.postMessage({ port }, [port]); else port.close();
+  if (warmer) warmer.postMessage({ port } satisfies WarmStart, [port]); else port.close();
 }
 
 /** The platform build (scripts/wasm/aot-build.ts) the server holds for these sources, with the modules a start of the process loads compiled. Undefined when the
@@ -310,7 +306,7 @@ export function openAot(): Promise<FetchStore | undefined> {
     const store = new FetchStore(`/aot/${(await current.json() as { key: string }).key}/`, aotPort);
     const [, startup] = await Promise.all([store.fetchBytes("index.json"), store.fetchBytes("startup.json")]);
     mark("aotIndex");
-    store.ready = prefetchInWorker(store, JSON.parse(new TextDecoder().decode(startup)) as string[]).then(() => mark("aotOpened"));
+    store.ready = prefetchInWorker(store, decodeJson<string[]>(startup)).then(() => mark("aotOpened"));
     return store;
   })();
 }

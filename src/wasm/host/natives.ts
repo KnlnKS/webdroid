@@ -11,10 +11,9 @@ import { ACC, kindOf, mid, type MethodInfo } from "../compiler/program.ts";
 import { elemKindOf, type ElemKind } from "../compiler/consts.ts";
 import { KINDS, valueKind } from "../compiler/infer.ts";
 import { decodeInstructions } from "../../jvm/prepared.ts";
-import { PRIMS, type PrimArray } from "../../jvm/abi.ts";
-import { isRetrying } from "../../jvm/runtime.ts";
+import { PRIMS, type NativeImpl, type PrimArray } from "../../jvm/abi.ts";
 import { Bridge } from "./bridge.ts";
-import { adaptImport, mayWait, reportSuspended, reportSuspendError, waitsAlways } from "./suspend.ts";
+import { adaptImport, reportSuspended, reportSuspendError } from "./suspend.ts";
 import { specClass, type HostBridge, type HostContext, type HostFn, type NativeBinder, type NativeSource } from "../link/hostapi.ts";
 import type { World } from "../link/world.ts";
 import { SIZE, copyFn } from "../link/copy.ts";
@@ -33,30 +32,11 @@ function overridden(m: MethodInfo): boolean {
   return HOST_FIRST.test(m.key) || decodeInstructions(m.dex.code(m.codeOff).insns).some((i) => (i.name.startsWith("iget") || i.name.startsWith("iput")) && m.dex.typeName(m.dex.field(i.c).cls) === STRING_CLASS);
 }
 
-/** natives that touch only [offset, offset + length) of a primitive array, as (array, offset, length) parameter positions (receiver first),
- *  by class, name and descriptor prefix: the contract of libcore's I/O, zip, crypto and Parcel natives. The array is copied for that range
- *  alone; text and pixel natives read a context around their range, so none of them is listed. */
-const RANGES: [string, ...[number, number, number][]][] = [
-  ["java/util/zip/Inflater.inflateBytesBytes", [1, 2, 3], [4, 5, 6]], ["java/util/zip/Deflater.deflateBytesBytes", [1, 2, 3], [4, 5, 6]],
-  ["java/util/zip/Inflater.inflateBytesBuffer", [1, 2, 3]], ["java/util/zip/Deflater.deflateBytesBuffer", [1, 2, 3]],
-  ["java/util/zip/Inflater.inflateBufferBytes", [3, 4, 5]], ["java/util/zip/Deflater.deflateBufferBytes", [3, 4, 5]],
-  ["java/util/zip/Inflater.setDictionary", [1, 2, 3]], ["java/util/zip/Deflater.setDictionary", [1, 2, 3]],
-  ["java/util/zip/CRC32.updateBytes0", [1, 2, 3]], ["java/util/zip/Adler32.updateBytes", [1, 2, 3]],
-  ["libcore/io/Memory.peekByteArray", [1, 2, 3]], ["libcore/io/Memory.pokeByteArray", [1, 2, 3]],
-  ["libcore/io/Linux.readBytes", [1, 2, 3]], ["libcore/io/Linux.writeBytes", [1, 2, 3]], ["libcore/io/Linux.preadBytes", [1, 2, 3]], ["libcore/io/Linux.pwriteBytes", [1, 2, 3]],
-  ["libcore/io/Linux.recvfromBytes", [1, 2, 3]], ["libcore/io/Linux.sendtoBytes", [1, 2, 3]],
-  ["java/lang/String.<init>([BII)V", [0, 1, 2]], ["java/lang/String.<init>([BIIL", [0, 1, 2]], ["java/lang/StringFactory.newStringFromUtf8Bytes", [0, 1, 2]],
-  ["java/net/SocketInputStream.socketRead0", [1, 2, 3]], ["java/net/SocketOutputStream.socketWrite0", [1, 2, 3]],
-  ["android/os/Parcel.nativeWriteByteArray", [1, 2, 3]], ["android/os/Parcel.nativeWriteBlob", [1, 2, 3]], ["android/os/Parcel.nativeUnmarshall", [1, 2, 3]],
-  ["android/content/res/AssetManager.nativeAssetRead", [1, 2, 3]],
-  ["android/database/sqlite/SQLiteRawStatement.nativeBindBlob", [2, 3, 4]], ["android/graphics/BitmapFactory.nativeDecodeByteArray", [0, 1, 2]],
-  ["org/apache/harmony/xml/ExpatParser.appendBytes", [1, 2, 3]],
-  ...["EVP_DigestUpdate", "EVP_DigestSignUpdate", "EVP_DigestVerifyUpdate", "EVP_DigestVerifyFinal", "HMAC_Update", "CMAC_Update", "BIO_write"].map((n): [string, [number, number, number]] => [`com/android/org/conscrypt/NativeCrypto.${n}`, [1, 2, 3]]),
-  ["com/android/org/conscrypt/NativeCrypto.EVP_CipherUpdate", [3, 4, 5]],
-];
-const rangesOf = (m: MethodInfo): Map<number, [number, number]> => {
-  const id = m.cls + "." + m.key, out = new Map<number, [number, number]>(), shift = m.isStatic || m.isCtor ? 0 : 1;
-  for (const [prefix, ...triples] of RANGES) if (id.startsWith(prefix)) for (const [a, o, l] of triples) out.set(a + shift, [o + shift, l + shift]);
+/** the (offset, length) positions of each array parameter `impl` touches only in that range (NativeImpl.ranges), by position in the import's Java
+ *  parameters (receiver first). The array is copied for that range alone. */
+const rangesOf = (m: MethodInfo, impl: NativeImpl): Map<number, [number, number]> => {
+  const out = new Map<number, [number, number]>(), shift = m.isStatic || m.isCtor ? 0 : 1;
+  for (const [a, o, l] of impl.ranges ?? []) out.set(a + shift, [o + shift, l + shift]);
   return out;
 };
 
@@ -81,7 +61,7 @@ interface Plan {
   always: boolean;
   /** whether a Promise it answers only says to call it again once settled (`retries`) */
   retry: boolean;
-  /** whether it takes and answers Java values as they are (HostFn.javaValues): its references are all opaque */
+  /** whether it takes and answers Java values as they are (NativeImpl.raw): its references are all opaque */
   raw: boolean;
   /** the class whose statics a `static ()V` native fills in, which the Bridge copies into the Wasm class */
   initializes: string | null;
@@ -122,16 +102,17 @@ export class Natives implements NativeBinder {
     // a String is not an object: bytecode that reads its representation (count, hash) is replaced by the production methods
     if (m.codeOff && !ctor && !override && (m.cls !== STRING_CLASS || !overridden(m))) { this.plans.set(id, p = "bytecode"); this.byMethod.set(m, p); return p; }
     // a native with no implementation yet (a JNI library binds its natives when it is loaded) finds one when it is called
-    const cls = specClass(m.cls), fn = this.source?.find(cls, m.key, m.isStatic, m.codeOff !== 0) ?? (!m.codeOff && m.flags & ACC.NATIVE ? this.source?.late?.(cls, m.key) : undefined);
-    const raw = !!fn?.javaValues, opaque = (d: string) => (raw && isRef(d) ? OBJECT : d);
+    const cls = specClass(m.cls), impl = this.source?.find(cls, m.key, m.isStatic, m.codeOff !== 0) ?? (!m.codeOff && m.flags & ACC.NATIVE ? this.source?.late?.(cls, m.key) : undefined);
+    const raw = !!impl?.raw, opaque = (d: string) => (raw && isRef(d) ? OBJECT : d);
     const args = (recv ? [m.cls === STRING_CLASS ? STRING : `L${m.cls};`, ...m.params] : m.params).map(opaque), params: VT[] = [];
-    p = !fn ? "unregistered" : "";
+    p = !impl ? "unregistered" : "";
     for (const d of p ? [] : args) {
       const t = abi(d);
       if (t !== undefined) params.push(t); else params.push(T.i32, T.i32);
     }
     const rd = opaque(ctor ? STRING : m.ret), ret = rd === "V" ? null : abi(rd) ?? null, retArray = isPrimArray(rd) ? rd : null;
-    this.plans.set(id, p ||= { id, fn: fn!, recv, suspends: !!fn && mayWait(fn), always: !!fn && waitsAlways(fn), retry: !!fn && isRetrying(fn), raw, initializes: !raw && m.isStatic && !m.params.length && m.ret === "V" ? m.cls : null, params, ret: retArray ? T.i32 : ret, args, ranges: rangesOf(m), retArray, retString: rd === STRING, retRef: !raw && isRef(rd) && rd !== STRING && !retArray ? rd : null });
+    p ||= { id, fn: impl!.fn, recv, suspends: impl!.wait === "maybe" || impl!.wait === "always", always: impl!.wait === "always", retry: impl!.wait === "retry", raw, initializes: !raw && m.isStatic && !m.params.length && m.ret === "V" ? m.cls : null, params, ret: retArray ? T.i32 : ret, args, ranges: rangesOf(m, impl!), retArray, retString: rd === STRING, retRef: !raw && isRef(rd) && rd !== STRING && !retArray ? rd : null };
+    this.plans.set(id, p);
     this.byMethod.set(m, p);
     return p;
   }
@@ -242,7 +223,7 @@ export class Natives implements NativeBinder {
     if (landed >= 0) c.lget(landed).call(cx.nativeImports.get("land:check")!);
   }
   /** copies array parameter `i` of class `d` into a fresh scratch region, leaving its (pointer, length), or (0, -1) for null; only the
-   *  elements [from, from + count) are copied when the native's contract names a range inside the array (RANGES), all of them otherwise */
+   *  elements [from, from + count) are copied when the native's contract names a range inside the array (NativeImpl.ranges), all of them otherwise */
   private copyIn(cx: Compiler, c: Code, i: number, d: string, sp: number, range: [number, number] | undefined, before: { i: number; data: number; ptr: number; len: number; ek: ElemKind; ranged: boolean }[]) {
     const ek = elemKindOf(d), data = c.newLocal({ ht: cx.tData[ek], nullable: true }), ptr = c.newLocal(T.i32), len = c.newLocal(T.i32), from = c.newLocal(T.i32), count = c.newLocal(T.i32), alias = c.newLocal(T.i32);
     // an array passed twice is one region: two copies would each be written back, the later over the first's changes

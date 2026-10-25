@@ -60,8 +60,7 @@ pnpm ts scripts/perfsum.ts tests/e2e/actual <baseline.json>
   (`scripts/preload.ts`) and the Vite config build them, and tests use ReleaseSafe.
 - `pnpm lat` gates tap latency (≤ 150 ms, pointerup to the answering frame); `--warm`
   repeats each scenario with the code a first launch persisted. `pnpm conform <suite>`
-  compares a conformance suite with its baseline in `tests/conformance/`; `--bytecode <prefixes>`
-  measures a provenance cut. `pnpm gen-framework` (reference AVD booted) refreshes the
+  compares a conformance suite with its baseline in `tests/conformance/`. `pnpm gen-framework` (reference AVD booted) refreshes the
   platform class path, framework-res, ICU/tz data and the device overlays' values.
 - Smoke-compile affected APKs (`smoke <apk>` is the Wasm sweep; `wasm all` sweeps FitNotes); require no unexplained failures or
   explicitly report a reproduced baseline failure. Use `fwtest [prefix ...]` for real framework delegate coverage.
@@ -94,8 +93,8 @@ pnpm ts scripts/perfsum.ts tests/e2e/actual <baseline.json>
   Re-entrant callbacks can suspend; do not infer synchrony from one observed fast path.
   Collection views stay live. Resolve CharSequence with `csText`, not `String(javaObject)`.
 - Resources drive widget defaults, themes and geometry (`src/shell/config.ts`). AOSP bytecode
-  needs its paired jar/resources from the same build, not relinked substitutes. Provenance lives
-  in `src/jvm/provenance.ts`. Preserve the software draw path when adding rendering capabilities.
+  needs its paired jar/resources from the same build, not relinked substitutes. The classes a TS
+  spec may stand in for are `TS_SPECS` in `src/jvm/provenance.ts`. Preserve the software draw path when adding rendering capabilities.
 - Preserve measure/layout invalidation, virtual view entry points and frame/lifecycle ordering.
   Back reaches the topmost window. Use shared text metrics; report draw failures and recover
   the frame loop. Detailed widget failure cases are in the history.
@@ -122,5 +121,3 @@ pnpm ts scripts/perfsum.ts tests/e2e/actual <baseline.json>
 The browser exposes `wd` from `src/shell/harness.ts`; missing APIs are `wd.rt.missing`.
 For suspected JIT faults, compare `?jit=0`, then narrow with `__wdJit` ranges or
 `core.jit_fallback(lo, hi)`. Combine reproduction, tier comparison and source inspection.
-A framework provenance cut uses
-`WEBDROID_BYTECODE='android/graphics/Paint,android/graphics/Canvas'`.

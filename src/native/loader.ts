@@ -5,7 +5,7 @@ import { kernelInit } from "./syscall.ts";
 import { dlInit, loadModule, modulePath, modules, resolveGlobalOrNull } from "./dl.ts";
 import type { Module } from "./elf.ts";
 import { jniInit, javaVM, pushFrame, popFrame, resolveByExport } from "./jni.ts";
-import { vm } from "./jnivm.ts";
+import { java } from "../jvm/javahost.ts";
 import { gles1Init } from "./gles1.ts";
 import { gles3Init } from "./gles3.ts";
 import { eglInit } from "./egl.ts";
@@ -86,7 +86,7 @@ export async function loadNativeLib(name: string, bytes: Uint8Array, abi: string
     const onload = mod.exports.get("JNI_OnLoad");
     if (!onload) return;
     const previousClass = cpu.nativeClass;
-    cpu.nativeClass = caller === null ? null : vm.classOf(caller);
+    cpu.nativeClass = caller === null ? null : java.jni.classOf(caller);
     pushFrame(cpu);
     try { yield cpu.call(onload, [javaVM.addr, 0]); }
     finally { popFrame(cpu); cpu.nativeClass = previousClass; }

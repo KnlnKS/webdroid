@@ -6,6 +6,7 @@ import type { Numbering } from "../link/numbers.ts";
 import { compileBytes } from "../link/module.ts";
 import type { DexFile } from "../../jvm/dex.ts";
 import { COMPILED_CODE_DIR } from "../../shell/hostfs.ts";
+import { decodeJson } from "./aotstore.ts";
 
 /** where the files live; paths are "<key>/<file>" and "meta.json" */
 export interface FileBackend {
@@ -24,7 +25,7 @@ export class Persist {
   constructor(fs: FileBackend, limits = LIMITS) { this.fs = fs; this.limits = limits; }
   private async meta(): Promise<Meta> {
     const raw = await this.fs.read("meta.json");
-    try { return raw ? JSON.parse(new TextDecoder().decode(raw)) as Meta : { clock: 0, entries: {} }; } catch { return { clock: 0, entries: {} }; }
+    try { return raw ? decodeJson<Meta>(raw) : { clock: 0, entries: {} }; } catch { return { clock: 0, entries: {} }; }
   }
   private saveMeta(meta: Meta): Promise<void> { return this.fs.write("meta.json", new TextEncoder().encode(JSON.stringify(meta))); }
 
@@ -65,7 +66,7 @@ export class Persist {
   /** what a process numbered before its app's code arrived, under platform build `platform` (boot.ts): a small file outside the bounded entries */
   async prefix(platform: string): Promise<Numbering | undefined> {
     const raw = await this.fs.read(`prefix-${platform}.json`).catch(() => undefined);
-    try { return raw && JSON.parse(new TextDecoder().decode(raw)) as Numbering; } catch { return undefined; }
+    try { return raw && decodeJson<Numbering>(raw); } catch { return undefined; }
   }
   savePrefix(platform: string, n: Numbering): Promise<void> { return this.fs.write(`prefix-${platform}.json`, new TextEncoder().encode(JSON.stringify(n))); }
   private async evict(meta: Meta, key: string): Promise<void> {
@@ -93,7 +94,7 @@ export class SavedBuild implements AotStore {
     if (!raw) return undefined;
     let build: SavedBuild;
     try {
-      const index = JSON.parse(new TextDecoder().decode(raw)) as AppIndex;
+      const index = decodeJson<AppIndex>(raw);
       // a build made before builds had ids is made again
       if (index.version !== APP_VERSION || !index.id) return undefined;
       build = new SavedBuild(index);
@@ -120,7 +121,7 @@ export class LaunchRecord {
   }
   static async load(persist: Persist | undefined, appKey: string): Promise<LaunchRecord> {
     const key = appKey + "-launch", saved = await persist?.load(key).catch(() => undefined), files = saved?.get("files.json"), ran = saved?.get("ran.bin");
-    return new LaunchRecord(persist, key, files ? JSON.parse(new TextDecoder().decode(files)) : [], ran && new Int32Array(ran.buffer, ran.byteOffset, ran.byteLength >> 2));
+    return new LaunchRecord(persist, key, files ? decodeJson<string[]>(files) : [], ran && new Int32Array(ran.buffer, ran.byteOffset, ran.byteLength >> 2));
   }
   /** the slots launches ran of build `id`, if they were recorded under it */
   ran(id: number): Int32Array | undefined { return id === this.build ? this.slots : undefined; }

@@ -84,15 +84,12 @@ export function readRemainingBytes(b: JBuffer, n?: number): Uint8Array | Promise
   const scale = 2 ** elementShift(b), remaining = (limit(b) - position(b)) * scale;
   return readBufferBytes(b,position(b) * scale,n === undefined ? remaining : Math.min(n,remaining));
 }
-/** Validate a destination before an operation starts, including its current limit. */
-export function checkedRemainingOffset(b: JBuffer, n: number): number {
-  const scale = 2 ** elementShift(b), at = position(b) * scale;
-  if (n > (limit(b) - position(b)) * scale) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", "buffer limit exceeded");
-  checkedByteLength(b,at,n);
-  return at;
-}
+/** writes `bytes` at the position, checked against the limit before anything is written */
 export function writeRemainingBytes(b: JBuffer, bytes: Uint8Array): void | Promise<void> {
-  return writeBufferBytes(b,bytes,checkedRemainingOffset(b,bytes.length));
+  const scale = 2 ** elementShift(b), at = position(b) * scale;
+  if (bytes.length > (limit(b) - position(b)) * scale) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", "buffer limit exceeded");
+  checkedByteLength(b,at,bytes.length);
+  return writeBufferBytes(b,bytes,at);
 }
 /** GetDirectBufferAddress: 0 for a heap buffer or a host array; an external mapping moves into guest memory */
 export function directAddress(b: JBuffer): number | bigint | Promise<number | bigint> {

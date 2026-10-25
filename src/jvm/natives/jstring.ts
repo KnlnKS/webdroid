@@ -1,37 +1,36 @@
 // java.lang.String's natives and constructors, and the regex methods whose bytecode builds a Pattern and a Matcher each call (measured tens of times slower):
 // these, called with the string as `this`, replace their bytecode. charAt and substring answer their Wasm intrinsics' out-of-range calls.
 
-import { rt } from "../runtime.ts";
+import { rt, ranged } from "../runtime.ts";
 import { charsToString } from "../abi.ts";
 import { decodeString } from "../charset.ts";
 import { csText } from "./jchars.ts";
 import { stringMatches, stringReplace } from "./jregex.ts";
 
-/** String's methods implemented here, by `name(desc)` */
-export const stringMethods = new Map<string, (this: string, ...a: any[]) => unknown>();
-const sm = (sig: string, fn: (this: string, ...a: any[]) => unknown) => {
-  if (stringMethods.has(sig)) throw new Error(`String.${sig} is registered twice`);
-  stringMethods.set(sig, fn);
-};
 function sioobe(i: number): never {
   throw rt.mkThrowable("java/lang/StringIndexOutOfBoundsException", "index " + i);
 }
 export const isLead = (c: number) => c >= 0xd800 && c <= 0xdbff, isTrail = (c: number) => c >= 0xdc00 && c <= 0xdfff;
-sm("charAt(I)C", function (i: number) {
-  if (i >>> 0 >= this.length) sioobe(i);
-  return this.charCodeAt(i);
+rt.registerJnis("java/lang/String", {
+  "charAt(I)C": function (this: string, i: number) {
+    if (i >>> 0 >= this.length) sioobe(i);
+    return this.charCodeAt(i);
+  },
+  "substring(I)Ljava/lang/String;": function (this: string, i: number) {
+    if (i < 0 || i > this.length) sioobe(i);
+    return this.slice(i);
+  },
+  "substring(II)Ljava/lang/String;": function (this: string, a: number, b: number) {
+    if (a < 0 || b > this.length || a > b) sioobe(a);
+    return this.slice(a, b);
+  },
+  "doRepeat(I)Ljava/lang/String;": function (this: string, n: number) { return this.repeat(n); },
+  // what replace(char, char) calls once it has found the old char
+  "doReplace(CC)Ljava/lang/String;": function (this: string, a: number, b: number) { return this.replaceAll(String.fromCharCode(a), String.fromCharCode(b)); },
+  "matches(Ljava/lang/String;)Z": function (this: string, p: string) { return stringMatches(this, p); },
+  "replaceAll(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": function (this: string, p: string, r: string) { return stringReplace(this, p, r, true); },
+  "replaceFirst(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": function (this: string, p: string, r: string) { return stringReplace(this, p, r, false); },
 });
-sm("substring(I)Ljava/lang/String;", function (i: number) {
-  if (i < 0 || i > this.length) sioobe(i);
-  return this.slice(i);
-});
-sm("substring(II)Ljava/lang/String;", function (a: number, b: number) {
-  if (a < 0 || b > this.length || a > b) sioobe(a);
-  return this.slice(a, b);
-});
-sm("doRepeat(I)Ljava/lang/String;", function (n: number) { return this.repeat(n); });
-// what replace(char, char) calls once it has found the old char
-sm("doReplace(CC)Ljava/lang/String;", function (a: number, b: number) { return this.replaceAll(String.fromCharCode(a), String.fromCharCode(b)); });
 // ---------- String's constructors, by "<init>" key: what a compiled String factory falls back to (compiler/strings.ts), and JNI's NewObject
 /** String's checkBoundsOffCount over a byte array: the offset */
 function byteRange(bytes: Int8Array, off: number, count: number): number {
@@ -53,7 +52,7 @@ function hibyteRange(bytes: Int8Array | null, high: number, off: number, n: numb
   for (let i = 0; i < n; i++) chars[i] = hi | (bytes[off + i] & 255);
   return charsToString(chars, 0, n);
 }
-const utf8Range = (bytes: Int8Array, off: number, n: number) => decodeString(bytes, "UTF-8", byteRange(bytes, off, n), n);
+const utf8Range = ranged((bytes: Int8Array, off: number, n: number) => decodeString(bytes, "UTF-8", byteRange(bytes, off, n), n), [0, 1, 2]);
 /** a builder's text: StringBuilder and StringBuffer run from bytecode */
 const builderText = (sb: unknown) => csText(sb ?? rt.npe());
 const constructors: Record<string, (...a: any[]) => unknown> = {
@@ -76,8 +75,8 @@ const constructors: Record<string, (...a: any[]) => unknown> = {
   "([BII)V": utf8Range,
   "([BLjava/lang/String;)V": (bytes: Int8Array, cs: string) => decodeString(bytes, cs),
   "([BLjava/nio/charset/Charset;)V": (bytes: Int8Array, cs: object) => decodeString(bytes, cs),
-  "([BIILjava/lang/String;)V": (bytes: Int8Array, off: number, n: number, cs: string) => decodeString(bytes, cs, byteRange(bytes, off, n), n),
-  "([BIILjava/nio/charset/Charset;)V": (bytes: Int8Array, off: number, n: number, cs: object) => decodeString(bytes, cs, byteRange(bytes, off, n), n),
+  "([BIILjava/lang/String;)V": ranged((bytes: Int8Array, off: number, n: number, cs: string) => decodeString(bytes, cs, byteRange(bytes, off, n), n), [0, 1, 2]),
+  "([BIILjava/nio/charset/Charset;)V": ranged((bytes: Int8Array, off: number, n: number, cs: object) => decodeString(bytes, cs, byteRange(bytes, off, n), n), [0, 1, 2]),
   // code points, not chars: each element is a whole Unicode scalar
   "([III)V": (cp: Int32Array, off: number, n: number) => {
     let out = "";
@@ -85,7 +84,7 @@ const constructors: Record<string, (...a: any[]) => unknown> = {
     return out;
   },
 };
-for (const desc in constructors) sm("<init>" + desc, constructors[desc]);
+rt.registerJnis("java/lang/String", Object.fromEntries(Object.entries(constructors).map(([desc, fn]) => ["<init>" + desc, fn])));
 // ART's string allocations, which String's constructors become
 rt.registerJnis("java/lang/StringFactory", {
   "newStringFromBytes([BIII)Ljava/lang/String;": hibyteRange,
@@ -98,6 +97,3 @@ rt.registerJnis("java/lang/StringFactory", {
     return charsToString(chars, 0, n);
   },
 });
-sm("matches(Ljava/lang/String;)Z", function (p: string) { return stringMatches(this as string, p); });
-sm("replaceAll(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", function (p: string, r: string) { return stringReplace(this as string, p, r, true); });
-sm("replaceFirst(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", function (p: string, r: string) { return stringReplace(this as string, p, r, false); });
