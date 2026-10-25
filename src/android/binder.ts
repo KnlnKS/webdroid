@@ -3,7 +3,7 @@
 import { awaited, JObj, rt, driven, waits, type Gen, type NativeSpec } from "../jvm/runtime.ts";
 import { callOn, curThread, JThread, scall, vcall, after, linkInit, linkClass, newObj, iof, classNameOf } from "../jvm/natives/jentry.ts";
 import { logUncaught, detached, type Escape } from "../jvm/natives/jthrowable.ts";
-import { exitProcess, processExited } from "../process-exit.ts";
+import { abortProcess, processExited } from "../process-exit.ts";
 import { newArrayList } from "../jvm/natives/jcoll.ts";
 import { SYSTEM_SERVER_PID, ashmemFd, ashmemProt, fdOverBytes, fdContents } from "./os.ts";
 import { O_ACCMODE } from "../native/abi.ts";
@@ -242,7 +242,6 @@ export async function withParcelScope<T>(work: () => T | Promise<T>): Promise<T>
   finally { state.parcelScope = undefined; scope.close(); }
 }
 export const callingIdentity = (): Caller => transactionCaller() ?? { pid: procIdentity.pid, uid: procIdentity.uid };
-const SIGABRT = 6;
 /** an exception escaping a stub's method, as JavaBBinder's report_exception takes it: logged,
  *  except that an Error is fatal (LOG_ALWAYS_FATAL aborts the process) */
 function reportException(e: unknown, message: string): void {
@@ -250,8 +249,7 @@ function reportException(e: unknown, message: string): void {
   console.error(`[Binder] ${message}`);
   logUncaught(je);
   if (!iof(je, "java/lang/Error") || processExited()) return;
-  console.error(`Fatal signal ${SIGABRT} (SIGABRT), pid ${procIdentity.pid}\nAbort message: '${message}'`);
-  exitProcess({ signal: SIGABRT });
+  abortProcess(procIdentity.pid, message);
 }
 const UNCAUGHT_REMOTE = "*** Uncaught remote exception!  (Exceptions are not yet supported across processes.)";
 /** the escape of a call into a local stub that no caller waits on (a oneway transaction, a death

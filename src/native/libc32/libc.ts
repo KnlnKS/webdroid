@@ -27,6 +27,7 @@ import { device } from "../../shell/config.ts";
 import { sysconf } from "../../shell/procfs.ts";
 import { wallMillis } from "../../guest-clock.ts";
 import { processEnv } from "../../shell/environment.ts";
+import { FDSAN_LIBC32 } from "../fdsan.ts";
 /** the C locale's month and weekday names (strftime, asctime) */
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -476,7 +477,7 @@ export function libcInit(): void {
     mem.memset(d, value, n);
   };
   const libm = libmLibc();
-  hostLib("libc.so", { ...asWrappers(KERNEL_SYSCALLS), ...M, ...stdioLibc(), ...PTHREAD_LIBC, ...libm, ...localeLibc(), ...SIGNAL_LIBC, ...procLibc(), ...netLibc() });
+  hostLib("libc.so", { ...asWrappers(KERNEL_SYSCALLS), ...M, ...stdioLibc(), ...PTHREAD_LIBC, ...libm, ...localeLibc(), ...SIGNAL_LIBC, ...procLibc(), ...netLibc(), ...FDSAN_LIBC32 });
   hostLib("libm.so", libm);
   hostLib("libz.so", zlibLibc());
   hostLib("liblog.so", { __android_log_write: M.__android_log_write, __android_log_print: M.__android_log_print, __android_log_vprint: M.__android_log_vprint, __android_log_assert: M.__android_log_assert });

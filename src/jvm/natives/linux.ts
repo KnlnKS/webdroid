@@ -17,8 +17,8 @@ import { E, ERRSTR, POLLIN, POLLERR, strerror } from "../../native/abi.ts";
 import { mmap, munmap } from "../../native/vm.ts";
 import { processOpenFd } from "../../native/process-fd.ts";
 import { readlinkAt, statAt, statFd, storageStat } from "../../native/fs.ts";
-import { openFd, dupFd, dup2Fd, dropFile, readFd, preadFd, writeFd, pwriteFd, seekFd, truncateFd, syncFd, fcntlFd, ioctlIntFd,
-  fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag, fdsanTagType, fdsanTagValue } from "../../native/fd.ts";
+import { openFd, dupFd, dup2Fd, dropFile, readFd, preadFd, writeFd, pwriteFd, seekFd, truncateFd, syncFd, fcntlFd, ioctlIntFd, fdsanOwnerTag } from "../../native/fd.ts";
+import { fdsanClose, fdsanExchangeOwnerTag, fdsanTagType, fdsanTagValue } from "../../native/fdsan.ts";
 import { pipeFds } from "../../native/pipe.ts";
 import type { Stat } from "../../native/kernel.ts";
 import { pollEntries, type PollEntry } from "../../native/poll.ts";
@@ -74,8 +74,9 @@ const files: Record<string, (...args: never[]) => unknown> = {
     [`ioctlInt(${FD}I)I`]: (d: JObj | null, request: number) => after(ioctlIntFd(fdInt(d), request), n => ioResult("ioctl", n)),
     [`fcntlInt(${FD}II)I`]: (d: JObj | null, cmd: number, arg: number) => after(fcntlFd(fdInt(d), cmd, arg), n => ioResult("fcntl", n)),
     [`fcntlVoid(${FD}I)I`]: (d: JObj | null, cmd: number) => after(fcntlFd(fdInt(d), cmd, 0), n => ioResult("fcntl", n)),
-    [`android_fdsan_exchange_owner_tag(${FD}JJ)V`]: (d: JObj | null, expected: bigint, tag: bigint) =>
-      fdsanExchangeOwnerTag(fdInt(d), expected, tag),
+    // a fatal violation never returns
+    [`android_fdsan_exchange_owner_tag(${FD}JJ)V`]: waits((d: JObj | null, expected: bigint, tag: bigint) =>
+      fdsanExchangeOwnerTag(fdInt(d), expected, tag)),
     [`android_fdsan_get_owner_tag(${FD})J`]: (d: JObj | null) => fdsanOwnerTag(fdInt(d)),
     "android_fdsan_get_tag_type(J)Ljava/lang/String;": (tag: bigint) => fdsanTagType(tag),
     "android_fdsan_get_tag_value(J)J": (tag: bigint) => fdsanTagValue(tag),

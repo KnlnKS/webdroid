@@ -1,4 +1,4 @@
-import { expect, test } from "vite-plus/test";
+import { expect, test, vi } from "vite-plus/test";
 import { JThread } from "../jvm/natives/jentry.ts";
 import { Cpu, setA64 } from "./cpu.ts";
 import { defineHost, lookupHost } from "./host.ts";
@@ -7,7 +7,8 @@ import { kernelInit, rawSyscall } from "./syscall.ts";
 import { mem } from "./mem.ts";
 import { E } from "./abi.ts";
 import { fdFile, localOpen } from "./fs.ts";
-import { closeFd } from "./fd.ts";
+import { closeFd, openFd } from "./fd.ts";
+import { fdsanExchangeOwnerTag } from "./fdsan.ts";
 import { vfs } from "../shell/vfs.ts";
 import { kernel } from "./calls.testkit.ts";
 import { procIdentity } from "../shell/procfs.ts";
@@ -100,6 +101,20 @@ test("raw ARM32 calls take the kernel's arguments, a svc's fifth on in r4", asyn
     expect(await cpu.call(code, [fd, 1, 0, 0])).toBe(-E.NOTSUP);
     expect(await cpu.call(syscall, [124])).toBe(-E.NOSYS);                                // adjtimex
   } finally { closeFd(fd); mem.free(path); cpu.dispose(); }
+});
+
+test("the ARM32 libc's close checks the owner tag libcore gave the descriptor", async () => {
+  setA64(false); kernelInit(); libcInit();
+  const cpu = new Cpu(new JThread(), "fdsan-test"), libc = (name: string) => lookupHost(name, "libc.so")!;
+  vfs.write("/fdsan-test", new Uint8Array(0));
+  const fd = localOpen("/fdsan-test", 2), error = vi.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    expect(await cpu.call(libc("android_fdsan_set_error_level"), [2])).toBe(3);         // WARN_ALWAYS, from FATAL
+    fdsanExchangeOwnerTag(fd, 0n, 5n << 56n | 0x1234n);                                // a FileInputStream's
+    expect(await cpu.call(libc("close"), [fd])).toBe(0);
+    expect(openFd(fd)).toBeUndefined();
+    expect(error.mock.calls.flat().join("\n")).toContain(`attempted to close file descriptor ${fd}, expected to be unowned, actually owned by FileInputStream 0x1234`);
+  } finally { await cpu.call(libc("android_fdsan_set_error_level"), [3]); error.mockRestore(); cpu.dispose(); }
 });
 
 test("ARM64 syncfs and ioctl tell an open descriptor from an invalid one", async () => {

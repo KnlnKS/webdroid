@@ -12,6 +12,12 @@ export const processExited = (): boolean => status !== null;
 export const never = (): Promise<never> => new Promise<never>(() => {});
 /** run `f` once when the process ends (the broker's death notice, the shell's display) */
 export function onProcessExit(f: (status: ExitStatus) => void): void { listeners.push(f); }
+/** abort(3) where no guest thread takes the SIGABRT: logged as debuggerd heads its report, and the process dies of it */
+export function abortProcess(pid: number, message: string): void {
+  if (status) return;
+  console.error(`Fatal signal 6 (SIGABRT), pid ${pid}\nAbort message: '${message}'`);
+  exitProcess({ signal: 6 });
+}
 export function exitProcess(how: ExitStatus): void {
   if (status) return;
   status = how;

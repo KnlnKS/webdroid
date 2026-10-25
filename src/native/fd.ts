@@ -5,7 +5,6 @@
 // another realm owns (process-fd.ts). Each call answers -errno on failure.
 
 import { E, O_ACCMODE, O_APPEND, O_NONBLOCK, O_RDONLY, O_WRONLY, POLLIN, POLLNVAL, POLLOUT, S_IFMT, S_IFSOCK } from "./abi.ts";
-import { logLine } from "./kernel.ts";
 import { mem, anchor, wrote } from "./mem.ts";
 import { procIdentity } from "../shell/procfs.ts";
 import { concat } from "../jvm/abi.ts";
@@ -284,43 +283,7 @@ export function watchFd(fd: number, wake: () => void): () => void {
   return f ? f.ops.watch(f, wake) : NOOP;
 }
 
-// bionic's fdsan: a descriptor's owner tag, which an ownership exchange or a tagged close checks.
-// The first violation is reported and every operation goes on, as fdsan's warn-once level does.
+/** each descriptor's fdsan owner tag (fdsan.ts), which closing it clears */
 const ownerTags = new Map<number, bigint>();
-let fdsanReported = false;
-const TAG_TYPES: Record<number, string> = {
-  1: "FILE*", 2: "DIR*", 3: "unique_fd", 4: "sqlite", 5: "FileInputStream", 6: "FileOutputStream", 7: "RandomAccessFile",
-  8: "ParcelFileDescriptor", 9: "ArtFdFile", 10: "DatagramSocketImpl", 11: "SocketImpl", 12: "ZipArchive", 13: "native_handle_t", 14: "Parcel",
-};
-export function fdsanTagType(tag: bigint): string {
-  const bits = BigInt.asUintN(64, tag), type = Number(bits >> 56n);
-  if (type === 255) return bits >> 48n === 0xffffn ? "native object of unknown type" : "Java object of unknown type";
-  return TAG_TYPES[type] ?? "native object of unknown type";
-}
-/** the owner a tag names: its low 56 bits, sign-extended */
-export const fdsanTagValue = (tag: bigint): bigint => BigInt.asIntN(56, tag);
-const owner = (tag: bigint) => tag ? `owned by ${fdsanTagType(tag)} 0x${BigInt.asUintN(64, fdsanTagValue(tag)).toString(16)}` : "unowned";
-function fdsanError(message: string): void {
-  if (fdsanReported) return;
-  fdsanReported = true;
-  logLine(6, "fdsan", message);
-}
 export const fdsanOwnerTag = (fd: number): bigint => ownerTags.get(fd) ?? 0n;
-export function fdsanExchangeOwnerTag(fd: number, expected: bigint, tag: bigint): void {
-  if (fd < 0) return;
-  const actual = fdsanOwnerTag(fd);
-  if (actual !== expected) {
-    fdsanError(`failed to exchange ownership of file descriptor: fd ${fd} is ${owner(actual)}, was expected to be ${owner(expected)}`);
-  } else if (tag) ownerTags.set(fd, tag);
-  else ownerTags.delete(fd);
-}
-/** android_fdsan_close_with_tag */
-export function fdsanClose(fd: number, expected: bigint): number | Promise<number> {
-  const actual = fdsanOwnerTag(fd);
-  if (fd >= 0 && actual !== expected) {
-    fdsanError(`attempted to close file descriptor ${fd}, expected to be ${owner(expected)}, actually ${owner(actual)}`);
-  }
-  const result = closeFd(fd);
-  if (expected && result === -E.BADF) fdsanError(`double-close of file descriptor ${fd} detected`);
-  return result;
-}
+export function setFdsanOwnerTag(fd: number, tag: bigint): void { if (tag) ownerTags.set(fd, tag); else ownerTags.delete(fd); }

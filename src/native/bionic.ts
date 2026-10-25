@@ -10,6 +10,7 @@ import { defineHost, hostLib, ldp, stp, SERVED, type HostFn } from "./host.ts";
 import { interposed, linkerHooks, loadModule, prefetchModules, runInit, libdl as dl, modules } from "./dl.ts";
 import { setThreadHooks, type Cpu } from "./cpu.ts";
 import { setAbortMessage } from "./crash.ts";
+import { FDSAN_TABLE } from "./fdsan.ts";
 import { E, RET_SENTINEL, TRAMP_BASE, TRAMP_END } from "./abi.ts";
 import { fail } from "./kernel.ts";
 import { auxv, memcpyChk } from "./proc.ts";
@@ -56,6 +57,8 @@ const staticModules: Module[] = [];
  *  give the calling thread its bionic identity, then run each library's initializers in order. */
 export async function bootBionic(cpu: Cpu): Promise<void> {
   for (const name of INTRINSICS) interposed.set(name, defineHost(name, name === "__memcpy_chk" ? memcpyChk : SERVED));
+  // one owner tag per descriptor for libcore and native code alike: the descriptor table's
+  for (const [name, fn] of Object.entries(FDSAN_TABLE)) interposed.set(name, defineHost(name, fn));
   const heap = heapDispatch();
   hostLib("ld-android.so", loaderExports());
   linkerHooks.hwcap = BigInt(auxv().find(([type]) => type === 16)![1]);
