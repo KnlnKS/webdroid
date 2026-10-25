@@ -10,6 +10,7 @@ import { entryCases, entryDex } from "./entrycases.ts";
 import { checker } from "./tools.ts";
 import { classNameOf, newObj, scall, staticField, vcall } from "../../src/jvm/natives/jentry.ts";
 import { FileDescriptors, type DescriptorCalls } from "../../src/shell/file-descriptors.ts";
+import { brokerMethods } from "../../src/shell/broker-contract.ts";
 import { canonicalFilePaths, usePathOwner } from "../../src/shell/file-path.ts";
 import { callProxy, serveCalls } from "../../src/shell/rpc.ts";
 import { writeBufferBytes } from "../../src/jvm/natives/jnio.ts";
@@ -29,7 +30,7 @@ async function inMemoryControl(): Promise<void> {
   padded.set(bytes, 8);
   const heap = await scall("java/nio/ByteBuffer", "wrap", "([BII)Ljava/nio/ByteBuffer;", padded, 8, bytes.length);
   const owner = new FileDescriptors(), ports = new MessageChannel();
-  const stop = serveCalls(ports.port1, owner.session(2001, () => 0)), proxy = callProxy<DescriptorCalls>(ports.port2, ["fileDescriptor"]);
+  const stop = serveCalls(ports.port1, owner.session(2001, () => 0)), proxy = callProxy<DescriptorCalls>(ports.port2, brokerMethods.descriptors);
   let shared, mapped;
   try {
     usePathOwner({ files: canonicalFilePaths(() => 0), descriptors: proxy.endpoint });

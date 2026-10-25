@@ -30,7 +30,6 @@ import { NativeWindow } from "../src/android/cursorwindow.ts";
 import { handle, release } from "../src/android/handles.ts";
 import { callProxy, serveCalls } from "../src/shell/rpc.ts";
 import { usePathOwner } from "../src/shell/file-path.ts";
-import { notConnected } from "../src/jvm/natives/jthrowable.ts";
 import { descriptorTransport } from "../src/native/process-fd.ts";
 import { vfs } from "../src/shell/vfs.ts";
 import { mediaInsert, mediaPath, mediaUpdate } from "../src/android/mediastore.ts";
@@ -595,7 +594,7 @@ test("libcore directory operations await their canonical owner and observe peer 
   const {vfs}=await import("../src/shell/vfs.ts");vfs.mkdir(root);
   let release!:()=>void;
   const gate=new Promise<void>(resolve=>release=resolve);
-  usePathOwner({descriptors:{fileDescriptor:notConnected},files:{fileSetAttributes:async(p,c)=>owner.fileSetAttributes(p,c),fileStat:async p=>owner.fileStat(p),fileList:async p=>owner.fileList(p),
+  usePathOwner({descriptors:{} as BrokerCalls["descriptors"],files:{fileSetAttributes:async(p,c)=>owner.fileSetAttributes(p,c),fileStat:async p=>owner.fileStat(p),fileList:async p=>owner.fileList(p),
     fileRename:async(a,b)=>owner.fileRename(a,b),fileRemove:async p=>owner.fileRemove(p),fileCreate:async p=>owner.fileCreate(p),fileFifo:async p=>owner.fileFifo(p),
     fileAccess:async(p,mode)=>owner.fileAccess(p,mode),fileMkdir:async p=>{await gate;return owner.fileMkdir(p);}}});
   try {

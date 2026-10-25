@@ -35,27 +35,27 @@ const roles: Record<string, () => (data: never) => void> = {
     const steps: Record<number, (intent: ParcelData) => Promise<BinderHandle>> = {
       42: async intent => ({ pid: (await broker.transact({ handle: { pid: 8001, id: 1 }, code: 2, flags: 0, data: intent, ...forged })).handled, id: notices }),
       43: async () => {
-        fd = (await broker.descriptors.fileDescriptor({ kind: "open", path: "/data/data/test.endpoint.two/fd.bin", flags: 2 }) as { token: number }).token;
-        const foreign = await broker.descriptors.fileDescriptor({ kind: "open", path: "/data/data/test.endpoint.one/fd.bin", flags: 2 }) as number;
-        await broker.descriptors.fileDescriptor({ kind: "write", fd, bytes: Uint8Array.of(55), offset: 0 });
+        fd = (await broker.descriptors.open("/data/data/test.endpoint.two/fd.bin",2) as { token: number }).token;
+        const foreign = await broker.descriptors.open("/data/data/test.endpoint.one/fd.bin",2) as number;
+        await broker.descriptors.write(fd,Uint8Array.of(55),0);
         return { pid: fd, id: foreign };
       },
       44: async () => {
-        const reply = await broker.descriptors.fileDescriptor({ kind: "read", fd, length: 1, offset: 0 }) as Uint8Array;
+        const reply = await broker.descriptors.read(fd,1,0) as Uint8Array;
         return { pid: reply[0] ?? -1, id: reply.length };
       },
       45: async () => {
-        const stage = await broker.descriptors.fileDescriptor({ kind: "stage", fd });
+        const stage = await broker.descriptors.stage(fd);
         received = descriptor(await broker.transact({ handle: { pid: 8001, id: 1 }, code: 3, flags: 0,
           data: { bytes: new Uint8Array(0), objects: [[0, { descriptor: stage }]] } }));
-        const read = await broker.descriptors.fileDescriptor({ kind: "read", fd: received, length: 1 }) as Uint8Array;
-        const position = await broker.descriptors.fileDescriptor({ kind: "seek", fd, offset: 0, whence: 1 });
-        await broker.descriptors.fileDescriptor({ kind: "close", fd });
+        const read = await broker.descriptors.read(received,1) as Uint8Array;
+        const position = await broker.descriptors.seek(fd,0,1);
+        await broker.descriptors.close(fd);
         return { pid: read[0], id: position };
       },
       46: async () => {
-        const read = await broker.descriptors.fileDescriptor({ kind: "read", fd: received, length: 1, offset: 0 }) as Uint8Array;
-        await broker.descriptors.fileDescriptor({ kind: "close", fd: received });
+        const read = await broker.descriptors.read(received,1,0) as Uint8Array;
+        await broker.descriptors.close(received);
         return { pid: read[0], id: read.length };
       },
       47: async () => {

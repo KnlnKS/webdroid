@@ -131,11 +131,11 @@ export async function endpointOwnership() {
         if(!right || !("descriptor" in right))throw new Error("missing driver FD right");
         const owner=callProxy<BrokerCalls>(broker.brokerPort(pid),brokerMethods);
         try {
-          const read=await owner.endpoint.descriptors.fileDescriptor({kind:"read",fd:right.descriptor,length:1});
-          await owner.endpoint.descriptors.fileDescriptor({kind:"write",fd:right.descriptor,offset:0,bytes:Uint8Array.of(77)});
-          await owner.endpoint.descriptors.fileDescriptor({kind:"seek",fd:right.descriptor,offset:0,whence:0});
-          const stage=await owner.endpoint.descriptors.fileDescriptor({kind:"stage",fd:right.descriptor});
-          await owner.endpoint.descriptors.fileDescriptor({kind:"close",fd:right.descriptor});
+          const read=await owner.endpoint.descriptors.read(right.descriptor,1);
+          await owner.endpoint.descriptors.write(right.descriptor,Uint8Array.of(77),0);
+          await owner.endpoint.descriptors.seek(right.descriptor,0,0);
+          const stage=await owner.endpoint.descriptors.stage(right.descriptor);
+          await owner.endpoint.descriptors.close(right.descriptor);
           return {handled:(read as Uint8Array)[0],data:{bytes:new Uint8Array(0),objects:[[0,{descriptor:stage}]]}};
         } finally {owner.close();}
       }
@@ -388,11 +388,11 @@ export async function pendingDescriptorRights() {
   const {ask,worker}=brokerWorker(broker,pid);
   try {
     await ask("files.fileMkdir",`/data/data/${pkg}`);
-    const opened=await ask("descriptors.fileDescriptor",{kind:"open",path,flags:0x42}) as number|{token:number};
+    const opened=await ask("descriptors.open",path,0x42) as number|{token:number};
     if(typeof opened==="number")throw new Error("Descriptor open failed: "+opened);
-    const staged=await ask("descriptors.fileDescriptor",{kind:"stage",fd:opened.token}) as number;
+    const staged=await ask("descriptors.stage",opened.token) as number;
     const denied=await ask("pending.create",pkg,"broadcast",0,0,{bytes:new Uint8Array(24),objects:[[0,{descriptor:staged}]]}) as {error?:string};
-    const retired=typeof await ask("descriptors.fileDescriptor",{kind:"stat",fd:staged})==="number";
+    const retired=typeof await ask("descriptors.stat",staged)==="number";
     return {pendingRejected:denied.error==="File descriptors passed in Intent" && retired};
   } finally {
     worker.terminate();broker.fail(pid,"pending rights fixture cleanup",NOT_CRASHED);
