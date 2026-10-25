@@ -1,20 +1,235 @@
-// libcore's socket syscalls (libcore.io.Linux) and the socket streams' natives, over the socket
-// core native code shares (src/native/socket/): a descriptor from either side is the same socket.
-import { awaited, rt, type JObj, getDeclared, setDeclared, driven, waits } from "../jvm/runtime.ts";
-import { vcall, scall, newObj, after, iof } from "../jvm/natives/jentry.ts";
-import { jarray, u8 } from "../jvm/abi.ts";
-import { fdInt, mkFd } from "../jvm/natives/jio.ts";
-import { errno, sys, ioResult, readBytes, writeBytes, FD, type IoBuffer } from "./os.ts";
-import { E, ERRSTR, POLLIN, POLLERR } from "../native/abi.ts";
-import { dup2Fd, dropFile } from "../native/fd.ts";
-import { pollEntries, type PollEntry } from "../native/poll.ts";
-import { SOL_SOCKET, MSG_DONTWAIT, MSG_TRUNC, sunPath, sunPathBytes, unixAddress, type SocketAddress } from "../native/socket/abi.ts";
-import { SO_PEERCRED, SO_RCVTIMEO, SO_SNDTIMEO, SO_BINDTODEVICE, readSocket, socketOf, type Socket, type Received, type Accepted } from "../native/socket/core.ts";
-import { IPPROTO_IP, IP_ADD_MEMBERSHIP, MCAST_JOIN_GROUP } from "../native/socket/inet.ts";
-import { socketCreate, socketPair } from "../native/socket/syscalls.ts";
+// libcore.io.Linux, the syscalls behind android.system.Os and Libcore.os, over the descriptor
+// table native code shares; its socket calls and the socket streams' natives go through the socket
+// core (src/native/socket/), so a descriptor from either side is the same socket.
+import { processEnv } from "../../shell/environment.ts";
+import { appUserName, procIdentity, processTid, sysconf, uname } from "../../shell/procfs.ts";
+import { filePaths } from "../../shell/file-path.ts";
+import { awaited, rt, type JObj, getDeclared, setDeclared, driven, waits, type Gen } from "../runtime.ts";
+import { jarray, u8 } from "../abi.ts";
+import { vcall, scall, newObj, after, iof, curThread, mainThread, type JThread, linkClass } from "./jentry.ts";
+import type { JThrowable } from "./jthrowable.ts";
+import { checkFromIndexSize } from "./jlang.ts";
+import { is64BitProcess } from "./jvmruntime.ts";
+import { fdInt, setFdInt, mkFd, bytesOf } from "./jio.ts";
+import { type JBuffer, isBuffer, readBufferBytes, writeBufferBytes, capacity, elementShift } from "./jnio.ts";
+import { OS_CONSTANTS } from "../../android/os-constants.ts";
+import { E, ERRSTR, POLLIN, POLLERR, strerror } from "../../native/abi.ts";
+import { mmap, munmap } from "../../native/vm.ts";
+import { processOpenFd } from "../../native/process-fd.ts";
+import { readlinkAt, statAt, statFd, storageStat } from "../../native/fs.ts";
+import { openFd, closeFd, dupFd, dup2Fd, dropFile, readFd, preadFd, writeFd, pwriteFd, seekFd, truncateFd, syncFd, fcntlFd, ioctlIntFd,
+  fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag, fdsanTagType, fdsanTagValue } from "../../native/fd.ts";
+import { pipeFds } from "../../native/pipe.ts";
+import type { Stat } from "../../native/kernel.ts";
+import { pollEntries, type PollEntry } from "../../native/poll.ts";
+import { SOL_SOCKET, MSG_DONTWAIT, MSG_TRUNC, sunPath, sunPathBytes, unixAddress, type SocketAddress } from "../../native/socket/abi.ts";
+import { SO_PEERCRED, SO_RCVTIMEO, SO_SNDTIMEO, SO_BINDTODEVICE, readSocket, socketOf, type Socket, type Received, type Accepted } from "../../native/socket/core.ts";
+import { IPPROTO_IP, IP_ADD_MEMBERSHIP, MCAST_JOIN_GROUP } from "../../native/socket/inet.ts";
+import { socketCreate, socketPair } from "../../native/socket/syscalls.ts";
 import {
   AF_UNIX, AF_INET, AF_INET6, NI_NUMERICHOST, NI_NAMEREQD, EAI_NONAME, INTERFACES, hostOf, gaiText, endpointOf, addressText, parseIpv4, parseIpv6, type Endpoint,
-} from "../native/net-address.ts";
+} from "../../native/net-address.ts";
+
+// android.system.Os: the libcore syscall surface over the same descriptor table native code uses
+export const errno = (fn: string, e: number): JThrowable => setDeclared(rt.mkThrowable("android/system/ErrnoException", null), "android/system/ErrnoException", { functionName: fn, errno: e });
+/** `then` once `path` exists in the realm that owns it (an app's private storage lives in the system realm), else `fn`'s ErrnoException */
+const existing = <T>(fn: string, path: string, then: (st: Stat) => T) => after(statAt(path), (st) => { if (typeof st === "number") throw errno(fn, -st); return then(st); });
+/** libcore's StructTimespec for a time in milliseconds */
+const timespec = (ms: number): JObj => setDeclared(rt.make("android/system/StructTimespec"), "android/system/StructTimespec",
+  { tv_sec: BigInt(Math.floor(ms / 1000)), tv_nsec: BigInt(Math.round((ms % 1000) * 1e6)) });
+export const FD = "Ljava/io/FileDescriptor;";
+/** a StructStat as libcore's JNI fills one from stat(2) */
+function statOf(st: Stat): JObj {
+  const seconds = BigInt(Math.floor(st.mtime / 1000)), time = timespec(st.mtime);
+  return setDeclared(rt.make("android/system/StructStat"), "android/system/StructStat", {
+    st_dev: BigInt(st.dev), st_ino: BigInt(st.ino), st_mode: st.mode, st_nlink: BigInt(st.nlink), st_uid: st.uid, st_gid: st.gid,
+    st_size: BigInt(st.size), st_blksize: BigInt(st.blksize), st_blocks: BigInt(st.blocks), st_atime: seconds, st_mtime: seconds, st_ctime: seconds,
+    st_atim: time, st_mtim: time, st_ctim: time,
+  });
+}
+/** a StructStatVfs as statvfs(2) fills it */
+const structStatVfs = () => after(storageStat(), (s) => newObj("android/system/StructStatVfs", "(JJJJJJJJJJJ)V",
+  BigInt(s.bsize), BigInt(s.bsize), BigInt(s.blocks), BigInt(s.bfree), BigInt(s.bfree), BigInt(s.files), BigInt(s.ffree), BigInt(s.ffree), 0n, 0n, BigInt(s.namemax)));
+// libcore.io.Linux: the syscalls behind android.system.Os and Libcore.os, over the descriptor
+// table native code shares
+const files: Record<string, (...args: never[]) => unknown> = {
+    "open(Ljava/lang/String;II)Ljava/io/FileDescriptor;": driven(function* (path: string, flags: number): Gen {
+      if (path === null) rt.npe();
+      const fd = yield* awaited(processOpenFd(path, flags));
+      if (fd < 0) throw errno("open", -fd);
+      return yield* awaited(mkFd(fd));
+    }),
+    [`fstat(${FD})Landroid/system/StructStat;`]: (d: JObj | null) => after(statFd(fdInt(d)), (st) => { if (typeof st === "number") throw errno("fstat", -st); return statOf(st); }),
+    [`readBytes(${FD}Ljava/lang/Object;II)I`]: waits((d: JObj | null, buffer: IoBuffer, offset: number, count: number) =>
+      readBytes("read", buffer, offset, count, (target) => readFd(fdInt(d), target, count))),
+    [`preadBytes(${FD}Ljava/lang/Object;IIJ)I`]: waits((d: JObj | null, buffer: IoBuffer, offset: number, count: number, position: bigint) =>
+      readBytes("pread", buffer, offset, count, (target) => preadFd(fdInt(d), target, count, Number(position)))),
+    [`writeBytes(${FD}Ljava/lang/Object;II)I`]: waits((d: JObj | null, buffer: IoBuffer, offset: number, count: number) =>
+      writeBytes(buffer, offset, count, (bytes) => after(writeFd(fdInt(d), bytes), n => ioResult("write", n)))),
+    [`pwriteBytes(${FD}Ljava/lang/Object;IIJ)I`]: waits((d: JObj | null, buffer: IoBuffer, offset: number, count: number, position: bigint) =>
+      writeBytes(buffer, offset, count, (bytes) => after(pwriteFd(fdInt(d), bytes, Number(position)), n => ioResult("pwrite", n)))),
+    [`ftruncate(${FD}J)V`]: (d: JObj | null, length: bigint) => after(truncateFd(fdInt(d), Number(length)), n => sys("ftruncate", n)),
+    [`fsync(${FD})V`]: (d: JObj | null) => after(syncFd(fdInt(d)), n => sys("fsync", n)),
+    [`fdatasync(${FD})V`]: (d: JObj | null) => after(syncFd(fdInt(d)), n => sys("fdatasync", n)),
+    [`ioctlInt(${FD}I)I`]: (d: JObj | null, request: number) => after(ioctlIntFd(fdInt(d), request), n => ioResult("ioctl", n)),
+    [`fcntlInt(${FD}II)I`]: (d: JObj | null, cmd: number, arg: number) => after(fcntlFd(fdInt(d), cmd, arg), n => ioResult("fcntl", n)),
+    [`fcntlVoid(${FD}I)I`]: (d: JObj | null, cmd: number) => after(fcntlFd(fdInt(d), cmd, 0), n => ioResult("fcntl", n)),
+    [`android_fdsan_exchange_owner_tag(${FD}JJ)V`]: (d: JObj | null, expected: bigint, tag: bigint) =>
+      fdsanExchangeOwnerTag(fdInt(d), expected, tag),
+    [`android_fdsan_get_owner_tag(${FD})J`]: (d: JObj | null) => fdsanOwnerTag(fdInt(d)),
+    "android_fdsan_get_tag_type(J)Ljava/lang/String;": (tag: bigint) => fdsanTagType(tag),
+    "android_fdsan_get_tag_value(J)J": (tag: bigint) => fdsanTagValue(tag),
+    // no descriptor here is a terminal
+    [`isatty(${FD})Z`]: () => 0,
+    "pipe2(I)[Ljava/io/FileDescriptor;": (flags: number) => {
+      const [read, write] = pipeFds(flags);
+      return after(mkFd(read), (r) => after(mkFd(write), (w) => jarray([r, w], FD)));
+    },
+    [`sendfile(${FD}${FD}Landroid/system/Int64Ref;J)J`]: (out: JObj | null, input: JObj | null, offset: JObj | null, count: bigint) => {
+      const start = offset ? Number(getDeclared<bigint>(offset, "android/system/Int64Ref", "value")) : 0;
+      const n = count < 0n ? -1 : Math.min(Number(count), SENDFILE_CHUNK);
+      if (n < 0 || start < 0) throw errno("sendfile", E.INVAL);
+      if (!openFd(fdInt(out))) throw errno("sendfile", E.BADF);
+      const scratch = new Uint8Array(n), from = fdInt(input);
+      return after(offset ? preadFd(from, scratch, n, start) : readFd(from, scratch, n), (read) => {
+        sys("sendfile", read);
+        return after(read ? writeFd(fdInt(out), scratch.subarray(0, read)) : 0, written => {
+          sys("sendfile", written);
+          if (offset) setDeclared(offset, "android/system/Int64Ref", { value: BigInt(start + written) });
+          return BigInt(written);
+        });
+      });
+    },
+    [`lseek(${FD}JI)J`]: driven(function* (d: JObj | null, off: bigint, whence: number): Gen {
+      const r = yield* awaited(seekFd(fdInt(d), Number(off), whence));
+      if (r < 0) throw errno("lseek", -r);
+      return BigInt(r);
+    }),
+    [`close(${FD})V`]: waits((d: JObj | null) => {
+      if (d === null) return rt.npe();
+      const fd = fdInt(d), owner = getDeclared<bigint | undefined>(d, "java/io/FileDescriptor", "ownerId");
+      setFdInt(d, -1);
+      let pending: number | Promise<number> | undefined;
+      const immediate = fdsanClose(fd, owner ?? 0n, fd => {
+        pending = closeFd(fd);
+        return pending instanceof Promise ? 0 : pending;
+      });
+      return after(pending ?? immediate, n => sys("close", n));
+    }),
+    [`dup(${FD})${FD}`]: waits((d: JObj | null) => {
+      const fd = dupFd(fdInt(d));
+      if (fd < 0) throw errno("dup", -fd);
+      return mkFd(fd);
+    }),
+    [`mmap(JJII${FD}J)J`]: waits((hint: bigint, count: bigint, prot: number, flags: number, d: JObj | null, offset: bigint) =>
+      after(mmap(hint, Number(count), prot, flags, fdInt(d), Number(offset)), (r) => { if (typeof r === "number" && r < 0) throw errno("mmap", -r); return BigInt(r); })),
+    "munmap(JJ)V": (address: bigint, count: bigint) => sys("munmap", munmap(address, Number(count))),
+    "gettid()I": () => threadTid(curThread),
+    "getenv(Ljava/lang/String;)Ljava/lang/String;": (key: string) => {
+      if (key === null) rt.npe();
+      return processEnv[key] ?? null;
+    },
+    "setenv(Ljava/lang/String;Ljava/lang/String;Z)V": (key: string, value: string, overwrite: number) => {
+      if (key === null || value === null) rt.npe();
+      if (!key || key.includes("=")) throw errno("setenv", 22);
+      if (overwrite || !(key in processEnv)) processEnv[key] = value;
+    },
+    "unsetenv(Ljava/lang/String;)V": (key: string) => {
+      if (key === null) rt.npe();
+      if (!key || key.includes("=")) throw errno("unsetenv", 22);
+      delete processEnv[key];
+    },
+    "getpid()I": () => procIdentity.pid,
+    "getuid()I": () => zygoteRunning ? 0 : procIdentity.uid,
+    // bionic's passwd entry: every id has one, named as appUserName names it
+    "getpwuid(I)Landroid/system/StructPasswd;": waits((uid: number) =>
+      newObj("android/system/StructPasswd", "(Ljava/lang/String;IILjava/lang/String;Ljava/lang/String;)V", appUserName(uid), uid, uid, "/data", "/system/bin/sh")),
+    "uname()Landroid/system/StructUtsname;": () => setDeclared(rt.make("android/system/StructUtsname"), "android/system/StructUtsname",
+      (({ domainname: _, ...fields }) => fields)(uname(is64BitProcess()))),
+    "sysconf(I)J": (name: number) => BigInt(sysconf(name)),
+    "strerror(I)Ljava/lang/String;": strerror,
+    "stat(Ljava/lang/String;)Landroid/system/StructStat;": (path: string) =>
+      existing("stat", path, (st) => statOf(st)),
+    "chmod(Ljava/lang/String;I)V": (path: string, mode: number) => {
+      if (path === null) rt.npe();
+      return after(filePaths(path).fileSetAttributes(path,{mode}), result => { sys("chmod",result); });
+    },
+    "chown(Ljava/lang/String;II)V": (path: string, uid: number, gid: number) => {
+      if (path === null) rt.npe();
+      return after(filePaths(path).fileSetAttributes(path,{uid,gid}), result => { sys("chown",result); });
+    },
+    // the VFS keeps no extended attributes, as a filesystem without xattr support
+    "setxattr(Ljava/lang/String;Ljava/lang/String;[BI)V": (path: string, name: string) => {
+      if (path === null || name === null) rt.npe();
+      return existing("setxattr", path, () => { throw errno("setxattr", E.NOTSUP); });
+    },
+    "statvfs(Ljava/lang/String;)Landroid/system/StructStatVfs;": (path: string) => existing("statvfs", path, () => structStatVfs()),
+    [`fstatvfs(${FD})Landroid/system/StructStatVfs;`]: (d: JObj | null) => {
+      if (fdInt(d) < 0) throw errno("fstatvfs", E.BADF);
+      return structStatVfs();
+    },
+    "readlink(Ljava/lang/String;)Ljava/lang/String;": (path: string) => { if (path === null) rt.npe(); return after(readlinkAt(path), (n) => { throw errno("readlink", -n); }); },
+    "access(Ljava/lang/String;I)Z": (path: string, mode: number) => {
+      if (path === null) rt.npe();
+      return after(filePaths(path).fileAccess(path, mode), result => { sys("access", result); return 1; });
+    },
+    "remove(Ljava/lang/String;)V": (path: string) => { if (path === null) rt.npe(); return after(filePaths(path).fileRemove(path), n => sys("remove", n)); },
+    // a new directory takes the default mode, not `mode`
+    "mkdir(Ljava/lang/String;I)V": (path: string) => {
+      if (path === null) rt.npe();
+      return after(filePaths(path).fileMkdir(path), result => { sys("mkdir", result); });
+    },
+    "rename(Ljava/lang/String;Ljava/lang/String;)V": (from: string, to: string) => {
+      if (from === null || to === null) rt.npe();
+      return after(filePaths(from, to).fileRename(from,to), n => sys("rename", n));
+    },
+};
+/** a -errno result as the ErrnoException libcore's Os methods throw */
+export function sys(fn: string, result: number): void { if (result < 0) throw errno(fn, -result); }
+export const ioResult = (fn: string, result: number): number => { sys(fn, result); return result; };
+/** sendfile moves at most this much a call, which its callers loop over as Linux allows */
+const SENDFILE_CHUNK = 1 << 20;
+/** the Object readBytes and its kin take: a byte[], or a direct ByteBuffer addressed from its start */
+export type IoBuffer = Int8Array | JBuffer | null;
+function ioRegion(buffer: Int8Array | null, offset: number, count: number): Uint8Array {
+  if (buffer === null) return rt.npe();
+  checkFromIndexSize(offset, count, buffer.byteLength, "java/lang/ArrayIndexOutOfBoundsException");
+  return new Uint8Array(buffer.buffer, buffer.byteOffset + offset, count);
+}
+/** Read a buffer's bytes through its canonical owner before writing them. */
+export function writeBytes<T>(buffer: IoBuffer, offset: number, count: number, write: (bytes: Uint8Array) => T): T | Promise<T> {
+  if (!isBuffer(buffer)) return write(ioRegion(buffer, offset, count));
+  checkFromIndexSize(offset,count,capacity(buffer) * 2 ** elementShift(buffer),"java/lang/ArrayIndexOutOfBoundsException");
+  return after(readBufferBytes(buffer,offset,count),write);
+}
+/** A direct buffer may live in guest memory, which can move while a read waits: it takes the
+ *  bytes once they have arrived. */
+export function readBytes(fn: string, buffer: IoBuffer, offset: number, count: number, read: (target: Uint8Array) => number | Promise<number>) {
+  if (!isBuffer(buffer)) return after(read(ioRegion(buffer, offset, count)), (n) => ioResult(fn, n));
+  checkFromIndexSize(offset,count,capacity(buffer) * 2 ** elementShift(buffer),"java/lang/ArrayIndexOutOfBoundsException");
+  const scratch = new Uint8Array(count);
+  return after(read(scratch),n => n > 0 ? after(writeBufferBytes(buffer,scratch.subarray(0,n),offset),() => ioResult(fn,n)) : ioResult(fn,n));
+}
+// System.getenv(): the environment as alternating name and value bytes
+rt.registerJni("java/lang/ProcessEnvironment", "environ()[[B", () => jarray(Object.entries(processEnv).flat().map(bytesOf), "[B"));
+// Android interrupts threads blocked on the descriptor; a reader parked on a pipe here stays parked
+rt.registerJni("libcore/io/AsynchronousCloseMonitor", `signalBlockedThreads(${FD})V`, () => {});
+// libcore's OsConstants fills its fields from native initConstants(); these are the reference
+// device's values (pnpm gen-framework)
+rt.registerJni("android/system/OsConstants", "initConstants()V", () => {
+  const constants = linkClass("android/system/OsConstants");
+  constants.setStatics(Object.entries(OS_CONSTANTS), "I");
+});
+/** set while the zygote initializes what every app inherits: it runs as root */
+let zygoteRunning = false;
+export async function asZygote(init: () => unknown): Promise<void> {
+  zygoteRunning = true;
+  try { await init(); } finally { zygoteRunning = false; }
+}
+/** the kernel thread id of a Java thread: the main thread's is the pid, as on a device */
+export function threadTid(t: JThread): number {
+  return processTid(t, t === mainThread);
+}
 
 const ISA = "java/net/InetSocketAddress", UNIX_ADDRESS = "android/system/UnixSocketAddress", ISA_HOLDER = "java/net/InetSocketAddress$InetSocketAddressHolder";
 const INET = "Ljava/net/InetAddress;", SOCKADDR = "Ljava/net/SocketAddress;";
@@ -86,7 +301,7 @@ function socketAddressOf(fn: string, d: JObj | null, peer: boolean) {
 }
 const iface = (name: string | null) => INTERFACES.find((i) => i.name === name) ?? null;
 
-const linux: Record<string, (...args: never[]) => unknown> = {
+const sockets: Record<string, (...args: never[]) => unknown> = {
   "socket(III)Ljava/io/FileDescriptor;": (domain: number, type: number, protocol: number) => {
     const fd = socketCreate(domain, type, protocol);
     sys("socket", fd);
@@ -228,7 +443,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     throw errno("ioctl", E.ADDRNOTAVAIL);
   },
 };
-rt.registerJnis("libcore/io/Linux", linux);
+rt.registerJnis("libcore/io/Linux", { ...files, ...sockets });
 
 // java.net.SocketInputStream/SocketOutputStream: OpenJDK's socketRead0 (NET_Timeout, then read)
 // and socketWrite0 (write until done)
