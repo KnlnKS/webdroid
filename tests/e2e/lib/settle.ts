@@ -47,7 +47,8 @@ export function stateMatches(condition: StateCondition, screen: Screen, nodes: U
   }
   const want = condition.text.replace(/\s+/g, " ").trim().toLowerCase();
   const found = nodes.some((node) =>
-    (!condition.resId || node.resId === condition.resId) && (!condition.visible || inScreen(node)) &&
+    (!condition.resId || node.resId === condition.resId) && (!condition.visible || inScreen(node)) && (!condition.within ||
+      node.bounds[0] >= condition.within[0] && node.bounds[1] >= condition.within[1] && node.bounds[2] <= condition.within[2] && node.bounds[3] <= condition.within[3]) &&
     [node.text, node.desc].some((text) => text.replace(/\s+/g, " ").trim().toLowerCase().includes(want)));
   return condition.kind === "text" ? found : !found;
 }

@@ -16,7 +16,7 @@ export function webdroidUrl(params: Record<string, string> = {}, base = BASE_URL
 // the app as Safari and Chrome on Android do
 const ISOLATED = process.env.WEBDROID_SITE_ISOLATION !== "0";
 /** what every harness's Chrome runs with, `jsFlags` added to WEBDROID_JS_FLAGS */
-export function chromeArgs(jsFlags?: string): string[] {
+function chromeArgs(jsFlags?: string): string[] {
   const js = [process.env.WEBDROID_JS_FLAGS, jsFlags].filter(Boolean).join(" ");
   return [...(ISOLATED ? ["--site-per-process"] : []), "--force-device-scale-factor=1", "--hide-scrollbars", ...(js ? [`--js-flags=${js}`] : [])];
 }
@@ -34,11 +34,11 @@ export const CONTEXT_OPTS = {
 export const HOST_GL = ["--enable-gpu", "--use-angle=metal"], SOFTWARE_GL = ["--use-gl=angle", "--use-angle=swiftshader"];
 /** the GPU on macOS unless WEBDROID_GL=swiftshader asks for the CPU, as every other host gets */
 const GL = process.platform === "darwin" && process.env.WEBDROID_GL !== "swiftshader" ? HOST_GL : SOFTWARE_GL;
-/** headless Chrome as the harnesses run it */
-export const launchOptions = (jsFlags?: string) => ({
+/** headless Chrome as the harnesses run it, its GL `gl` */
+export const launchOptions = (jsFlags?: string, gl = GL) => ({
   headless: true,
   args: [...chromeArgs(jsFlags), "--font-render-hinting=none", "--disable-lcd-text",
-    ...GL, "--disable-partial-raster", "--disable-skia-runtime-opts"],
+    ...gl, "--disable-partial-raster", "--disable-skia-runtime-opts"],
   ignoreDefaultArgs: ISOLATED ? ["--disable-features=IsolateOrigins,site-per-process"] : [],
 });
 export const launchBrowser = (jsFlags?: string) => chromium.launch(launchOptions(jsFlags));

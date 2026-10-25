@@ -6,6 +6,7 @@ import { chromium, type BrowserServer, type CDPSession, type Page } from "playwr
 import { PINNED_CLOCK_MS, deviceScreen, screenParam, type CaptureScreen, type WaitPolicy } from "../types.ts";
 import { CONTEXT_OPTS, launchOptions, openWebdroid, pageErrors, webdroidUrl } from "../../../scripts/page.ts";
 import { deadline } from "../../../scripts/util.ts";
+import { NO_PICKERS } from "../lib/actions.ts";
 import { DEFAULT_QUIESCENCE, probeScript, stepDeadlineMs, type Act, type Quiescence, type StepResult, type StepSpec } from "../lib/probe.ts";
 
 /** `WEBDROID_SCREEN=1080x2424@480` overrides the geometry every flow runs at — which un-scores
@@ -71,8 +72,7 @@ export class WebdroidDriver {
       const browser = await chromium.connect(server.wsEndpoint());
       const ctx = await browser.newContext(CONTEXT_OPTS);
       await ctx.addInitScript({ content: probeScript({ fixedMs: opts.fixedMs === undefined ? PINNED_CLOCK_MS : opts.fixedMs, files: opts.files ?? [], shots: !!opts.shots }) });
-      if (opts.privateStorage) await ctx.addInitScript({ content: `for (const name of ['showDirectoryPicker', 'showOpenFilePicker', 'showSaveFilePicker'])
-        Object.defineProperty(window, name, { value: undefined, configurable: true });` });
+      if (opts.privateStorage) await ctx.addInitScript({ content: NO_PICKERS });
       if (opts.offline) {
         await ctx.route(/^https?:\/\/[^/]+\/(dns|proxy)\?/, (route) => route.fulfill(
           new URL(route.request().url()).pathname === "/dns" ? { status: 404 } : { status: 502, headers: { "x-wd-error": "host" } }));

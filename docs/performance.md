@@ -21,14 +21,14 @@ WEBDROID_URL=http://localhost:4191 pnpm wasm aot-profile  # regenerate the bundl
 - **`lat`** (`scripts/lat/run.ts`) launches the browser with Playwright but drives it over raw CDP with only Page
   and Target enabled (Playwright's `Runtime.enable` makes every Java exception about 5× dearer). It reports launch,
   each gated tap (pointer-up to the intended UI state and response pixels) and a fixed scroll window (`fps` step:
-  presentation intervals and page long tasks), on a fixed 1080×2160@480 screen. Scenarios are in `scripts/lat/scenarios/` (calculatorm, fitnotes,
-  komikku, mihon; the heavy-app reports youtube, reddit, chatgpt and tiktok carry `"gate": false` and run only when named,
-  without failing the gate). Without `--warm` it measures a first launch, which waits for the app's install-time build; `--warm` launches
+  presentation intervals and page long tasks), on a fixed 1080×2160@480 screen. Scenarios are in `scripts/lat/scenarios.ts` (calculatorm, fitnotes,
+  komikku, mihon; the heavy-app reports youtube, reddit, chatgpt and tiktok carry `gate: false` and run only when named,
+  without failing the gate); their steps besides the gated taps are e2e actions and their expected states e2e state conditions. Without `--warm` it measures a first launch, which waits for the app's install-time build; `--warm` launches
   twice in one profile, clearing the app's data between, and gates the second. `--gpu` uses the host GPU instead of SwiftShader, `--cpuprofile` profiles every
   Worker, `--timeline` shows the app Worker's startup marks, `--trace` writes a browser-wide trace, and
   `WEBDROID_JS_FLAGS` passes V8 flags; `--engine webkit`, `--json <file>` and `--query <params>` are also
   accepted. For another app, add a temporary scenario and delete it afterwards.
-- **Repeat visits and the development metric.** `--repeat N` appends a scenario's `"repeat"` steps N times (Komikku:
+- **Repeat visits and the development metric.** `--repeat N` appends a scenario's `repeat` steps N times (Komikku:
   back twice, then Settings and Appearance) and prints the medians of the third and later visits. Each tap also
   reports `busy` (the main looper's work from `pointerup` to the answering frame) and `frame` (its longest `doFrame`),
   both on the Worker's clock. A tap time adds the vsyncs an animation waits for (a Komikku screen answers in its third

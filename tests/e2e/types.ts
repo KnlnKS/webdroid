@@ -40,7 +40,7 @@ type Action =
   | { type: "settle" };
 
 export type StateCondition =
-  | { kind: "text" | "text-absent"; text: string; resId?: string; visible?: boolean }
+  | { kind: "text" | "text-absent"; text: string; resId?: string; visible?: boolean; within?: [number, number, number, number] }
   | { kind: "resource"; resId: string }
   | { kind: "resource-absent"; resId: string }
   | { kind: "perf"; counter: keyof typeof perf; atLeast: number }
