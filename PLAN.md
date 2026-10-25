@@ -1,4 +1,4 @@
-# Webdroid status — 2026-10-24
+# Webdroid status — 2026-10-25
 
 This file tracks where the work stands and what is open. [AGENTS.md](AGENTS.md) defines the working and
 verification rules, [docs/architecture.md](docs/architecture.md) the design, [docs/performance.md](docs/performance.md)
@@ -71,6 +71,10 @@ along with 1,187 unit tests, all `wasm all` suites, `fwtest` (31 of 31), descche
 Worker dry run. After `pnpm aot` the `--jobs 1` quick gate reaches 7 of 7 flows in 165 s. `lat` puts every FitNotes
 and Komikku tap within 150 ms; Mihon's launch is unavailable because its live update check shows "New version
 available!" over the onboarding screen the scenario expects.
+
+After the third code-quality pass (2026-10-25; history, "Third code-quality pass (2026-10-25)"): `pnpm check` passes
+in 134 s and `--corpus` in 213 s, with 2,551 unit tests. In matched `lat` runs every gated tap passes, and Komikku's
+`start` median moved 54.5 → 62 ms on vsync phase while its busy time fell.
 
 `pnpm check` (2026-10-24) runs the typecheck, three unit-test shards, each part of `wasm all` and the seven
 deterministic flows as one pool in 83–89 s on an M4 Pro beside other sessions' load (three runs); `--corpus` adds a
