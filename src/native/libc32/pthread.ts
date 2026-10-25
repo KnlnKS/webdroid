@@ -57,7 +57,7 @@ function rwRelease(cpu: Cpu, a: number): number {
 /** bionic's ILP32 pthread_attr_t: flags (bit 0: detached), stack base and size, guard size,
  *  scheduling policy and priority */
 const ATTR = { flags: 0, base: 4, size: 8, guard: 12, policy: 16, priority: 20 }, ATTR_DETACHED = 1;
-export type ThreadAttr = Record<keyof typeof ATTR, number>;
+type ThreadAttr = Record<keyof typeof ATTR, number>;
 const ATTR_FIELDS = Object.keys(ATTR) as (keyof typeof ATTR)[];
 const PTHREAD_STACK_MIN = 2 * PAGE_SIZE;
 const DEFAULT_ATTR: ThreadAttr = { flags: 0, base: 0, size: STACK_SIZE, guard: PAGE_SIZE, policy: 0, priority: 0 };

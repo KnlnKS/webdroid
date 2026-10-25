@@ -248,7 +248,7 @@ export function makePipe(out: number, flags: number): number {
 }
 /** statfs and statvfs of the one filesystem: the storage estimate in 4K blocks, 0x10000 inodes and
  *  half of them free, 255-byte names */
-export type StorageStat = { bsize: number; blocks: number; bfree: number; files: number; ffree: number; namemax: number };
+type StorageStat = { bsize: number; blocks: number; bfree: number; files: number; ffree: number; namemax: number };
 export const storageStat = (): Promise<StorageStat> => storageEstimate().then(({ total, free }) =>
   ({ bsize: 4096, blocks: Math.floor(total / 4096), bfree: Math.floor(free / 4096), files: 0x10000, ffree: 0x8000, namemax: 255 }));
 /** statfs(2) into `buf`: f_type and f_bsize are longs; the counts after them are 64-bit on both ABIs

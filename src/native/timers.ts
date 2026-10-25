@@ -51,7 +51,7 @@ function validTime(p: number): boolean {
   return ldLong(p) >= 0 && nanos >= 0 && nanos < 1e9;
 }
 /** SIGEV_THREAD's notification: a libc's, which starts `fn(value)` on a thread with `attributes` */
-export type ThreadNotify = (fn: number, attributes: number, value: bigint) => () => void;
+type ThreadNotify = (fn: number, attributes: number, value: bigint) => () => void;
 /** timer_create(2), and a libc's over it when it gives SIGEV_THREAD's threads */
 export function createTimer(cpu: Cpu, clock: number, event: number, out: number, thread?: ThreadNotify): number {
   if (![0, 1, 7].includes(clock) || !out) return -E.INVAL;

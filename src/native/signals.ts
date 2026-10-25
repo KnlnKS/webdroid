@@ -35,7 +35,7 @@ const DUMPS_CORE = sigset(SIGQUIT, SIGILL, SIGTRAP, SIGABRT, SIGBUS, SIGFPE, SIG
 export const dumpsCore = (sig: number): boolean => blocked(DUMPS_CORE, sig);
 
 /** a disposition other than the default: SIG_IGN, or a handler (sa_handler or sa_sigaction) */
-export type Disposition = { kind: "ignore" } | Handler;
+type Disposition = { kind: "ignore" } | Handler;
 export type Handler = { kind: "handler"; fn: number; flags: number; mask: bigint };
 /** sigaction's table, by signal; a signal it lacks takes its default action */
 export const dispositions = new Map<number, Disposition>();
