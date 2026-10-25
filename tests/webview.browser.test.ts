@@ -802,7 +802,7 @@ test("Worker WebView surfaces transfer real renderer ports and retire only their
 });
 
 test("Worker WebStorage commands retain canonical package origins and ordered deletion", async () => {
-  const server=await serveModules(["src/android/webstorage.ts","src/shell/rpc.ts"],(_,path):Response|undefined=>{
+  const server=await serveModules(["src/android/webstorage.ts","src/shell/rpc.ts","src/shell/broker-access.ts"],(_,path):Response|undefined=>{
     if(path==="/webview-origin")return Response.json(`http://*.localhost:${server.port}`);
     if(path==="/webview")return new Response(WEB_FRAME,{headers:{"content-type":"text/html"}});
     if(path==="/write")return new Response("<script>const r=indexedDB.open('canonical');r.onupgradeneeded=()=>r.result.createObjectStore('s').put(new Uint8Array(8192),'data');r.onsuccess=()=>{r.result.close();parent.postMessage('written','*');};</script>",{headers:{"content-type":"text/html"}});
@@ -817,9 +817,10 @@ test("Worker WebStorage commands retain canonical package origins and ordered de
       localStorage.setItem("wd:install:org.webdroid.surface.foreign","1000");
       const owner=canonicalWebStorage("org.webdroid.surface.owner"),foreign=canonicalWebStorage("org.webdroid.surface.foreign");
       const channel=new MessageChannel();const stop=serveCalls(channel.port1,owner);
-      const code=`import {webRenderer,webStorageTransport} from '${location.origin}/webstorage.js';
+      const code=`import {webRenderer} from '${location.origin}/webstorage.js';
         import {callProxy} from '${location.origin}/rpc.js';
-        onmessage=async({data})=>{const proxy=callProxy(data.port,['webRenderer','webStorage']);webStorageTransport.calls=()=>proxy.endpoint;
+        import {connectBroker} from '${location.origin}/broker-access.js';
+        onmessage=async({data})=>{const proxy=callProxy(data.port,['webRenderer','webStorage']);connectBroker({webStorage:proxy.endpoint},true);
           const [a,b]=await Promise.all([webRenderer('https://one.example'),webRenderer('https://two.example')]);
           postMessage({a,b,local:typeof localStorage});};`;
       const url=URL.createObjectURL(new Blob([code],{type:"text/javascript"})),worker=new Worker(url,{type:"module"});

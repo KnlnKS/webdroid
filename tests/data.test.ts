@@ -1,41 +1,31 @@
-import { webStorageTransport } from "../src/android/webstorage.ts";
 import { expect, test, vi, describe, beforeAll } from "vite-plus/test";
 import initSqlJs from "sql.js";
 import "../src/natives.ts";
 import { rt, JObj } from "../src/jvm/runtime.ts";
 import { newObj, vcall, scall, vcallAsync, iof } from "../src/jvm/natives/jentry.ts";
 import { strArray } from "../src/jvm/abi.ts";
-import { useSQLiteStore, sqliteTransport, sqliteStore, createSQLiteSession, type SQLiteRequest, type SQLiteReply } from "../src/android/sqlite.ts";
+import { useSQLiteStore, sqliteStore, createSQLiteSession, type SQLiteRequest, type SQLiteReply } from "../src/android/sqlite.ts";
 import { attachProcessBrokerPort, closeProcessBrokerPort, createProcessEndpoint } from "../src/shell/process-endpoint.ts";
-import { exitRecordTransport } from "../src/android/server/appexitinfo.ts";
-import { settingsStore, useSettingsStore } from "../src/android/settings.ts";
-import { serviceTransport } from "../src/android/server/activeservices.ts";
-import { providerProcesses } from "../src/android/server/am.ts";
-import { broadcastTransport } from "../src/android/server/broadcastqueue.ts";
-import { pendingTransport } from "../src/android/pendingintent.ts";
-import { activityTransport } from "../src/android/server/atm.ts";
+import { launchRemote } from "../src/android/server/atm.ts";
+import { settingsStore } from "../src/android/settings.ts";
 import { newIntent } from "../src/android/intent.ts";
 import { decodeIntent } from "../src/android/intentipc.ts";
 import { useFocusedUid } from "../src/android/clipboard.ts";
-import { binderTransport, useSystemServiceAccess } from "../src/android/binder.ts";
-import { notificationTransport } from "../src/android/notification.ts";
 import type { BrokerCalls, Calls } from "../src/shell/broker-contract.ts";
-import { cookieManager, cookieTransport } from "../src/android/cookies.ts";
-import { PermissionStore, canonicalPermissionCommands, usePermissionAccess, usePermissionStore, grantPermissions, type PermissionAccess } from "../src/android/permissions.ts";
-import { AccountStore, decodeAccount } from "../src/shell/accounts.ts";
-import { useAccountStore } from "../src/android/accounts.ts";
+import { cookieManager } from "../src/android/cookies.ts";
+import { PermissionStore, canonicalPermissionCommands, grantPermissions, type PermissionAccess } from "../src/android/permissions.ts";
+import { decodeAccount } from "../src/shell/accounts.ts";
+import { accountStore } from "../src/android/accounts.ts";
 import { cookieCalls, type CookieCalls } from "../src/shell/cookie-access.ts";
 import { WebCookies } from "../src/shell/webcookies.ts";
 import { NativeWindow } from "../src/android/cursorwindow.ts";
 import { handle, release } from "../src/android/handles.ts";
 import { callProxy, serveCalls } from "../src/shell/rpc.ts";
-import { usePathOwner } from "../src/shell/file-path.ts";
 import { notConnected } from "../src/jvm/natives/jthrowable.ts";
-import { descriptorTransport } from "../src/native/process-fd.ts";
 import { vfs } from "../src/shell/vfs.ts";
 import { mediaInsert, mediaPath, mediaUpdate } from "../src/android/mediastore.ts";
 import { mkUri } from "../src/android/net.ts";
-import { bootApp, packageRecord, thrown } from "./java.ts";
+import { bootApp, packageRecord, thrown, useTestBroker } from "./java.ts";
 import { startMainLooper } from "../src/android/mainloop.ts";
 
 // framework.jar and a running main looper, as a booted page has them
@@ -60,7 +50,7 @@ test("permission checks deny pending grants and Java calls await the canonical o
     permissionGrant: async (target, names) => { entered(); await blocked; return owner.permissionGrant(target, names); },
   } as Calls<PermissionAccess>);
   const client = callProxy<Calls<PermissionAccess>>(port2, ["permissionCheck", "permissionGrant"]);
-  usePermissionAccess(client.endpoint);
+  const restore = useTestBroker({ permissions: client.endpoint }, true);
   try {
     const service = rt.make("webdroid/PermissionManagerService"), location = rt.make("webdroid/LocationManagerService");
     const check = () => vcall(service, "checkPermission", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)I", pkg, fine, pkg, 0);
@@ -78,7 +68,7 @@ test("permission checks deny pending grants and Java calls await the canonical o
     expect(await last()).toBeNull();
     expect(await client.endpoint.permissionGrant("foreign", [fine]).then(() => null, error => error.message)).toBe("foreign permission grant");
     expect(await owner.permissionCheck("foreign", [fine])).toEqual([false]);
-  } finally { release(); client.close(); stop(); usePermissionStore(new PermissionStore()); }
+  } finally { release(); client.close(); stop(); restore(); }
 });
 
 test("AccountManagerService answers an account's secrets to its authenticator only, and lists it to a package it is visible to", async () => {
@@ -87,26 +77,23 @@ test("AccountManagerService answers an account's secrets to its authenticator on
   expect(decodeAccount({ name: "alice", type: "test", owner: "owner", password: null, data: {}, tokens: {}, visibility: { reader: 5 } })).toBeNull();
   const saved = decodeAccount({ name: "alice", type: "test", owner: "org.webdroid.test.authenticator", password: "secret", data: JSON.parse('{"__proto__":"data"}'), tokens: {}, visibility: { [pkg]: 1 } })!;
   expect([Object.getPrototypeOf(saved.data), saved.data.__proto__]).toEqual([null, "data"]);
-  const store = new AccountStore(), stop = useAccountStore(store);
+  const store = accountStore;
   store.add(saved);
   try {
     const service = rt.make("webdroid/AccountManagerService"), account = await newObj("android/accounts/Account", "(Ljava/lang/String;Ljava/lang/String;)V", "alice", "test");
     expect(await thrown(() => vcall(service, "getPassword", `(${A})Ljava/lang/String;`, account))).toMatch(/^java\/lang\/SecurityException: uid \d+ cannot manage accounts of type: test$/);
     expect((await vcall(service, "getAccountsForPackage", `(Ljava/lang/String;ILjava/lang/String;)[${A}`, pkg, 0, null)).length).toBe(1);
     expect((await vcall(service, "getAccountsForPackage", `(Ljava/lang/String;ILjava/lang/String;)[${A}`, "org.webdroid.test.other", 0, null)).length).toBe(0);
-  } finally { stop(); }
-  store.remove(pkg);
-  expect(store.records.map((s) => [s.name, s.visibility])).toEqual([["alice", {}]]);
+  } finally {
+    store.remove(pkg);
+    expect(store.records.map((s) => [s.name, s.visibility])).toEqual([["alice", {}]]);
+    store.drop(store.records[0]);
+  }
 });
 
 test("Worker activity commands retain local results across reentrant replies and failed launch acknowledgment", async () => {
   const owner = await packageRecord("org.webdroid.test.activitycommands");
   await bootApp(owner);
-  const previousService = {...serviceTransport}, previousProvider = providerProcesses.get, previousBroadcast = broadcastTransport.send;
-  const previousPending = {...pendingTransport};
-  const previous = {...activityTransport}, previousExit = {...exitRecordTransport}, previousSettings = settingsStore(), previousSql = sqliteTransport.call,
-    previousWebStorage = webStorageTransport.calls, previousCookies = cookieTransport.calls,
-    previousDescriptors = {...descriptorTransport}, previousBinder = binderTransport.transact, previousForeground = notificationTransport.foreground;
   type Calls = Pick<BrokerCalls,"activity"|"exitRecords">;
   const {port1,port2} = new MessageChannel();
   let entered!:()=>void, release!:()=>void, request = 0, launches = 0, completed = false;
@@ -128,7 +115,7 @@ test("Worker activity commands retain local results across reentrant replies and
   attachProcessBrokerPort(port2);
   try {
     const endpoint = createProcessEndpoint(), delivery = {caller:{pkg:"org.webdroid.test.activitycommands",cls:"Caller"},deliver:(code:number,data:unknown)=>results.push([code,data])};
-    const launch = activityTransport.launch!("target","target:ui","Target",intent,delivery).then(()=>completed=true);
+    const launch = launchRemote("target","target:ui","Target",intent,delivery).then(()=>completed=true);
     await waiting;
     expect(completed).toBe(false);
     expect(received).toEqual(["target","target:ui","Target","Caller",false,"org.webdroid.test.LAUNCH"]);
@@ -138,7 +125,7 @@ test("Worker activity commands retain local results across reentrant replies and
     await endpoint.activity({kind:"result",request,code:32,data:null});
     expect(results).toEqual([[31,null]]);
     release();await launch;expect(completed).toBe(true);
-    const denied = await activityTransport.launch!("target","target:ui","Target",intent,delivery).then(()=>null,error=>error);
+    const denied = await launchRemote("target","target:ui","Target",intent,delivery).then(()=>null,error=>error);
     expect((denied as Error).message).toBe("launch denied");
     await endpoint.activity({kind:"result",request,code:33,data:null});
     expect(results).toEqual([[31,null]]);
@@ -149,16 +136,7 @@ test("Worker activity commands retain local results across reentrant replies and
     expect(await vcall(info,"getPid","()I")).toBe(71);
     expect(await vcall(info,"getReason","()I")).toBe(2);
   } finally {
-    release();readRelease();closeProcessBrokerPort();stop();
-    for(const key of Object.keys(activityTransport)) Reflect.deleteProperty(activityTransport,key);
-    for(const key of Object.keys(exitRecordTransport)) Reflect.deleteProperty(exitRecordTransport,key);
-    Object.assign(exitRecordTransport,previousExit);useSettingsStore(previousSettings);
-    Object.assign(activityTransport,previous);sqliteTransport.call=previousSql;cookieTransport.calls=previousCookies;webStorageTransport.calls=previousWebStorage;
-    Object.assign(serviceTransport,previousService); providerProcesses.get=previousProvider; broadcastTransport.send=previousBroadcast;
-    Object.assign(pendingTransport,previousPending);
-    useSystemServiceAccess([]); binderTransport.transact=previousBinder; notificationTransport.foreground=previousForeground;
-    usePathOwner(null); for(const key of Object.keys(descriptorTransport))Reflect.deleteProperty(descriptorTransport,key); Object.assign(descriptorTransport,previousDescriptors);
-    usePermissionStore(new PermissionStore());
+    release();readRelease();closeProcessBrokerPort();stop();useTestBroker({});
   }
 });
 
@@ -183,7 +161,7 @@ test("ClipboardService keeps one clip, which only the focused uid reads", async 
 
 test("CookieManager waits for canonical mutation before its main-looper callback", async () => {
   await bootApp(await packageRecord("org.webdroid.test.cookies"));
-  const jar = new WebCookies("org.webdroid.test.cookies"), previous = cookieTransport.calls;
+  const jar = new WebCookies("org.webdroid.test.cookies");
   let entered!: () => void, release!: () => void, received!: (value: JObj) => void, called = false;
   const waiting = new Promise<void>(resolve => entered = resolve), blocked = new Promise<void>(resolve => release = resolve);
   const callback = new Promise<JObj>(resolve => received = resolve);
@@ -193,7 +171,7 @@ test("CookieManager waits for canonical mutation before its main-looper callback
   const { port1, port2 } = new MessageChannel();
   const stop = serveCalls<CookieCalls>(port1, cookieCalls(async () => { entered(); await blocked; return jar; }));
   const client = callProxy<CookieCalls>(port2, ["cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush"]);
-  cookieTransport.calls = () => client.endpoint;
+  const restore = useTestBroker(client.endpoint);
   try {
     const manager = cookieManager(), url = "https://cookies.example/";
     const write = vcallAsync(manager, "setCookie", "(Ljava/lang/String;Ljava/lang/String;Landroid/webkit/ValueCallback;)V",
@@ -210,7 +188,7 @@ test("CookieManager waits for canonical mutation before its main-looper callback
     await vcall(manager, "removeAllCookie", "()V");
     expect(await vcall(manager, "hasCookies", "()Z")).toBe(0);
     expect(await vcall(manager, "getCookie", "(Ljava/lang/String;)Ljava/lang/String;", url)).toBeNull();
-  } finally { release(); cookieTransport.calls = previous; client.close(); stop(); jar.remove(); jar.forget(); }
+  } finally { release(); restore(); client.close(); stop(); jar.remove(); jar.forget(); }
 });
 
 describe("cursorwindow", () => {
@@ -280,7 +258,8 @@ describe("sqlite", () => {
     const ports = new MessageChannel();
     const stop = serveCalls<Calls>(ports.port1, { sqlite: request => session.call(request) });
     const proxy = callProxy<Calls>(ports.port2, ["sqlite"], { makeError: error => rt.mkThrowable(error.javaClass ?? "java/lang/RuntimeException", error.message) });
-    sqliteTransport.call = request => proxy.endpoint.sqlite(request);
+    // DeviceConfig reads settings, which system_server holds
+    const restore = useTestBroker({ sqlite: proxy.endpoint.sqlite, settings: settingsStore() as unknown as BrokerCalls["settings"] }, true);
     let first: unknown, second: unknown;
     try {
       first = await open(path); second = await open(path);
@@ -308,7 +287,7 @@ describe("sqlite", () => {
     } finally {
       if (first) await vcall(first, "close", "()V");
       if (second) await vcall(second, "close", "()V");
-      sqliteTransport.call = null; session.close(); stop(); proxy.close(); vfs.delete(path);
+      restore(); session.close(); stop(); proxy.close(); vfs.delete(path);
     }
     expect(sqliteStore.files.get(path)!.connections.size).toBe(0);
   });
@@ -332,12 +311,12 @@ describe("sqlite", () => {
       const readOnly = new NativeWindow("imported", 1024, true);
       Object.assign(readOnly, { rows: 1, cols: 1, used: 16, types: [1], values: [42] });
       const windowHandle = handle(readOnly);
-      sqliteTransport.call = request => first.call(request);
+      const restore = useTestBroker({ sqlite: first.call }, true);
       try {
         const fill = rt.jniFn("android/database/sqlite/SQLiteConnection", "nativeExecuteForCursorWindow(JJJIIZ)J")! as (...args: unknown[]) => unknown;
         expect(await thrown(() => fill(a, tiny, windowHandle, 0, 0, 1))).toMatch(/^java\/lang\/IllegalStateException: /);
         expect(readOnly.values).toEqual([42]); expect(readOnly.rows).toBe(1);
-      } finally { sqliteTransport.call = null; release(windowHandle); }
+      } finally { restore(); release(windowHandle); }
       first.close(); first.close();
       expect(await thrown(() => call(first, "nativeExecuteForLong(JJ)J", a, st))).toMatch(/^android\/os\/DeadObjectException: /);
       const live = await call(second, "nativePrepareStatement(JLjava/lang/String;)J", b, "SELECT 7") as bigint;
@@ -595,9 +574,9 @@ test("libcore directory operations await their canonical owner and observe peer 
   const {vfs}=await import("../src/shell/vfs.ts");vfs.mkdir(root);
   let release!:()=>void;
   const gate=new Promise<void>(resolve=>release=resolve);
-  usePathOwner({descriptors:{fileDescriptor:notConnected},files:{fileSetAttributes:async(p,c)=>owner.fileSetAttributes(p,c),fileStat:async p=>owner.fileStat(p),fileList:async p=>owner.fileList(p),
+  const restore=useTestBroker({descriptors:{fileDescriptor:notConnected},files:{fileSetAttributes:async(p,c)=>owner.fileSetAttributes(p,c),fileStat:async p=>owner.fileStat(p),fileList:async p=>owner.fileList(p),
     fileRename:async(a,b)=>owner.fileRename(a,b),fileRemove:async p=>owner.fileRemove(p),fileCreate:async p=>owner.fileCreate(p),fileFifo:async p=>owner.fileFifo(p),
-    fileAccess:async(p,mode)=>owner.fileAccess(p,mode),fileMkdir:async p=>{await gate;return owner.fileMkdir(p);}}});
+    fileAccess:async(p,mode)=>owner.fileAccess(p,mode),fileMkdir:async p=>{await gate;return owner.fileMkdir(p);}} as BrokerCalls["files"]},true);
   try {
     const file=await onMain(()=>newObj("java/io/File","(Ljava/lang/String;)V",path));
     let finished=false;
@@ -608,7 +587,7 @@ test("libcore directory operations await their canonical owner and observe peer 
     expect(await onMain(()=>vcall(file,"mkdir","()Z"))).toBe(0);
     const parent=await onMain(()=>newObj("java/io/File","(Ljava/lang/String;)V",root));
     expect([...await onMain(()=>vcall(parent,"list","()[Ljava/lang/String;"))]).toEqual(["created"]);
-  }finally{release();usePathOwner(null);vfs.rmdir(path);vfs.rmdir(root);}
+  }finally{release();restore();vfs.rmdir(path);vfs.rmdir(root);}
 });
 
 test("queued IME edits retain their editor generation through the Java main queue", async () => {

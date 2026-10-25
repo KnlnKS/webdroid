@@ -4,10 +4,10 @@ import { type JObj, declaredField } from "../src/jvm/runtime.ts";
 import { classNameOf, newObj, vcall, vcallAsync } from "../src/jvm/natives/jentry.ts";
 import { stringHash } from "../src/jvm/abi.ts";
 import { packageUid } from "../src/android/packages.ts";
-import { grantPermissions } from "../src/android/permissions.ts";
+import { canonicalPermissionCommands, grantPermissions, permissionStore } from "../src/android/permissions.ts";
 import { callProxy, serveCalls } from "../src/shell/rpc.ts";
-import { ownedSystemService, useSystemServiceAccess, parcelled, type BinderHandle } from "../src/android/binder.ts";
-import { NotificationStore, notificationStore, useNotificationStore, notificationTransport, receiveForegroundNotification, startForegroundNotification, stopForegroundNotification, type ForegroundNotificationRequest } from "../src/android/notification.ts";
+import { ownedSystemService, parcelled, type BinderHandle } from "../src/android/binder.ts";
+import { notificationStore, receiveForegroundNotification, startForegroundNotification, stopForegroundNotification, type ForegroundNotificationRequest } from "../src/android/notification.ts";
 import { vfs } from "../src/shell/vfs.ts";
 import { fdInt, mkFd } from "../src/jvm/natives/jio.ts";
 import { javaOpenFd } from "../src/native/fs.ts";
@@ -15,20 +15,21 @@ import { javaReadFd, openFd } from "../src/native/fd.ts";
 import { ProcessBroker } from "../src/shell/processes.ts";
 import { brokerMethods, type BrokerCalls } from "../src/shell/broker-contract.ts";
 import { descriptorTransport, processRights } from "../src/native/process-fd.ts";
-import { usePathOwner } from "../src/shell/file-path.ts";
 import { NOT_CRASHED } from "../src/android/server/appexitinfo.ts";
-import { bootApp, packageRecord } from "./java.ts";
+import { bootApp, packageRecord, useTestBroker } from "./java.ts";
 import { procIdentity } from "../src/shell/procfs.ts";
 
 const pkg = "org.webdroid.test.notify";
 const N = "Landroid/app/Notification;", B = "Landroid/app/Notification$Builder;";
 let manager: JObj, app: JObj;
 let closeService: () => void;
+/** the grants the broker answers this Worker with: this realm's own, which system_server holds */
+const permissions = canonicalPermissionCommands(permissionStore, () => {}) as BrokerCalls["permissions"];
 
 // the app reaches the service and posts its foreground notification over a port, as a Worker does
 beforeAll(async () => {
   app = await bootApp(await packageRecord(pkg, { permissions: ["android.permission.POST_NOTIFICATIONS"] }));
-  const { port1, port2 } = new MessageChannel(), foreground = notificationTransport.foreground;
+  const { port1, port2 } = new MessageChannel();
   type Calls = {
     systemService(name: string): Promise<BinderHandle | null>;
     foreground(request: ForegroundNotificationRequest): Promise<void>;
@@ -37,9 +38,8 @@ beforeAll(async () => {
     foreground: (request: ForegroundNotificationRequest) => receiveForegroundNotification(pkg, {pid:procIdentity.pid,uid:packageUid(pkg)}, request),
   });
   const client = callProxy<Calls>(port2, ["systemService", "foreground"]);
-  useSystemServiceAccess(["notification"], client.endpoint.systemService);
-  notificationTransport.foreground = client.endpoint.foreground;
-  closeService = () => { client.close(); stop(); useSystemServiceAccess([]); notificationTransport.foreground = foreground; };
+  const restore = useTestBroker({ systemService: client.endpoint.systemService, notificationForeground: client.endpoint.foreground, permissions }, true);
+  closeService = () => { client.close(); stop(); restore(); };
   manager = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "notification");
 });
 afterAll(() => closeService?.());
@@ -174,8 +174,7 @@ test("stored notification descriptors share offsets and release on replacement, 
       expect(notificationStore.posted).toHaveLength(0);
       expect(file.references).toBe(1);
     } finally { release(); notificationStore.capture = capture; }
-    const transport = notificationTransport.foreground;
-    notificationTransport.foreground = null;
+    const restore = useTestBroker({});
     try {
       await startForegroundNotification(99, await make());
       expect(file.references).toBe(2);
@@ -186,7 +185,7 @@ test("stored notification descriptors share offsets and release on replacement, 
       expect(await read(99)).toBe(3);
       await stopForegroundNotification(99, true);
       expect(javaReadFd(fdInt(await vcall(copies[0], "getFileDescriptor", "()Ljava/io/FileDescriptor;")), new Uint8Array(1))).toBe(1);
-    } finally { notificationTransport.foreground = transport; }
+    } finally { restore(); }
   } finally {
     for (const copy of copies) await vcall(copy, "close", "()V");
     await notificationStore.clear(pkg, packageUid(pkg), {fromApp: true, keepState: false});
@@ -196,19 +195,18 @@ test("stored notification descriptors share offsets and release on replacement, 
 });
 
 test("foreground broker retains transferred rights after sender death and rejects partial replacement rights", async () => {
-  const original = notificationStore, descriptors = {...descriptorTransport}, foreground = notificationTransport.foreground;
-  const store = new NotificationStore(); useNotificationStore(store);
+  const descriptors = {...descriptorTransport}, store = notificationStore;
   const broker = new ProcessBroker(); broker.register(pkg, pkg + ":fd", 7701);
   const client = callProxy<BrokerCalls>(broker.brokerPort(7701), brokerMethods);
   const path = "/data/data/" + pkg + "/foreground-fd.bin";
   vfs.write(path, Uint8Array.of(7, 8));
   const source = javaOpenFd(path, 2), file = openFd(source)!;
   const pfd = await newObj("android/os/ParcelFileDescriptor", "(Ljava/io/FileDescriptor;)V", await mkFd(source));
-  let recipient: JObj | undefined;
+  let recipient: JObj | undefined, restore = () => {};
   try {
-    usePathOwner(client.endpoint);
+    const { files, descriptors: calls, notificationForeground } = client.endpoint;
+    restore = useTestBroker({ files, descriptors: calls, notificationForeground, permissions }, true);
     descriptorTransport.local = broker.descriptorRights(7701);
-    notificationTransport.foreground = client.endpoint.notificationForeground;
     grantPermissions(["android.permission.POST_NOTIFICATIONS"]);
     await vcall(manager, "createNotificationChannel", "(Landroid/app/NotificationChannel;)V", await channel("brokerfd", "Broker FD", 3));
     const n = await build("brokerfd", "foreground descriptor");
@@ -239,8 +237,8 @@ test("foreground broker retains transferred rights after sender death and reject
     await store.clear(pkg, packageUid(pkg), {fromApp:true,keepState:false});
     await vcall(pfd, "close", "()V");
     for (const key of Object.keys(descriptorTransport)) Reflect.deleteProperty(descriptorTransport, key);
-    Object.assign(descriptorTransport, descriptors); usePathOwner(null); notificationTransport.foreground = foreground;
-    client.close(); broker.fail(7701, "test cleanup", NOT_CRASHED); useNotificationStore(original); vfs.delete(path);
+    Object.assign(descriptorTransport, descriptors); restore();
+    client.close(); broker.fail(7701, "test cleanup", NOT_CRASHED); vfs.delete(path);
   }
   expect(file.references).toBe(0);
 });

@@ -3,7 +3,7 @@
 // provider and broadcast requests and process deaths between them, and holds the stores every
 // process shares. Each realm reaches it through shell/process-endpoint.ts.
 import { PendingIntents, type PendingOperation } from "./pendingintents.ts";
-import { AccountStore } from "./accounts.ts";
+import { accountStore } from "../android/accounts.ts";
 import { encodeIntent, intentCodec } from "../android/intentipc.ts";
 import type { IntentCodec } from "./pendingintents.ts";
 import { packages } from "../android/packages.ts";
@@ -20,14 +20,14 @@ import type { FileSource } from "./lazyfile.ts";
 import { vfs } from "./vfs.ts";
 import { device, naturalLandscape } from "./config.ts";
 import { exported, componentPermission, componentProcess, resolveProvider } from "../android/pm.ts";
-import { PermissionStore } from "../android/permissions.ts";
+import { permissionStore } from "../android/permissions.ts";
 import { attrStr } from "../android/axml.ts";
 import type { createSQLiteSession } from "../android/sqlite.ts";
 import { notificationStore } from "../android/notification.ts";
 import { settingsStore } from "../android/settings.ts";
 import { awaited, rt } from "../jvm/runtime.ts";
 import type { WebCookies } from "./webcookies.ts";
-import { BrowserLocation } from "./geolocation.ts";
+import { geolocation } from "../android/locationmanager.ts";
 import { FileDescriptors, type DescriptorRights } from "./file-descriptors.ts";
 import { ProcessHosts, type ProcessHost } from "./process-host.ts";
 import type { StartPhase } from "./worker-control.ts";
@@ -84,7 +84,7 @@ export class ProcessRecord {
 }
 export class ProcessBroker {
   readonly files = new PrivateFiles();
-  readonly accounts = new AccountStore();
+  readonly accounts = accountStore;
   readonly intents = new PendingIntents(intentCodec, async (operation, fill, alarmCount) => {
     if (packages.get(operation.pkg)?.uid !== operation.uid)
       throw rt.mkThrowable("android/app/PendingIntent$CanceledException", "Creator package is unavailable");
@@ -114,13 +114,13 @@ export class ProcessBroker {
     if (operation && operation.uid !== this.entry(pid).uid) throw rt.mkThrowable("java/lang/SecurityException", "Only the creator may cancel a PendingIntent");
     this.intents.cancel(id);
   }
-  readonly location = new BrowserLocation();
+  readonly location = geolocation;
   readonly settings = settingsStore();
   constructor() {
     this.location.enabledChanged = () => this.settings.changed("secure", "location_mode");
     this.notifications.bindDescriptors(this.fileDescriptors);
   }
-  readonly permissions = new PermissionStore();
+  readonly permissions = permissionStore;
   private cookieStores = new Map<string, Promise<WebCookies>>();
   cookies(pkg: string): Promise<WebCookies> {
     let store = this.cookieStores.get(pkg);

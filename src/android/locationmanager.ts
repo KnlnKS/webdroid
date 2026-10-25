@@ -18,9 +18,7 @@ import { ownedBy } from "./packages.ts";
 import { BrowserLocation, type LocationEvent, type LocationFix } from "../shell/geolocation.ts";
 
 /** the browser's geolocation, which system_server's realm shares with the broker */
-export type Geolocation = Pick<BrowserLocation, "available" | "enabled" | "last" | "subscribe" | "remove">;
-let geolocation: Geolocation = new BrowserLocation();
-export function useGeolocation(source: Geolocation): void { geolocation = source; }
+export const geolocation = new BrowserLocation();
 /** LocationManager.isLocationEnabled, as a service in any process asks system_server's */
 export const locationEnabled = (): boolean | Promise<boolean> => after(hostedService("location"), binder =>
   after(scall("android/location/ILocationManager$Stub", "asInterface", "(Landroid/os/IBinder;)Landroid/location/ILocationManager;", binder),

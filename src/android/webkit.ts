@@ -12,7 +12,8 @@ import { after, vcall, newObj, staticField, JThread, iof, classNameOf } from "..
 import { toJsArray } from "../jvm/natives/jcoll.ts";
 import { device } from "../shell/config.ts";
 import { onMain } from "./mainloop.ts";
-import { cookieTransport, watchCookies } from "./cookies.ts";
+import { watchCookies } from "./cookies.ts";
+import { broker } from "../shell/broker-access.ts";
 import { WebBridge, type WebInterfaces } from "../shell/webbridge.ts";
 import { rendererPattern, rendererUrl } from "../shell/webrenderer.ts";
 import { parsePageMessage, request, respond, type Answers, type AppMessage, type LoadMessage, type PageMessage, type WebRequest,
@@ -146,7 +147,7 @@ export class WebViewChromium extends JObj {
         if (answer) void webAsset(m.path).catch(() => ({ status: 500 })).then((asset) => respond(m, answer, asset as Answers["webasset"]));
         return;
       case "webcookies":
-        if (answer) void cookieTransport.calls().cookieNetwork(m.url, this.url ?? "", m.values, this.settings.thirdPartyCookies)
+        if (answer) void broker().cookieNetwork(m.url, this.url ?? "", m.values, this.settings.thirdPartyCookies)
           .then((header) => respond(m, answer, header), () => respond(m, answer, ""));
         return;
       case "subframe":
@@ -191,7 +192,7 @@ export class WebViewChromium extends JObj {
   /** what a frame's document.cookie reads at `url` once it wrote `value`: a subframe's sees cookies
    *  first-party to the page, or any when third-party ones are allowed */
   private frameCookies(frame: RendererFrame, url: string, value?: string) {
-    return cookieTransport.calls().cookieDocument(url, frame.sub ? this.url ?? "" : null, this.settings.thirdPartyCookies, value);
+    return broker().cookieDocument(url, frame.sub ? this.url ?? "" : null, this.settings.thirdPartyCookies, value);
   }
   /** each frame's document.cookie, once the jar changed */
   private refreshCookies() {

@@ -19,6 +19,7 @@ import { NativeWindow, FIELD_INTEGER, FIELD_FLOAT, FIELD_STRING, FIELD_BLOB, sql
   SQLITE_INTERRUPT, SQLITE_CANTOPEN, SQLITE_TOOBIG, SQLITE_MISUSE, SQLITE_RANGE, SQLITE_ROW as ROW, SQLITE_DONE as DONE } from "./cursorwindow.ts";
 import { callFailure, type CallFailure } from "../shell/rpc.ts";
 import { javaFailure } from "../shell/broker-contract.ts";
+import { broker, remoteSystem } from "../shell/broker-access.ts";
 
 type SqlJs = Awaited<ReturnType<typeof initSqlJs>>;
 /** the C API and Emscripten FS vendor/sql.js/sqljs.patch exports */
@@ -313,14 +314,13 @@ function fillWindow(c: Connection, s: number, w: NativeWindow, startPos: number,
   return BigInt(startPos) << 32n | BigInt(total);
 }
 
-// ── the process boundary: a Worker's natives run in the broker (sqliteTransport), each process in a session
+// ── the process boundary: a Worker's natives run in the broker, each process in a session
 type SQLiteFamily = "platform" | "driver" | "connection" | "statement";
 type SQLiteValue = number | bigint | string | null | Int8Array | void;
 type WindowData = Pick<NativeWindow, "rows" | "cols" | "used" | "types" | "values">;
 export type SQLiteRequest = { family: SQLiteFamily; method: string; args: SQLiteValue[];
   window?: Pick<NativeWindow, "name" | "size" | "readOnly"> };
 export type SQLiteReply = { value: SQLiteValue; window?: WindowData; error?: CallFailure };
-export const sqliteTransport = { call: null as ((request: SQLiteRequest) => Promise<SQLiteReply>) | null };
 type NativeCall = (...args: never[]) => SQLiteValue | Promise<SQLiteValue>;
 type Handle = "connection" | "statement" | "window";
 /** what a native does to the handles a session keeps: opens a connection, prepares a statement, or ends either */
@@ -341,9 +341,9 @@ function registerSQLite(family: SQLiteFamily, cls: string, handles: Handle[], li
     const at = handles.indexOf("window");
     return [method, driven(function* (...args: SQLiteValue[]) {
       args = args.slice(0, arity);
-      if (!sqliteTransport.call) return yield* awaited(call(...args as never[]));
+      if (!remoteSystem()) return yield* awaited(call(...args as never[]));
       const window = at < 0 ? null : deref<NativeWindow>(args[at] as bigint);
-      const reply = yield* awaited(sqliteTransport.call({ family, method,
+      const reply = yield* awaited(broker().sqlite({ family, method,
         args: window ? args.map((value, i) => i === at ? 0n : value) : args,
         ...(window ? { window: { name: window.name, size: window.size, readOnly: window.readOnly } } : {}) }));
       if (window && !window.readOnly && reply.window) Object.assign(window, reply.window);

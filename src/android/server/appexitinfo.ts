@@ -12,6 +12,7 @@ import { logLine } from "../../native/kernel.ts";
 import { persisted } from "../../shell/device-storage.ts";
 import type { PackageState } from "../../shell/packagedata.ts";
 import { procIdentity } from "../../shell/procfs.ts";
+import { broker, remoteSystem } from "../../shell/broker-access.ts";
 
 export const REASON_EXIT_SELF = 1, REASON_SIGNALED = 2, REASON_CRASH = 4, REASON_CRASH_NATIVE = 5, REASON_USER_REQUESTED = 10;
 export type ExitRecord = {
@@ -47,13 +48,9 @@ const savedRecords = persisted("wd:exit-info:", (saved) => Array.isArray(saved) 
 export const exitRecordData: PackageState = { remove: (pkg) => savedRecords.remove(pkg), packages: () => savedRecords.packages() };
 /** a package's records, newest first */
 export const exitRecords = (pkg: string): ExitRecord[] => savedRecords.get(pkg) ?? [];
-/** Workers query/publish through the page owner; no localStorage replica is authoritative. */
-export const exitRecordTransport: {
-  records?: (pkg: string) => Promise<ExitRecord[]>;
-  publish?: (record: ExitRecord) => void;
-} = {};
+/** a Worker queries and publishes through the page owner; no localStorage replica is authoritative */
 export const queryExitRecords = (pkg: string): ExitRecord[] | Promise<ExitRecord[]> =>
-  exitRecordTransport.records ? exitRecordTransport.records(pkg) : exitRecords(pkg);
+  remoteSystem() ? broker().exitRecords(pkg) : exitRecords(pkg);
 /** The owner computes crash repetition against its current history, then persists before death. */
 export function recordRemoteExit(record: ExitRecord): ExitRecord {
   const canonical = {...copyExitRecord(record), dialog: isCrash(record) && crashedRecently(record.pkg, record.process, record.timestamp)};
@@ -118,7 +115,7 @@ function recordExit(status: ExitStatus): void {
     tombstone: status.signal !== undefined && status.tombstone ? status.tombstone.toBase64() : null, dialog: noted?.dialog ?? false,
     ...(fatalCrash ? {crash:copyCrashInfo(fatalCrash)} : {}),
   };
-  if (exitRecordTransport.publish) exitRecordTransport.publish(lastExit);
+  if (remoteSystem()) broker().processExited(lastExit);
   else save(lastExit);
 }
 onProcessExit(recordExit);

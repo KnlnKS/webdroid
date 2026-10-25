@@ -6,7 +6,7 @@ import "../../src/natives.ts";
 import { rt, JObj, declaredField } from "../../src/jvm/runtime.ts";
 import { classNameOf, newObj, vcall, scall } from "../../src/jvm/natives/jentry.ts";
 import { setAppHost } from "../../src/android/apphost.ts";
-import { testAppHost, fixtureDeadline } from "../../tests/java.ts";
+import { testAppHost, fixtureDeadline, useTestBroker } from "../../tests/java.ts";
 import { packages, PackageRecord, packageUid } from "../../src/android/packages.ts";
 import { emptyApk } from "../../src/android/res.ts";
 import { TV } from "../../src/android/axml.ts";
@@ -15,8 +15,8 @@ import { hostedService } from "../../src/android/binder.ts";
 import { newIntent, mkComponentName } from "../../src/android/intent.ts";
 import { deliverBroadcast } from "../../src/android/server/broadcastqueue.ts";
 import { startMainLooper } from "../../src/android/mainloop.ts";
-import { serviceTransport } from "../../src/android/server/activeservices.ts";
 import { ServiceRecords } from "../../src/shell/servicerecords.ts";
+import type { BrokerCalls } from "../../src/shell/broker-contract.ts";
 import { serveCalls,callProxy } from "../../src/shell/rpc.ts";
 console.warn = () => {};
 fixtureDeadline();
@@ -25,8 +25,8 @@ let creationGate: { entered: () => void; wait: Promise<void> } | undefined;
 const starts = new ServiceRecords({ send: () => null, connected: () => {}, persistent: () => false }).starts("", ""), ports = new MessageChannel();
 const stopStarts = serveCalls(ports.port1,Object.fromEntries(Object.entries(starts).map(([name,method]) =>
   [name,async (...args:unknown[]) => { await new Promise(resolve=>setTimeout(resolve,1)); if (name === "created" && creationGate) { creationGate.entered(); await creationGate.wait; } return (method as (...args:unknown[])=>unknown)(...args); }])));
-const remoteStarts = callProxy<typeof starts>(ports.port2,Object.keys(starts) as (keyof typeof starts)[]);
-serviceTransport.starts = () => remoteStarts.endpoint;
+const remoteStarts = callProxy<BrokerCalls["starts"]>(ports.port2,Object.keys(starts) as (keyof BrokerCalls["starts"])[]);
+useTestBroker({ starts: remoteStarts.endpoint });
 
 
 const PKG = "org.webdroid.test.am", SERVICE = PKG + ".Svc";

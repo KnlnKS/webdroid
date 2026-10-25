@@ -13,6 +13,7 @@ import { rendererOrigin, rendererStorage } from "../shell/webrenderer.ts";
 import type { StorageOp } from "../shell/webpage/protocol.ts";
 import type { PackageState } from "../shell/packagedata.ts";
 import { persisted } from "../shell/device-storage.ts";
+import { broker } from "../shell/broker-access.ts";
 
 /** the broker's, by package */
 const savedOrigins = persisted("wd:web-origins:", (saved) => Array.isArray(saved) ? saved.filter((o): o is string => typeof o === "string") : null);
@@ -32,10 +33,6 @@ export type WebStorageCalls = {
   webRenderer(origin: string): Promise<string>;
   webStorage(op: StorageOp, origin?: string): Promise<[string, {usage:number;quota:number}|null][]>;
 };
-/** the package's WebView data, which the broker holds */
-export const webStorageTransport: { calls: () => WebStorageCalls } = {
-  calls: () => { throw rt.mkThrowable("android/os/RemoteException", "Process transport unavailable"); },
-};
 /** Bound to the registered process package, never an identity supplied by a renderer. */
 export function canonicalWebStorage(pkg:string): WebStorageCalls {
   return {
@@ -49,9 +46,8 @@ export function canonicalWebStorage(pkg:string): WebStorageCalls {
     }),
   };
 }
-const storageCalls = () => webStorageTransport.calls();
 /** the renderer origin this process's pages of `webOrigin` render on */
-export const webRenderer = (webOrigin: string): Promise<string> => storageCalls().webRenderer(webOrigin);
+export const webRenderer = (webOrigin: string): Promise<string> => broker().webStorage.webRenderer(webOrigin);
 
 // the quota manager runs its tasks in order: a query after a delete sees it done
 let lane: Promise<unknown> = Promise.resolve();
@@ -77,13 +73,13 @@ const answer = (callback: JObj | null, value: () => unknown) => {
   if (callback) void onMain(() => rt.drive(function* (): Gen { yield vcall(callback, "onReceiveValue", "(Ljava/lang/Object;)V", yield value()); }()));
 };
 /** usage and quota of an origin; the quota manager answers an origin without data with no usage */
-const usageAndQuota = async (origin:string) => (await storageCalls().webStorage("usage",origin))[0]?.[1] ?? null;
+const usageAndQuota = async (origin:string) => (await broker().webStorage.webStorage("usage",origin))[0]?.[1] ?? null;
 rt.register({
   name: "webdroid/WebStorage", ctor: class extends JObj {}, sup: "android/webkit/WebStorage",
   methods: {
     // GetAllStorageKeys: the origins holding quota-managed data, each named by its URL spec
     "getOrigins(Landroid/webkit/ValueCallback;)V": (callback: JObj | null) => {
-      void storageCalls().webStorage("usage")
+      void broker().webStorage.webStorage("usage")
         .then((usages) => answer(callback, driven(function* (): Gen {
           const map: JObj = yield newObj("java/util/HashMap");
           for (const [o, u] of usages) {
@@ -103,10 +99,10 @@ rt.register({
     },
     // DeleteOriginFramework: its file systems and IndexedDB
     "deleteOrigin(Ljava/lang/String;)V": (origin: string) => {
-      void storageCalls().webStorage("origin",origin);
+      void broker().webStorage.webStorage("origin",origin);
     },
     // DeleteAllDataFramework: every origin's file systems, IndexedDB and localStorage
-    "deleteAllData()V": () => { void storageCalls().webStorage("data"); },
+    "deleteAllData()V": () => { void broker().webStorage.webStorage("data"); },
   },
 });
 

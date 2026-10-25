@@ -22,12 +22,16 @@ import { FdScope } from "../src/android/fd-scope.ts";
 import { settleRemoteMaps } from "../src/native/mappings.ts";
 import { kernelInit } from "../src/native/syscall.ts";
 import { BytesFile } from "../src/shell/lazyfile.ts";
-import { assetFd, scall } from "./java.ts";
+import { assetFd, scall, useTestBroker } from "./java.ts";
 import { FileDescriptors, type DescriptorCalls } from "../src/shell/file-descriptors.ts";
 import { callProxy, serveCalls } from "../src/shell/rpc.ts";
 import { isRemoteFd, processRights } from "../src/native/process-fd.ts";
 import { type JBuffer, addressOf, directAddress } from "../src/jvm/natives/jnio.ts";
-import { canonicalFilePaths, renamePath, makeFifo, usePathOwner, type FilePaths } from "../src/shell/file-path.ts";
+import { canonicalFilePaths, renamePath, makeFifo, type FilePaths, type PathOwner } from "../src/shell/file-path.ts";
+import type { BrokerCalls } from "../src/shell/broker-contract.ts";
+
+/** this realm as a Worker whose mutable files `owner` holds, or as the page again */
+const usePathOwner = (owner: PathOwner | null): void => { useTestBroker(owner ? owner as unknown as Partial<BrokerCalls> : {}, !!owner); };
 
 
 describe("android-pfd", () => {

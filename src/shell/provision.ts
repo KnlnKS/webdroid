@@ -10,7 +10,7 @@ import { mkComponentName, newIntent, putExtra } from "../android/intent.ts";
 import { vcall } from "../jvm/natives/jentry.ts";
 import { awaited, rt, type Gen } from "../jvm/runtime.ts";
 import { asSystem } from "../android/binder.ts";
-import { serviceTransport } from "../android/server/activeservices.ts";
+import { startRemoteService } from "../android/server/activeservices.ts";
 import { hexBytes } from "../jvm/abi.ts";
 
 let ready: Promise<void> | null = null;
@@ -44,6 +44,6 @@ export const provisionServices = (options: { attestationEnabled: boolean }): Pro
     const extras = { ...spec.provision.extras,
       ...(options.attestationEnabled && "attestationExtras" in spec.provision ? spec.provision.attestationExtras : {}) };
     for (const [key, value] of Object.entries(extras)) yield putExtra(intent, key, +value, "Z");
-    yield serviceTransport.start(owner, owner.process(component), intent, false);
+    yield startRemoteService(owner.pkg, owner.process(component), intent, false);
   }
 }()));

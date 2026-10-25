@@ -4,7 +4,7 @@
 // bundle the broker. Caller identity is bound to the port, never supplied in a request's arguments.
 import type { PendingAccess } from "../android/pendingintent.ts";
 import type { PermissionAccess } from "../android/permissions.ts";
-import type { UriGrantCalls } from "../android/urigrants.ts";
+import type { UriGrantCalls } from "../android/server/urigrants.ts";
 import type { WebStorageCalls } from "../android/webstorage.ts";
 import type { ForegroundNotificationRequest } from "../android/notification.ts";
 import type { SQLiteRequest, SQLiteReply } from "../android/sqlite.ts";

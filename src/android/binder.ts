@@ -16,6 +16,7 @@ import { jarray, i8, u8 } from "../jvm/abi.ts";
 import { handle, release, FINALIZER } from "./handles.ts";
 import { procIdentity } from "../shell/procfs.ts";
 import { ownedBy } from "./packages.ts";
+import { broker, processLife, remoteSystem } from "../shell/broker-access.ts";
 
 const F_GETFL = 3, O_RDONLY = 0;
 /** the binder driver's buffer for a process (BINDER_VM_SIZE), half of it for oneway calls */
@@ -33,15 +34,6 @@ export type ParcelData = { bytes: Uint8Array; objects: [number, BinderHandle | F
 export type Transaction = { handle: BinderHandle; code: number; flags: number; data: ParcelData; system?: boolean };
 export type TransactionReply = { handled: number; data: ParcelData };
 export type Caller = { pid: number; uid: number };
-export const binderTransport: {
-  transact: (request: Transaction) => Promise<TransactionReply>;
-  alive: (pid: number) => boolean | Promise<boolean>;
-  watch: (pid: number, died: () => void) => (() => void) | Promise<() => void>;
-} = {
-  transact: async () => { throw rt.mkThrowable("android/os/DeadObjectException", "Process unavailable"); },
-  alive: () => false,
-  watch: () => () => {},
-};
 const callerDeaths = new Map<number, Set<(pid: number) => void>>();
 /** `died(pid)` once process `pid` dies, until the returned function is called, as a hosted service's
  *  death recipient on its caller's binder drops what it kept for the caller; one watch serves each process */
@@ -52,7 +44,7 @@ export function onCallerDeath(pid: number, died: (pid: number) => void): () => v
   if (!callerDeaths.has(pid)) {
     callerDeaths.set(pid, recipients);
     const notify = () => { callerDeaths.delete(pid); for (const f of recipients) f(pid); };
-    void Promise.resolve(binderTransport.watch(pid, notify)).catch(notify);
+    processLife.watch(pid, notify).catch(notify);
   }
   recipients.add(died);
   return () => { recipients.delete(died); };
@@ -422,7 +414,7 @@ rt.register({ name: "webdroid/FileWriter", ctor: JFileWriter, sup: "android/os/B
 } });
 
 const proxyOf = (proxy: JObj) => proxyData.get(proxy)!;
-const pidAlive = (pid: number) => pid === procIdentity.pid || binderTransport.alive(pid);
+const pidAlive = (pid: number) => pid === procIdentity.pid || processLife.alive(pid);
 const proxyAlive = function (this: JObj) { return after(pidAlive(proxyOf(this).handle.pid), alive => +alive); };
 /** a transaction or reply the target's buffer cannot take fails, as signalExceptionForError reports
  *  FAILED_TRANSACTION for the data parcel's size */
@@ -469,11 +461,11 @@ const transact = driven(function* transact(target: BinderHandle, code: number, d
   // system_server outlives its callers, so the driver's queueing is all a oneway call to it can report;
   // one carrying no rights reaches it in order without the caller waiting
   if (flags & FLAG_ONEWAY && target.pid === SYSTEM_SERVER_PID && !sent.objects.length) {
-    binderTransport.transact(request).catch(logUncaught);
+    broker().transact(request).catch(logUncaught);
     return 1;
   }
   try {
-    const result = yield* awaited(binderTransport.transact(request));
+    const result = yield* awaited(broker().transact(request));
     if (reply) yield fillParcel(reply, result.data, processRights);
     else yield* awaited(releaseRights(result.data, processRights, false));
     return result.handled;
@@ -502,7 +494,7 @@ rt.registerJnis("android/os/BinderProxy", {
     const unlink = () => { received = true; cancel(); };
     deaths.set(recipient, unlink);
     try {
-      cancel = yield binderTransport.watch(target.pid, () => {
+      cancel = yield processLife.watch(target.pid, () => {
         if (received || deaths.get(recipient) !== unlink) return;
         received = true;
         deaths.delete(recipient);
@@ -552,31 +544,21 @@ export const newStub = driven(function* newStub$(cls: string): Gen<JObj> {
 const absentServices = new Set<string>();
 export const absentService = (...names: string[]): void => names.forEach((name) => absentServices.add(name));
 class JServiceManager extends JObj { binder: JObj | null = null; }
-/** a hosted service's binder, made when first asked for */
-let remoteServices = new Set<string>();
-let serviceLookup: ((name: string) => Promise<BinderHandle | null>) | undefined;
-/** system_server's handle of each service asked for: it outlives every app process */
-let remoteHandles = new Map<string, BinderHandle | Promise<BinderHandle | null>>();
-export function useSystemServiceAccess(names: Iterable<string>, lookup?: (name: string) => Promise<BinderHandle | null>): void {
-  remoteServices = new Set(names);
-  if (remoteServices.size && !lookup) throw new Error("System service lookup is required");
-  serviceLookup = lookup;
-  remoteHandles = new Map();
-}
+/** system_server's handle of each of its services a Worker asked for: it outlives every app process */
+const remoteHandles = new Map<string, BinderHandle | Promise<BinderHandle | null>>();
 export function ownedSystemService(name: string): BinderHandle | null | Promise<BinderHandle | null> {
   return after(localHostedService(name), exportBinder);
 }
+/** a hosted service's binder: system_server's through the broker for a `system` one in a Worker */
 export function hostedService(name: string): JObj | Promise<JObj> | null {
-  if (remoteServices.has(name) && serviceLookup) {
-    let handle = remoteHandles.get(name);
-    if (!handle) {
-      const handles = remoteHandles, asked = serviceLookup(name);
-      handles.set(name, handle = asked);
-      asked.then((h) => h ? handles.set(name, h) : handles.delete(name), () => handles.delete(name));
-    }
-    return after(handle, importBinder);
+  if (!remoteSystem() || !systemServices.has(name)) return localHostedService(name);
+  let handle = remoteHandles.get(name);
+  if (!handle) {
+    const asked = broker().systemService(name);
+    remoteHandles.set(name, handle = asked);
+    asked.then((h) => h ? remoteHandles.set(name, h) : remoteHandles.delete(name), () => remoteHandles.delete(name));
   }
-  return localHostedService(name);
+  return after(handle, importBinder);
 }
 function localHostedService(name: string): JObj | Promise<JObj> | null {
   const service = binderServices.get(name);

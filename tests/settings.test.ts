@@ -4,16 +4,15 @@ import { rt, JObj, declaredField } from "../src/jvm/runtime.ts";
 import { newObj, vcall, scall } from "../src/jvm/natives/jentry.ts";
 import { packages, type PackageRecord } from "../src/android/packages.ts";
 import { setProcessIdentity } from "../src/android/os.ts";
-import { useGeolocation } from "../src/android/locationmanager.ts";
-import { BrowserLocation } from "../src/shell/geolocation.ts";
+import { geolocation } from "../src/android/locationmanager.ts";
 import { hostedService } from "../src/android/binder.ts";
 import { mkUri, uriText, type JUri } from "../src/android/net.ts";
-import { settingsStore, useSettingsStore, useSettingsAccess } from "../src/android/settings.ts";
+import { settingsStore } from "../src/android/settings.ts";
 import type { SettingsAccess } from "../src/shell/settings.ts";
 import type { Calls } from "../src/shell/broker-contract.ts";
 import { callProxy, serveCalls } from "../src/shell/rpc.ts";
 import { systemProvider } from "../src/android/systemproviders.ts";
-import { bootApp, packageRecord, thrown } from "./java.ts";
+import { bootApp, packageRecord, thrown, useTestBroker } from "./java.ts";
 import { DEVICE_PROPERTIES } from "../src/shell/device-properties.ts";
 
 async function install(pkg: string, target: number, permissions: string[], certificate: number): Promise<PackageRecord> {
@@ -55,7 +54,7 @@ describe("settings-provider", () => {
       put: async (table, name, value) => { began(); await gate; return store.put(table, name, value); },
     });
     const client = callProxy<Calls<SettingsAccess>>(channel.port2, ["get", "entries", "put", "ssaidKey"]);
-    useSettingsAccess(client.endpoint);
+    const restore = useTestBroker({ settings: client.endpoint }, true);
     setProcessIdentity(4321, 1000);
     try {
       const pending = scall(GLOBAL, "putString", `(${CR}${S}${S})Z`, cr, key, "shared");
@@ -71,7 +70,7 @@ describe("settings-provider", () => {
       expect(await vcall(cursor, "getString", "(I)Ljava/lang/String;", 2)).toBe("shared");
       await vcall(cursor, "close", "()V");
     } finally {
-      release(); client.close(); stop(); useSettingsStore(store); store.put("global", key, null);
+      release(); client.close(); stop(); restore(); store.put("global", key, null);
       setProcessIdentity(4321, packages.get("org.webdroid.test.settings")!.uid);
     }
   });
@@ -81,17 +80,16 @@ describe("settings-provider", () => {
     expect(await thrown(() => scall(SYSTEM, "getInt", `(${CR}${S})I`, cr, "font_scale"))).toBe("android/provider/Settings$SettingNotFoundException: font_scale");
     expect(await scall(GLOBAL, "getString", `(${CR}${S})${S}`, cr, "device_name")).toBe(DEVICE_PROPERTIES["ro.product.model"]);
     expect(await scall(GLOBAL, "getFloat", `(${CR}${S}F)F`, cr, "animator_duration_scale", 0.5)).toBe(0.5);
-    const geolocation = { available: false, enabled: false, last: null, subscribe() {}, remove() {} };
-    useGeolocation(geolocation);
+    const available = vi.spyOn(geolocation, "available", "get").mockReturnValue(false), enabled = vi.spyOn(geolocation, "enabled", "get").mockReturnValue(false);
     try {
       const service = rt.make("webdroid/LocationManagerService");
       expect(await vcall(service, "hasProvider", "(Ljava/lang/String;)Z", "gps")).toBe(0);
-      geolocation.available = true;
+      available.mockReturnValue(true);
       expect(await vcall(service, "hasProvider", "(Ljava/lang/String;)Z", "gps")).toBe(1);
       expect(await scall(SECURE, "getInt", `(${CR}${S})I`, cr, "location_mode")).toBe(0);
-      geolocation.enabled = true;
+      enabled.mockReturnValue(true);
       expect(await scall(SECURE, "getInt", `(${CR}${S})I`, cr, "location_mode")).toBe(3);
-    } finally { useGeolocation(new BrowserLocation()); }
+    } finally { available.mockRestore(); enabled.mockRestore(); }
   });
 
   test("an app reads its SSAID, the same for every package with its signer", async () => {

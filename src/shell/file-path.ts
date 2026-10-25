@@ -5,6 +5,7 @@ import type { FdStat, FileStat } from "../native/fd.ts";
 import { isFifo, moveRemoteFifo, nameFifo } from "../native/pipe.ts";
 import { utf8 } from "../jvm/abi.ts";
 import type { DescriptorCalls } from "./file-descriptors.ts";
+import { broker, remoteSystem } from "./broker-access.ts";
 export type PathReply<T> = { errno: number; value: T };
 /** a change to a file's owner, group (-1 keeps either), permission bits or modification time (epoch ms) */
 export type AttributeChange = Partial<FileAttributes> & { mtime?: number };
@@ -39,11 +40,9 @@ export const isMutablePath = (path: string): boolean => /^\/(?:data\/(?:data|use
 /** the realm that owns the page's mutable files, as a process Worker reaches it through the broker: its path
  *  operations and the kernel of their descriptors */
 export type PathOwner = { files: FilePaths; descriptors: DescriptorCalls };
-let owner: PathOwner | null = null;
-export const usePathOwner = (realm: PathOwner | null): void => { owner = realm; };
 /** the realm that owns `path`, or every mutable file when none is given, when this realm does not: in a process
  *  Worker a mutable path is the page's */
-export const pathOwner = (path?: string): PathOwner | null => owner && (path === undefined || isMutablePath(path)) ? owner : null;
+export const pathOwner = (path?: string): PathOwner | null => remoteSystem() && (path === undefined || isMutablePath(path)) ? broker() : null;
 /** chmod, chown and utimes of `path` as process `uid` may make them: an owner changes its file's mode and times, and
  *  gives it to a group it is in (its own, or the cache and shared application gids ProcessList gives every app process) */
 export function changeFileAttributes(path: string, change: AttributeChange, uid = procIdentity.uid): number {
@@ -152,7 +151,7 @@ const localFilePaths: Answering<Operations, true> = {
   fileFifo: makeFifo,
   fileSetAttributes: (path, change) => changeFileAttributes(path, change),
 };
-const owned = () => owner!.files;
+const owned = () => broker().files;
 /** the owning realm's path operations; this process's pipes for its fifos follow their names (pipe.ts) */
 const ownerFilePaths: FilePaths = {
   fileStat: path => owned().fileStat(path),

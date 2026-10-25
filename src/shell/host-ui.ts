@@ -3,6 +3,7 @@
 // the user's gesture there, so a process Worker reaches it through the broker.
 
 import { methodsOf } from "./rpc.ts";
+import { broker, remoteSystem } from "./broker-access.ts";
 
 // lib.dom types the handles but not the pickers
 declare global {
@@ -138,6 +139,4 @@ const pageUi: HostUi = {
     });
   },
 };
-let ui = (): HostUi => pageUi;
-export const hostUi = (): HostUi => ui();
-export const useHostUi = (remote: () => HostUi): void => { ui = remote; };
+export const hostUi = (): HostUi => remoteSystem() ? broker().ui : pageUi;
