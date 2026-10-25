@@ -10,16 +10,27 @@ import type { MC } from "./method.ts";
 import { R as KR } from "./kinds.ts";
 
 const NONE: readonly string[] = [];
+/** a field access's object web and the struct its field belongs to */
+interface Shadow { web: number; struct: number; key: string }
+export const shadowKey = (web: number, struct: number) => `${web}:${struct}`;
 
-/** `typed` holds "web:struct" for a web whose shadow local for that struct type currently holds the web's value */
-export interface Facts { nonNull: Set<number>; inited: Set<string>; typed: Set<string> }
-export const newFacts = (): Facts => ({ nonNull: new Set(), inited: new Set(), typed: new Set() });
-export const cloneFacts = (f: Facts): Facts => ({ nonNull: new Set(f.nonNull), inited: new Set(f.inited), typed: new Set(f.typed) });
+/** `typed` holds, by web, the struct types whose shadow local currently holds the web's value */
+export interface Facts { nonNull: Set<number>; inited: Set<string>; typed: Map<number, Set<number>> }
+export const newFacts = (): Facts => ({ nonNull: new Set(), inited: new Set(), typed: new Map() });
+export const cloneFacts = (f: Facts): Facts => {
+  const typed = new Map<number, Set<number>>();
+  for (const [w, s] of f.typed) typed.set(w, new Set(s));
+  return { nonNull: new Set(f.nonNull), inited: new Set(f.inited), typed };
+};
 const meet = (a: Facts, b: Facts): boolean => {
   let changed = false;
   for (const w of a.nonNull) if (!b.nonNull.has(w)) { a.nonNull.delete(w); changed = true; }
   for (const c of a.inited) if (!b.inited.has(c)) { a.inited.delete(c); changed = true; }
-  for (const k of a.typed) if (!b.typed.has(k)) { a.typed.delete(k); changed = true; }
+  for (const [w, s] of a.typed) {
+    const o = b.typed.get(w);
+    for (const t of s) if (!o?.has(t)) { s.delete(t); changed = true; }
+    if (!s.size) a.typed.delete(w);
+  }
   return changed;
 };
 
@@ -31,12 +42,12 @@ export class MethodFacts {
   readonly entry: Facts[];
   private mc: MC;
   private initedAt = new Map<number, readonly string[]>();
-  private shadowAt = new Map<number, string | undefined>();
+  private shadowAt = new Map<number, Shadow | undefined>();
   constructor(mc: MC) {
     this.mc = mc;
     const seen = new Set<string>();
     for (const ins of mc.prepared.instructions) {
-      const key = this.fieldKey(ins);
+      const key = this.fieldKey(ins)?.key;
       if (key === undefined) continue;
       if (seen.has(key)) this.shadowKeys.add(key); else seen.add(key);
     }
@@ -51,12 +62,12 @@ export class MethodFacts {
     const d = mc.typing.def(ins.pc);
     for (const c of this.initedBy(ins)) f.inited.add(c);
     const shadow = this.shadowKey(ins);
-    if (shadow) f.typed.add(shadow);
+    if (shadow) { const s = f.typed.get(shadow.web); if (s) s.add(shadow.struct); else f.typed.set(shadow.web, new Set([shadow.struct])); }
     if (d < 0) return;
     const nn = this.definesNonNull(ins, f);
     f.nonNull.delete(d);
     if (nn) f.nonNull.add(d);
-    if (f.typed.size) { const p = d + ":"; for (const k of f.typed) if (k.startsWith(p)) f.typed.delete(k); }
+    if (f.typed.size) f.typed.delete(d);
   }
 
   private analyze(): Facts[] {
@@ -122,21 +133,23 @@ export class MethodFacts {
     const w = from < 0 ? -1 : this.mc.typing.use(ins.pc, from);
     return w >= 0 && f.nonNull.has(w);
   }
-  /** the shadow key of the field access `ins` if its object shares a cast, else undefined */
-  private shadowKey(ins: Ins): string | undefined {
+  /** the shadow of the field access `ins` if its object shares a cast, else undefined */
+  private shadowKey(ins: Ins): Shadow | undefined {
     if (!this.shadowKeys.size || !isFieldAccess(ins.op)) return undefined;
     if (this.shadowAt.has(ins.pc)) return this.shadowAt.get(ins.pc);
-    const key = this.fieldKey(ins), shared = key !== undefined && this.shadowKeys.has(key) ? key : undefined;
+    const s = this.fieldKey(ins), shared = s && this.shadowKeys.has(s.key) ? s : undefined;
     this.shadowAt.set(ins.pc, shared);
     return shared;
   }
-  /** "web:struct" of an iget or iput's object and the struct of its field, unless it is a symbolic site or its field fails to resolve */
-  private fieldKey(ins: Ins): string | undefined {
+  /** an iget or iput's object and the struct of its field, unless it is a symbolic site or its field fails to resolve */
+  private fieldKey(ins: Ins): Shadow | undefined {
     const mc = this.mc;
     if (!isFieldAccess(ins.op) || mc.deferredSite(ins)) return undefined;
-    const w = mc.typing.use(ins.pc, ins.b);
-    if (w < 0) return undefined;
+    const web = mc.typing.use(ins.pc, ins.b);
+    if (web < 0) return undefined;
     const r = mc.fieldOf(ins.c, false);
-    return failed(r) ? undefined : `${w}:${mc.cx.structFor(r.decl)}`;
+    if (failed(r)) return undefined;
+    const struct = mc.cx.structFor(r.decl);
+    return { web, struct, key: shadowKey(web, struct) };
   }
 }

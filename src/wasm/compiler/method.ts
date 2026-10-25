@@ -13,7 +13,7 @@ import { type Flow, Go, structureAny } from "./structure.ts";
 import { emitPolymorphic } from "./poly.ts";
 import { emitCustom, emitHandleConstant, emitTypeConstant } from "./handles.ts";
 import { bindInvoke, failed, invokeSite, resolveFieldRef, typeFailure, type InvokeSite, type LinkFailure } from "./linkage.ts";
-import { MethodFacts, cloneFacts, newFacts, type Facts } from "./facts.ts";
+import { MethodFacts, cloneFacts, newFacts, shadowKey, type Facts } from "./facts.ts";
 import { isStackOverflow } from "./exc.ts";
 import { WHOLE_FRAME, planDepth, type DepthPlan } from "./depth.ts";
 import { BINOPS, Family, Invoke, endsBlock, familyOf, invokeKind, isIf, isInvoke, isMoveResult, narrowBits, typeLetter, variantOf, wideBits, type Binop } from "../../jvm/opcodes.ts";
@@ -418,9 +418,9 @@ export class MC {
   /** emit "ensure class initialized", unless an earlier instruction on every path to here has */
   ensure(cls: string) { this.cx.emitEnsure(this.code, cls, this.facts.inited); }
   refTo(reg: number, struct: number) {
-    const c = this.code, key = `${this.useWeb(reg)}:${struct}`;
+    const c = this.code, web = this.useWeb(reg), key = shadowKey(web, struct);
     let local = this.shadows.get(key);
-    if (this.facts.typed.has(key) && local !== undefined) { c.lget(local); return; }
+    if (this.facts.typed.get(web)?.has(struct) && local !== undefined) { c.lget(local); return; }
     this.nonNull(reg); c.refCast(struct);
     if (this.known?.shadowKeys.has(key)) { if (local === undefined) this.shadows.set(key, local = c.newLocal(refNull(struct))); c.ltee(local); }
   }
