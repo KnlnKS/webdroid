@@ -1,10 +1,12 @@
-// The tab's CanvasKit, Skia compiled to wasm: SkPathOps and SkStroke for android.graphics.Path, and
-// text drawn into bitmaps through FreeType's rasterizer. A process realm uses its page's: the tab's
-// realms share one thread, so one wasm heap and one set of fonts serve them all.
+// The tab's CanvasKit, Skia compiled to wasm: SkPathOps (Path.op) and SkStroke for
+// android.graphics.Path, and text drawn into bitmaps through FreeType's rasterizer. A process realm
+// uses its page's: the tab's realms share one thread, so one wasm heap and one set of fonts serve them all.
 import CanvasKitModule from "canvaskit-wasm";
 import canvasKitPackage from "canvaskit-wasm/package.json" with { type: "json" };
 import type { CanvasKit, Font, Paint, Surface, Typeface, FillType } from "canvaskit-wasm";
+import { rt } from "../jvm/runtime.ts";
 import { after } from "../jvm/natives/jentry.ts";
+import { NativePath, expand, pathAt } from "./path.ts";
 import { servedFont, platformFontBytes } from "./fonts.ts";
 import { colorGlyphClips, ownBuffer } from "./sfnt.ts";
 
@@ -37,32 +39,67 @@ function canvasKit(): CanvasKit | Promise<CanvasKit> {
   }));
 }
 
-/** CanvasKit path commands, verb then points: 0 move, 1 line, 2 quad, 3 conic (with its weight), 4 cubic, 5 close */
-export type PathCommands = number[] | Float32Array;
-/** SkPathOps' Op over two paths of the given SkPathFillTypes: the result's commands and fill type,
- *  or null where Skia finds none */
-export function pathOp(a: PathCommands, aFill: number, b: PathCommands, bFill: number, op: number): { cmds: Float32Array; fill: number } | null | Promise<{ cmds: Float32Array; fill: number } | null> {
+/** SkPathOp, which Path$Op's ordinals follow */
+const DIFFERENCE = 0;
+/** Path.op: SkPathOps' result over two paths, and its fill type, into `dst`; false where Skia finds none */
+export function pathOp(dst: NativePath, a: NativePath, b: NativePath, op: number): boolean | Promise<boolean> {
+  const ca = expand(a.ops, true), cb = expand(b.ops, true);
   return after(canvasKit(), (k) => {
-    const pa = k.Path.MakeFromCmds(a), pb = k.Path.MakeFromCmds(b);
+    const pa = k.Path.MakeFromCmds(ca), pb = k.Path.MakeFromCmds(cb);
     try {
-      if (!pa || !pb) return null;
-      pa.setFillType(fillTypes[aFill]); pb.setFillType(fillTypes[bFill]);
-      return pa.op(pb, [k.PathOp.Difference, k.PathOp.Intersect, k.PathOp.Union, k.PathOp.XOR, k.PathOp.ReverseDifference][op])
-        ? { cmds: pa.toCmds(), fill: pa.getFillType().value } : null;
+      if (!pa || !pb) return false;
+      pa.setFillType(fillTypes[a.fillType()]); pb.setFillType(fillTypes[b.fillType()]);
+      if (!pa.op(pb, [k.PathOp.Difference, k.PathOp.Intersect, k.PathOp.Union, k.PathOp.XOR, k.PathOp.ReverseDifference][op])) return false;
+      setCommands(dst, pa.toCmds());
+      dst.setFillType(pa.getFillType().value);
+      return true;
     } finally { pa?.delete(); pb?.delete(); }
   });
 }
-/** SkStroke: a path's outline at the stroke's width, cap and join (Paint's ordinals), as commands */
-export function strokeCommands(cmds: PathCommands, width: number, miter: number, cap: number, join: number): Float32Array | null | Promise<Float32Array | null> {
+/** SkStroke: `src`'s outline at the stroke's width, cap and join (Paint's ordinals) into `dst`,
+ *  emptied where Skia makes none */
+export function strokePath(dst: NativePath, src: NativePath, width: number, miter: number, cap: number, join: number): void | Promise<void> {
+  const cmds = expand(src.ops, true);
   return after(canvasKit(), (k) => {
     const path = k.Path.MakeFromCmds(cmds);
-    if (!path) return null;
     try {
-      return path.stroke({ width, miter_limit: miter, precision: 1, cap: [k.StrokeCap.Butt, k.StrokeCap.Round, k.StrokeCap.Square][cap],
-        join: [k.StrokeJoin.Miter, k.StrokeJoin.Round, k.StrokeJoin.Bevel][join] }) ? path.toCmds() : null;
-    } finally { path.delete(); }
+      const stroked = path?.stroke({ width, miter_limit: miter, precision: 1, cap: [k.StrokeCap.Butt, k.StrokeCap.Round, k.StrokeCap.Square][cap],
+        join: [k.StrokeJoin.Miter, k.StrokeJoin.Round, k.StrokeJoin.Bevel][join] });
+      if (stroked) setCommands(dst, path!.toCmds()); else dst.reset();
+    } finally { path?.delete(); }
   });
 }
+/** `dst` set to CanvasKit's commands: verb (MOVE..CLOSE) then its points, a conic's weight after them */
+function setCommands(dst: NativePath, cmds: Float32Array): void {
+  dst.reset();
+  for (let i = 0; i < cmds.length;) {
+    const verb = cmds[i++];
+    if (verb === 0) dst.moveTo(cmds[i++], cmds[i++]);
+    else if (verb === 1) dst.lineTo(cmds[i++], cmds[i++]);
+    else if (verb === 2) { dst.quadTo(cmds[i], cmds[i + 1], cmds[i + 2], cmds[i + 3]); i += 4; }
+    else if (verb === 3) { dst.conicTo(cmds[i], cmds[i + 1], cmds[i + 2], cmds[i + 3], cmds[i + 4]); i += 5; }
+    else if (verb === 4) { dst.cubicTo(cmds[i], cmds[i + 1], cmds[i + 2], cmds[i + 3], cmds[i + 4], cmds[i + 5]); i += 6; }
+    else dst.close();
+  }
+}
+/** a path's inverse fill within [l, t, r, b], as Canvas2D can fill it, once CanvasKit (which the page loads before anything draws) can subtract it */
+export function inversePath(path: NativePath, l: number, t: number, r: number, b: number): [Path2D, CanvasFillRule] | Promise<[Path2D, CanvasFillRule]> {
+  if (path.fillRule === "evenodd") {
+    const inverse = new Path2D();
+    inverse.rect(l, t, r - l, b - t);
+    inverse.addPath(path.path());
+    return [inverse, "evenodd"];
+  }
+  // the bounds less the path under its plain fill
+  const outer = new NativePath(), plain = new NativePath(), result = new NativePath();
+  outer.addRect(l, t, r, b, 0);
+  plain.set(path);
+  plain.setFillType(path.fillType() & 1);
+  return after(pathOp(result, outer, plain, DIFFERENCE), (): [Path2D, CanvasFillRule] => [result.path(), result.fillRule]);
+}
+rt.registerJnis("android/graphics/Path", {
+  "nOp(JJIJ)Z": (a: bigint, b: bigint, op: number, dst: bigint) => after(pathOp(pathAt(dst), pathAt(a), pathAt(b), op), Number),
+});
 
 function inkBounds(font: Font, paint: Paint, glyphs: Uint16Array, positions: Float32Array, x: number, y: number,
   matrix: DOMMatrix, width: number, height: number): [number, number, number, number] | null {

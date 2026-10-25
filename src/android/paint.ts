@@ -13,11 +13,11 @@ import { COMPOSITE, BLEND_MODES, cssColor, setEdges, emptyBox } from "./graphics
 import type { NativeColorFilter } from "./colorfilter.ts";
 import type { NativeShader } from "./shader.ts";
 import { colorLongAt } from "./bitmap.ts";
-import { NativePath, skCommands, setSkCommands, pathAt } from "./path.ts";
+import { NativePath, pathAt } from "./path.ts";
 import { type NativeMaskFilter, maskFilterAt } from "./maskfilter.ts";
 import { type NativePathEffect, DashEffect, effectAt, strokeRec } from "./patheffect.ts";
 import { shapeTextRun, layoutOutlines, layoutBounds, hasGlyph } from "./shaping.ts";
-import { strokeCommands } from "./skia.ts";
+import { strokePath } from "./skia.ts";
 import { deviceScale } from "./matrix.ts";
 import { recordOrRun, transformOf, type Ctx2D } from "./recording.ts";
 
@@ -231,8 +231,7 @@ function fillPath(p: NativePaint, src: NativePath, dst: NativePath): boolean | P
   const rec = strokeRec(p), tmp = new NativePath();
   const path = p.pathEffect?.filter(tmp, src, rec) ? tmp : src;
   if (rec.fill || rec.width === 0) { dst.set(path); return rec.fill; }
-  return after(strokeCommands(skCommands(path), rec.width, p.strokeMiter, CAPS.indexOf(p.strokeCapN), JOINS.indexOf(p.strokeJoinN)), (out) => {
-    if (out) setSkCommands(dst, out); else dst.reset();
+  return after(strokePath(dst, path, rec.width, p.strokeMiter, CAPS.indexOf(p.strokeCapN), JOINS.indexOf(p.strokeJoinN)), () => {
     if (rec.strokeAndFill) dst.append(path);
     return true;
   });

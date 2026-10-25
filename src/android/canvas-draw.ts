@@ -4,12 +4,13 @@
 
 import { recordOrRun, type Ctx2D } from "./recording.ts";
 import { tryBitmapLine, tryBitmapOval, tryBitmapPath, tryBitmapRect, tryBitmapRoundRect } from "./bitmap-raster.ts";
-import { drawSkiaText, SKIA_TEXT_FACE, SKIA_EMOJI_FACE } from "./skia.ts";
+import { drawSkiaText, inversePath, SKIA_TEXT_FACE, SKIA_EMOJI_FACE } from "./skia.ts";
 import { rt } from "../jvm/runtime.ts";
 import { after } from "../jvm/natives/jentry.ts";
 import { charsToString } from "../jvm/abi.ts";
 import { deref } from "./handles.ts";
-import { NativePath, PathMeasure, inversePath, pathAt } from "./path.ts";
+import { NativePath, pathAt } from "./path.ts";
+import { PathMeasure } from "./pathmeasure.ts";
 import type { NativeRegion } from "./region.ts";
 import { NativeBitmap, bitmapAt, ALPHA_8, ARGB_8888, PREMUL, OPAQUE, setPixels, colorLongAt } from "./bitmap.ts";
 import { drawGlyphs, cssFont, shapeTextRun, hyphenEdited, graphemes, clusterwise, shapeStyle } from "./shaping.ts";

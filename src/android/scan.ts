@@ -4,7 +4,8 @@
 // and hairlines stepped as SkScan_Hairline steps them. bitmap-raster.ts decides which draws take them.
 
 import type { Ctx2D, Mat2D } from "./recording.ts";
-import { type NativePath, type Sink, chopCubicAt, chopQuadAt, walkPath } from "./path.ts";
+import { type NativePath, type Sink, walkPath } from "./path.ts";
+import { chopCubicAt, chopQuadAt } from "./pathmeasure.ts";
 import type { Box } from "./graphics.ts";
 
 type Point = [number, number];
