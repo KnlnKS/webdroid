@@ -57,7 +57,7 @@ export function wasmEntry(w: World): WasmEntry {
 function makeEntry(w: World): WasmEntry {
   const { bridge, prog, sched } = w;
   const missing = (what: string): Error => rt.unimplemented(what);
-  const recs = new WeakMap<JThread, ThreadRec>(), javaStrands = new WeakMap<HostStrand, Strand>();
+  const recs = new WeakMap<JThread, ThreadRec>();
   const jthreadOf = (rec: ThreadRec): JThread => {
     if (rec === sched.mainRec) return mainThread;
     let t = rec.host as JThread | null;
@@ -75,7 +75,7 @@ function makeEntry(w: World): WasmEntry {
   let hostCurrent = curThread;
   const hostStrandOf = (s: Strand): HostStrand => {
     let host = s.host as HostStrand | null;
-    if (!host) { s.host = host = new HostStrand(jthreadOf(s.thread)); javaStrands.set(host, s); }
+    if (!host) { s.host = host = new HostStrand(jthreadOf(s.thread)); host.tier = s; }
     return host;
   };
   // /proc/self/task: the main thread, the Java threads Thread.start made and the native threads, by their native names
@@ -99,7 +99,7 @@ function makeEntry(w: World): WasmEntry {
   /** the strand whose native is entering Java, while it lives: the one running on this stack, or the one a native resumed as after a wait (Runtime.drive), as rt.cur names it.
    *  The globals name a strand until a later reaction idles them, after its stack ends: they are its turn only while rt.cur is its own */
   const nativeOf = (): Strand | null => {
-    const s = javaStrands.get(rt.cur);
+    const s = rt.cur.tier as Strand | null;
     return s && !s.root && sched.strands[s.id] === s ? s : null;
   };
   /** the thread whose turn callOn is running; else the thread of the native that enters Java, else the main thread */
