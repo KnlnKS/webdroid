@@ -12,7 +12,7 @@ import type { ClassRt, World } from "../link/world.ts";
 import { rtfns, type RtName } from "./rtfns.ts";
 import { finalDispatch, type LinkFailure } from "./linkage.ts";
 import { SLOT, THROWERS, type Thrower } from "./exc.ts";
-import { STRING, StructStrings } from "./strings.ts";
+import { STRING, StructStrings, stringSites } from "./strings.ts";
 import { helpers as HELPERS, type HelperName } from "./helpers.ts";
 import type { NativeBinder } from "../link/hostapi.ts";
 
@@ -104,6 +104,8 @@ export type LinkEnv = Pick<World, "prog" | "natives" | "intrinsic" | "link" | "c
   stats: Pick<World["stats"], "phase">; cha: Pick<World["cha"], "targets">; dispatch: Pick<World["dispatch"], "vslot">;
   classModules: Pick<World["classModules"], "ensureBody">; units: Pick<World["units"], "sharedHelpers">;
 };
+/** what compiling a method reads of its code (Compiler.analysis) */
+export interface Analysis { prepared: PreparedMethod; typing: Typing; strings: ReadonlyMap<number, "alloc" | "init"> }
 /** per call site (caller and DEX pc): the implementations worth a guarded direct call (Planner.group) */
 export type CallPlan = ReadonlyMap<string, readonly MethodInfo[]>;
 /** a function of Compiler.buildSynthetics */
@@ -164,7 +166,7 @@ export class Compiler implements Base {
   str: StructStrings;
   /** the production natives this module imports, by method id, and their import indices */
   nativeImports = new Map<string, number>();
-  private analyses = new Map<MethodInfo, { prepared: PreparedMethod; typing: Typing }>();
+  private analyses = new Map<MethodInfo, Analysis>();
   symbolicTable?: number;
   symbolicImports = new Map<string, { slot: number; site: SymbolicSite }>();
   private memory = false;
@@ -629,12 +631,12 @@ export class Compiler implements Base {
     return this.defineFn(name, params, results, body, true);
   }
 
-  /** `m`'s decoded code and typing, timed as phases: kept from the declaring of its symbolic sites until its compile takes them (`last`) */
-  analysis(m: MethodInfo, last = false): { prepared: PreparedMethod; typing: Typing } {
+  /** `m`'s decoded code, typing and String sites, timed as phases: kept from the declaring of its symbolic sites until its compile takes them (`last`) */
+  analysis(m: MethodInfo, last = false): Analysis {
     let a = this.analyses.get(m);
     if (a) { if (last) this.analyses.delete(m); return a; }
     const phase = this.w.stats.phase, item = m.dex.code(m.codeOff), t0 = performance.now(), prepared = prepareMethod(item), t1 = performance.now();
-    a = { prepared, typing: inferTyping(m.dex, item, m.desc, m.isStatic, prepared) };
+    a = { prepared, typing: inferTyping(m.dex, item, m.desc, m.isStatic, prepared), strings: stringSites(m.dex, prepared) };
     phase.prepare += t1 - t0; phase.infer += performance.now() - t1;
     if (!last) this.analyses.set(m, a);
     return a;

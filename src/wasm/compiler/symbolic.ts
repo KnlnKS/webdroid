@@ -7,11 +7,12 @@ import { symbolicInstruction, type SymbolicSite } from "./sites.ts";
 import { T } from "./wasmbin.ts";
 
 // A resolved symbolic site's operation: no method IR or copied callees, and its inputs are the caller's bits. It lowers only the instructions
-// symbolicInstruction selects, whose lowering reaches registers through get and set alone, never the typing, prepared code or flow this MC lacks.
+// symbolicInstruction selects, none a String site, whose lowering reaches registers through get and set alone, never the typing, prepared code or flow
+// this MC lacks.
 class SymbolicMC extends MC {
   private inputs: SymbolicSite[4];
   outputLocal = -1;
-  constructor(cx: Compiler, m: MethodInfo, inputs: SymbolicSite[4]) { super(cx, m); this.inputs = inputs; }
+  constructor(cx: Compiler, m: MethodInfo, inputs: SymbolicSite[4]) { super(cx, m); this.inputs = inputs; this.strings = new Map(); }
   override consumeResult(): void {}
   protected override copyReference(reg: number): void { this.get("L", reg); this.set("L"); }
   override set(_kind: Kind): void { this.code.lset(this.outputLocal); }

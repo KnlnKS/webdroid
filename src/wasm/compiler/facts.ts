@@ -7,7 +7,6 @@ import { ifTarget, type PreparedInstruction as Ins } from "../../jvm/prepared.ts
 import { R as KR } from "./infer.ts";
 import { Family, Invoke, familyOf, invokeKind, isFieldAccess, nullChecked, typeLetter, variantOf } from "../../jvm/opcodes.ts";
 import { failed } from "./linkage.ts";
-import { stringSite } from "./strings.ts";
 import type { MC } from "./method.ts";
 
 const NONE: readonly string[] = [];
@@ -46,8 +45,9 @@ export class MethodFacts {
 
   /** applies the effect of `ins` to `f`, once it has been emitted */
   step(ins: Ins, f: Facts): void {
+    // a String constructor call's receiver is the allocation, which holds null until the call makes the String
     const mc = this.mc, reg = nullChecked(ins);
-    if (reg >= 0 && !(familyOf(ins.op) === Family.Invoke && mc.binding(ins)?.k === "string")) { const w = mc.typing.use(ins.pc, reg); if (w >= 0 && mc.typing.kind[w] === KR) f.nonNull.add(w); }
+    if (reg >= 0 && mc.strings.get(ins.pc) !== "init") { const w = mc.typing.use(ins.pc, reg); if (w >= 0 && mc.typing.kind[w] === KR) f.nonNull.add(w); }
     const d = mc.typing.def(ins.pc);
     for (const c of this.initedBy(ins)) f.inited.add(c);
     const shadow = this.shadowKey(ins);
@@ -108,7 +108,7 @@ export class MethodFacts {
     const mc = this.mc;
     if (mc.deferredSite(ins)) return undefined;
     const f = familyOf(ins.op);
-    if (f === Family.NewInstance) return stringSite(mc.dex, ins) ? undefined : mc.types.typeName(ins.b);
+    if (f === Family.NewInstance) return mc.strings.has(ins.pc) ? undefined : mc.types.typeName(ins.b);
     if (f !== Family.Invoke) { const r = mc.fieldOf(ins.b, true); return failed(r) ? undefined : r.f.owner; }
     const { target } = mc.invoke(ins);
     return target === "clone" || failed(target) ? undefined : target.cls;
@@ -116,7 +116,7 @@ export class MethodFacts {
   /** whether the register `ins` defines surely holds a reference: an allocation, a constant, the exception caught, or a copy of one */
   private definesNonNull(ins: Ins, f: Facts): boolean {
     const family = familyOf(ins.op);
-    if (family === Family.NewInstance) return !stringSite(this.mc.dex, ins);
+    if (family === Family.NewInstance) return !this.mc.strings.has(ins.pc);
     if (family === Family.ConstString || family === Family.ConstClass || family === Family.NewArray || family === Family.MoveException) return true;
     const from = family === Family.CheckCast ? ins.a : family === Family.Move && typeLetter(ins.op) === "L" ? ins.b : -1;
     const w = from < 0 ? -1 : this.mc.typing.use(ins.pc, from);

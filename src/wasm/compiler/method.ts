@@ -1,6 +1,6 @@
 import { emitSymbolicSite, siteKey } from "./sites.ts";
 import { emitProfile } from "./profile.ts";
-import { STRING, stringSite } from "./strings.ts";
+import { STRING } from "./strings.ts";
 import { Code, OP, inlineMark } from "./code.ts";
 import { T, ref, refNull, type VT } from "./wasmbin.ts";
 import { kindOf, mid, type FieldInfo, type Kind, type MethodInfo } from "./program.ts";
@@ -73,6 +73,8 @@ export function compileMethod(cx: Compiler, m: MethodInfo): Code {
 export class MC {
   cx: Compiler; m: MethodInfo;
   code: Code; prepared!: PreparedMethod; flow!: Flow; typing!: Typing; item; dex;
+  /** the String allocations and constructor calls, by pc (stringSite) */
+  strings!: ReadonlyMap<number, "alloc" | "init">;
   /** the types the method's dex names, as its class's loader sees them */
   types: DexTypes;
   /** wasm local of each web */
@@ -168,8 +170,8 @@ export class MC {
   setNum(k: number): void { if (KINDS[k].toBits) this.store(this.cur); else this.set(KINDS[k].abi); }
 
   run(): void {
-    const { m, item, cx } = this, phase = cx.w.stats.phase, { prepared, typing } = cx.analysis(m, true);
-    this.prepared = prepared; this.typing = typing;
+    const { m, item, cx } = this, phase = cx.w.stats.phase, { prepared, typing, strings } = cx.analysis(m, true);
+    this.prepared = prepared; this.typing = typing; this.strings = strings;
     let t = performance.now();
     const lap = (name: keyof typeof phase) => { const n = performance.now(); phase[name] += n - t; t = n; };
     let flow: Flow;
@@ -465,7 +467,7 @@ export class MC {
       case Family.NewInstance: {
         if (this.unresolved(types.type(b))) return;
         // a String is made by the constructor call, which assigns its registers
-        if (stringSite(dex, ins) === "alloc") c.anyNull(); else { const name = types.typeName(b); this.ensure(name); cx.emitNew(c, name); }
+        if (this.strings.has(ins.pc)) c.anyNull(); else { const name = types.typeName(b); this.ensure(name); cx.emitNew(c, name); }
         this.set("L"); return;
       }
       case Family.NewArray: if (this.unresolved(types.type(ins.c))) return; cx.emitNewArray(c, types.type(ins.c), () => this.get("I", ins.b)); this.set("L"); return;
@@ -726,7 +728,7 @@ export class MC {
   /** the webs besides the receiver's that the String.<init> call `ins` assigns the String it makes, as ART assigns every copy of the allocation
    *  (SetStringInitValueToAllAliases): those that own their storage there */
   private stringCopies(ins: Ins): number[] {
-    const regs = (this.aliases ??= uninitAliases(this.dex, this.item, this.prepared, (x) => stringSite(this.dex, x))).get(ins.pc);
+    const regs = (this.aliases ??= uninitAliases(this.dex, this.item, this.prepared, this.strings)).get(ins.pc);
     if (!regs) return [];
     const i = this.prepared.indexAt[ins.pc], own = this.useWeb(ins.regs[0]), { start, end } = this.spans;
     return regs.map((r) => this.typing.holds(ins.pc, r)).filter((w) => w >= 0 && w !== own && start[w] <= i && i <= end[w]);

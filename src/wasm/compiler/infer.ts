@@ -273,9 +273,9 @@ export function inferTyping(dex: DexFile, code: CodeItem, desc: string, isStatic
   };
 }
 
-/** by the pc of each constructor call `site` names "init": the registers besides the receiver that hold the object it initializes, copies made after the
- *  allocation `site` names "alloc" (ART's verifier types them as that allocation until the call; running the allocation again makes another) */
-export function uninitAliases(dex: DexFile, code: CodeItem, prepared: PreparedMethod, site: (x: PreparedInstruction) => "alloc" | "init" | undefined): Map<number, number[]> {
+/** by the pc of each constructor call `sites` names "init": the registers besides the receiver that hold the object it initializes, copies made after the
+ *  allocation `sites` names "alloc" (ART's verifier types them as that allocation until the call; running the allocation again makes another) */
+export function uninitAliases(dex: DexFile, code: CodeItem, prepared: PreparedMethod, sites: ReadonlyMap<number, "alloc" | "init">): Map<number, number[]> {
   const { instructions: ins, first, last, succ, hsucc } = prepared, n = code.regs, out = new Map<number, number[]>();
   // by block: the allocation (its instruction index) each register holds on entry, -1 for none; a handler starts with none
   const entry: (Int32Array | undefined)[] = new Array(first.length), none = new Int32Array(n).fill(-1), st = new Int32Array(n);
@@ -292,7 +292,7 @@ export function uninitAliases(dex: DexFile, code: CodeItem, prepared: PreparedMe
   while (queue.length) {
     const b = queue.pop()!; queued[b] = 0; st.set(entry[b]!);
     for (let i = first[b]; i <= last[b]; i++) {
-      const x = ins[i], kind = site(x);
+      const x = ins[i], kind = sites.get(x.pc);
       if (kind === "alloc") { forget(i); st[x.a] = i; continue; }
       if (kind === "init") {
         const p = st[x.regs[0]], copies: number[] = [];
