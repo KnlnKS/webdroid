@@ -15,12 +15,15 @@ const hostSpec = (spec: NativeSpec): HostSpec => ({
   name: spec.name, sup: spec.sup ?? null, ifaces: spec.ifaces ?? [], methods: Object.keys(spec.methods ?? {}), platformClinit: spec.platformClinit, statics: spec.statics, ctor: spec.ctor,
   fields: Object.entries(spec.fields ?? {}),
 });
-/** `w` with the classes the host implements: those registered, and each one registered later (a module that loads later) as it is */
+const attached = new WeakSet<World>();
+/** `w` with the classes the host implements that are registered; one registered later (a module that loads later) joins it once it is the World in use (boot.ts useWorld) */
 export function attachHostClasses<W extends World>(w: W): W {
   for (const spec of nativeSource.hostSpecs()) w.addHostClass(spec);
-  rt.registered = (spec) => w.addHostClass(hostSpec(spec));
+  attached.add(w);
   return w;
 }
+/** a spec registered after `w` was made joins it, if it has the host's classes */
+export const addHostSpec = (w: World, spec: NativeSpec): void => { if (attached.has(w)) w.addHostClass(hostSpec(spec)); };
 export const nativeSource = {
   hostSpecs: () => [...rt.natives.values()].map(hostSpec),
   find: (cls, key, isStatic, hasBody) => {

@@ -12,6 +12,7 @@
 // that occupant to an unrelated Java object and free it while its owner still uses it.
 
 import { rt } from "../jvm/runtime.ts";
+import { java } from "../jvm/javahost.ts";
 
 const objs: (object | undefined)[] = [undefined];
 /** each slot's generation, 1..GENERATIONS, in the bits above SLOT_BITS of its long; longs stay
@@ -88,13 +89,11 @@ export function weakHandle(o: object): bigint {
   return h;
 }
 
-/** how the Wasm tier, which holds Java arrays apart from the host's, gives natives the arrays whose handles it handed out: a view the native's writes are stored back from */
-export const handleViews = { of: null as ((o: object) => unknown) | null };
-
 /** the object behind a long, or undefined for the null handle */
 export function deref<T>(h: bigint): T {
   const n = slotOf(h), o = objs[n], v = o === WEAK ? refs[n]!.deref() : o;
-  return (handleViews.of !== null && typeof v === "object" && v !== null && Object.getPrototypeOf(v) === null ? handleViews.of(v) : v) as T;
+  // the Wasm tier holds Java arrays apart from the host's: a native gets a view of one whose handle it handed out, which its writes are stored back from
+  return (typeof v === "object" && v !== null && Object.getPrototypeOf(v) === null ? java.toHost(v) : v) as T;
 }
 
 export function release(h: bigint): void {
@@ -127,7 +126,8 @@ export function ownedHandle(o: object, dispose?: () => void): bigint {
   if (dispose) disposers.set(o, dispose);
   return handle(o);
 }
-rt.claimHandle = (owner: object, h: bigint) => {
+/** `owner`, a Java object, owns the object of handle `h` (ownedHandle): the object is released once `owner` is collected */
+export const claimHandle = (owner: object, h: bigint): void => {
   const o = objs[slotOf(h)];
   if (o && owned.delete(o)) owners.register(owner, { h, o });
 };

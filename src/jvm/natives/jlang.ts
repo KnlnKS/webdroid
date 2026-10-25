@@ -2,6 +2,7 @@
 // Java booleans are 0/1 numbers, longs are BigInt.
 
 import { awaited, driven, rt, type Gen } from "../runtime.ts";
+import { java } from "../javahost.ts";
 import { HEAP_LIMIT } from "../abi.ts";
 import { jarray } from "../abi.ts";
 import { uptimeMillis, wallMillis } from "../../guest-clock.ts";
@@ -120,7 +121,7 @@ rt.registerJnis("java/lang/Runtime", {
   "totalMemory()J": () => BigInt(HEAP_LIMIT / 2),
   "freeMemory()J": () => BigInt(HEAP_LIMIT / 4),
 });
-rt.registerJni("dalvik/system/VMStack", "getClosestUserClassLoader()Ljava/lang/ClassLoader;", () => rt.userClassLoader());
+rt.registerJni("dalvik/system/VMStack", "getClosestUserClassLoader()Ljava/lang/ClassLoader;", () => java.userClassLoader());
 // libcore's AtomicLong asks whether the VM compares-and-sets 8 bytes without a lock
 rt.registerJni("java/util/concurrent/atomic/AtomicLong", "VMSupportsCS8()Z", () => 1);
 

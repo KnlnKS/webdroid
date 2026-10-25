@@ -1,10 +1,11 @@
-// How host code enters Java on the Wasm tier: the Entry that src/jvm/natives/jentry.ts selects with `useEntry`, over one World. A Java object
+// How host code enters Java on the Wasm tier: the Entry of one World, which boot.ts installs in the realm's JavaHost (src/jvm/javahost.ts). A Java object
 // is a facade (bridge.ts) to host code, one per object; a Java exception that leaves a call is thrown as the facade of the throwable, which
 // stands where a native's JThrowable does. A call from host code that no Java frame is under (an event, a Suspending native after its first wait) runs on a new
 // strand of the thread that owns the turn, so it may wait; the result is the value at once if it did not, else a Promise. A native that a
 // Java frame called is on that frame's stack, which cannot suspend, and calls Java on it.
 import { rt, JObj } from "../../jvm/runtime.ts";
-import { JThread, curThread, mainThread, resumeAs, setCurThread, threadContended, threadExit, type Entry } from "../../jvm/natives/jentry.ts";
+import { JThread, curThread, mainThread, resumeAs, setCurThread, threadExit } from "../../jvm/natives/jentry.ts";
+import type { Entry, JavaHost } from "../../jvm/javahost.ts";
 import { Strand as HostStrand } from "../../jvm/suspend.ts";
 import { processExited, never } from "../../process-exit.ts";
 import { mangleField } from "../../jvm/abi.ts";
@@ -22,7 +23,7 @@ import { UInfo } from "../compiler/info.ts";
 import { box } from "../compiler/primitives.ts";
 import { count } from "./stats.ts";
 import { note, Ev } from "../../timeline.ts";
-import { procTasks, processTid } from "../../shell/procfs.ts";
+import { processTid } from "../../shell/procfs.ts";
 import { cpus, nameThread } from "../../native/cpu.ts";
 
 const OBJECT = "Ljava/lang/Object;";
@@ -44,14 +45,16 @@ export const onNestedStrand = <T>(w: World, f: (s: Strand) => T): T => nested.ge
 /** the Java thread whatever is running enters Java as */
 export const runningThread = (w: World): ThreadRec => nested.get(w)!.thread();
 
-const entries = new WeakMap<World, Entry>();
+/** what the host has of `w`'s threads: the calls into Java on them, and what the runtime asks about them */
+type WasmEntry = Entry & Pick<JavaHost, "contended" | "tasks">;
+const entries = new WeakMap<World, WasmEntry>();
 /** the entry seam over `w`: one per World, since it keeps the World's host threads and its scheduler's thread hook */
-export function wasmEntry(w: World): Entry {
+export function wasmEntry(w: World): WasmEntry {
   let entry = entries.get(w);
   if (!entry) entries.set(w, entry = makeEntry(w));
   return entry;
 }
-function makeEntry(w: World): Entry {
+function makeEntry(w: World): WasmEntry {
   const { bridge, prog, sched } = w;
   const missing = (what: string): Error => rt.unimplemented(what);
   const recs = new WeakMap<JThread, ThreadRec>(), javaStrands = new WeakMap<HostStrand, Strand>();
@@ -75,14 +78,10 @@ function makeEntry(w: World): Entry {
     if (!host) { s.host = host = new HostStrand(jthreadOf(s.thread)); javaStrands.set(host, s); }
     return host;
   };
-  threadContended.hook = (t) => { const rec = t === mainThread ? sched.mainRec : recs.get(t); return !!rec && sched.contended(rec); };
   // /proc/self/task: the main thread, the Java threads Thread.start made and the native threads, by their native names
   const tidOf = (t: JThread) => processTid(t, t === mainThread);
   const tasks = (): JThread[] => [mainThread, ...[...sched.started].map(jthreadOf), ...[...cpus].filter((c) => !c.finished).map((c) => c.jthread)];
   const taskOf = (tid: number) => tasks().find((t) => tidOf(t) === tid);
-  procTasks.tids = () => [...new Set(tasks().map(tidOf))].sort((a, b) => a - b);
-  procTasks.name = (tid) => taskOf(tid)?.jname ?? null;
-  procTasks.rename = (tid, name) => { const t = taskOf(tid); if (t) nameThread(t, name); return !!t; };
   let noted = -1, threadName: FieldInfo | undefined;
   sched.hooks = {
     switched(rec, idle) {
@@ -248,6 +247,12 @@ function makeEntry(w: World): Entry {
     classNameOf,
     callOn: (thread, run) => processExited() || waitsEnded() ? never() as never : asThread(recOf(thread), run),
     after: chain,
+    contended: (t) => { const rec = t === mainThread ? sched.mainRec : recs.get(t); return !!rec && sched.contended(rec); },
+    tasks: {
+      tids: () => [...new Set(tasks().map(tidOf))].sort((a, b) => a - b),
+      name: (tid) => taskOf(tid)?.jname ?? null,
+      rename: (tid, name) => { const t = taskOf(tid); if (t) nameThread(t, name); return !!t; },
+    },
   };
 }
 

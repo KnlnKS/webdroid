@@ -11,7 +11,7 @@ import { loadDexes } from "../dexes.ts";
 import { Program, ACC, PlainClass, javaName, mid } from "../../src/wasm/compiler/program.ts";
 import { wasmJni } from "../../src/wasm/host/jni.ts";
 import { jniInit, deref, javaVM } from "../../src/native/jni.ts";
-import { useJniVm, vm as priorJniVm } from "../../src/native/jnivm.ts";
+import { java as javaHost, useJavaHost } from "../../src/jvm/javahost.ts";
 import { Cpu, setA64 } from "../../src/native/cpu.ts";
 import { mem } from "../../src/native/mem.ts";
 import { ldp, PTR } from "../../src/native/host.ts";
@@ -469,8 +469,8 @@ for (const asynchronous of [false, true]) {
       }
     } finally { first.end(); second.end(); }
   }
-  const jni = wasmJni(resolver), previous = priorJniVm;
-  setA64(false); jniInit(); useJniVm(jni);
+  const jni = wasmJni(resolver), previous = javaHost;
+  setA64(false); jniInit(); useJavaHost({ ...previous, jni });
   const name = mem.malloc(16), environment = mem.malloc(PTR);
   mem.putCstr(name, "Shared");
   try {
@@ -489,7 +489,7 @@ for (const asynchronous of [false, true]) {
         if (!handle || cpu.exc || jni.classOf(deref(handle, cpu))?.name !== key) fail("suspended JNI FindClass lost its class or reference owner");
       } else if (handle || !cpu.exc || resolver.classNameOf(cpu.exc as object) !== "java/lang/ClassNotFoundException") fail("JNI loader failure did not remain pending");
     }
-  } finally { mem.free(name); mem.free(environment); useJniVm(previous); }
+  } finally { mem.free(name); mem.free(environment); useJavaHost(previous); }
 }
 await defaults(suite, build);
 await nativePaths(suite, app, common, files, paths);

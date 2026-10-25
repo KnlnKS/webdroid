@@ -4,6 +4,7 @@
 import { Strand } from "./suspend.ts";
 import { never, processExited } from "../process-exit.ts";
 import { dotName, oomMessage, type NativeImpl } from "./abi.ts";
+import { java } from "./javahost.ts";
 
 /** Root of the host's Java objects: a native spec's class, or an object a native makes by class name (`$i` names the Java class). */
 export class JObj {
@@ -73,8 +74,12 @@ export class Runtime {
     if (boot) return boot.read();
     return Object.hasOwn(this.classpath, name) ? this.classpath[name] : this.classpathSource?.entry(name) ?? null;
   }
-  /** makes a Java exception by class name (set by the Wasm tier's host); before a World, an Error that carries the class and message as a throwable does */
-  mkThrowable: (cls: string, msg: string | null) => any = (cls, msg) => Object.assign(new Error(`${cls}: ${msg}`), { $javaClass: cls, msg });
+  /** makes a Java exception by class name; before a World, an Error that carries the class and message as a throwable does */
+  mkThrowable(cls: string, msg: string | null): any { return java.throwable(cls, msg); }
+  /** an instance of `cls`, its constructor not run */
+  make(cls: string): any { return java.make(cls); }
+  /** java.lang.Class object for a class name */
+  classFor(name: string): any { return java.classFor(name); }
   /** report listeners: the reports reach the console either way */
   onMissing: (what: string) => void = () => {};
   onNativeRequired: (lib: string, abi: string) => void = () => {};
@@ -121,7 +126,7 @@ export class Runtime {
     if (this.natives.has(spec.name)) throw new Error(`${spec.name} is registered twice`);
     this.natives.set(spec.name, spec);
     for (const [key, fn] of Object.entries(spec.methods ?? {})) this.specImpls.set(spec.name + "|" + key, this.impl(`${spec.name}.${key}`, fn));
-    this.registered?.(spec);
+    java.registered(spec);
   }
   /** the specs' methods by "cls|key", a static one's key prefixed "static " */
   private specImpls = new Map<string, NativeImpl>();
@@ -134,15 +139,11 @@ export class Runtime {
     const R = this;
     impl.fn = function (this: unknown, ...args: unknown[]) {
       impl.fn = fn as NativeImpl["fn"];
-      if (!R.placeholders.has(what)) { R.placeholders.add(what); R.placeholderAt.set(what, R.javaFrames().slice(0, 12)); }
+      if (!R.placeholders.has(what)) { R.placeholders.add(what); R.placeholderAt.set(what, java.javaFrames().slice(0, 12)); }
       return fn.apply(this, args);
     };
     return impl;
   }
-  /** a spec registered after the World was made (a module a split bundle loads later) */
-  registered?: (spec: NativeSpec) => void;
-  /** an instance of `cls`, its constructor not run (set by the Wasm tier's host) */
-  make: (cls: string) => any = (cls) => { throw new Error(`no World makes ${cls}`); };
 
   /** JNI registry: implementations for dex-declared native methods (key "cls|name+desc") */
   jni = new Map<string, NativeImpl>();
@@ -186,15 +187,12 @@ export class Runtime {
     return this.mkThrowable("java/lang/UnsatisfiedLinkError", "No implementation found for " + dotName(cls) + "." + name + desc);
   }
 
-  /** the Java frames calling into the runtime here, innermost first, and the loader of the innermost one whose class is not the platform's (JavaHost's) */
-  javaFrames: () => string[] = () => [];
-  userClassLoader: () => object | null = () => null;
   /** where each missing entry was first reached */
   missingAt = new Map<string, string[]>();
   noteMissing(what: string) {
     if (!this.missing.has(what)) {
       this.missing.add(what);
-      const at = this.javaFrames().slice(0, 12);
+      const at = java.javaFrames().slice(0, 12);
       this.missingAt.set(what, at);
       console.warn("[webdroid missing]", what, at.length ? "\n  at " + at.join("\n  at ") : "");
       this.onMissing(what);
@@ -217,10 +215,6 @@ export class Runtime {
     return this.mkThrowable("java/lang/UnsupportedOperationException", "webdroid missing: " + what);
   }
 
-  /** the handle-table owner hook (src/android/handles.ts) */
-  claimHandle?: (owner: object, h: bigint) => void;
-  /** java.lang.Class object for a class name (set by the Wasm tier's host) */
-  classFor: (name: string) => any = (name) => { throw new Error(`no World has the Class of ${name}`); };
 
   /** normalize a thrown JS value to a Java throwable */
   jx(e: unknown): any {
@@ -265,7 +259,7 @@ const declaredFields = new Map<string, string>();
 export function declaredField(cls: string, name: string): string {
   const key = cls + "." + name;
   let prop = declaredFields.get(key);
-  if (prop === undefined) declaredFields.set(key, prop = fieldNames.find?.(cls, name) ?? "");
+  if (prop === undefined) declaredFields.set(key, prop = java.fieldName(cls, name) ?? "");
   return prop;
 }
 /** `cls`'s instance field `name` for a native that reads or writes it on every call, such as the
@@ -278,8 +272,6 @@ export function instanceField<T>(cls: string, name: string): { get(o: object): T
   };
 }
 export const peerField = <T>(cls: string, name: string): ((o: object) => T) => instanceField<T>(cls, name).get;
-/** how the World names an instance field, which a facade of the object answers under that name */
-export const fieldNames = { find: null as ((cls: string, name: string) => string | undefined) | null };
 function fieldOf(cls: string, name: string): string {
   const prop = declaredField(cls, name);
   if (!prop) throw new Error(`${cls} has no field ${name}`);

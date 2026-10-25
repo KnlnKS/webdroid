@@ -13,7 +13,6 @@ import type { World } from "../link/world.ts";
 import type { Strand } from "../link/sched.ts";
 import type { BridgeScope, HostBridge, HostSpec, NativeSource } from "../link/hostapi.ts";
 import { copyFn } from "../link/copy.ts";
-import { handleViews } from "../../android/handles.ts";
 import { count } from "./stats.ts";
 import { readBufferBytes, type JBuffer } from "../../jvm/natives/jnio.ts";
 
@@ -62,7 +61,7 @@ export class Bridge implements HostBridge {
   private accessors = { get: new WeakMap<FieldInfo, Fn>(), set: new WeakMap<FieldInfo, Fn>(), gets: new WeakMap<FieldInfo, Fn>(), sets: new WeakMap<FieldInfo, Fn>() };
   private ops?: { alen: Fn; acopy: Fn; aget: Fn; aset: Fn; js: Fn };
 
-  constructor(w: World, src?: NativeSource) { this.w = w; this.src = src; handleViews.of = (o) => this.toHost(o); }
+  constructor(w: World, src?: NativeSource) { this.w = w; this.src = src; }
   /** the array accessors, generated on first use (the World is still being constructed when its Bridge is) */
   private get op() {
     if (this.ops) return this.ops;
