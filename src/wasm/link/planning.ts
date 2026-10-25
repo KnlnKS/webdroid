@@ -1,8 +1,8 @@
 // What a unit is made of: the methods a first call compiles beside the one asked for (`batch`), and the callees and guarded implementations a hot
 // method's second-tier unit takes in (`group`), chosen by how often the first tier saw them run.
 import { ACC, mid, type MethodInfo } from "../compiler/program.ts";
-import { staticallyBound, type CallPlan } from "../compiler/j2w.ts";
-import { failed, invokeSite, symbolicOverride } from "../compiler/linkage.ts";
+import type { CallPlan } from "../compiler/j2w.ts";
+import { bindInvoke, failed, invokeSite, symbolicOverride } from "../compiler/linkage.ts";
 import { cyclic, decodeInstruction, decodeInstructions, prepareMethod, type PreparedInstruction } from "../../jvm/prepared.ts";
 import { Family, Invoke, endsBlock, familyOf, insnLen, invokeKind, isIf, isInvoke } from "../../jvm/opcodes.ts";
 import { instructionClass } from "./resolution.ts";
@@ -122,16 +122,17 @@ export class Planner {
     }
     return entry;
   }
-  /** `m`'s calls as the compiler binds them (MC.binding): the method each one reaches when that is known (a call bound statically, or a virtual call with one
-   *  implementation) and a virtual call's implementations. A call that does not link, or copies an array, calls no method. */
+  /** `m`'s calls as the compiler binds them (bindInvoke): the method each one reaches when that is known (a fixed call, or a virtual call with one
+   *  implementation) and a virtual call's implementations. A call that does not link, copies an array or makes a String calls no method. */
   calls(m: MethodInfo) { return this.bind(m, this.planning(m).calls); }
   // Cache bytecode references, not eligibility or targets: loader initiation can change both.
   private *bind(m: MethodInfo, calls: PreparedInstruction[]): Generator<{ ins: PreparedInstruction; t?: MethodInfo; targets?: MethodInfo[]; decl: string; name: string; desc: string }> {
     for (const ins of calls) {
       if (this.w.needsSymbolicSite(m, ins)) continue;
-      const kind = invokeKind(ins.op), { decl, name, desc, target } = invokeSite(this.w.prog, m, ins.b, kind);
-      if (target === "clone" || failed(target)) continue;
-      if (staticallyBound(this.w, kind, decl, target)) { yield { ins, t: target, decl, name, desc }; continue; }
+      const site = invokeSite(this.w.prog, m, ins.b, invokeKind(ins.op)), b = bindInvoke(this.w, m, ins, site);
+      if (!b || b.k === "string") continue;
+      const { decl, name } = site, desc = b.m.desc;
+      if (b.k === "fixed") { yield { ins, t: b.m, decl, name, desc }; continue; }
       const targets = this.w.cha.targets(decl, name, desc);
       yield { ins, t: targets.length === 1 ? targets[0] : undefined, targets, decl, name, desc };
     }

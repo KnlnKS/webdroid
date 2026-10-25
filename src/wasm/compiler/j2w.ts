@@ -2,16 +2,15 @@
 import { parseMethodDesc } from "../../jvm/abi.ts";
 import { HT, ModuleBuilder, T, ref, refNull, type VT, type FunctionType } from "./wasmbin.ts";
 import { Code, OP, type InlineFrame } from "./code.ts";
-import { ACC, kindOf, methodKinds, mid, type FieldInfo, type Program, type Kind, type MethodInfo } from "./program.ts";
+import { kindOf, methodKinds, mid, type FieldInfo, type Program, type Kind, type MethodInfo } from "./program.ts";
 import { H, ELEM, MATH_ARITY, elemKindOf, FUEL, INIT_DONE, MAX_DEPTH, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, SAMPLE_EVERY, WARM_AT, type ElemKind } from "./consts.ts";
 import { declareSymbolicSites, siteKey, type SymbolicSite } from "./sites.ts";
 import { prepareMethod, type PreparedMethod } from "../../jvm/prepared.ts";
-import { Invoke } from "../../jvm/opcodes.ts";
 import { inferTyping, type Typing } from "./infer.ts";
 import { compileMethod } from "./method.ts";
 import type { ClassRt, World } from "../link/world.ts";
 import { rtfns, type RtName } from "./rtfns.ts";
-import type { LinkFailure } from "./linkage.ts";
+import { finalDispatch, type LinkFailure } from "./linkage.ts";
 import { SLOT, THROWERS, type Thrower } from "./exc.ts";
 import { STRING, StructStrings } from "./strings.ts";
 import { helpers as HELPERS, type HelperName } from "./helpers.ts";
@@ -124,17 +123,6 @@ export interface UnitOptions {
   plan?: CallPlan;
 }
 const NO_PLAN: CallPlan = new Map();
-/** whether a virtual call of `t` through class `decl` runs `t` whatever the receiver: ART links no subclass of a final class and no override of a final method */
-function finalDispatch(prog: Program, decl: string, t: MethodInfo): boolean {
-  const d = prog.get(decl);
-  return !!d && !d.isInterface && (!!(d.flags & ACC.FINAL) || !!(t.flags & ACC.FINAL) && prog.isSubclass(decl, t.cls));
-}
-/** whether invoke `kind` of `target` through `decl` runs `target`'s slot whatever the receiver: a static, direct or super call, or a virtual call that dispatches finally
- *  and reaches no host spec's native. Only a build knows every spec (a split bundle registers some late), so a World without one binds no virtual call */
-export function staticallyBound(w: Pick<LinkEnv, "prog" | "hosts">, kind: Invoke, decl: string, target: MethodInfo): boolean {
-  if (kind !== Invoke.Virtual && kind !== Invoke.Interface) return true;
-  return finalDispatch(w.prog, decl, target) && !w.hosts.mayReach(decl, target);
-}
 export class Compiler implements Base {
   w: LinkEnv;
   mb = new ModuleBuilder();

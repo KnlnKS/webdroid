@@ -4,7 +4,7 @@ import { STRING, stringSite } from "./strings.ts";
 import { Code, OP, inlineMark } from "./code.ts";
 import { T, ref, refNull, type VT } from "./wasmbin.ts";
 import { kindOf, mid, type FieldInfo, type Kind, type MethodInfo } from "./program.ts";
-import { staticallyBound, type Compiler } from "./j2w.ts";
+import type { Compiler } from "./j2w.ts";
 import { ELEM_KINDS, elemKindOf, type ElemKind } from "./consts.ts";
 import { isWide } from "../../jvm/abi.ts";
 import type { DexTypes } from "../../jvm/dex.ts";
@@ -12,7 +12,7 @@ import { argRegisters, ifTarget, switchCases, type PreparedInstruction as Ins, t
 import { type Flow, Go, structureAny } from "./structure.ts";
 import { emitPolymorphic } from "./poly.ts";
 import { emitCustom, emitHandleConstant, emitTypeConstant } from "./handles.ts";
-import { failed, invokeSite, resolveFieldRef, typeFailure, type InvokeSite, type LinkFailure } from "./linkage.ts";
+import { bindInvoke, failed, invokeSite, resolveFieldRef, typeFailure, type InvokeSite, type LinkFailure } from "./linkage.ts";
 import { MethodFacts, cloneFacts, newFacts, type Facts } from "./facts.ts";
 import { isStackOverflow } from "./exc.ts";
 import { WHOLE_FRAME, planDepth, type DepthPlan } from "./depth.ts";
@@ -279,11 +279,10 @@ export class MC {
     return b;
   }
   private bind(ins: Ins): Binding | null {
-    const { decl, name, target } = this.invoke(ins), kind = invokeKind(ins.op);
-    if (target === "clone" || failed(target)) return null;
-    if (stringSite(this.dex, ins) === "init") return { k: "string" };
-    if (staticallyBound(this.cx.w, kind, decl, target)) return { k: "fixed", m: target, body: this.bodyOf(target) };
-    const only = this.cx.devirt(decl, name, target.desc);
+    const site = this.invoke(ins), b = bindInvoke(this.cx.w, this.m, ins, site);
+    if (b?.k === "fixed") return { k: "fixed", m: b.m, body: this.bodyOf(b.m) };
+    if (b?.k !== "virtual") return b;
+    const only = this.cx.devirt(site.decl, site.name, b.m.desc);
     return { k: "virtual", only: only === "many" ? undefined : only };
   }
   /** what a call of `m`, bound statically, runs in place (inline.ts) */
