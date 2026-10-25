@@ -4,7 +4,7 @@
 // handle to a NativeCanvas in mNativeCanvasWrapper, and TS reaches it through canvasOf.
 
 import { isInvertible, isRecording, nestedRecording, recordOrRun, replay, replayFor, replayingCanvas, transformOf, type Ctx2D, type DisplayList, Recorder } from "./recording.ts";
-import { aliasedStroke } from "./bitmap-raster.ts";
+import { aliasedStroke, tryBitmapPath } from "./bitmap-raster.ts";
 import { rt, type JObj, peerField, setDeclared } from "../jvm/runtime.ts";
 import { after, newObj, scall } from "../jvm/natives/jentry.ts";
 import { handle, deref, release, ownedHandle, FINALIZER } from "./handles.ts";
@@ -16,8 +16,7 @@ import { strokeRec } from "./patheffect.ts";
 import { NativePaint, copyPaint, beginPaintShadow, applyStroke } from "./paint.ts";
 import { setEdges, emptyBox, type Box, DST, SRC_OVER, compositeOf } from "./graphics.ts";
 import type { NativeColorFilter } from "./colorfilter.ts";
-import { NativeBitmapShader, fillWithShader, shaderIdentity } from "./shader.ts";
-import { type Affine, PLANE, setAffine, applyMatrix, matrixAt, deviceScale, deviceBounds, localBounds, canvasLocalBounds } from "./matrix.ts";
+import { setAffine, applyMatrix, matrixAt, deviceScale, deviceBounds, localBounds, canvasLocalBounds } from "./matrix.ts";
 
 /** the Java canvases TS hands framework and app code: a Canvas or RecordingCanvas peer */
 export type JavaCanvas = JObj;
@@ -39,8 +38,14 @@ const box = new Float64Array(4);
 /** what planDraw draws: geometry (and text), an ALPHA_8 image (coverage in the paint's colour) or
  *  any other image, whose source is its pixels rather than a colour */
 export const SHAPE = 0, MASK = 1, IMAGE = 2;
-/** a shape's fill, or with `clip` the context clipped to the shape for a shader to fill */
-export type Fill = (ctx: Ctx2D, clip: boolean) => void;
+/** what drawShape draws: a NativePath, or geometry drawn as one is (a glyph run) */
+export interface Outline {
+  fill(ctx: Ctx2D): void;
+  stroke(ctx: Ctx2D): void;
+  /** whether clip can narrow the context to the fill: colour glyphs are drawn, not outlined */
+  readonly clips: boolean;
+  clip(ctx: Ctx2D): void;
+}
 /** how one draw applies its paint, as planDraw decides it */
 export class DrawPlan {
   /** the SkBlendMode (drawMode's for a solid colour); by DST the draw changes nothing */
@@ -127,9 +132,8 @@ export class NativeCanvas {
     return out;
   }
 
-  /** the paint's fill or stroke style on the context, and a stroke's geometry; true when a shader's
-   *  style is a pattern, which carries its own transform */
-  prep(p: NativePaint, stroke: boolean) {
+  /** the paint's fill or stroke style on the context, and a stroke's geometry */
+  prep(p: NativePaint, stroke: boolean): void {
     const ctx = this.ctx, shader = p.shader, replayed = shader?.atReplay && !p.clears() ? shader : null;
     if (replayed) recordOrRun(ctx, c => { c[stroke ? "strokeStyle" : "fillStyle"] = replayed.pattern(c)!; });
     if (stroke) {
@@ -140,7 +144,6 @@ export class NativeCanvas {
     } else {
       if (!replayed) ctx.fillStyle = p.fillStyle(ctx);
     }
-    return shader !== null && (!!replayed || typeof CanvasPattern !== "undefined" && ctx[stroke ? "strokeStyle" : "fillStyle"] instanceof CanvasPattern);
   }
   private maskLayer: { shape: NativeCanvas; target: OffscreenCanvasRenderingContext2D; shaded: OffscreenCanvasRenderingContext2D | null; paint: NativePaint; cpu: boolean } | null = null;
   /** a draw blended through its coverage, as SkDraw blends a mask: `coverage` draws the shape in the
@@ -200,23 +203,33 @@ export class NativeCanvas {
     try { ctx.resetTransform(); ctx.drawImage(target.canvas, 0, 0); }
     finally { ctx.restore(); endPaint(ctx, undo); }
   }
-  /** a shape drawn with the paint; `geom` gives it as a path, for a path effect to change, and `plan`
-   *  is the draw's when the caller has made it */
-  drawShape(p: NativePaint, fill: Fill, stroke: (ctx: Ctx2D) => void, geom?: () => NativePath, plan = this.planDraw(p)) {
-    if (p.pathEffect && !p.dash && geom) return this.drawEffected(p, geom());
+  private readonly scratch = new NativePath();
+  /** the canvas's path for one draw's geometry, emptied; a draw replaces it */
+  shape(): NativePath {
+    const s = this.scratch;
+    s.reset();
+    return s;
+  }
+  /** SkCanvas::drawPath of a shape with the paint: a path through its path effect (an inverse one
+   *  draws unchanged) and into a bitmap by Skia's raster rules; `plan` is the draw's when the
+   *  caller has made it */
+  drawShape(p: NativePaint, shape: Outline, plan = this.planDraw(p)) {
+    if (shape instanceof NativePath) {
+      if (p.pathEffect && !p.dash && !shape.inverseFill) return this.drawEffected(p, shape);
+      if (plan.raster && tryBitmapPath(this, p, plan.raster, shape)) return;
+    }
     if (plan.mode === DST) return;
+    const shader = p.shader, clipped = shader !== null && p.style !== 1 && !shader.direct;
     // through the shape's coverage: a clip to the shape would confine an unbounded mode, but the
     // context's clips are aliased
-    if (plan.viaMask || plan.raster && aliasedStroke(this, p)) return maskShape(this, p, plan.op, fill, stroke);
-    const ctx = this.ctx, undo = beginPaint(ctx, p, plan.op, p.shader !== null, plan.blur);
+    if (plan.viaMask || plan.raster && aliasedStroke(this, p) || clipped && !shape.clips) return maskShape(this, p, plan.op, shape);
+    const ctx = this.ctx, undo = beginPaint(ctx, p, plan.op, shader !== null, plan.blur);
     try {
-      if (p.style !== 1) {
-        const shader = p.shader, lm = shader?.local;
-        if (shader instanceof NativeBitmapShader) this.shaderFill(fill, lm ?? shaderIdentity, shader);
-        else if (!this.prep(p, false) && lm) this.shaderFill(fill, lm, null);
-        else fill(ctx, false);
-      }
-      if (p.style === 1 || p.style === 2 && p.strokeWidth !== 0) { this.prep(p, true); stroke(ctx); }
+      if (clipped) {
+        ctx.save();
+        try { shape.clip(ctx); shader.fillClip(ctx); } finally { ctx.restore(); }
+      } else if (p.style !== 1) { this.prep(p, false); shape.fill(ctx); }
+      if (p.style === 1 || p.style === 2 && p.strokeWidth !== 0) { this.prep(p, true); shape.stroke(ctx); }
     } finally { endPaint(ctx, undo); }
   }
   private restyled: NativePaint | null = null;
@@ -236,28 +249,17 @@ export class NativeCanvas {
     const path = p.pathEffect!.filter(dst, src, rec) ? dst : src;
     copyPaint(p, q); q.setPathEffect(null);
     if (rec.fill) q.style = 0;
-    this.drawShape(q, (c, clip) => clip ? c.clip(path.path(), path.fillRule) : c.fill(path.path(), path.fillRule), (c) => c.stroke(path.path()));
+    this.drawShape(q, path);
   }
   /** SkCanvas::drawPaint: the paint over the whole clip */
   drawPaint(paint: NativePaint) {
     const bounds = canvasLocalBounds(this.ctx);
     if (!bounds) return;
-    const [l, t, r, b] = bounds;
     const q = this.restyled ??= new NativePaint();
     copyPaint(paint, q); q.style = 0; q.maskFilter = null;
-    this.drawShape(q, (c, clip) => { if (!clip) c.fillRect(l, t, r - l, b - t); }, () => {});
-  }
-  /** a fill by a shader the 2D context cannot fill with, a bitmap's or a gradient under a local
-   *  matrix (Canvas2D gradients have no transform of their own): the plane under the matrix,
-   *  clipped to the shape */
-  private shaderFill(fill: Fill, lm: Affine, bitmap: NativeBitmapShader | null) {
-    const ctx = this.ctx;
-    ctx.save();
-    fill(ctx, true);
-    ctx.transform(lm[0], lm[1], lm[2], lm[3], lm[4], lm[5]);
-    if (bitmap) bitmap.draw(ctx);
-    else ctx.fillRect(-PLANE, -PLANE, 2 * PLANE, 2 * PLANE);
-    ctx.restore();
+    const shape = this.shape();
+    shape.addRect(bounds[0], bounds[1], bounds[2], bounds[3], 0);
+    this.drawShape(q, shape);
   }
 
   // ── save and restore (SkiaCanvas, with its partial saves) ──
@@ -665,8 +667,8 @@ function beginAlpha(ctx: Ctx2D, alpha: number): boolean {
 const restoreOp = (c: Ctx2D) => c.restore();
 // out of line, as each draw's mask path is: a closure over a draw's arguments would make every
 // call of the draw allocate a context for them
-function maskShape(nc: NativeCanvas, p: NativePaint, op: GlobalCompositeOperation | null, fill: Fill, stroke: (ctx: Ctx2D) => void) {
-  nc.drawMask(p, op, (m, q) => m.drawShape(q, fill, stroke), !p.antiAlias);
+function maskShape(nc: NativeCanvas, p: NativePaint, op: GlobalCompositeOperation | null, shape: Outline) {
+  nc.drawMask(p, op, (m, q) => m.drawShape(q, shape), !p.antiAlias);
 }
 /** the paint drawMask draws a shape's coverage with: its geometry, in opaque white */
 function whitePaint(p: NativePaint, into: NativePaint): NativePaint {
@@ -685,7 +687,7 @@ function fillSource(c: OffscreenCanvasRenderingContext2D, p: NativePaint, op: Gl
   } else if (p.shader) {
     c.setTransform(m);
     c.globalAlpha = (p.color >>> 24) / 255;
-    fillWithShader(c, p.shader);
+    p.shader.fillClip(c);
     c.globalAlpha = 1;
     c.resetTransform();
   } else {
@@ -701,7 +703,7 @@ function filteredShader(c: OffscreenCanvasRenderingContext2D, p: NativePaint, m:
   const w = c.canvas.width, h = c.canvas.height;
   c.resetTransform(); c.clearRect(0, 0, w, h); c.setTransform(m);
   c.globalAlpha = (p.color >>> 24) / 255;
-  fillWithShader(c, p.shader!);
+  p.shader!.fillClip(c);
   c.globalAlpha = 1;
   c.resetTransform();
   p.colorFilter!.apply(c, w, h);

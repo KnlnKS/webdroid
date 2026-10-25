@@ -4,7 +4,7 @@ import { rt } from "../jvm/runtime.ts";
 import { handle, deref, FINALIZER } from "./handles.ts";
 import { compositeOf } from "./graphics.ts";
 import type { NativeColorFilter } from "./colorfilter.ts";
-import { NativeShader, fillWithShader } from "./shader.ts";
+import { NativeShader } from "./shader.ts";
 import type { NativeBitmap } from "./bitmap.ts";
 import { radiusToSigma } from "./maskfilter.ts";
 import type { RuntimeShaderBuilder } from "./runtime-shader.ts";
@@ -193,7 +193,7 @@ class ShaderEffect extends NativeRenderEffect {
   filter(source: Filtered): Filtered {
     const c = this.out = sized(this.out, Math.max(1, Math.ceil(source.w)), Math.max(1, Math.ceil(source.h))), g = c.getContext("2d")!;
     g.reset(); g.translate(-source.x, -source.y);
-    fillWithShader(g, this.shader);
+    this.shader.fillClip(g);
     return { img: c, x: source.x, y: source.y, w: source.w, h: source.h };
   }
 }

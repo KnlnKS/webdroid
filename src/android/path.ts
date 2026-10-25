@@ -11,6 +11,7 @@ import { rt, noops, peerField } from "../jvm/runtime.ts";
 import { deref, handle, release, FINALIZER } from "./handles.ts";
 import { type Mat, mapPoint, matrixAt, snap } from "./matrix.ts";
 import { setEdges, type Box } from "./graphics.ts";
+import type { Ctx2D } from "./recording.ts";
 
 /** SkPath::Verb, which PathIterator reports; a path's ops extend them with the compound shapes:
  *  RECT l t r b dir start, RRECT l t r b (8 radii) dir, OVAL l t r b dir start, ARC l t r b start sweep forceMoveTo */
@@ -268,6 +269,13 @@ function drawNative(p: Path2D, o: number[], i: number): boolean {
     p.moveTo(ovalX(start, l, r), ovalY(start, t, b));
     p.ellipse((l + r) / 2, (t + b) / 2, (r - l) / 2, (b - t) / 2, 0, a, ccw ? a - 2 * Math.PI : a + 2 * Math.PI, ccw);
     p.closePath();
+  } else if (k === ARC && l < r && t < b && o[i + 6] !== 0 && Math.abs(o[i + 6]) <= 359) {
+    // a sweep near a whole turn is left to the pen, which snaps its ends as SkPath::arcTo does
+    const start = o[i + 5] * Math.PI / 180, end = (o[i + 5] + o[i + 6]) * Math.PI / 180;
+    const cx = (l + r) / 2, cy = (t + b) / 2, rx = (r - l) / 2, ry = (b - t) / 2;
+    // Path2D's ellipse lines to the arc from the last point, or starts the first subpath at it
+    if (o[i + 7] && i > 0) p.moveTo(cx + rx * Math.cos(start), cy + ry * Math.sin(start));
+    p.ellipse(cx, cy, rx, ry, 0, start, end, o[i + 6] < 0);
   } else return false;
   return true;
 }
@@ -297,6 +305,19 @@ export class NativePath {
     }
     return this.p2d;
   }
+  /** the path filled on `ctx` by its fill rule, whatever its inverseness; a lone rect by fillRect */
+  fill(ctx: Ctx2D): void {
+    const o = this.ops;
+    if (o.length === 7 && o[0] === RECT && o[5] === CW && o[6] === 0) ctx.fillRect(o[1], o[2], o[3] - o[1], o[4] - o[2]);
+    else ctx.fill(this.path(), this.fillRule);
+  }
+  stroke(ctx: Ctx2D): void {
+    const o = this.ops;
+    if (o.length === 7 && o[0] === RECT && o[5] === CW && o[6] === 0) ctx.strokeRect(o[1], o[2], o[3] - o[1], o[4] - o[2]);
+    else ctx.stroke(this.path());
+  }
+  readonly clips = true;
+  clip(ctx: Ctx2D): void { ctx.clip(this.path(), this.fillRule); }
   /** the verbs SkPath stores, until the path changes; they are not to be modified */
   verbs(): number[] { return this.vs ??= expand(this.ops); }
   private changed() { this.p2d = null; this.vs = null; this.gen = 0; }

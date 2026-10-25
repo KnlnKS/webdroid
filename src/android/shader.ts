@@ -14,11 +14,26 @@ import { compositeOf, cssColor } from "./graphics.ts";
 export abstract class NativeShader {
   readonly local: Affine | null;
   constructor(local: Affine | null) { this.local = local; }
+  /** the fill style that paints the shader, its local matrix included when `direct`; strokes and
+   *  text paint with it either way */
   abstract pattern(ctx: Ctx2D): CanvasGradient | CanvasPattern | null;
   /** the pattern is made for the target a draw lands on, so a display list makes it at replay */
   get atReplay(): boolean { return false; }
+  /** the pattern is the shader, so a fill can draw with it; a fill by any other is clipped to the
+   *  shape and painted by fillClip */
+  get direct(): boolean { return true; }
+  /** everything `ctx` can show painted with the shader; the transform and fill style may change */
+  fillClip(ctx: Ctx2D): void {
+    const style = this.pattern(ctx);
+    if (style) fillBounds(ctx, style);
+  }
 }
-export const shaderIdentity: Affine = [1, 0, 0, 1, 0, 0];
+function fillBounds(ctx: Ctx2D, style: CanvasGradient | CanvasPattern) {
+  const bounds = canvasLocalBounds(ctx);
+  if (!bounds) return;
+  ctx.fillStyle = style;
+  ctx.fillRect(bounds[0], bounds[1], bounds[2] - bounds[0], bounds[3] - bounds[1]);
+}
 const bitmapShaderTiles = new WeakMap<NativeBitmap, { generation: number; tiles: Map<string, CanvasPattern> }>();
 /** tileX/tileY: Shader.TileMode's nativeInt (CLAMP, REPEAT, MIRROR, DECAL) */
 export class NativeBitmapShader extends NativeShader {
@@ -28,7 +43,13 @@ export class NativeBitmapShader extends NativeShader {
   constructor(local: Affine | null, bitmap: NativeBitmap, tileX: number, tileY: number) { super(local); this.bitmap = bitmap; this.tileX = tileX; this.tileY = tileY; }
   // its pattern() covers the target's canvas
   override get atReplay(): boolean { return true; }
-  draw(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D): void {
+  override get direct(): boolean { return false; }
+  override fillClip(ctx: Ctx2D): void {
+    if (this.local) ctx.transform(...this.local);
+    this.draw(ctx);
+  }
+  /** the tiles over everything `ctx` can show */
+  private draw(ctx: Ctx2D): void {
     const bitmap = this.bitmap;
     let cache = bitmapShaderTiles.get(bitmap);
     if (!cache || cache.generation !== bitmap.genId) {
@@ -74,23 +95,12 @@ export class NativeBitmapShader extends NativeShader {
     // Strokes and text cannot clip a Canvas2D path to its stroked outline.
     const surface = new OffscreenCanvas(ctx.canvas.width, ctx.canvas.height), c = surface.getContext("2d")!;
     c.setTransform(matrix);
-    if (local) c.transform(...local);
-    this.draw(c);
+    this.fillClip(c);
     const pattern = ctx.createPattern(surface, "no-repeat")!;
     pattern.setTransform(matrix.inverse());
     this.cacheKey = key;
     return this.cached = pattern;
   }
-}
-/** fills everything `c` can show with `s`; a pattern shader applies its own local matrix */
-export function fillWithShader(c: OffscreenCanvasRenderingContext2D, s: NativeShader) {
-  const style = s.pattern(c);
-  if (!style) return;
-  if (s.local && style instanceof CanvasGradient) c.transform(...s.local);
-  const bounds = canvasLocalBounds(c);
-  if (!bounds) return;
-  c.fillStyle = style;
-  c.fillRect(bounds[0], bounds[1], bounds[2] - bounds[0], bounds[3] - bounds[1]);
 }
 /** ComposeShader: `src` blended onto `dst` by the mode, rasterized over the target once per transform */
 export class NativeComposeShader extends NativeShader {
@@ -106,11 +116,11 @@ export class NativeComposeShader extends NativeShader {
     const c = new OffscreenCanvas(width, height).getContext("2d")!;
     const base = this.local ? matrix.multiply(new DOMMatrix(this.local)) : matrix;
     c.setTransform(base);
-    fillWithShader(c, this.dst);
+    this.dst.fillClip(c);
     if (this.op) {
       c.setTransform(base);
       c.globalCompositeOperation = this.op;
-      fillWithShader(c, this.src);
+      this.src.fillClip(c);
     }
     const pattern = ctx.createPattern(c.canvas, "no-repeat")!;
     pattern.setTransform(matrix.inverse());
@@ -126,6 +136,12 @@ export class NativeGradient extends NativeShader {
   readonly style: CanvasGradient | CanvasPattern;
   constructor(local: Affine | null, style: CanvasGradient | CanvasPattern) { super(local); this.style = style; }
   override pattern(): CanvasGradient | CanvasPattern { return this.style; }
+  // a CanvasGradient has no transform of its own
+  override get direct(): boolean { return !this.local || !(this.style instanceof CanvasGradient); }
+  override fillClip(ctx: Ctx2D): void {
+    if (!this.direct) ctx.transform(...this.local!);
+    fillBounds(ctx, this.style);
+  }
 }
 let scratch: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null = null;
 /** a 2D context that makes gradients for any canvas */

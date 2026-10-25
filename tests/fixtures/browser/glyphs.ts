@@ -32,7 +32,7 @@ export default async function glyphs() {
   const draw = async (text: string, ctx: Ctx2D) => {
     const run = await shapeTextRun(text, 0, text.length, 0, text.length, false, paint);
     const positions = Float32Array.from({ length: run.ids.length * 2 }, (_, i) => i & 1 ? 50 : 10 + run.x[i >> 1]);
-    await drawGlyphs((fill) => fill(ctx), Int32Array.from(run.ids), 0, positions, 0, run.ids.length, wrapFont(run.fonts[0].font), paint);
+    await drawGlyphs((run) => run.fill(ctx), Int32Array.from(run.ids), 0, positions, 0, run.ids.length, wrapFont(run.fonts[0].font), paint);
     return run;
   };
   const drawn = new OffscreenCanvas(W, H).getContext("2d")!, reference = new OffscreenCanvas(W, H).getContext("2d")!;
