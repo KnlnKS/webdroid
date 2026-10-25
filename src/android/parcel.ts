@@ -6,7 +6,7 @@ import { JObj, rt, getDeclared, ranged } from "../jvm/runtime.ts";
 import { utf8, u8, encodeModifiedUtf8 } from "../jvm/abi.ts";
 import { scall, iof } from "../jvm/natives/jentry.ts";
 import { fdInt, mkFd } from "../jvm/natives/jio.ts";
-import { javaCloseFd, javaDupFd } from "../native/fd.ts";
+import { closeFd, dupFd } from "../native/fd.ts";
 import { fdLease, type FdScope } from "./fd-scope.ts";
 import { ownedHandle, deref, release } from "./handles.ts";
 
@@ -169,7 +169,7 @@ const isFd = (o: unknown) => o instanceof OwnedFd;
 /** a side-table entry's removal, closing the descriptor it owned */
 function dropObject(p: NativeParcel, at: number) {
   const o = p.objects.get(at);
-  if (o instanceof OwnedFd) javaCloseFd(o.fd);
+  if (o instanceof OwnedFd) closeFd(o.fd);
   p.objects.delete(at);
 }
 /** closing what a parcel owns: the descriptors written into it */
@@ -265,7 +265,7 @@ rt.registerJnis("android/os/Parcel", {
   "nativeWriteFileDescriptor(JLjava/io/FileDescriptor;)V": (ptr: bigint, d: JObj | null) => {
     const p = parcelAt(ptr);
     if (!p.allowFds) throw status(FDS_NOT_ALLOWED);
-    const fd = javaDupFd(fdInt(d));
+    const fd = dupFd(fdInt(d));
     if (fd < 0) throw status(BAD_VALUE);
     writeObject(p, new OwnedFd(fd));
   },
@@ -290,7 +290,7 @@ rt.registerJnis("android/os/Parcel", {
   },
   "nativeReadFileDescriptor(J)Ljava/io/FileDescriptor;": (ptr: bigint) => {
     const o = readObject(parcelAt(ptr));
-    return o instanceof OwnedFd ? mkFd(javaDupFd(o.fd)) : null;
+    return o instanceof OwnedFd ? mkFd(dupFd(o.fd)) : null;
   },
   "nativeMarshall(J)[B": (ptr: bigint) => {
     const p = parcelAt(ptr);
@@ -319,7 +319,7 @@ rt.registerJnis("android/os/Parcel", {
     reserve(p, len);
     const to = advance(p, len);
     p.buf.set(o.buf.subarray(off, off + len), to);
-    for (const [k, v] of o.objects) if (k >= off && k < off + len) p.objects.set(to + k - off, v instanceof OwnedFd ? new OwnedFd(javaDupFd(v.fd)) : v);
+    for (const [k, v] of o.objects) if (k >= off && k < off + len) p.objects.set(to + k - off, v instanceof OwnedFd ? new OwnedFd(dupFd(v.fd)) : v);
     for (const [k, n] of o.ashmem) if (k >= off && k + n <= off + len) p.ashmem.set(to + k - off, n);
   },
   "nativeHasBinders(J)Z": (ptr: bigint) => +inRange(parcelAt(ptr), isBinder),

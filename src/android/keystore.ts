@@ -17,7 +17,7 @@ import {
   CURVES, mul, generateEc, generateRsa, ecdsaSign, ecdsaVerify, rsaBytes, rsaApply, rsaVerify, emsaEncode, emeEncode, emeDecode,
   parsePrivateKey, parsePublicKey, marshalPrivateKey, bitLength, EVP_PKEY_RSA, EVP_PKEY_EC, type PKey, type RsaPad,
 } from "../crypto/pkey.ts";
-import { bigToBytes, bytesToBig } from "../crypto/der.ts";
+import { bigToBytes, bytesToBig } from "../crypto/bigint.ts";
 import { buildCertificate, x500Name, keyUsage } from "../crypto/x509.ts";
 import type { PackageState } from "../shell/packagedata.ts";
 import { persisted } from "../shell/device-storage.ts";

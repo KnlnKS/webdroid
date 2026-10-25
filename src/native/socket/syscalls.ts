@@ -1,24 +1,21 @@
-// The socket calls over guest memory: the kernel's (NET_SYSCALLS, which raw svcs and libc's
-// wrappers reach) and the ARM32 libc's send, recv, poll, select and resolver functions. Each
-// marshals with abi.ts and hands the socket core JS values.
+// The kernel's socket calls over guest memory (NET_SYSCALLS, which raw svcs and libc's wrappers
+// reach). Each marshals with abi.ts and hands the socket core JS values.
 
 import { E } from "../abi.ts";
 import type { Cpu } from "../cpu.ts";
-import { hostLib, stLong, complete, type HostFn, type HostRet } from "../host.ts";
+import { ldLong, stLong, complete, type HostFn, type HostRet } from "../host.ts";
 import { mem, anchor } from "../mem.ts";
-import { wrapped } from "../kernel.ts";
-import { fdRead, fdWrite, written } from "../fs.ts";
-import { installFile, dropFile, type OpenFile } from "../fd.ts";
-import { nativePoll, nativeSelect } from "../poll.ts";
+import { writeTs, KLAYOUT } from "../kernel.ts";
+import { fdWrite, written } from "../fs.ts";
+import { installFile, dropFile, readFd, type OpenFile } from "../fd.ts";
 import { AF_UNSPEC, AF_UNIX, AF_INET, AF_INET6 } from "../net-address.ts";
 import {
   SOL_SOCKET, MSG_CTRUNC, MSG_TRUNC, MSG_CMSG_CLOEXEC, readSockaddr, writeSockaddr, readMsghdr, readCmsgs, writeControl, gather,
-  iovecs, guestBuffer, ucredBytes, readTimeval, writeTimeval, TIMEVAL_SIZE, type GuestBuffer, type Cmsg,
+  iovecs, guestBuffer, ucredBytes, type GuestBuffer, type Cmsg,
 } from "./abi.ts";
 import { record, installSocket, socketOf, SO_LINGER, SO_PEERCRED, SO_RCVTIMEO, SO_SNDTIMEO, type Socket, type Received, type Accepted } from "./core.ts";
 import { inetSocket, IPPROTO_IP, IP_ADD_MEMBERSHIP, IP_DROP_MEMBERSHIP } from "./inet.ts";
 import { unixSocket, unixSocketPair } from "./unix.ts";
-import { RESOLVER, hostLookups } from "./resolver.ts";
 
 const UIO_MAXIOV = 1024;
 
@@ -111,8 +108,8 @@ function getsockopt(fd: number, level: number, name: number, value: number, leng
   const result = s.getOption(level, name);
   if (result < 0) return result;
   if (level === SOL_SOCKET && (name === SO_RCVTIMEO || name === SO_SNDTIMEO)) {
-    if (mem.ld32(length) < TIMEVAL_SIZE()) return -E.INVAL;
-    writeTimeval(value, result); mem.st32(length, TIMEVAL_SIZE());
+    if (mem.ld32(length) < KLAYOUT.TS_SIZE) return -E.INVAL;
+    writeTs(value, result, 1e3); mem.st32(length, KLAYOUT.TS_SIZE);
     return 0;
   }
   if (level === SOL_SOCKET && name === SO_LINGER && mem.ld32(length) >= 8) {
@@ -132,8 +129,8 @@ function setsockopt(fd: number, level: number, name: number, value: number, leng
     return accepted(s.group(name === IP_ADD_MEMBERSHIP, Array.from(mem.bytes(value, 4)), length >= 12 ? mem.ld32(value + 8) : 0));
   if (level === SOL_SOCKET && name === SO_LINGER) return value && length >= 8 ? s.setOption(level, name, mem.ld32(value) ? mem.ld32(value + 4) : -1) : -E.INVAL;
   if (level === SOL_SOCKET && (name === SO_RCVTIMEO || name === SO_SNDTIMEO)) {
-    if (!value || length < TIMEVAL_SIZE()) return -E.INVAL;
-    const { sec, usec } = readTimeval(value);
+    if (!value || length < KLAYOUT.TS_SIZE) return -E.INVAL;
+    const sec = ldLong(value + KLAYOUT.TS_SEC), usec = ldLong(value + KLAYOUT.TS_NSEC);
     if (usec < 0 || usec >= 1_000_000) return -E.DOM;
     return s.setOption(level, name, sec < 0 ? 0 : sec * 1000 + Math.ceil(usec / 1000));
   }
@@ -141,17 +138,17 @@ function setsockopt(fd: number, level: number, name: number, value: number, leng
   return accepted(s.setOption(level, name, length >= 4 ? mem.ld32(value) : mem.u8[value]));
 }
 /** sendto(2): a descriptor that is no socket takes a plain write */
-function sendto(cpu: Cpu, fd: number, source: number, length: number, flags: number, destination: number, destinationLength: number): number | Promise<number> {
+export function sendto(cpu: Cpu, fd: number, source: number, length: number, flags: number, destination: number, destinationLength: number): number | Promise<number> {
   const s = socketOf(fd);
   if (typeof s === "number") return destination || destinationLength ? -E.ISCONN : fdWrite(cpu, fd, source, length);
   return send(cpu, s, mem.bytes(source, length), destination, destinationLength, flags);
 }
 /** recvfrom(2): a descriptor that is no socket takes a plain read */
-function recvfrom(fd: number, destination: number, length: number, flags: number, source = 0, sourceLength = 0): number | Promise<number> {
+export function recvfrom(fd: number, destination: number, length: number, flags: number, source = 0, sourceLength = 0): number | Promise<number> {
   const s = socketOf(fd);
   if (typeof s !== "number") return length && !destination ? -E.FAULT : receive(fd, s, [guestBuffer(destination, length)], flags, { ...NO_RESULTS, name: source, nameLength: sourceLength });
   if (source || sourceLength) return -E.NOTCONN;
-  return fdRead(fd, destination, length);
+  return readFd(fd, destination, length);
 }
 
 export const NET_SYSCALLS: Record<string, HostFn> = {
@@ -205,19 +202,3 @@ export const NET_SYSCALLS: Record<string, HostFn> = {
   getsockname: (_c, a) => sockname(a.i(), a.p(), a.p(), false),
   getpeername: (_c, a) => sockname(a.i(), a.p(), a.p(), true),
 };
-
-export function netInit(): void {
-  hostLib("libc.so", {
-    ...RESOLVER, ...hostLookups(),
-    send: wrapped((cpu, a) => sendto(cpu, a.i(), a.p(), a.u(), a.i(), 0, 0)),
-    recv: wrapped((_c, a) => recvfrom(a.i(), a.p(), a.u(), a.i())),
-    poll: wrapped((_c, a) => nativePoll(a.p(), a.u(), a.i())),
-    select: wrapped((_c, a) => {
-      const count = a.i(), r = a.p(), w = a.p(), x = a.p(), timeout = a.p();
-      if (!timeout) return nativeSelect(count, r, w, x, -1);
-      const { sec, usec } = readTimeval(timeout);
-      if (sec < 0 || usec < 0 || usec >= 1_000_000) return -E.INVAL;
-      return nativeSelect(count, r, w, x, sec * 1000 + usec / 1000);
-    }),
-  });
-}

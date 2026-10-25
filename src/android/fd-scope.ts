@@ -1,6 +1,6 @@
 // Descriptor ownership while Java decodes a Parcel: a scope owns the descriptors it was handed, and
 // closes those still its own when it is released. A duplicate is its original's owner's too.
-import { fdEvents, javaCloseFd, openFd } from "../native/fd.ts";
+import { fdEvents, closeFd, openFd } from "../native/fd.ts";
 
 const leases = new Map<number, FdLease>();
 export class FdScope {
@@ -28,7 +28,7 @@ class FdLease {
   private callbacks = new Set<() => void>();
   constructor(number: number, owner: FdScope | undefined) { this.number = number; this.owner = owner; }
   get fd(): number { return leases.get(this.number) === this && openFd(this.number) ? this.number : -1; }
-  close(): void { if (this.fd >= 0) javaCloseFd(this.fd); }
+  close(): void { if (this.fd >= 0) closeFd(this.fd); }
   onClose(callback: () => void): void { this.callbacks.add(callback); }
   closed(): void { for (const callback of this.callbacks) callback(); this.callbacks.clear(); }
 }

@@ -8,8 +8,7 @@ import { java } from "../jvm/javahost.ts";
 import { rt } from "../jvm/runtime.ts";
 import type { Strand } from "../jvm/suspend.ts";
 import { mem } from "./mem.ts";
-import { NativeFault, BadAddress } from "./core.ts";
-import { core, jitDrain, TLS_KEYS } from "./core.ts";
+import { NativeFault, BadAddress, core, jitDrain } from "./core.ts";
 import { Args, Args64, type ArgReader, onBadAddress, kernelEntry, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, wordsd, slowMs, NORET, hostTrace } from "./host.ts";
 import { E, RET_SENTINEL, TRAMP_BASE, TRAMP_END, STACK_SIZE, MAIN_STACK_SIZE, MEM_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi.ts";
 import { perf } from "../perf.ts";
@@ -125,7 +124,6 @@ export class Cpu {
   private bytes!: Uint8Array;
   a64 = false;
   pcx = 15; lrx = 14; spx = 13;
-  private threadData = 0;
   private staticTlsBlocks = new Map<object, number>();
   /** the pthread_internal_t this thread is known by: pthread_self(), the handle pthread_create hands out */
   pthreadSelf = 0;
@@ -135,8 +133,6 @@ export class Cpu {
   readonly osTid: number;
   stackBase = 0; stackTop = 0;
   env = 0;
-  /** the pthread key table: TLS_KEYS guest pointers, read and written by the core */
-  tlsTab = 0;
   pending: Promise<unknown> | null = null;
   private budgetWake: (() => void) | null = null;
   /** signals pending for this thread, delivered at its next slice boundary, each with the siginfo its
@@ -166,18 +162,6 @@ export class Cpu {
     if (!this.base) throw new NativeFault("[native] out of memory for thread state");
     this.views();
     this.setAbi(A64);
-    // the TLS block, errno, the pthread key table the core serves lookups from, then the
-    // pthread_internal_t pthread_self() names (bionic's layout: tid at +0x10, the stack in
-    // attr at +0x20/+0x28), which TLS slot 1 points at as on a device
-    this.threadData = mem.calloc(1, 264 + 8 * TLS_KEYS + PTHREAD_SIZE);
-    if (!this.threadData) throw new NativeFault("[native] out of memory for thread data");
-    this.tlsBase = this.threadData;
-    this.errnoAddr = this.threadData + 256;
-    this.tlsTab = this.threadData + 264;
-    this.u32[OFF_TLSTAB >> 2] = this.tlsTab;
-    this.pthreadSelf = this.tlsTab + 8 * TLS_KEYS;
-    mem.st32(this.pthreadSelf + 0x10, this.osTid);
-    mem.st32(this.tlsBase + (A64 ? 8 : 4), this.pthreadSelf);
     cpus.add(this);
   }
   // a memory committed whole detached every live thread's views
@@ -222,6 +206,9 @@ export class Cpu {
   /** where the guest libc keeps this thread's errno, which the host's and the core's failures set */
   get errnoAddr(): number { return this.u32[OFF_ERRNO >> 2]; }
   set errnoAddr(v: number) { this.u32[OFF_ERRNO >> 2] = v; }
+  /** the ARM32 libc's pthread key table: TLS_KEYS guest pointers, which the core serves lookups from */
+  get keyTable(): number { return this.u32[OFF_TLSTAB >> 2]; }
+  set keyTable(v: number) { this.u32[OFF_TLSTAB >> 2] = v; }
   get tlsBase(): number { return this.u32[OFF_TLS >> 2]; }
   set tlsBase(v: number) { this.u32[OFF_TLS >> 2] = v; this.u32[(OFF_TLS >> 2) + 1] = 0; }
   /** the thread pointer as the guest holds it: a guest libc's TLS block may lie in a plane */
@@ -385,22 +372,19 @@ export class Cpu {
   /** guest-visible thread exit (pthread_exit / thread function returned) */
   finished = false;
 
-  dispose(retainThreadData = false): number {
+  dispose(): void {
     if (this.loops) throw new Error("[native] cannot dispose a running thread");
-    if (!cpus.has(this)) return 0;
+    if (!cpus.has(this)) return;
     this.finished = true;
     if (this.stackBase) mem.freeStack(this.stackBase, this.stackTop);
     for (const p of this.staticTlsBlocks.values()) mem.free(p);
     this.staticTlsBlocks.clear();
-    const threadData = retainThreadData ? this.threadData : 0;
-    if (!retainThreadData) mem.free(this.threadData);
     mem.free(this.env);
-    this.threadData = this.errnoAddr = this.env = this.stackBase = this.stackTop = 0;
+    this.errnoAddr = this.env = this.stackBase = this.stackTop = 0;
     this.signals.clear();
     cpus.delete(this);
     if (byThread.get(this.jthread) === this) byThread.delete(this.jthread);
     core.cpu_free(this.base);
-    return threadData;
   }
   /** an unloaded image's TLS block */
   releaseTls(key: object): void {
@@ -439,14 +423,13 @@ export class Cpu {
     this.libc = "host";
   }
   /** clone(CLONE_SETTLS): the guest libc made this thread, with `tls` its thread pointer */
-  cloned(tls: bigint): void { this.tlsVa = tls; this.libc = "guest"; threadHooks?.cloned(this); }
+  cloned(tls: bigint): void { this.tlsVa = tls; this.libc = "guest"; threadHooks?.cloned?.(this); }
 
   ensureStack(size = this.jthread === mainThread ? MAIN_STACK_SIZE : STACK_SIZE): void {
     if (!this.stackTop) {
       const s = mem.allocStack(size);
       this.stackBase = s.base; this.stackTop = s.top;
       this.w[2 * this.spx] = s.top; this.w[2 * this.spx + 1] = 0;
-      if (this.a64) { mem.st64(this.pthreadSelf + 0x20, BigInt(s.base)); mem.st64(this.pthreadSelf + 0x28, BigInt(s.top - s.base)); }
     }
   }
 
@@ -554,8 +537,8 @@ export class Cpu {
   /** the slice driver: run until the frame returns (pc = RET_SENTINEL) or the thread finishes;
    *  synchronous when it returns within its first slice */
   run(strand = rt.cur): void | Promise<void> {
-    if (this.libc === "none" && threadHooks) return threadHooks.start(this).then(() => this.runLoop(strand));
-    return this.runLoop(strand);
+    const bound = this.libc === "none" && threadHooks ? threadHooks.start(this) : undefined;
+    return bound ? bound.then(() => this.runLoop(strand)) : this.runLoop(strand);
   }
   private runLoop(strand: Strand): void | Promise<void> {
     this.loops++;
@@ -851,13 +834,11 @@ function memoryFault(addr: bigint): { sig: number; info: SigInfo } {
   return { sig: SIGBUS, info: { code: BUS_ADRALN, addr } };
 }
 export function setRawSyscall(fn: (cpu: Cpu, nr: number, a: ArgReader) => HostRet | Promise<HostRet>): void { rawSyscall = fn; }
-/** bionic's pthread_internal_t is under 0x200 bytes; a crash reporter scans it up to a page */
-const PTHREAD_SIZE = 0x200;
 let tidSeq = 0;
-/** the guest libc's state for a thread the host created: `start` binds it (bindThread) before its
- *  first instruction, `end` tears it down when its Java thread ends; `cloned` finds a thread's the
- *  guest libc created */
-let threadHooks: { start: (cpu: Cpu) => Promise<void>; end: (cpu: Cpu) => Promise<void>; cloned: (cpu: Cpu) => void } | null = null;
+/** the libc's state for a thread the host created: `start` binds it (bindThread) before its first
+ *  instruction, `end` tears it down when its Java thread ends; `cloned` finds a thread's the guest
+ *  libc created */
+let threadHooks: { start: (cpu: Cpu) => void | Promise<void>; end: (cpu: Cpu) => Promise<void>; cloned?: (cpu: Cpu) => void } | null = null;
 export function setThreadHooks(hooks: NonNullable<typeof threadHooks>): void { threadHooks = hooks; }
 export const cpus = new Set<Cpu>();
 const byThread = new WeakMap<JThread, Cpu>();

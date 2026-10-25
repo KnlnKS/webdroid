@@ -3,7 +3,7 @@
 // crashing thread is unwound, by its frame-pointer chain.
 
 export type TombstoneFrame = { pc: number; relPc: number; file: string; fn: string; fnOffset: number };
-export type TombstoneData = {
+type TombstoneData = {
   a64: boolean; fingerprint: string; timestamp: number; pid: number; tid: number; uid: number; command: string; uptimeS: number;
   signal: number; signalName: string; code: number; codeName: string; faultAddress: bigint | null; abort: string;
   threadName: string; registers: [string, bigint][]; frames: TombstoneFrame[];

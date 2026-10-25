@@ -1,6 +1,6 @@
 import { rt, type Gen } from "../jvm/runtime.ts";
 import { curThread, mainThread } from "../jvm/natives/jentry.ts";
-import { libcInit } from "./libc.ts";
+import { libcInit } from "./libc32/libc.ts";
 import { kernelInit } from "./syscall.ts";
 import { dlInit, loadModule, modulePath, modules, resolveGlobalOrNull } from "./dl.ts";
 import type { Module } from "./elf.ts";

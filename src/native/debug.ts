@@ -1,8 +1,9 @@
 // wd.native: modules, symbolize, traces, threads, unresolved/jniMissing, peek/poke.
 import { modules, symbolizePc, backtrace } from "./dl.ts";
 import { hostTrace, calledMissing, unresolved, probed, hostCounts, slotName } from "./host.ts";
-import { killLog, dispositions } from "./signals.ts";
-import { futexStats } from "./pthread.ts";
+import { dispositions } from "./signals.ts";
+import { killLog } from "./libc32/signal.ts";
+import { futexStats } from "./thread.ts";
 import { jniMissing, jniTrace, registered } from "./jni.ts";
 import { cpus, codeStats, stepMode, setStepMode, profile, slice, watchPcs, lastFault, invalidations } from "./cpu.ts";
 import { yieldStats } from "../jvm/yield.ts";

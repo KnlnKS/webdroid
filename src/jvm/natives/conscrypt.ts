@@ -19,7 +19,8 @@ import {
   parsePublicKey, parsePrivateKey, marshalPublicKey, marshalPrivateKey, EVP_PKEY_RSA, EVP_PKEY_EC, EVP_PKEY_X25519,
   type Curve, type Point, type Rsa, type RsaPad, type PKey,
 } from "../../crypto/pkey.ts";
-import { bigToBytes, fromSigned, parseOne, DerError, orDer, oid as oidDer } from "../../crypto/der.ts";
+import { fromSigned, parseOne, DerError, orDer, oid as oidDer } from "../../crypto/der.ts";
+import { bigToBytes } from "../../crypto/bigint.ts";
 
 const NC = "com/android/org/conscrypt/NativeCrypto";
 export const nc = (sig: string, fn: (...a: never[]) => unknown) => rt.registerJni(NC, sig, fn);

@@ -330,7 +330,10 @@ export const deferred = (name: string) => new Deferred(DIGESTS[name].make(), DIG
 export function digestBytes(algorithm: string, data: Uint8Array): Uint8Array | Promise<Uint8Array> | null {
   const name = algorithm.toLowerCase().replace("-", "");
   if (!(name in DIGESTS)) return null;
-  const h = deferred(name);
+  const { make, web } = DIGESTS[name];
+  // the browser takes a whole message of any size, as a copy, since it refuses a shared buffer's view
+  if (web && data.length >= WEB_MIN && globalThis.crypto?.subtle) return crypto.subtle.digest(web, data.slice()).then((r) => new Uint8Array(r));
+  const h = make();
   h.update(data);
-  return h.final();
+  return h.digest();
 }

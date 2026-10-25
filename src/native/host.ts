@@ -157,7 +157,7 @@ export function stp(a: number, v: number): void { const g = mem.va(v); if (typeo
 export function ldp(a: number): number { const lo = mem.ld32(a), hi = PTR === 8 ? mem.ld32(a + 4) : 0; return hi ? mem.tx(hi, lo) : lo >>> 0; }
 /** a C long, pointer-sized: signed on load */
 /** an unsigned pointer-sized word (an address or size_t) as a bigint */
-export const ldWord = (a: number): bigint => PTR === 8 ? mem.ld64(a) : BigInt(mem.ld32(a) >>> 0);
+export const ldWord = (a: number): bigint => PTR === 8 ? BigInt.asUintN(64, mem.ld64(a)) : BigInt(mem.ld32(a) >>> 0);
 export function stWord(a: number, v: bigint): void { if (PTR === 8) mem.st64(a, v); else mem.st32(a, Number(v)); }
 export const ldLong = (a: number): number => PTR === 8 ? Number(mem.ld64(a)) : mem.ld32(a) | 0;
 export function stLong(a: number, v: number): void { if (PTR === 8) mem.st64(a, BigInt(v)); else mem.st32(a, v); }

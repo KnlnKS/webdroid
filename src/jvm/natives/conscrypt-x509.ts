@@ -11,7 +11,8 @@ import { nc, sslError, keyOf, newKey, parsing, type Key } from "./conscrypt.ts";
 import { parseX509, X509, SIG_ALGS, bitBooleans, basicConstraints, keyUsageBits, exFlags, generalNames, extKeyUsage, tbsWithout, nameRfc2253,
   signedDataCertificates, KEY_USAGE, EXT_KEY_USAGE, BASIC_CONSTRAINTS, SUBJECT_ALT_NAME, ISSUER_ALT_NAME, type Time } from "../../crypto/x509.ts";
 import { parsePublicKey, rsaApply, rsaBytes, emsaVerify, ecdsaVerify, bitLength, encodePoint, EVP_PKEY_RSA, EVP_PKEY_EC, type RsaPad } from "../../crypto/pkey.ts";
-import { children, parseOne, readTlv, oidToString, seq, oid, integer, tlv, bytesToBig, bigToBytes, DerError, orDer, SEQUENCE, INTEGER } from "../../crypto/der.ts";
+import { children, parseOne, readTlv, oidToString, seq, oid, integer, tlv, DerError, orDer, SEQUENCE, INTEGER } from "../../crypto/der.ts";
+import { bytesToBig, bigToBytes } from "../../crypto/bigint.ts";
 import { DIGESTS, digestOfOid, hashOf, sha1 } from "../../crypto/digest.ts";
 
 const X = "Lcom/android/org/conscrypt/OpenSSLX509Certificate;";

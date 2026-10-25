@@ -3,13 +3,14 @@ import { NODE_ARGS, run } from "../../scripts/node.ts";
 import { curThread, JThread, mainThread, setCurThread } from "../jvm/natives/jentry.ts";
 import { Cpu, setA64, slice } from "./cpu.ts";
 import { dispositions, sigHandler } from "./signals.ts";
-import { defineHost, lookupHost } from "./host.ts";
-import { libcInit } from "./libc.ts";
+import { defineHost, lookupHost, markKernelEntries } from "./host.ts";
+import { libcInit } from "./libc32/libc.ts";
 import { mem } from "./mem.ts";
-import { futex } from "./pthread.ts";
+import { futex } from "./thread.ts";
 import { E, RET_SENTINEL } from "./abi.ts";
 import { jitStats, JIT_HEAT } from "./core.ts";
-import { kernelInit, rawSyscall, syscallEntry } from "./syscall.ts";
+import { kernelInit, rawSyscall } from "./syscall.ts";
+import { kernelResult } from "./kernel.ts";
 
 /** `sig` is handled as `d` until the result puts back what was there */
 function install(sig: number, d: ReturnType<typeof sigHandler>): () => void {
@@ -322,9 +323,12 @@ test("an ARM32 store past 2 GiB or to space the memory does not yet back faults 
 
 test("a bad pointer fails a system call with EFAULT and faults a libc body with SIGSEGV", async () => {
   setA64(true); kernelInit();
-  const cpu = new Cpu(new JThread(), "bad-pointer"), at = mem.reserve(4096, 4096), seen: bigint[] = [];
+  const cpu = new Cpu(new JThread(), "bad-pointer"), at = mem.reserve(4096, 4096), seen: bigint[] = [], errno = mem.malloc(4);
   mem.u32.set([0xd2801408, 0xd4000001, 0xd65f03c0], at >>> 2);                         // uname(x0) by svc
-  const libcSyscall = defineHost("syscall", syscallEntry);
+  cpu.bindThread(0, 0, errno);
+  // a libc's syscall(2), as libcInit marks it
+  markKernelEntries(["syscall"]);
+  const libcSyscall = defineHost("syscall", (c, a) => kernelResult(c, rawSyscall(c, a.i(), a)));
   const userRead = defineHost("test.bad.read", (_c, a) => mem.ld32(a.p()));
   const handler = defineHost("test.bad.segv", (_c, a) => {
     a.i(); const info = a.p(), ctx = a.p();
@@ -337,12 +341,12 @@ test("a bad pointer fails a system call with EFAULT and faults a libc body with 
   try {
     expect(await cpu.call(at, [8])).toBe(-E.FAULT);
     expect(await cpu.call(libcSyscall, [160, 8])).toBe(-1);
-    expect(mem.ld32(cpu.errnoAddr)).toBe(E.FAULT);
+    expect(mem.ld32(errno)).toBe(E.FAULT);
     expect(await cpu.call(userRead, [0x24])).toBe(7);
     expect(seen).toEqual([0x24n]);
   } finally {
     restore();
-    cpu.dispose(); setA64(false);
+    cpu.dispose(); mem.free(errno); setA64(false);
   }
 });
 

@@ -6,9 +6,8 @@ import * as zInflate from "pako/lib/zlib/inflate.js";
 import * as zDeflate from "pako/lib/zlib/deflate.js";
 import ZStream from "pako/lib/zlib/zstream.js";
 import MESSAGES from "pako/lib/zlib/messages.js";
-import { mem, AddrMap, wrote } from "./mem.ts";
-import { hostLib, type HostFn, stp, ldp } from "./host.ts";
-import { crc32, adler32 } from "../zip.ts";
+import { mem, AddrMap, wrote } from "../mem.ts";
+import { type HostFn, SERVED, stp, ldp } from "../host.ts";
 
 // z_stream fields
 const Z = { IN: 0, AVIN: 4, TIN: 8, OUT: 12, AVOUT: 16, TOUT: 20, MSG: 24, STATE: 28, DATA_TYPE: 44, ADLER: 48 };
@@ -75,8 +74,9 @@ function setDictionary(strm: number, s: ZStream | undefined, dictionary: number,
   return code;
 }
 
-export function zlibInit(): void {
+export function zlibLibc(): Record<string, HostFn> {
   messages.clear();
+  const zver = mem.hostStr("1.2.8");
   const M: Record<string, HostFn> = {
     deflateInit_: (_c, a) => { const strm = a.p(), level = a.i(); a.str(); a.i(); return open(strm, deflaters, (s) => zDeflate.deflateInit2(s, level, 8, 15, 8, 0)); },
     deflateInit2_: (_c, a) => {
@@ -93,8 +93,7 @@ export function zlibInit(): void {
     inflateReset: (_c, a) => { const strm = a.p(); return reset(strm, inflaters.get(strm), zInflate.inflateReset); },
     inflateSetDictionary: (_c, a) => { const strm = a.p(), d = a.p(), n = a.u(); return setDictionary(strm, inflaters.get(strm), d, n, zInflate.inflateSetDictionary); },
     inflateEnd: (_c, a) => end(a.p(), inflaters, zInflate.inflateEnd),
-    crc32: (_c, a) => { const crc = a.i(), p = a.p(), n = a.u(); return p ? crc32(crc, mem.bytes(p, n)) >>> 0 : 0; },
-    adler32: (_c, a) => { const ad = a.i(), p = a.p(), n = a.u(); return p ? adler32(ad, mem.bytes(p, n)) >>> 0 : 1; },
+    crc32: SERVED, adler32: SERVED,
     zlibVersion: () => zver,
     zError: (_c, a) => message(MESSAGES[a.i()] ?? ""),
     uncompress: (_c, a) => {
@@ -111,6 +110,5 @@ export function zlibInit(): void {
       return Z_OK;
     },
   };
-  hostLib("libz.so", M);
-  const zver = mem.hostStr("1.2.8");
+  return M;
 }

@@ -1,7 +1,7 @@
 // The zygote's Java, which needs no app: a page runs it in every process while the app downloads, and aot-startup runs it to record the modules a start loads.
 import { rt, type Gen } from "../jvm/runtime.ts";
 import { callOn, initClass, mainThread, scall } from "../jvm/natives/jentry.ts";
-import { asZygote } from "./os.ts";
+import { asZygote } from "../jvm/natives/linux.ts";
 import { preloadFonts } from "./fonts.ts";
 import { initDeviceLocales } from "./configuration.ts";
 import { preloadPaint } from "./paint.ts";

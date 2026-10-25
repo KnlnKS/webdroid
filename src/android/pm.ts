@@ -575,7 +575,7 @@ async function apkDigests(record: PackageRecord, includeSplits: boolean, require
     if (!bytes) continue;
     for (const [type, algorithm] of wholeChecksumAlgorithms) {
       if (!(required & type)) continue;
-      const value = algorithm === "SHA-512" ? new Uint8Array(await crypto.subtle.digest("SHA-512", bytes.slice())) : await digestBytes(algorithm, bytes);
+      const value = await digestBytes(algorithm, bytes);
       if (value) result.push([splitName, type, value]);
     }
   }

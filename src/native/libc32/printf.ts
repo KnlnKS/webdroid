@@ -1,8 +1,8 @@
 // C99 printf/scanf formatting over an ArgReader (registers+stack, a va_list, or a JS array in tests).
 
-import type { ArgReader } from "./host.ts";
-import { mem } from "./mem.ts";
-import { utf8 } from "../jvm/abi.ts";
+import type { ArgReader } from "../host.ts";
+import { mem } from "../mem.ts";
+import { utf8 } from "../../jvm/abi.ts";
 
 function pad(s: string, width: number, left: boolean, zero: boolean): string {
   if (s.length >= width) return s;
