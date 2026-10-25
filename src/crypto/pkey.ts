@@ -2,12 +2,12 @@
 // curves BoringSSL builds in (and arbitrary prime curves), and X25519 (RFC 7748); the SPKI and PKCS#8
 // encodings EVP_parse_*/EVP_marshal_* read and write.
 
-import { modInverse, modPow } from "./bigint.ts";
+import { modInverse, modPow, bytesToBig, bigToBytes } from "./bigint.ts";
 import { DIGESTS, hashOf, type Hash } from "./digest.ts";
 import { concat, sameBytes } from "../jvm/abi.ts";
 import {
   readTlv, children, parseOne, expect, oidToString, tlv, seq, oid, derNull, octets, bits, integer, uintOf,
-  bytesToBig, bigToBytes, DerError, SEQUENCE, BIT_STRING, OCTET_STRING, OID,
+  DerError, SEQUENCE, BIT_STRING, OCTET_STRING, OID,
 } from "./der.ts";
 
 export const EVP_PKEY_RSA = 6, EVP_PKEY_EC = 408, EVP_PKEY_X25519 = 948;
@@ -250,8 +250,8 @@ export function ecdsaVerify(c: Curve, Q: [bigint, bigint], digest: Uint8Array, s
 
 // ── X25519 (RFC 7748 §5)
 const P25519 = (1n << 255n) - 19n, A24 = 121665n;
-const le = (b: Uint8Array) => { let v = 0n; for (let i = b.length - 1; i >= 0; i--) v = (v << 8n) | BigInt(b[i]); return v; };
-const toLe = (v: bigint) => { const o = new Uint8Array(32); for (let i = 0; i < 32; i++, v >>= 8n) o[i] = Number(v & 255n); return o; };
+const le = (b: Uint8Array) => bytesToBig(b.toReversed());
+const toLe = (v: bigint) => bigToBytes(v, 32).reverse();
 export function x25519(scalar: Uint8Array, u: Uint8Array): Uint8Array {
   const k = scalar.slice(); k[0] &= 248; k[31] &= 127; k[31] |= 64;
   const kk = le(k), p = P25519, x1 = le(u) & ((1n << 255n) - 1n);

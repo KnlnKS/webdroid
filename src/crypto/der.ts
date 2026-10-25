@@ -1,5 +1,6 @@
 // DER (X.690) for the natives that parse and build keys and certificates.
 import { concat } from "../jvm/abi.ts";
+import { bytesToBig, bigToBytes } from "./bigint.ts";
 
 export type Tlv = { tag: number; /** the whole encoding */ raw: Uint8Array; body: Uint8Array };
 export class DerError extends Error {}
@@ -77,22 +78,6 @@ export const derNull = () => Uint8Array.of(NULL, 0);
 export const octets = (b: Uint8Array) => tlv(OCTET_STRING, b);
 export const bits = (b: Uint8Array) => tlv(BIT_STRING, concat([Uint8Array.of(0), b]));
 
-/** unsigned big-endian bytes ↔ bigint */
-export function bytesToBig(b: Uint8Array): bigint {
-  if (!b.length) return 0n;
-  let hex = "";
-  for (const x of b) hex += (x < 16 ? "0" : "") + x.toString(16);
-  return BigInt("0x" + hex);
-}
-/** `v` as `len` big-endian bytes (minimal when len is omitted) */
-export function bigToBytes(v: bigint, len?: number): Uint8Array {
-  let hex = v.toString(16);
-  if (hex.length & 1) hex = "0" + hex;
-  if (v === 0n) hex = "";
-  const n = len ?? hex.length / 2, out = new Uint8Array(n);
-  for (let i = 0, o = n - hex.length / 2; i < hex.length; i += 2, o++) if (o >= 0) out[o] = parseInt(hex.slice(i, i + 2), 16);
-  return out;
-}
 /** a non-negative INTEGER */
 export function integer(v: bigint): Uint8Array {
   const b = bigToBytes(v);

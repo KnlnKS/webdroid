@@ -4,9 +4,10 @@
 
 import { concat, sameBytes, utf8 } from "../jvm/abi.ts";
 import {
-  children, parseOne, readTlv, expect, oidToString, tlv, seq, oid, integer, bits, octets, derNull, bytesToBig, DerError,
+  children, parseOne, readTlv, expect, oidToString, tlv, seq, oid, integer, bits, octets, derNull, DerError,
   SEQUENCE, INTEGER, BIT_STRING, OCTET_STRING, OID, BOOLEAN, type Tlv,
 } from "./der.ts";
+import { bytesToBig } from "./bigint.ts";
 import { ecdsaSign, emsaEncode, rsaApply, marshalPublicKey, EVP_PKEY_EC, EVP_PKEY_RSA, type PKey } from "./pkey.ts";
 import { sha256 } from "./digest.ts";
 

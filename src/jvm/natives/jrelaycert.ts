@@ -10,7 +10,8 @@ import { newObj, vcall, scall } from "./jentry.ts";
 import { vfs } from "../../shell/vfs.ts";
 import { BytesFile } from "../../shell/lazyfile.ts";
 import { md5, sha1 } from "../../crypto/digest.ts";
-import { seq, oid, tlv, octets, bytesToBig } from "../../crypto/der.ts";
+import { seq, oid, tlv, octets } from "../../crypto/der.ts";
+import { bytesToBig } from "../../crypto/bigint.ts";
 import { CURVES, generateEc, marshalPublicKey, EVP_PKEY_EC, type PKey } from "../../crypto/pkey.ts";
 import { buildCertificate, x500Name, extension, keyUsage, BASIC_CONSTRAINTS, SUBJECT_ALT_NAME, EXT_KEY_USAGE } from "../../crypto/x509.ts";
 
