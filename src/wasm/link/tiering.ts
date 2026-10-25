@@ -53,7 +53,7 @@ export class Tiering {
     this.initializing = this.initializing.filter(([slot, cls, at]) => {
       if (!w.initialized(cls)) return true;
       done.push(w.table.get(slot) as Function);
-      w.table.set(slot, w.rt.nop);
+      w.slots.install(slot, w.rt.nop, false);
       if (at >= 0 && w.slots.compiled(at)) w.slots.unlink(at);
       return false;
     });
