@@ -6,9 +6,14 @@ type Env = { ASSETS: Fetcher; BACKEND: Fetcher; BACKEND_ORIGIN?: string };
 /** each file answered in ranges by its size, and for one build-prod split to fit the asset size limit, its parts' */
 type Sizes = Record<string, { size: number; partSize?: number }>;
 
-let sizes: Promise<Sizes> | undefined;
-const assetSizes = (env: Env, url: URL): Promise<Sizes> => sizes ??= env.ASSETS.fetch(new URL("/asset-sizes.json", url))
-  .then(r => r.json<Sizes>()).catch(error => { sizes = undefined; throw error; });
+const read = new Map<string, Promise<unknown>>();
+/** the file build-prod or deploy wrote at `path` for this Function, read once */
+function written<T>(env: Env, url: URL, path: string, parse: (response: Response) => Promise<T>): Promise<T> {
+  let value = read.get(path) as Promise<T> | undefined;
+  if (!value) read.set(path, value = env.ASSETS.fetch(new URL(path, url))
+    .then(r => r.ok ? parse(r) : Promise.reject(new Error(`${path}: ${r.status}`))).catch(error => { read.delete(path); throw error; }));
+  return value;
+}
 
 /** Stream only the requested bytes, including when the asset store ignores Range. */
 function sliceBody(body: ReadableStream<Uint8Array>, skip: number, length: number): ReadableStream<Uint8Array> {
@@ -60,11 +65,12 @@ async function ranged(request: Request, env: Env, path: string, { size, partSize
   return new Response(readable, { status, headers });
 }
 
-/** the backend Worker's answer; a preview's is the Worker deployed for its branch, which its alias host names (scripts/deploy.ts) */
-function backend(request: Request, env: Env): Promise<Response> {
+/** the backend Worker's answer; a preview's is the Worker deployed for its branch, which scripts/deploy.ts names in each of its
+ *  deployments, since a deployment's unique host does not name the branch */
+async function backend(request: Request, env: Env): Promise<Response> {
   if (!env.BACKEND_ORIGIN) return env.BACKEND.fetch(request);
-  const url = new URL(request.url), origin = env.BACKEND_ORIGIN.replace("*", url.hostname.slice(0, url.hostname.indexOf(".")));
-  return fetch(new Request(new URL(url.pathname + url.search, origin), request));
+  const url = new URL(request.url), alias = await written(env, url, "/preview-alias.txt", r => r.text());
+  return fetch(new Request(new URL(url.pathname + url.search, env.BACKEND_ORIGIN.replace("*", alias)), request));
 }
 
 export const onRequest: PagesFunction<Env> = async ({ request, env }) => {
@@ -80,6 +86,6 @@ export const onRequest: PagesFunction<Env> = async ({ request, env }) => {
   }
   let path: string;
   try { path = decodeURIComponent(url.pathname); } catch { return new Response("bad path", { status: 400 }); }
-  const entry = (await assetSizes(env, url))[path];
+  const entry = (await written(env, url, "/asset-sizes.json", r => r.json<Sizes>()))[path];
   return entry ? ranged(request, env, path, entry) : env.ASSETS.fetch(request);
 };

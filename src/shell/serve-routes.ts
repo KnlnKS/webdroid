@@ -15,8 +15,9 @@ export interface ServeHost {
   /** the WebView renderer origin, a "*" label standing for each partition (webrenderer.ts), for a
    *  shell page at `url`; null when there is none */
   webviewOrigin(url: URL): string | null;
-  /** the shell page's origin for a request to `url`: the request's own on the dev server, the Pages site's for the Worker */
-  appOrigin(url: URL): string;
+  /** whether a page of `origin` is the shell page for a request to `url`: the request's own origin on the dev server, the Pages
+   *  site's deployments for the Worker */
+  isApp(origin: string, url: URL): boolean;
   proxy?: Omit<ProxyOptions, "bridgeCall">;
 }
 type Route = (request: Request) => Response | Promise<Response>;
@@ -31,7 +32,10 @@ export function pageOrigin(url: URL, header: Header): string | null {
   return header("origin") || (header("sec-fetch-site") === "same-origin" ? url.origin : null);
 }
 /** whether a request comes from the app's page: its sockets reach the network, which no other site's page, a renderer's included, may */
-export const fromApp = (url: URL, header: Header, host: ServeHost): boolean => pageOrigin(url, header) === host.appOrigin(url);
+export function fromApp(url: URL, header: Header, host: ServeHost): boolean {
+  const origin = pageOrigin(url, header);
+  return origin !== null && host.isApp(origin, url);
+}
 const forbidden = () => new Response("forbidden", { status: 403 });
 const frame = () => new Response(WEB_FRAME, { headers: { "content-type": "text/html", "cache-control": "no-store" } });
 const bridgeCall = async (request: Request, host: ServeHost): Promise<Response> => {
@@ -49,8 +53,8 @@ export function sharedRoute(url: URL, host: ServeHost): Route | undefined {
     case "/webview-call": return request => bridgeCall(request, host);
     // the app's and its renderers' own HTTP: a page of another origin would make this an open proxy
     case "/proxy": return request => {
-      const url = new URL(request.url), from = pageOrigin(url, name => request.headers.get(name));
-      return from === url.origin || from === host.appOrigin(url)
+      const url = new URL(request.url), header = (name: string) => request.headers.get(name);
+      return pageOrigin(url, header) === url.origin || fromApp(url, header, host)
         ? proxyRequest(request, { ...host.proxy, bridgeCall: call => bridgeCall(call, host) }) : forbidden();
     };
     case "/dns-query": return forwardDnsMessage;
@@ -67,7 +71,7 @@ export function sharedRoute(url: URL, host: ServeHost): Route | undefined {
     case "/webview-origin": return request => {
       const url = new URL(request.url), template = URL.parse(host.webviewOrigin(url) ?? "")?.origin;
       const origin = template && URL.parse(template.replace("*", "x"))?.origin;
-      return origin && origin !== "null" && origin !== host.appOrigin(url) ? Response.json(template)
+      return origin && origin !== "null" && !host.isApp(origin, url) ? Response.json(template)
         : new Response("Configure the WebView renderer origin on a separate site", { status: 503 });
     };
   }

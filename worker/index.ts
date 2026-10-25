@@ -26,12 +26,13 @@ async function nameExists(name: string): Promise<boolean | null> {
 
 export default {
   async fetch(request: Request, env: Env, context: ExecutionContext): Promise<Response> {
-    const url = new URL(request.url), header = (name: string) => request.headers.get(name);
-    // a preview's "*" is the alias Pages gave its branch (scripts/deploy.ts)
-    const origin = (template: string) => env.PREVIEW_ALIAS ? template.replace("*", env.PREVIEW_ALIAS) : template;
-    const appOrigin = origin(env.APP_ORIGIN);
+    const url = new URL(request.url), header = (name: string) => request.headers.get(name), app = new URL(env.APP_ORIGIN);
+    // a preview's "*" is its branch alias (scripts/deploy.ts)
+    const webviewOrigin = env.PREVIEW_ALIAS ? env.WEBVIEW_ORIGIN.replace("*", env.PREVIEW_ALIAS) : env.WEBVIEW_ORIGIN;
     const host: ServeHost = { bridge: (call, id) => env.WEB_BRIDGES.getByName(id).fetch(call), nameExists,
-      webviewOrigin: () => origin(env.WEBVIEW_ORIGIN), appOrigin: () => appOrigin, proxy: { reachable: isPublicHost } };
+      webviewOrigin: () => webviewOrigin, proxy: { reachable: isPublicHost },
+      // the Pages site, or one of its deployments: a branch alias or a deployment's unique host
+      isApp: (origin) => { const page = URL.parse(origin); return page?.protocol === app.protocol && (page.host === app.host || page.host.endsWith(`.${app.host}`)); } };
     const shared = sharedRoute(url, host);
     if (shared) return shared(request);
     // a renderer's pages share this origin, so the app's sockets answer only the app's
@@ -40,7 +41,7 @@ export default {
       const id = bridgeSocket(url, header, host);
       return id === null ? new Response("bad bridge", { status: 403 }) : host.bridge(request, id);
     }
-    if (url.pathname === "/") return Response.redirect(appOrigin, 308);
+    if (url.pathname === "/") return Response.redirect(env.PREVIEW_ALIAS ? `${app.protocol}//${env.PREVIEW_ALIAS}.${app.host}` : app.origin, 308);
     return new Response("not found", { status: 404 });
   },
 } satisfies ExportedHandler<Env>;

@@ -10,7 +10,7 @@
   // this Worker is also the WebView renderer's origin, a site apart from the app's
   "vars": { "APP_ORIGIN": "https://webdroid.pages.dev", "WEBVIEW_ORIGIN": "https://webdroid-backend.kunalan-k-subagaran.workers.dev", "PREVIEW_ALIAS": "" },
   "previews": {
-    "vars": { "APP_ORIGIN": "https://*.webdroid.pages.dev", "WEBVIEW_ORIGIN": "https://*-webdroid-backend.kunalan-k-subagaran.workers.dev", "PREVIEW_ALIAS": "" },
+    "vars": { "APP_ORIGIN": "https://webdroid.pages.dev", "WEBVIEW_ORIGIN": "https://*-webdroid-backend.kunalan-k-subagaran.workers.dev", "PREVIEW_ALIAS": "" },
     "durable_objects": {
       "bindings": [{ "name": "WEB_BRIDGES", "class_name": "WebBridgeSession" }]
     }

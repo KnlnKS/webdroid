@@ -5,7 +5,7 @@
 - **Frontend, Cloudflare Pages** (`wrangler.jsonc`, project `webdroid`): static `dist/` plus one Function (`functions/[[path]].ts`) for the paths in `dist/_routes.json`. It answers platform files in byte ranges, inflates microg downloads and forwards the backend routes (`/proxy`, `/dns`, `/dns-query`, `/tcp`, `/webview-socket`, `/webview-origin`) on the page's origin.
 - **Backend, Worker `webdroid-backend`** (`worker/wrangler.jsonc`, passed with `-c`): HTTP proxy, DNS, TCP WebSocket relay and the WebView callback bridge, whose Durable Object holds one session per WebView session ID. It is also the WebView renderer's origin. No user package reaches it.
 
-Backend calls stay same-origin, so they need no CORS preflight. Production forwards through the `BACKEND` service binding. A binding cannot select a branch preview, so previews forward by `BACKEND_ORIGIN`: `<alias>.webdroid.pages.dev` → `https://<alias>-webdroid-backend.kunalan-k-subagaran.workers.dev`. Unique hash URLs reach no backend.
+Backend calls stay same-origin, so they need no CORS preflight. Production forwards through the `BACKEND` service binding. A binding cannot select a branch preview, so previews forward by `BACKEND_ORIGIN` to `https://<alias>-webdroid-backend.kunalan-k-subagaran.workers.dev`, the alias Pages gives the branch. A deployment's unique hash host does not name its branch, so `scripts/deploy.ts` writes the alias into each preview as `preview-alias.txt`.
 
 ## Build and check
 
@@ -31,8 +31,8 @@ The build script fetches pinned Zig 0.16.0 and the `vendor/aosp` archive, which 
 
 ## Sites and configuration
 
-WebView runs on a separate site so loaded pages cannot reach the app's window and storage and synchronous JavaScript interface calls cannot block its event loop. The app is on `webdroid.pages.dev`, the renderer on `webdroid-backend.kunalan-k-subagaran.workers.dev`; both suffixes are public, so these are separate sites. Two hosts under one `workers.dev` account subdomain are same-site in Chromium and can deadlock, so the renderer needs a different registrable domain. `WEBVIEW_ORIGIN` and `APP_ORIGIN` name the two origins; in preview variables `*` stands for the alias. A `*` label in a production `WEBVIEW_ORIGIN` (wildcard DNS and route) gives each app install its own renderer storage. Development uses `*.localhost`. `/webview-origin` returns 503 when the origins match.
+WebView runs on a separate site so loaded pages cannot reach the app's window and storage and synchronous JavaScript interface calls cannot block its event loop. The app is on `webdroid.pages.dev`, the renderer on `webdroid-backend.kunalan-k-subagaran.workers.dev`; both suffixes are public, so these are separate sites. Two hosts under one `workers.dev` account subdomain are same-site in Chromium and can deadlock, so the renderer needs a different registrable domain. `WEBVIEW_ORIGIN` and `APP_ORIGIN` name the two origins; in the preview `WEBVIEW_ORIGIN` `*` stands for the alias. A `*` label in a production `WEBVIEW_ORIGIN` (wildcard DNS and route) gives each app install its own renderer storage. Development uses `*.localhost`. `/webview-origin` returns 503 when the origins match.
 
-The Worker accepts relay and bridge WebSockets only from `APP_ORIGIN` and redirects `/` to the app. The public proxy and relay reach whatever loaded apps request, so add rate limits and access policy before exposing them.
+The Worker accepts relay and bridge WebSockets only from `APP_ORIGIN` and its deployments' hosts (`*.webdroid.pages.dev`) and redirects `/` to the app. The public proxy and relay reach whatever loaded apps request, so add rate limits and access policy before exposing them.
 
 Cloudflare sockets expose no ALPN selection or reliable local endpoint, so TLS sockets use default negotiation and the relay sends the legacy `ok` frame. Verify networking on the deployed site; local Wrangler differs from the edge.

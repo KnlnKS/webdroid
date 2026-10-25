@@ -105,7 +105,7 @@ const host: ServeHost = {
   // a browser resolves every *.localhost name to this loopback server, each its own site
   webviewOrigin: (url) => process.env.WEBDROID_WEBVIEW_ORIGIN
     ?? (url.hostname === "localhost" || url.hostname === "127.0.0.1" ? `${url.protocol}//*.localhost:${url.port}` : null),
-  appOrigin: (url) => url.origin,
+  isApp: (origin, url) => origin === url.origin,
   proxy: { fetchEncoded },
 };
 export function devServer(): Plugin {

@@ -1,7 +1,7 @@
 // pnpm release: deploys dist/ (pnpm build:prod) from one build. main deploys the backend Worker, then the page to Pages' production;
-// another branch deploys a Pages preview first, whose alias then names the Worker preview its Function forwards to.
+// another branch deploys a Pages preview, then the Worker preview its Function forwards to, named by the branch's alias.
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -18,13 +18,14 @@ if (branch === "main") {
   wrangler("deploy", ...worker, "--env=");
   wrangler("pages", "deploy", "--branch", branch);
 } else {
+  // Pages' alias for the branch, written into each deployment because its unique host does not name the branch (functions/)
+  const alias = branch.toLowerCase().replace(/[^a-z0-9]/g, "-").slice(0, 28).replace(/-+$/, "");
+  writeFileSync("dist/preview-alias.txt", alias);
   wrangler("pages", "deploy", "--branch", branch);
   const deployed = readFileSync(output, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as { type: string; alias?: string })
     .find(({ type }) => type === "pages-deploy-detailed");
-  const alias = deployed?.alias && new URL(deployed.alias).hostname.split(".")[0];
-  if (!alias) throw new Error("Pages gave the deployment no alias");
   wrangler("preview", ...worker, "--name", alias, "--var", `PREVIEW_ALIAS:${alias}`);
-  await reportDeployment(`https://${alias}.webdroid.pages.dev`);
+  await reportDeployment(deployed?.alias ?? `https://${alias}.webdroid.pages.dev`);
 }
 
 // The Pages project has no Git integration, so a GitHub deployment is what puts the preview's link on the branch's PRs.
