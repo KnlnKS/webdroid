@@ -3,8 +3,12 @@
 // receivers through scheduleReceiver. An ordered delivery waits for the receiver's finishReceiver,
 // whose result the next receiver starts from; the sender's result receiver hears the last.
 import { awaited, type JObj, driven, type Gen } from "../../jvm/runtime.ts";
-import { newObj, vcall } from "../../jvm/natives/jentry.ts";
-import { logUncaught, detached, notConnected } from "../../jvm/natives/jthrowable.ts";
+import { after, newObj, vcall } from "../../jvm/natives/jentry.ts";
+import { logUncaught, detached } from "../../jvm/natives/jthrowable.ts";
+import { parcelled, unparcelled } from "../binder.ts";
+import { encodeIntent } from "../intentipc.ts";
+import { broker } from "../../shell/broker-access.ts";
+import { receivers, type BroadcastData } from "../../shell/broker-contract.ts";
 import { runningApp } from "../apphost.ts";
 import { checkPermission } from "../permissions.ts";
 import { mkComponentName, withComponent$, type JIntent } from "../intent.ts";
@@ -12,10 +16,17 @@ import { scheduleOnApp, compatInfo, thisApp, pms, STOCK_PM_FLAGS } from "./proce
 import { processState, PROCESS_STATE_RECEIVER } from "./atm.ts";
 import { procIdentity } from "../../shell/procfs.ts";
 
-export type BroadcastResult = { code: number; data: string | null; extras: JObj | null; aborted: boolean };
+type BroadcastResult = { code: number; data: string | null; extras: JObj | null; aborted: boolean };
+/** a result as it crosses processes, its extras parcelled */
+export const resultData = (result: BroadcastResult): BroadcastData | Promise<BroadcastData> =>
+  after(result.extras && parcelled(result.extras), (extras) => ({ ...result, extras }));
+export const broadcastResult = (data: BroadcastData): BroadcastResult | Promise<BroadcastResult> =>
+  after(data.extras && unparcelled("android/os/Bundle", data.extras), (extras) => ({ ...data, extras }));
 /** a broadcast to every process, through the broker: `permissions` are those a receiver must hold; it answers the final result */
-export const broadcastTransport: { send: (intent: JIntent, permissions: string[], ordered: boolean, initial?: BroadcastResult) => BroadcastResult | Promise<BroadcastResult> } =
-  { send: notConnected };
+function* send$(intent: JIntent, permissions: string[], ordered: boolean, initial?: BroadcastResult): Gen<BroadcastResult> {
+  const data = yield* awaited(encodeIntent(intent)), targets = yield* receivers(intent), from = initial && (yield* awaited(resultData(initial)));
+  return yield* awaited(broadcastResult(yield* awaited(broker().broadcast(data, targets, permissions, ordered, from))));
+}
 /** broadcasts the system keeps current (BatteryService's BATTERY_CHANGED), by action. As in
  *  ActivityManagerService, a registration matching one gets it back and its receiver hears it at once. */
 export const stickyBroadcasts = new Map<string, () => JIntent | Promise<JIntent>>();
@@ -89,7 +100,7 @@ export const deliverBroadcast = driven(function* (intent: JObj, component: strin
 /** ActivityManagerService.broadcastIntent: through every process, then to the sender's result receiver */
 export const broadcastIntent = driven(function* (intent: JObj, permissions: string[], ordered: boolean, resultTo: JObj | null = null, initial?: BroadcastResult): Gen<void> {
   const copy = yield newObj("android/content/Intent", `(${INTENT})V`, intent);
-  const final = yield* awaited(broadcastTransport.send(copy, permissions, ordered, initial));
+  const final = yield* send$(copy, permissions, ordered, initial);
   if (resultTo) yield scheduleRegistered(resultTo, copy, final, false, false, { uid: procIdentity.uid, pkg: runningApp().pkg });
 });
 

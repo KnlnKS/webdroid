@@ -87,9 +87,9 @@ const encodeParam = (p: Param): [number, number, string] =>
   [p.tag, p.kind, p.v instanceof Uint8Array ? p.v.toBase64() : typeof p.v === "bigint" ? p.v.toString() : String(p.v)];
 const decodeParam = ([tag, kind, s]: [number, number, string]): Param =>
   ({ tag, kind, v: kind === KIND.blob ? Uint8Array.fromBase64(s) : kind === KIND.longInteger || kind === KIND.dateTime ? BigInt(s) : kind === KIND.boolValue ? s === "true" : Number(s) });
-const savedEntry = persisted("wd:keystore2:", (saved) => saved && typeof saved === "object" && !Array.isArray(saved) ? saved as Entry : null);
+const savedEntry = persisted("wd:keystore2:", (saved) => saved && typeof saved === "object" && !Array.isArray(saved) ? saved as Entry : null, { scope: "uid" });
 /** the store before entries had keys of their own, one list per uid */
-const savedList = persisted("wd:keystore2:", (saved) => Array.isArray(saved) ? saved as Entry[] : null);
+const savedList = persisted("wd:keystore2:", (saved) => Array.isArray(saved) ? saved as Entry[] : null, { scope: "uid" });
 /** AppDataHelper.clearKeystoreData: every key of the app's uid */
 export const keystoreData: PackageState = {
   clear(_pkg, uid) { if (uid !== undefined) for (const key of [String(uid), ...savedEntry.keys(uid + ":")]) savedEntry.remove(key); },

@@ -25,7 +25,7 @@ export function decodeAccount(value: unknown): StoredAccount | null {
   return { name, type, owner, password, data, tokens, visibility, ...isString(previousName) ? { previousName } : {} };
 }
 const saved = persisted<StoredAccount[]>("wd:accounts", (value) => Array.isArray(value) ? value.flatMap((s) => decodeAccount(s) ?? []) : null,
-  (records) => records.map(({ id, ...s }) => s));
+  { encode: (records) => records.map(({ id, ...s }) => s) });
 
 export class AccountStore {
   private loaded: StoredAccount[] | null = null;

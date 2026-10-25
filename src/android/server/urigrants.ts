@@ -1,38 +1,44 @@
 // UriGrantsManagerService: the device's URI grants, held in system_server's realm. A grant is made to
 // a package and kept by its uid; one the package takes as persistable is install state, kept under
-// the package's own key. Each process's ActivityManager and ActivityStarter grant and check through
-// ../urigrants.ts, which the broker answers here as the calling process.
+// the package's own key. A Worker's ActivityManager and ActivityStarter grant and check through the
+// broker, which answers here as the calling process.
 import { callingIdentity, hostService } from "../binder.ts";
 import { awaited, rt, JObj, driven, type Gen } from "../../jvm/runtime.ts";
-import { type JUri, mkUri, uriParts, uriText } from "../net.ts";
+import { type JUri, clipUris, mkUri, uriParts, uriText } from "../net.ts";
 import { procIdentity } from "../../shell/procfs.ts";
-import { newObj, after } from "../../jvm/natives/jentry.ts";
+import { newObj, after, vcall } from "../../jvm/natives/jentry.ts";
 import { newArrayList } from "../../jvm/natives/jcoll.ts";
 import { attrStr, type XmlNode } from "../axml.ts";
 import { ownedBy, packages, uidPackages } from "../packages.ts";
 import { checkUidPermission } from "../permissions.ts";
 import { exported, resolveProvider } from "../pm.ts";
 import { systemProviders } from "../systemproviders.ts";
-import { uriGrantTransport, type UriGrantCalls } from "../urigrants.ts";
+import { broker, remoteSystem } from "../../shell/broker-access.ts";
 import type { PackageState } from "../../shell/packagedata.ts";
 import { persisted } from "../../shell/device-storage.ts";
+export type UriGrantCalls = {
+  check(uri: string, uid: number, modes: number): number | Promise<number>;
+  /** the caller grants `targetPkg` each of `uris` it needs, or is refused with a SecurityException */
+  grant(targetPkg: string, uris: string[], modes: number): void | Promise<void>;
+  revoke(targetPkg: string | null, uri: string, modes: number): void | Promise<void>;
+};
 type PersistedUriGrant = { uri: string; flags: number; time: number };
 const READ_WRITE = 3, PERSISTABLE_GRANT = 0x40, PREFIX_GRANT = 0x80;
-/** A persistable grant is app state that survives a reboot, so it lives with the install. */
-const savedGrants = persisted("wd:install:", (saved) => Array.isArray(saved) ? saved.flatMap((entry): PersistedUriGrant[] => {
+/** the grants each package took as persistable, which survive a reboot */
+const savedGrants = persisted("wd:uri-grants:", (saved) => Array.isArray(saved) ? saved.flatMap((entry): PersistedUriGrant[] => {
   if (typeof entry === "string") return [{ uri: entry, flags: 3 | (entry.includes("/tree/") ? PREFIX_GRANT : 0), time: 0 }];
   if (entry && typeof entry === "object" && "uri" in entry && typeof entry.uri === "string" &&
     "flags" in entry && typeof entry.flags === "number")
     return [{ uri: entry.uri, flags: entry.flags, time: "time" in entry && typeof entry.time === "number" ? entry.time : 0 }];
   return [];
 }) : null);
-const grantsKey = (pkg: string) => pkg + ":uriperms";
 /** removeUriPermissionsForPackage's persisted share: the grants the package holds, which a clear
  *  that keeps the package's state keeps */
 export const uriGrantData: PackageState = {
-  clear(pkg, _uid, how) { if (!how.keepState) savedGrants.remove(grantsKey(pkg)); },
+  clear(pkg, _uid, how) { if (!how.keepState) savedGrants.remove(pkg); },
+  packages: () => savedGrants.packages(),
 };
-const persistedGrants = (pkg: string): PersistedUriGrant[] => savedGrants.get(grantsKey(pkg)) ?? [];
+const persistedGrants = (pkg: string): PersistedUriGrant[] => savedGrants.get(pkg) ?? [];
 
 /** the grants made to each uid: by uri, the package each was made to and its modes */
 const granted = new Map<number, Map<string, { pkg: string; modes: number }>>();
@@ -132,8 +138,19 @@ export const uriGrantCommands = (source: () => number): UriGrantCalls => ({
   grant: (targetPkg, uris, modes) => rt.drive(grantFrom(source(), targetPkg, uris, modes)),
   revoke: (targetPkg, uri, modes) => rt.drive(revokeFrom(source(), targetPkg, uri, modes)),
 });
-// this realm's own, until the broker connects a process's to system_server's
-Object.assign(uriGrantTransport, uriGrantCommands(() => procIdentity.uid));
+const ownGrants = uriGrantCommands(() => procIdentity.uid);
+/** UriGrantsManagerInternal: this realm's, or system_server's from a Worker */
+export const uriGrants = (): UriGrantCalls => remoteSystem() ? broker().uriGrants : ownGrants;
+/** checkGrantUriPermissionFromIntent: the caller grants `targetPkg` the intent's data and ClipData
+ *  uris under its grant flags */
+export function* grantIntentUris$(targetPkg: string, intent: JObj): Gen<void> {
+  const flags: number = yield vcall(intent, "getFlags", "()I");
+  if (!(flags & 3)) return;
+  const uri: JUri | null = yield vcall(intent, "getData", "()Landroid/net/Uri;");
+  const uris: string[] = yield* clipUris(yield vcall(intent, "getClipData", "()Landroid/content/ClipData;"));
+  if (uri) uris.push(yield* awaited(uriText(uri)));
+  if (uris.length) yield* awaited(uriGrants().grant(targetPkg, uris, flags));
+}
 
 /** takePersistableUriPermission for `uid`: a grant it was offered as persistable, or one it already persisted */
 function takePersistable(u: string, modes: number, uid: number): void {
@@ -145,10 +162,10 @@ function takePersistable(u: string, modes: number, uid: number): void {
   if (!pkg) throw rt.mkThrowable("java/lang/SecurityException", "No persistable URI permission for " + u);
   const all = persistedGrants(pkg), old = all.find((grant) => grant.uri === u);
   const flags = (old?.flags ?? 0) | requested | (offered & PREFIX_GRANT);
-  savedGrants.set(grantsKey(pkg), [...all.filter((grant) => grant.uri !== u), { uri: u, flags, time: Date.now() }]);
+  savedGrants.set(pkg, [...all.filter((grant) => grant.uri !== u), { uri: u, flags, time: Date.now() }]);
 }
 function releasePersistable(u: string, modes: number, uid: number): void {
-  for (const { pkg } of uidPackages(uid)) savedGrants.set(grantsKey(pkg), persistedGrants(pkg).flatMap((grant) => {
+  for (const { pkg } of uidPackages(uid)) savedGrants.set(pkg, persistedGrants(pkg).flatMap((grant) => {
     if (grant.uri !== u) return [grant];
     const flags = grant.flags & ~(modes & READ_WRITE);
     return flags & READ_WRITE ? [{ ...grant, flags }] : [];

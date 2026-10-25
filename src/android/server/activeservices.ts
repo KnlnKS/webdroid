@@ -7,36 +7,33 @@
 // recreates in a restarted process.
 import { awaited, rt, type JObj, getDeclared, driven, type Gen } from "../../jvm/runtime.ts";
 import { newObj, vcall } from "../../jvm/natives/jentry.ts";
-import { logUncaught, detached, notConnected } from "../../jvm/natives/jthrowable.ts";
-import { parceledList, type ParcelData, binderEscape } from "../binder.ts";
+import { logUncaught, detached } from "../../jvm/natives/jthrowable.ts";
+import { parceledList, exportBinder, importBinder, type ParcelData, binderEscape } from "../binder.ts";
 import { encodeIntent, decodeIntent } from "../intentipc.ts";
 import { runningApp } from "../apphost.ts";
-import { packages, qualifyComponent, type PackageRecord } from "../packages.ts";
+import { packages, qualifyComponent } from "../packages.ts";
 import { checkPermission } from "../permissions.ts";
-import { grantIntentUris$ } from "../urigrants.ts";
-import { type JComponentName, type JIntent, componentParts$, mkComponentName, newIntent, withComponent$ } from "../intent.ts";
+import { grantIntentUris$ } from "./urigrants.ts";
+import { type JComponentName, componentParts$, mkComponentName, newIntent, withComponent$ } from "../intent.ts";
 import { startForegroundNotification, stopForegroundNotification } from "../notification.ts";
 import { scheduleOnApp, compatInfo, pms, runsHere, STOCK_PM_FLAGS } from "./process.ts";
 import { processState, PROCESS_STATE_SERVICE } from "./atm.ts";
-import type { ServiceBinding, ServiceStartAccess } from "../../shell/servicerecords.ts";
+import type { ServiceBinding, ServiceRequest } from "../../shell/servicerecords.ts";
+import { broker } from "../../shell/broker-access.ts";
 import { procIdentity } from "../../shell/procfs.ts";
 
-/** the services of another process, through the broker; `flags` are bindService's. A binding hears
- *  its service's binder through `connected`, which the broker sends again when the service restarts. */
-export const serviceTransport: {
-  bind: (owner: PackageRecord, process: string, cls: string, intent: JIntent, key: string, flags: number) => unknown;
-  unbind: (owner: PackageRecord, process: string, key: string) => unknown;
-  start: (owner: PackageRecord, process: string, intent: JIntent, foreground: boolean) => unknown;
-  stop: (owner: PackageRecord, process: string, cls: string, intent: JIntent) => unknown;
-  peek: (owner: PackageRecord, process: string, intent: JIntent) => unknown;
-  /** the start state of this process's services, which the broker keeps */
-  starts: () => ServiceStartAccess;
-  /** what a binding of another process hears: the binder published, or that the service is gone */
-  connected: (key: string, binder: JObj | null, dead: boolean) => unknown;
-} = { bind: notConnected, unbind: notConnected, start: notConnected, stop: notConnected, peek: notConnected,
-  starts: () => unconnected, connected: notConnected };
-const unconnected: ServiceStartAccess = { created: notConnected, destroyed: notConnected, start: notConnected, deliver: notConnected,
-  requested: notConnected, stop: notConnected, stopSelf: notConnected, done: notConnected, foreground: notConnected };
+/** a request to the services of `pkg`'s `process`, which the broker makes of that process's
+ *  hostedServices; a binding hears its service's binder through remoteServiceConnected, which the
+ *  broker sends again when the service restarts */
+const serviceRequest = (pkg: string, process: string, request: ServiceRequest) => broker().service(pkg, process, request);
+/** startService of another process's service */
+export const startRemoteService = driven(function* (pkg: string, process: string, intent: JObj, foreground: boolean): Gen<void> {
+  yield serviceRequest(pkg, process, { kind: "start", intent: yield* awaited(encodeIntent(intent)), foreground });
+});
+const bindRemote = driven(function* (pkg: string, process: string, cls: string, intent: JObj, key: string, flags: number): Gen<void> {
+  yield serviceRequest(pkg, process, { kind: "bind", cls, intent: yield* awaited(encodeIntent(intent)), key, flags });
+});
+const unbindRemote = (pkg: string, process: string, key: string) => serviceRequest(pkg, process, { kind: "unbind", key });
 
 const SI = "android/content/pm/ServiceInfo", INTENT = "Landroid/content/Intent;", BINDER = "Landroid/os/IBinder;";
 const CONNECTED = "(Landroid/content/ComponentName;Landroid/os/IBinder;Z)V";
@@ -53,7 +50,8 @@ interface ServiceRecord {
 }
 const services = new Map<string, ServiceRecord>();
 const byToken = (token: JObj) => [...services.values()].find((s) => s.token === token) ?? null;
-const starts = () => serviceTransport.starts();
+/** the start state of this process's services, which the broker keeps */
+const starts = () => broker().starts;
 
 interface Target { info: JObj; name: JObj; pkg: string; process: string }
 function* resolve(intent: JObj, resolvedType: string | null): Gen<Target | null> {
@@ -73,10 +71,9 @@ function* denial(t: Target, callingPackage: string): Gen<string | null> {
   const permission = getDeclared<string | null>(t.info, SI, "permission");
   return permission && (yield* awaited(checkPermission(permission, callingPackage))) !== 0 ? permission : null;
 }
-function remoteOwner(t: Target) {
-  const owner = packages.get(t.pkg);
-  if (!owner) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Unknown package: " + t.pkg);
-  return owner;
+function remotePkg(t: Target): string {
+  if (!packages.has(t.pkg)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Unknown package: " + t.pkg);
+  return t.pkg;
 }
 
 const serviceClass = (t: Target) => getDeclared<string>(t.info, SI, "name");
@@ -193,7 +190,7 @@ function* peekLocal(t: Target): Gen<JObj | null> {
 }
 /** another process's binding, which hears its binder through the broker */
 const remoteConnection = (key: string, flags: number): Connection => ({ id: key, autoCreate: !!(flags & BIND_AUTO_CREATE),
-  connected: (binder, dead) => detached(() => serviceTransport.connected(key, binder, dead), logUncaught) });
+  connected: (binder, dead) => detached(() => broker().serviceConnected(key, exportBinder(binder), dead), logUncaught) });
 
 /** what a broker request for this process's services does */
 function* local(intent: JObj): Gen<Target> {
@@ -247,8 +244,8 @@ export const bindAsSystem = driven(function* (component: JComponentName, key: st
     yield* bindLocal(yield* local(intent), intent, { id: key, autoCreate: true, connected });
     return { binder: (yield* awaited(bound.promise))!, unbind: () => hostedServices.unbind(key) };
   }
-  remoteBindings.set(key, { conn: null, connected, unbind: () => serviceTransport.unbind(owner, process, key) });
-  try { yield serviceTransport.bind(owner, process, cls, intent, key, BIND_AUTO_CREATE); }
+  remoteBindings.set(key, { conn: null, connected, unbind: () => unbindRemote(owner.pkg, process, key) });
+  try { yield bindRemote(owner.pkg, process, cls, intent, key, BIND_AUTO_CREATE); }
   catch (error) { remoteBindings.delete(key); throw error; }
   return { binder: (yield* awaited(bound.promise))!, unbind: () => remoteUnbind(key) };
 });
@@ -262,7 +259,7 @@ export const startService = driven(function* (intent: JObj, resolvedType: string
   yield* grantIntentUris$(t.pkg, intent);
   const bound = yield* withComponent$(intent, t.name);
   if (isLocal(t)) yield* startLocal(t, bound);
-  else detached(() => serviceTransport.start(remoteOwner(t), t.process, bound, foreground), logUncaught);
+  else detached(() => startRemoteService(remotePkg(t), t.process, bound, foreground), logUncaught);
   return t.name;
 });
 let nextKey = 1;
@@ -279,7 +276,9 @@ export const activeServiceMethods = {
     if (!t) return 0;
     if (yield* denial(t, runningApp().pkg)) return -1;
     if (isLocal(t)) yield* stopLocal(t);
-    else { const bound = yield* withComponent$(intent, t.name); detached(() => serviceTransport.stop(remoteOwner(t), t.process, serviceClass(t), bound), logUncaught); }
+    else { const bound = yield* withComponent$(intent, t.name); detached(() => rt.drive(function* () {
+      yield serviceRequest(remotePkg(t), t.process, { kind: "stop", cls: serviceClass(t), intent: yield* awaited(encodeIntent(bound)) });
+    }()), logUncaught); }
     return 1;
   }),
   "stopServiceToken(Landroid/content/ComponentName;Landroid/os/IBinder;I)Z": driven(function* (_name: JObj, token: JObj, startId: number) {
@@ -300,10 +299,10 @@ export const activeServiceMethods = {
         return 1;
       }
       const key = procIdentity.pid + ":" + nextKey++;
-      remoteBindings.set(key, { conn, connected, unbind: () => serviceTransport.unbind(remoteOwner(t), t.process, key) });
+      remoteBindings.set(key, { conn, connected, unbind: () => unbindRemote(remotePkg(t), t.process, key) });
       // the binding answers later, on this thread
       detached(() => rt.drive(function* () {
-        try { yield serviceTransport.bind(remoteOwner(t), t.process, serviceClass(t), bound, key, bits); }
+        try { yield bindRemote(remotePkg(t), t.process, serviceClass(t), bound, key, bits); }
         catch (error) { if (remoteBindings.delete(key)) connected(null, true); throw error; }
       }()), logUncaught);
       return 1;
@@ -336,7 +335,9 @@ export const activeServiceMethods = {
     const t = yield* resolve(intent, resolvedType);
     if (!t) return null;
     if (yield* denial(t, callingPackage)) throw rt.mkThrowable("java/lang/SecurityException", "Permission Denial: Accessing service " + t.pkg);
-    return isLocal(t) ? yield* peekLocal(t) : yield serviceTransport.peek(remoteOwner(t), t.process, yield* withComponent$(intent, t.name));
+    if (isLocal(t)) return yield* peekLocal(t);
+    const bound = yield* awaited(encodeIntent(yield* withComponent$(intent, t.name)));
+    return yield* awaited(importBinder(yield* awaited(serviceRequest(remotePkg(t), t.process, { kind: "peek", intent: bound }))));
   }),
   // Service.startForeground (id) and stopForeground (its STOP_FOREGROUND_* flags): the service's notification
   "setServiceForeground(Landroid/content/ComponentName;Landroid/os/IBinder;ILandroid/app/Notification;II)V":

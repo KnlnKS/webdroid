@@ -2,6 +2,9 @@ import { readFileSync } from "node:fs";
 import { rt, type JObj } from "../src/jvm/runtime.ts";
 import { classNameOf, newObj, scall } from "../src/jvm/natives/jentry.ts";
 import type { AppHost } from "../src/android/apphost.ts";
+import type { BrokerCalls } from "../src/shell/broker-contract.ts";
+import { connectBroker } from "../src/shell/broker-access.ts";
+import { notConnected, unconnected } from "../src/jvm/natives/jthrowable.ts";
 
 export { scall } from "../src/jvm/natives/jentry.ts";
 
@@ -27,6 +30,20 @@ export function fixtureDeadline(ms = 90_000): void {
 }
 
 /** the AppHost a booted page sets for `pkg` */
+/** a broker of `calls`, whose other calls fail as an unconnected realm's do; the presentation and finish
+ *  notices a page or Worker sends go nowhere */
+export function testBroker(calls: Partial<BrokerCalls>): BrokerCalls {
+  const target: Partial<BrokerCalls> = { activity: { presentation: async () => {}, finish: async () => {}, launch: notConnected }, ...calls };
+  return new Proxy(target, { get: (_, name) => (target as Record<string | symbol, unknown>)[name] ?? unconnected() }) as BrokerCalls;
+}
+let baseBroker: Partial<BrokerCalls> = {}, current = () => connectBroker(undefined, false);
+/** connect this realm to `calls` over those bootApp gives, as the page or (`worker`) a Worker, until the
+ *  returned function connects it as before */
+export function useTestBroker(calls: Partial<BrokerCalls>, worker = false): () => void {
+  const previous = current;
+  (current = () => connectBroker(testBroker({ ...baseBroker, ...calls }), worker))();
+  return () => (current = previous)();
+}
 export const testAppHost = ({ pkg }: { pkg: string }): AppHost =>
   ({ pkg, assetKey: "", zip: {}, splits: [], setApplicationNightMode: () => {}, setApplicationLocales: () => {} });
 
@@ -127,11 +144,11 @@ export async function bootApp(record: import("../src/android/packages.ts").Packa
   if (!started) {
     started = entry = (async () => {
       const { startActivityThread } = await import("../src/android/server/am.ts");
-      const { serviceTransport } = await import("../src/android/server/activeservices.ts");
       const { ServiceRecords } = await import("../src/shell/servicerecords.ts");
       // the start state the broker keeps of this realm's services, which no broker holds here
       const starts = new ServiceRecords({ send: () => null, connected: () => {}, persistent: () => false }).starts("", "");
-      serviceTransport.starts = () => starts;
+      baseBroker = { starts: starts as unknown as BrokerCalls["starts"] };
+      useTestBroker({});
       await loadPlatform();
       await loadSystemFonts();
       await onMain(() => startActivityThread(false));

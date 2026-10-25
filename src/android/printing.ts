@@ -12,7 +12,8 @@ import { hostUi } from "../shell/host-ui.ts";
 import { hostService } from "./binder.ts";
 import { newIntent, registerSystemActivity, type JIntent } from "./intent.ts";
 import { mkUri } from "./net.ts";
-import { pendingTransport, intentSender } from "./pendingintent.ts";
+import { intentSender } from "./pendingintent.ts";
+import { broker } from "../shell/broker-access.ts";
 import { encodeIntent } from "./intentipc.ts";
 import { pdfFile, type PdfPage } from "./pdf.ts";
 import type { WebViewChromium as JWebView } from "./webkit.ts";
@@ -42,7 +43,7 @@ hostService("print", "webdroid/PrintManagerService", "android/print/IPrintManage
       const intent: JIntent = yield* awaited(newIntent(PRINT_DIALOG));
       yield vcall(intent, "setData", "(Landroid/net/Uri;)Landroid/content/Intent;", yield* awaited(mkUri(`printjob:${key}`)));
       // FLAG_ONE_SHOT | FLAG_IMMUTABLE, as the spooler makes it
-      const record = yield* awaited(pendingTransport.create(pkg, "activity", 0, 0x44000000, yield* awaited(encodeIntent(intent))));
+      const record = yield* awaited(broker().pending.create(pkg, "activity", 0, 0x44000000, yield* awaited(encodeIntent(intent))));
       if (record === null) return null;
       const sender = yield newObj("android/content/IntentSender", "(Landroid/content/IIntentSender;)V", yield* awaited(intentSender(record)));
       const result = yield newObj("android/os/Bundle");

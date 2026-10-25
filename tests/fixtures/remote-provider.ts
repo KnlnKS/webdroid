@@ -6,13 +6,12 @@ import "../../src/natives.ts";
 import { rt, JObj, declaredField } from "../../src/jvm/runtime.ts";
 import { classNameOf, newObj, vcall, scall } from "../../src/jvm/natives/jentry.ts";
 import { setAppHost } from "../../src/android/apphost.ts";
-import { testAppHost, fixtureDeadline, loadPlatform } from "../../tests/java.ts";
+import { testAppHost, fixtureDeadline, loadPlatform, useTestBroker } from "../../tests/java.ts";
 import { packages, PackageRecord, packageUid } from "../../src/android/packages.ts";
 import { emptyApk } from "../../src/android/res.ts";
 import { TV } from "../../src/android/axml.ts";
 import { setProcessIdentity, setProcessName, mkPfd, pfdContents } from "../../src/android/os.ts";
-import { hostedService, binderTransport, receiveTransaction, importBinder, exportBinder, type ParcelData } from "../../src/android/binder.ts";
-import { providerProcesses } from "../../src/android/server/am.ts";
+import { hostedService, receiveTransaction, exportBinder, type ParcelData } from "../../src/android/binder.ts";
 import { mkUri } from "../../src/android/net.ts";
 import { startMainLooper } from "../../src/android/mainloop.ts";
 import { box } from "../../src/jvm/natives/jbox.ts";
@@ -57,17 +56,19 @@ const rename = (data: ParcelData, from: number, to: number): ParcelData => {
   const swap = <T>(h: T): T => h && typeof h === "object" && "pid" in h && h.pid === from ? { ...h, pid: to } : h;
   return { ...data, objects: data.objects.map(([at, o]) => [at, o && "bytes" in o ? { ...o, writer: swap(o.writer) } : swap(o)]) };
 };
-binderTransport.alive = () => true;
-binderTransport.transact = async (request: Parameters<typeof binderTransport.transact>[0]) => {
-  const reply = await receiveTransaction({ ...request, handle: { pid: HERE, id: request.handle.id }, data: rename(request.data, REMOTE, HERE) }, { pid: HERE, uid: client.uid });
-  return { ...reply, data: rename(reply.data, HERE, REMOTE) };
-};
 const provider = await newObj("webdroid/test/Provider");
 const asked: string[] = [];
-providerProcesses.get = async (pkg: string, process: string, authority: string) => {
-  asked.push(`${pkg} ${process} ${authority}`);
-  return importBinder({ pid: REMOTE, id: exportBinder(provider)!.id });
-};
+useTestBroker({
+  process: { processAlive: async () => true, processSignal: async () => {}, processWatch: async () => {}, processUnwatch: async () => {} },
+  transact: async (request) => {
+    const reply = await receiveTransaction({ ...request, handle: { pid: HERE, id: request.handle.id }, data: rename(request.data, REMOTE, HERE) }, { pid: HERE, uid: client.uid });
+    return { ...reply, data: rename(reply.data, HERE, REMOTE) };
+  },
+  contentProvider: async (pkg, process, authority) => {
+    asked.push(`${pkg} ${process} ${authority}`);
+    return { pid: REMOTE, id: exportBinder(provider)!.id };
+  },
+});
 
 const am = await hostedService("activity") as JObj, out: Record<string, unknown> = { owner: owner.uid !== client.uid };
 const holder = await vcall(am, "getContentProvider", `(Landroid/app/IApplicationThread;${S}${S}IZ)Landroid/app/ContentProviderHolder;`, null, CLIENT, AUTHORITY, 0, 1);

@@ -3,7 +3,7 @@ import { newObj, vcall, scall, after, iof } from "../jvm/natives/jentry.ts";
 import { type JIntent, newIntent } from "./intent.ts";
 import { asBinder, exportBinder, importBinder, type BinderHandle, type ParcelData } from "./binder.ts";
 import { SYSTEM_SERVER_PID } from "./os.ts";
-import { notConnected } from "../jvm/natives/jthrowable.ts";
+import { broker } from "../shell/broker-access.ts";
 import { encodeIntent, decodeIntent } from "./intentipc.ts";
 import type { PendingOperation } from "../shell/pendingintents.ts";
 
@@ -17,6 +17,7 @@ export function* fillIn$(operation: PendingOperation, fill: JIntent | null): Gen
 }
 /** what getInfoForIntentSender reports of a sender */
 type PendingInfo = Pick<PendingOperation, "pkg" | "uid" | "kind" | "flags">;
+/** ActivityManagerService's PendingIntentController: the broker's records, which every process asks */
 export type PendingAccess = {
   create(pkg: string, kind: PendingOperation["kind"], code: number, flags: number, intent: ParcelData, intents?: ParcelData[]): Promise<number | null>;
   cancel(id: number): void | Promise<void>;
@@ -26,10 +27,8 @@ export type PendingAccess = {
   /** the sender's record, left in place */
   peek(id: number): PendingInfo | null | Promise<PendingInfo | null>;
 };
-/** ActivityManagerService's PendingIntentController: the broker's records, which every process asks */
-export const pendingTransport: PendingAccess = { create: notConnected, cancel: notConnected, send: notConnected, take: notConnected, peek: notConnected };
 /** a record's IIntentSender: a binder of system_server's, numbered apart from those it exports */
-export const senderHandle = (id: number): BinderHandle => ({ pid: SYSTEM_SERVER_PID, id: -id });
+const senderHandle = (id: number): BinderHandle => ({ pid: SYSTEM_SERVER_PID, id: -id });
 /** the record a sender's handle stands for */
 export const senderRecord = (h: BinderHandle): number | null => h.pid === SYSTEM_SERVER_PID && h.id < 0 ? -h.id : null;
 function targetId(target: unknown): number {
@@ -45,7 +44,7 @@ export function* senderId$(sender: JObj): Gen<number> {
 export const operationId = driven(senderId$);
 /** whether the record was there to send */
 export function* sendPending$(id: number, fill: JIntent | null | undefined): Gen<boolean> {
-  return yield* awaited(pendingTransport.send(id, fill ? yield* awaited(encodeIntent(fill)) : null));
+  return yield* awaited(broker().pending.send(id, fill ? yield* awaited(encodeIntent(fill)) : null));
 }
 /** PendingIntent.send's IntentSender call: CanceledException when its record is gone */
 export const sendIntent = driven(function* (sender: JObj, fill?: JIntent): Gen<void> {
@@ -70,12 +69,12 @@ export const intentSenderMethods = {
         throw rt.mkThrowable("java/lang/IllegalArgumentException", "File descriptors passed in Intent");
       const encoded: ParcelData[] = [];
       for (const intent of intents) encoded.push(yield* awaited(encodeIntent(intent)));
-      const id = yield* awaited(pendingTransport.create(pkg, kind, code, flags, encoded.at(-1)!, kind === "activity" && encoded.length > 1 ? encoded : undefined));
+      const id = yield* awaited(broker().pending.create(pkg, kind, code, flags, encoded.at(-1)!, kind === "activity" && encoded.length > 1 ? encoded : undefined));
       return id === null ? null : intentSender(id);
     }),
-  "cancelIntentSender(Landroid/content/IIntentSender;)V": driven(function* (sender: JObj): Gen { yield* awaited(pendingTransport.cancel(yield* senderId$(sender))); }),
+  "cancelIntentSender(Landroid/content/IIntentSender;)V": driven(function* (sender: JObj): Gen { yield* awaited(broker().pending.cancel(yield* senderId$(sender))); }),
   "getInfoForIntentSender(Landroid/content/IIntentSender;)Landroid/app/ActivityManager$PendingIntentInfo;": driven(function* (sender: JObj): Gen {
-    const info = yield* awaited(pendingTransport.peek(yield* senderId$(sender)));
+    const info = yield* awaited(broker().pending.peek(yield* senderId$(sender)));
     return newObj("android/app/ActivityManager$PendingIntentInfo", "(Ljava/lang/String;IZI)V", info?.pkg ?? null, info?.uid ?? -1,
       +!!(info && info.flags & FLAG_IMMUTABLE), info ? KINDS[info.kind] : 0);
   }),

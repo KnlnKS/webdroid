@@ -2,17 +2,22 @@
 // lacks. A Worker reads a replica of the entries its package may see, taken at bootstrap and kept
 // current by the page, and the page keeps only the writes to entries the package owns.
 
-export type StorageOwner = { pkg: string; uid: number };
-/** An install's state, WebView cookies and per-app configuration belong to their package and a
- *  keystore to its uid; any package reads the installs (component states, install times, persisted
- *  URI grants, the doze allowlist) and the uids, and writes the device's MediaStore flags, as its
- *  in-process MediaProvider does. */
+type StorageOwner = { pkg: string; uid: number };
+/** who besides system_server sees a store's entries, each keyed by the package or uid it belongs to
+ *  (+ ":" + more): that package's processes ("package"), that uid's ("uid"), every process reading
+ *  and the named package writing ("device-read"), or every process reading and writing
+ *  ("device-write"). A store with no scope is system_server's alone. */
+type StorageScope = "package" | "uid" | "device-read" | "device-write";
+const scopes = new Map<string, StorageScope>();
 export function storageAccess(key: string, { pkg, uid }: StorageOwner): "read" | "write" | null {
-  if (key === `wd:install:${pkg}` || key.startsWith(`wd:install:${pkg}:`) || key === `wd:web-cookies:${pkg}` || key === `wd:keystore2:${uid}`
-    || key === `wd:package-config:${pkg}`
-    || key.startsWith(`wd:keystore2:${uid}:`)
-    || key === "wd:media:flags") return "write";
-  return key.startsWith("wd:install:") || key === "wd:package-uids" ? "read" : null;
+  for (const [prefix, scope] of scopes) {
+    if (!key.startsWith(prefix)) continue;
+    if (scope === "device-write") return "write";
+    const rest = key.slice(prefix.length), owner = scope === "uid" ? String(uid) : pkg;
+    if (rest === owner || rest.startsWith(owner + ":")) return "write";
+    return scope === "device-read" ? "read" : null;
+  }
+  return null;
 }
 
 /** the page's entries `owner` may read */
@@ -78,9 +83,12 @@ export function storeText(key: string, text: string | null): boolean {
   } catch { return false; }
 }
 /** the entries `prefix` + key, each the JSON of what `encode` makes of a value and `decode` reads back
- *  (null when absent or malformed). `get` answers the value it last read or wrote while the entry
- *  is unchanged, so its callers share that value and leave it as it is. */
-export function persisted<T>(prefix: string, decode: (saved: unknown) => T | null, encode: (value: T) => unknown = (value) => value) {
+ *  (null when absent or malformed), which the processes `scope` names also see. `get` answers the
+ *  value it last read or wrote while the entry is unchanged, so its callers share that value and
+ *  leave it as it is. */
+export function persisted<T>(prefix: string, decode: (saved: unknown) => T | null,
+  { encode = (value: T): unknown => value, scope }: { encode?: (value: T) => unknown; scope?: StorageScope } = {}) {
+  if (scope) scopes.set(prefix, scope);
   let lastKey: string | null = null, lastText: string | null = null, last: T | null = null;
   return {
     get(key: string): T | null | undefined {

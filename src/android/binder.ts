@@ -16,6 +16,7 @@ import { jarray, i8, u8 } from "../jvm/abi.ts";
 import { handle, release, FINALIZER } from "./handles.ts";
 import { procIdentity } from "../shell/procfs.ts";
 import { ownedBy } from "./packages.ts";
+import { broker, processLife, remoteSystem } from "../shell/broker-access.ts";
 
 const F_GETFL = 3, O_RDONLY = 0;
 /** the binder driver's buffer for a process (BINDER_VM_SIZE), half of it for oneway calls */
@@ -27,21 +28,11 @@ export type BinderHandle = { pid: number; id: number };
  *  for a writable one the binder that writes them back to the descriptor it came from, and for an
  *  ashmem region its protection */
 type FileHandle = { bytes: Uint8Array; writer: BinderHandle | null; prot?: number };
-export type DescriptorHandle = { descriptor: number };
+type DescriptorHandle = { descriptor: number };
 export type ParcelData = { bytes: Uint8Array; objects: [number, BinderHandle | FileHandle | DescriptorHandle | null][] };
-/** `system`: sent by a service hosted here on system_server's behalf, so it carries the system's identity */
-export type Transaction = { handle: BinderHandle; code: number; flags: number; data: ParcelData; system?: boolean };
+export type Transaction = { handle: BinderHandle; code: number; flags: number; data: ParcelData };
 export type TransactionReply = { handled: number; data: ParcelData };
 export type Caller = { pid: number; uid: number };
-export const binderTransport: {
-  transact: (request: Transaction) => Promise<TransactionReply>;
-  alive: (pid: number) => boolean | Promise<boolean>;
-  watch: (pid: number, died: () => void) => (() => void) | Promise<() => void>;
-} = {
-  transact: async () => { throw rt.mkThrowable("android/os/DeadObjectException", "Process unavailable"); },
-  alive: () => false,
-  watch: () => () => {},
-};
 const callerDeaths = new Map<number, Set<(pid: number) => void>>();
 /** `died(pid)` once process `pid` dies, until the returned function is called, as a hosted service's
  *  death recipient on its caller's binder drops what it kept for the caller; one watch serves each process */
@@ -52,7 +43,7 @@ export function onCallerDeath(pid: number, died: (pid: number) => void): () => v
   if (!callerDeaths.has(pid)) {
     callerDeaths.set(pid, recipients);
     const notify = () => { callerDeaths.delete(pid); for (const f of recipients) f(pid); };
-    void Promise.resolve(binderTransport.watch(pid, notify)).catch(notify);
+    processLife.watch(pid, notify).catch(notify);
   }
   recipients.add(died);
   return () => { recipients.delete(died); };
@@ -225,7 +216,8 @@ export const copyParcelable = driven(function* (cls: string, object: JObj, scope
 });
 
 // ── IPCThreadState: a thread's calling identity (`explicit` once cleared), StrictMode policy and
-// work source, and whether it transacts as system_server
+// work source, and whether its calls into services hosted here are system_server's (the broker gives
+// remote calls their sender's identity, system_server's for the page's)
 type IpcState = { caller: Caller | undefined; explicit: boolean; policy: number; workSource: { uid: number; propagate: boolean }; system: boolean; parcelScope?: FdScope };
 const UNSET_WORK_SOURCE = -1;
 const ipcStates = new WeakMap<JThread, IpcState>();
@@ -297,7 +289,7 @@ export async function withCallingIdentity<T>(caller: Caller, call: () => T | Pro
   try { return await callOn(thread, call); }
   finally { state.caller = undefined; }
 }
-/** system_server's identity: what a hosted service's binder calls carry, local or remote. Its pid is
+/** system_server's identity: what its realm's and a hosted service's binder calls carry. Its pid is
  *  the 0 Binder.getCallingPid reports when a caller's is unavailable: system_server's halves also run
  *  in app processes, beside app code whose AttributionSources carry that process's pid */
 export const SYSTEM_CALLER: Caller = { pid: 0, uid: 1000 };
@@ -422,7 +414,7 @@ rt.register({ name: "webdroid/FileWriter", ctor: JFileWriter, sup: "android/os/B
 } });
 
 const proxyOf = (proxy: JObj) => proxyData.get(proxy)!;
-const pidAlive = (pid: number) => pid === procIdentity.pid || binderTransport.alive(pid);
+const pidAlive = (pid: number) => pid === procIdentity.pid || processLife.alive(pid);
 const proxyAlive = function (this: JObj) { return after(pidAlive(proxyOf(this).handle.pid), alive => +alive); };
 /** a transaction or reply the target's buffer cannot take fails, as signalExceptionForError reports
  *  FAILED_TRANSACTION for the data parcel's size */
@@ -465,15 +457,15 @@ const transact = driven(function* transact(target: BinderHandle, code: number, d
   const binder = target.pid === procIdentity.pid ? local.get(target.id) : undefined;
   if (binder && isSystemBinder(binder)) return yield localTransact(binder, code, data, reply, flags);
   const sent = yield* awaited(exportParcel(data, processRights));
-  const request = { handle: target, code, data: sent, flags, system: ipc().system };
+  const request = { handle: target, code, data: sent, flags };
   // system_server outlives its callers, so the driver's queueing is all a oneway call to it can report;
   // one carrying no rights reaches it in order without the caller waiting
   if (flags & FLAG_ONEWAY && target.pid === SYSTEM_SERVER_PID && !sent.objects.length) {
-    binderTransport.transact(request).catch(logUncaught);
+    broker().transact(request).catch(logUncaught);
     return 1;
   }
   try {
-    const result = yield* awaited(binderTransport.transact(request));
+    const result = yield* awaited(broker().transact(request));
     if (reply) yield fillParcel(reply, result.data, processRights);
     else yield* awaited(releaseRights(result.data, processRights, false));
     return result.handled;
@@ -502,7 +494,7 @@ rt.registerJnis("android/os/BinderProxy", {
     const unlink = () => { received = true; cancel(); };
     deaths.set(recipient, unlink);
     try {
-      cancel = yield binderTransport.watch(target.pid, () => {
+      cancel = yield processLife.watch(target.pid, () => {
         if (received || deaths.get(recipient) !== unlink) return;
         received = true;
         deaths.delete(recipient);
@@ -552,31 +544,21 @@ export const newStub = driven(function* newStub$(cls: string): Gen<JObj> {
 const absentServices = new Set<string>();
 export const absentService = (...names: string[]): void => names.forEach((name) => absentServices.add(name));
 class JServiceManager extends JObj { binder: JObj | null = null; }
-/** a hosted service's binder, made when first asked for */
-let remoteServices = new Set<string>();
-let serviceLookup: ((name: string) => Promise<BinderHandle | null>) | undefined;
-/** system_server's handle of each service asked for: it outlives every app process */
-let remoteHandles = new Map<string, BinderHandle | Promise<BinderHandle | null>>();
-export function useSystemServiceAccess(names: Iterable<string>, lookup?: (name: string) => Promise<BinderHandle | null>): void {
-  remoteServices = new Set(names);
-  if (remoteServices.size && !lookup) throw new Error("System service lookup is required");
-  serviceLookup = lookup;
-  remoteHandles = new Map();
-}
+/** system_server's handle of each of its services a Worker asked for: it outlives every app process */
+const remoteHandles = new Map<string, BinderHandle | Promise<BinderHandle | null>>();
 export function ownedSystemService(name: string): BinderHandle | null | Promise<BinderHandle | null> {
   return after(localHostedService(name), exportBinder);
 }
+/** a hosted service's binder: system_server's through the broker for a `system` one in a Worker */
 export function hostedService(name: string): JObj | Promise<JObj> | null {
-  if (remoteServices.has(name) && serviceLookup) {
-    let handle = remoteHandles.get(name);
-    if (!handle) {
-      const handles = remoteHandles, asked = serviceLookup(name);
-      handles.set(name, handle = asked);
-      asked.then((h) => h ? handles.set(name, h) : handles.delete(name), () => handles.delete(name));
-    }
-    return after(handle, importBinder);
+  if (!remoteSystem() || !systemServices.has(name)) return localHostedService(name);
+  let handle = remoteHandles.get(name);
+  if (!handle) {
+    const asked = broker().systemService(name);
+    remoteHandles.set(name, handle = asked);
+    asked.then((h) => h ? remoteHandles.set(name, h) : remoteHandles.delete(name), () => remoteHandles.delete(name));
   }
-  return localHostedService(name);
+  return after(handle, importBinder);
 }
 function localHostedService(name: string): JObj | Promise<JObj> | null {
   const service = binderServices.get(name);

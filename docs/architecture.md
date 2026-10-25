@@ -131,13 +131,15 @@ events reach `MotionEvent`/`KeyEvent` through AOSP's input stages, and `ViewRoot
 `drawSoftware` onto the page canvas.
 
 A service whose state is the device's (notification, mount, audio, media_session, media_router, clipboard, alarm,
-location, account, content, jobscheduler, shortcut: `SYSTEM_SERVICES` in `binder.ts`) is hosted once, in
+location, account, content, jobscheduler, shortcut, uri_grants: `SYSTEM_SERVICES` in `binder.ts`) is hosted once, in
 system_server, and app processes reach it by Binder through the broker; a service that holds the process's own
 state (activity, window, input_method) or answers from the device profile or a broker-owned store is hosted in
 each process. Each is hosted with `hostService` by the module that owns it. A Worker reaches the broker through the domains of
-`src/shell/broker-contract.ts` and never bundles `processes.ts`; a transport that is not connected throws
-RemoteException rather than answering from a local copy. Path operations and descriptors of another realm's files
-go through one `pathOwner()` (`src/shell/file-path.ts`).
+`src/shell/broker-contract.ts` and never bundles `processes.ts`. Each realm reaches them through one `broker()`
+(`src/shell/broker-access.ts`), which throws RemoteException before the realm connects and after its port
+closes; a Worker reaches system_server's stores and services through it rather than answering from a local
+copy, while the page and a realm that never connects hold them. Path operations and descriptors of another
+realm's files go through one `pathOwner()` (`src/shell/file-path.ts`).
 
 ## Native code
 

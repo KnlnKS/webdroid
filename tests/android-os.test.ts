@@ -3,13 +3,18 @@ import "../src/natives.ts";
 import { TV } from "../src/android/axml.ts";
 import { vcall, newObj, scall, linkInit, JThread, curThread, setCurThread, iof } from "../src/jvm/natives/jentry.ts";
 import { rt, JObj, getDeclared } from "../src/jvm/runtime.ts";
-import { bootApp, packageRecord } from "./java.ts";
+import { bootApp, packageRecord, useTestBroker } from "./java.ts";
+
+const lifeCalls = (calls: Partial<ProcessLifeCalls>): ProcessLifeCalls =>
+  ({ processAlive: async () => true, processSignal: async () => {}, processWatch: async () => {}, processUnwatch: async () => {}, ...calls });
 import { startMainLooper } from "../src/android/mainloop.ts";
 import { NativeLooper, onMain, fnRunnable, postRunnable } from "../src/android/mainloop.ts";
 import { BridgeCalls } from "../src/shell/bridgecalls.ts";
 import { setProcessIdentity, setProcessName } from "../src/android/os.ts";
 import { UNAME } from "../src/shell/device-properties.ts";
-import { binderTransport, importBinder, onCallerDeath } from "../src/android/binder.ts";
+import { importBinder, onCallerDeath } from "../src/android/binder.ts";
+import { processLife } from "../src/shell/broker-access.ts";
+import type { ProcessLifeCalls } from "../src/shell/process-life.ts";
 import { procIdentity, procList, procText, procWrite } from "../src/shell/procfs.ts";
 
 describe("bundle-parcel", () => {
@@ -245,15 +250,10 @@ describe("remotecallbacklist", () => {
   const register = (list: unknown, cb: unknown, cookie: unknown = null) => vcall(list, "register", "(Landroid/os/IInterface;Ljava/lang/Object;)Z", cb, cookie);
   const count = (list: unknown) => vcall(list, "getRegisteredCallbackCount", "()I");
 
-  test.each([false, true])("RemoteCallbackList removes dead Binders and unlinks replacements (async=%s)", async (remote) => {
-    const saved = { ...binderTransport }, watches = new Set<() => void>();
+  test("RemoteCallbackList removes dead Binders and unlinks replacements", async () => {
+    const watches = new Set<number>();
     let alive = true;
-    binderTransport.alive = () => remote ? Promise.resolve(alive) : alive;
-    binderTransport.watch = (_pid, died) => {
-      watches.add(died);
-      const cancel = () => { watches.delete(died); };
-      return remote ? Promise.resolve(cancel) : cancel;
-    };
+    const restore = useTestBroker({ process: lifeCalls({ processAlive: async () => alive, processWatch: async (_pid, token) => { watches.add(token); }, processUnwatch: async token => { watches.delete(token); } }) });
     try {
       const list = await newObj("android/os/RemoteCallbackList"), cb = callback(await importBinder({ pid: 987654, id: 1 }));
       expect(await register(list, cb)).toBe(1);
@@ -266,27 +266,27 @@ describe("remotecallbacklist", () => {
       await Promise.all([first, second]);
       expect(watches.size).toBe(1);
       alive = false;
-      for (const died of watches) died();
+      for (const token of watches) processLife.died(token);
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
       expect(await count(list)).toBe(0);
       expect(await register(list, cb)).toBe(0);
-    } finally { Object.assign(binderTransport, saved); }
+    } finally { restore(); }
   });
 });
 
 test("a system service hears each caller's death once, through one watch per process", () => {
-  const saved = { ...binderTransport }, watches: (() => void)[] = [], heard: string[] = [];
-  binderTransport.watch = (_pid, died) => { watches.push(died); return () => {}; };
+  const watches: number[] = [], heard: string[] = [];
+  const restore = useTestBroker({ process: lifeCalls({ processWatch: async (_pid, token) => { watches.push(token); } }) });
   try {
     onCallerDeath(4242, (pid) => heard.push("kept " + pid));
     const stop = onCallerDeath(4242, (pid) => heard.push("dropped " + pid));
     expect(watches.length).toBe(1);
     stop();
-    watches[0]();
+    processLife.died(watches[0]);
     expect(heard).toEqual(["kept 4242"]);
     onCallerDeath(4242, () => {});
     expect(watches.length).toBe(2);
-  } finally { Object.assign(binderTransport, saved); }
+  } finally { restore(); }
 });
 
 describe("stats-log", () => {

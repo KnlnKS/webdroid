@@ -13,11 +13,12 @@ import { configurations } from "./wm.ts";
 import { startMainActivity, startOperation$ } from "./atm.ts";
 import { uptimeMillis } from "../../guest-clock.ts";
 import { systemProviderHolder } from "../systemproviders.ts";
-import { uriGrantTransport } from "../urigrants.ts";
+import { uriGrants } from "./urigrants.ts";
 import { uriText, type JUri } from "../net.ts";
 import { systemFontMap } from "../fonts.ts";
 import { appCrashed, processImportance, queryExitRecords, noteApplicationFlags, setProcessStateSummary, type ExitRecord } from "./appexitinfo.ts";
-import { callingIdentity, hostService, newStub, parceledList, type ParcelData } from "../binder.ts";
+import { callingIdentity, hostService, importBinder, newStub, parceledList, type ParcelData } from "../binder.ts";
+import { broker } from "../../shell/broker-access.ts";
 import { packages, ownedBy, GET_SHARED_LIBRARY_FILES, GET_URI_PERMISSION_PATTERNS, MATCH_DIRECT_BOOT_AUTO } from "../packages.ts";
 import { checkUidPermission } from "../permissions.ts";
 import { mkPfd } from "../os.ts";
@@ -99,8 +100,6 @@ export async function publishedProvider(authority: string): Promise<JObj | null>
   clearTimeout(timer);
   return holder && getDeclared<JObj>(holder, HOLDER, "provider");
 }
-/** the broker's: the binder another process publishes for an authority, starting that process */
-export const providerProcesses: { get: (pkg: string, process: string, authority: string) => JObj | null | Promise<JObj | null> } = { get: () => null };
 
 /** getContentProviderImpl: system_server's provider, this process's own, or a holder for the
  *  package manager's: a local one (newHolder(null, true)) when it may run here, multiprocess or
@@ -115,7 +114,8 @@ const contentProvider = driven(function* (name: string, userId: number): Gen<JOb
   const holder: JObj = yield newObj(HOLDER, "(Landroid/content/pm/ProviderInfo;)V", info);
   if (getDeclared(app, APP_INFO, "uid") === procIdentity.uid && (getDeclared(info, PROVIDER_INFO, "multiprocess") || process === processName()))
     return setDeclared(holder, HOLDER, { mLocal: 1 });
-  const binder = yield* awaited(providerProcesses.get(getDeclared(app, APP_INFO, "packageName"), process, name));
+  // the binder the provider's process publishes, which the broker starts it for
+  const binder = yield* awaited(importBinder(yield* awaited(broker().contentProvider(getDeclared(app, APP_INFO, "packageName"), process, name))));
   if (!binder) return null;
   return setDeclared(holder, HOLDER, { provider: yield scall("android/content/ContentProviderNative", "asInterface", "(Landroid/os/IBinder;)Landroid/content/IContentProvider;", binder) });
 });
@@ -140,11 +140,11 @@ const activityManagerMethods = {
   "unstableProviderDied(Landroid/os/IBinder;)V": () => {},
   // ContextImpl's URI permissions, held by UriGrantsManagerService
   "checkUriPermission(Landroid/net/Uri;IIIILandroid/os/IBinder;)I": (uri: JUri | null, _pid: number, uid: number, modes: number) =>
-    after(uriText(uri), (u) => uriGrantTransport.check(u, uid, modes)),
+    after(uriText(uri), (u) => uriGrants().check(u, uid, modes)),
   "grantUriPermission(Landroid/app/IApplicationThread;Ljava/lang/String;Landroid/net/Uri;II)V": (_app: JObj, pkg: string, uri: JUri | null, modes: number) =>
-    after(pkg ? uriText(uri) : rt.npe(), (u) => uriGrantTransport.grant(pkg, [u], modes)),
+    after(pkg ? uriText(uri) : rt.npe(), (u) => uriGrants().grant(pkg, [u], modes)),
   "revokeUriPermission(Landroid/app/IApplicationThread;Ljava/lang/String;Landroid/net/Uri;II)V": (_app: JObj, pkg: string | null, uri: JUri | null, modes: number) =>
-    after(uriText(uri), (u) => uriGrantTransport.revoke(pkg, u, modes)),
+    after(uriText(uri), (u) => uriGrants().revoke(pkg, u, modes)),
   // Log.wtf's report, which RuntimeInit sends after logging it: with Settings.Global wtf_is_fatal
   // unset, ActivityManagerService records it and the process lives
   "handleApplicationWtf(Landroid/os/IBinder;Ljava/lang/String;ZLandroid/app/ApplicationErrorReport$ParcelableCrashInfo;I)Z": () => 0,

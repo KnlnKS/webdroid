@@ -5,7 +5,7 @@
 // pauses, resumes the one below with any result it is owed, then stops and destroys.
 import { awaited, rt, JObj, noops, stubs, setDeclared, getDeclared, driven, type Gen } from "../../jvm/runtime.ts";
 import { after, newObj, vcall, scall, staticField } from "../../jvm/natives/jentry.ts";
-import { logUncaught, detached, notConnected } from "../../jvm/natives/jthrowable.ts";
+import { logUncaught, detached } from "../../jvm/natives/jthrowable.ts";
 import { once } from "../../jvm/suspend.ts";
 import { newArrayList } from "../../jvm/natives/jcoll.ts";
 import { configurations, resizeWindows, setClientVisible } from "./wm.ts";
@@ -13,10 +13,12 @@ import { notifyDisplayChanged } from "../display.ts";
 import { asSystem, hostService, systemToken } from "../binder.ts";
 import { runningApp } from "../apphost.ts";
 import { componentParts$, intentQuery$, mkComponentName, systemActivity, withComponent$, SYSTEM_ACTIVITY, type ComponentRef, type JIntent, type SystemHandler, type SystemResult } from "../intent.ts";
-import { grantIntentUris$ } from "../urigrants.ts";
+import { grantIntentUris$ } from "./urigrants.ts";
 import { pms, processRecord, runsHere, scheduleOnApp, thisApp } from "./process.ts";
-import { decodeIntent } from "../intentipc.ts";
-import { fillIn$, pendingTransport, senderId$, sendPending$, START_CANCELED } from "../pendingintent.ts";
+import { decodeIntent, encodeIntent } from "../intentipc.ts";
+import { broker, tellBroker } from "../../shell/broker-access.ts";
+import { note, Ev } from "../../timeline.ts";
+import { fillIn$, senderId$, sendPending$, START_CANCELED } from "../pendingintent.ts";
 import type { PendingOperation } from "../../shell/pendingintents.ts";
 import { GET_META_DATA, MATCH_DEFAULT_ONLY } from "../packages.ts";
 import { deviceConfiguration } from "../configuration.ts";
@@ -26,14 +28,26 @@ const CT = "android/app/servertransaction/";
 const PROCESS_STATE_TOP = 2, START_SUCCESS = 0, START_INTENT_NOT_RESOLVED = -1;
 
 /** a start in another process, and the result target there when it asked for one */
-export type ResultDelivery = { caller: ComponentRef; deliver: (resultCode: number, data: JIntent | null) => void };
-/** the broker's half of ActivityTaskManager: starts in other processes and their results */
-export const activityTransport: {
-  launch: (pkg: string, process: string, component: string, intent: JIntent, result?: ResultDelivery) => Promise<void>;
-  presentation?: (translucent: boolean) => void;
-  /** an activity the broker started here (its record id) finished with a result */
-  finished?: (remoteId: number, code: number, data: JIntent | null) => void;
-} = { launch: notConnected };
+type ResultDelivery = { caller: ComponentRef; deliver: (resultCode: number, data: JIntent | null) => void };
+/** each remote start's result delivery, by request */
+const remoteResults = new Map<number, ResultDelivery["deliver"]>();
+let nextRequest = 1;
+/** the broker's start of `component` in its own process; its acknowledgment means queued there */
+export async function launchRemote(pkg: string, process: string, component: string, intent: JIntent, result?: ResultDelivery): Promise<void> {
+  const request = nextRequest++;
+  if (result) remoteResults.set(request, result.deliver);
+  try { await broker().activity.launch(pkg, process, component, await encodeIntent(intent), request, result?.caller.cls ?? null); }
+  catch (error) { remoteResults.delete(request); throw error; }
+}
+/** the result a remote start's activity finished with, delivered once */
+export function deliverRemoteResult(request: number, code: number, data: JIntent | null): void {
+  const deliver = remoteResults.get(request);
+  remoteResults.delete(request);
+  deliver?.(code, data);
+}
+/** whether this process's windows are on screen, which its display loop follows */
+export const processPresentation = { visible: true };
+export function setVisible(visible: boolean): void { note(Ev.Visible, +visible); processPresentation.visible = visible; }
 
 /** a resumed activity is also the top resumed one: it hears that with its resume, and loses it
  *  in the transaction that pauses it */
@@ -178,7 +192,11 @@ function* destroy(r: ActivityRecord): Gen<void> {
   reportPresentation();
   // a start waiting on its pause goes on: the report would find no record
   settlePause(r);
-  if (r.remote) activityTransport.finished?.(r.remote.id, r.owed?.code ?? RESULT_CANCELED, r.owed?.data ?? null);
+  if (r.remote) {
+    const { id } = r.remote, code = r.owed?.code ?? RESULT_CANCELED, data = r.owed?.data ?? null;
+    setVisible(false);
+    tellBroker(({ activity }) => after(data && encodeIntent(data), encoded => activity.finish(id, code, encoded)));
+  }
   yield* schedule(r.app, null, yield item("DestroyActivityItem", "Landroid/os/IBinder;Z", r.token, +r.finishing));
 }
 
@@ -293,7 +311,10 @@ function* translucentTheme(info: JObj): Gen<boolean> {
   } finally { yield vcall(a, "recycle", "()V"); }
 }
 /** the broker shows the process under this one while every activity here lets it show through */
-const reportPresentation = () => activityTransport.presentation?.(stack.length > 0 && stack.every((r) => r.translucent));
+const reportPresentation = () => {
+  const translucent = stack.length > 0 && stack.every((r) => r.translucent);
+  tellBroker(({ activity }) => activity.presentation(translucent));
+};
 
 /** the launcher activity of `pkg`, as the home screen starts it */
 export const startMainActivity = driven(function* (app: JObj, pkg: string): Gen<void> {
@@ -326,7 +347,7 @@ function* resolveStart(app: JObj, intent: JObj, resolvedType: string | null, res
   yield* grantIntentUris$(pkg, copy);
   if (runsHere(pkg, process)) return { run: () => startActivity(app, copy, info, resultRecord, resultWho, requestCode), remote: false };
   return { remote: true, run: function* () {
-    yield activityTransport.launch(pkg, process, getDeclared<string>(info, AI, "name").replaceAll(".", "/"), copy, resultRecord ? {
+    yield launchRemote(pkg, process, getDeclared<string>(info, AI, "name").replaceAll(".", "/"), copy, resultRecord ? {
       caller: { pkg: runningApp().pkg, cls: getDeclared<string>(resultRecord.info, AI, "name") },
       deliver: (resultCode, data) => detached(() => asSystem(() => rt.drive(deliverResult(resultRecord, resultWho, requestCode, resultCode, data))), logUncaught),
     } : undefined);
@@ -585,9 +606,9 @@ const activityTaskMethods = {
   // other kind is an ordinary send, which the peek leaves to consume a one-shot sender
   "startActivityIntentSender(Landroid/app/IApplicationThread;Landroid/content/IIntentSender;Landroid/os/IBinder;Landroid/content/Intent;Ljava/lang/String;Landroid/os/IBinder;Ljava/lang/String;IIILandroid/os/Bundle;)I":
     driven(function* (caller: JObj, target: JObj, _token: unknown, fill: JIntent | null, resolvedType: string | null, resultTo: JObj | null, resultWho: string | null, requestCode: number): Gen {
-      const id = yield* senderId$(target), info = yield* awaited(pendingTransport.peek(id));
+      const id = yield* senderId$(target), info = yield* awaited(broker().pending.peek(id));
       if (info?.kind !== "activity") return info && (yield* sendPending$(id, fill)) ? 0 : START_CANCELED;
-      const operation = yield* awaited(pendingTransport.take(id));
+      const operation = yield* awaited(broker().pending.take(id));
       return operation ? yield* startOperation$(caller, operation, yield* fillIn$(operation, fill), resolvedType, resultTo, resultWho, requestCode) : START_CANCELED;
     }),
 };

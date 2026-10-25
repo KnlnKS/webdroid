@@ -1,4 +1,4 @@
-import { packageArchive, packageArchiveSource } from "../android/packagearchive.ts";
+import { packageArchive, packageArchiveSource, type PackageArchive } from "../android/packagearchive.ts";
 import { zipTree } from "../zip.ts";
 import { PackedArchive, SYSTEM_PACKAGE_BASE, systemPackage, type PackedArchiveIndex } from "./packedarchive.ts";
 import { SYSTEM_PACKAGES } from "./system-packages.ts";
@@ -26,35 +26,47 @@ async function preparedArchive(index: PackedArchiveIndex, base: string, own: boo
   await opened.prepare(own);
   return opened;
 }
+type PackageSnapshot = ProcessBootstrap["registry"][number];
+/** another package's archive as the broker serves it: its system package's packed archive, or its served bytes */
+async function openArchive({ source, certificates }: PackageSnapshot): Promise<{ archive: PackageArchive; base: Install["base"] }> {
+  if ("index" in source) {
+    const packed = await preparedArchive(source.index, source.base, false);
+    return { archive: packageArchive(packed.zip, source.index.certificates.map(hexBytes)), base: packed };
+  }
+  const file = new RemoteFile(source);
+  return { archive: await packageArchiveSource(file, certificates), base: file };
+}
+const register = (snapshot: PackageSnapshot, archive: PackageArchive, source: Install["base"]) =>
+  registerPackage(archive, { path: installedPath(snapshot.pkg), source, uid: snapshot.uid, system: snapshot.system,
+    grants: snapshot.grants, signatures: snapshot.signatures?.map((s) => u8(s)) ?? null });
+/** a package installed after this process started */
+export async function registerSnapshot(snapshot: PackageSnapshot): Promise<void> {
+  const { archive, base } = await openArchive(snapshot);
+  register(snapshot, archive, base);
+}
 /** Load a process registry from its transferred archive descriptors: archives open together, packages register in registry order. */
 export async function loadProcessPackages(data: ProcessBootstrap): Promise<Install | null> {
   let boot: Install | null = null;
   const opened = await Promise.all(data.registry.map(async (snapshot) => {
-    const path = installedPath(snapshot.pkg), source = snapshot.source, own = snapshot.pkg === data.pkg;
+    if (snapshot.pkg !== data.pkg) return { snapshot, ...await openArchive(snapshot) };
+    const source = snapshot.source;
     let archive, base: Pick<Install, "zip" | "base">;
     if ("index" in source) {
-      const packed = await preparedArchive(source.index, source.base, own);
+      const packed = await preparedArchive(source.index, source.base, true);
       archive = packageArchive(packed.zip, source.index.certificates.map(hexBytes));
-      if (own) rt.classpathSource = packed;
+      rt.classpathSource = packed;
       base = { zip: packed.zip, base: packed };
-    } else if (!own) {
-      const file = new RemoteFile(source);
-      archive = await packageArchiveSource(file, snapshot.certificates);
-      base = {zip: archive.apk.zip, base: file};
     } else {
       const bytes = await readFully(new RemoteFile(source)), zip = zipTree(bytes);
       archive = packageArchive(zip, snapshot.certificates);
       base = { zip, base: bytes };
     }
-    if (own) {
-      boot = await openInstallApks(snapshot.splits.map((split) => new RemoteFile(split)), base);
-      // the record's apk is the one ApkAssets loads at sourceDir: the splits join it
-      for (const split of boot.splits) if (split.resources) archive.apk.table?.add(split.resources);
-      for (const [name, source] of boot.lazyEntries) archive.apk.lazyEntries.set(name, source);
-    }
-    return { snapshot, archive, path, source: base.base };
+    boot = await openInstallApks(snapshot.splits.map((split) => new RemoteFile(split)), base);
+    // the record's apk is the one ApkAssets loads at sourceDir: the splits join it
+    for (const split of boot.splits) if (split.resources) archive.apk.table?.add(split.resources);
+    for (const [name, source] of boot.lazyEntries) archive.apk.lazyEntries.set(name, source);
+    return { snapshot, archive, base: base.base };
   }));
-  for (const { snapshot, archive, path, source } of opened) registerPackage(archive, { path, source, uid: snapshot.uid, system: snapshot.system,
-    grants: snapshot.grants, signatures: snapshot.signatures?.map((s) => u8(s)) ?? null });
+  for (const { snapshot, archive, base } of opened) register(snapshot, archive, base);
   return boot;
 }
