@@ -3,7 +3,7 @@
 // (file-path.ts); and the read/write family over guest memory.
 
 import { mem, anchor } from "./mem.ts";
-import { type HostFn, PTR, ldp, ldLong, ARG0, complete } from "./host.ts";
+import { type HostFn, PTR, ldp, ldLong, complete } from "./host.ts";
 import { E, AT_FDCWD, O_ACCMODE, O_APPEND, O_CLOEXEC, O_CREAT, O_DIRECTORY, O_EXCL, O_NONBLOCK, O_RDONLY, O_RDWR, O_TRUNC, O_WRONLY,
   POLLERR, POLLHUP, POLLIN, S_IFCHR, S_IFDIR, S_IFIFO, S_IFREG } from "./abi.ts";
 import type { Cpu } from "./cpu.ts";
@@ -391,7 +391,8 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
   fstatfs: (_c, a) => { a.i(); return statfs(a.p()); },
   statfs64: (_c, a) => { a.str(); return statfs(a.p()); },
   fstatfs64: (_c, a) => { a.i(); return statfs(a.p()); },
-  getcwd: (_c, a) => { const b = a.p(), n = a.u(); mem.putCstr(b, "/", n); return ARG0; },
+  // the length with its NUL
+  getcwd: (_c, a) => { const b = a.p(), n = a.u(); return n < 2 ? -E.RANGE : mem.putCstr(b, "/", n) + 1; },
   chdir: () => 0,
   readlinkat: () => -E.INVAL,
 };

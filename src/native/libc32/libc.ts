@@ -254,6 +254,7 @@ export function libcInit(): void {
     android_get_device_api_level: () => device.sdk,
     // AT_HWCAP and friends: this CPU advertises no optional feature bits, which is true and is
     // also what steers a library away from the paths the emitter has not written.
+    getcwd: (_c, a) => { const b = a.p(); mem.putCstr(b, "/", a.u()); return ARG0; },
     getauxval: (cpu, a) => {
       const t = a.ul(), e = auxv().find(([type]) => BigInt(type) === t);
       if (e) return e[1];

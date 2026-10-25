@@ -7,8 +7,7 @@ import * as zDeflate from "pako/lib/zlib/deflate.js";
 import ZStream from "pako/lib/zlib/zstream.js";
 import MESSAGES from "pako/lib/zlib/messages.js";
 import { mem, AddrMap, wrote } from "../mem.ts";
-import { type HostFn, stp, ldp } from "../host.ts";
-import { crc32, adler32 } from "../../zip.ts";
+import { type HostFn, SERVED, stp, ldp } from "../host.ts";
 
 // z_stream fields
 const Z = { IN: 0, AVIN: 4, TIN: 8, OUT: 12, AVOUT: 16, TOUT: 20, MSG: 24, STATE: 28, DATA_TYPE: 44, ADLER: 48 };
@@ -93,8 +92,7 @@ export function zlibLibc(): Record<string, HostFn> {
     inflateReset: (_c, a) => { const strm = a.p(); return reset(strm, inflaters.get(strm), zInflate.inflateReset); },
     inflateSetDictionary: (_c, a) => { const strm = a.p(), d = a.p(), n = a.u(); return setDictionary(strm, inflaters.get(strm), d, n, zInflate.inflateSetDictionary); },
     inflateEnd: (_c, a) => end(a.p(), inflaters, zInflate.inflateEnd),
-    crc32: (_c, a) => { const crc = a.i(), p = a.p(), n = a.u(); return p ? crc32(crc, mem.bytes(p, n)) >>> 0 : 0; },
-    adler32: (_c, a) => { const ad = a.i(), p = a.p(), n = a.u(); return p ? adler32(ad, mem.bytes(p, n)) >>> 0 : 1; },
+    crc32: SERVED, adler32: SERVED,
     zlibVersion: () => zver,
     zError: (_c, a) => message(MESSAGES[a.i()] ?? ""),
     uncompress: (_c, a) => {
