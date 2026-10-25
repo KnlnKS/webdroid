@@ -100,6 +100,9 @@ describe("native-egl", () => {
           expect(mem.ld32(p + 4)).toBe(a64 ? 0 : -1);
           expect(mem.ld32(p + 8)).toBe(1);
           expect(mem.ld32(p + 12)).toBe(-1);
+          // a NULL configs array asks only for the count
+          expect(hostFn("libEGL.so", name)!(cpu, args(name === "eglGetConfigs" ? [1, 0, 0, p + 8] : [1, 0, 0, 0, p + 8]))).toBe(1);
+          expect(mem.ld32(p + 8)).toBeGreaterThan(0);
         }
       }
     } finally { mem.free(p); setA64(false); }

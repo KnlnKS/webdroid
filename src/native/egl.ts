@@ -21,10 +21,10 @@ const answer = (value: number | null, out: number): number => { if (value === nu
 function configs(t: object, found: number[] | null, out: number, size: number, num: number): number {
   if (!found) return 0;
   if (!num) return egl.fail(t, egl.BAD_PARAMETER, 0);
-  const n = out ? Math.min(Math.max(size, 0), found.length) : found.length;
+  if (!out) return answer(found.length, num);
+  const n = Math.min(Math.max(size, 0), found.length);
   for (let i = 0; i < n; i++) stp(out + i * PTR, found[i]);
-  mem.st32(num, n);
-  return 1;
+  return answer(n, num);
 }
 
 const own = (procs: Record<string, HostFn>, name: string): HostFn | undefined => (Object.hasOwn(procs, name) ? procs[name] : undefined);
