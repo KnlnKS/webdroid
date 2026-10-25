@@ -9,7 +9,12 @@ import { Sync, ROOT } from "../compiler/hostcalls.ts";
 import { suspending } from "./module.ts";
 import type { World } from "./world.ts";
 
-export type Runtime = { tag: WebAssembly.Tag; alloc: WebAssembly.Global; hash: WebAssembly.Global; ctab: WebAssembly.Global; unsafeSlots: WebAssembly.Global; sid: WebAssembly.Global; thr: WebAssembly.Global; depth: WebAssembly.Global; iw: WebAssembly.Global; wait: WebAssembly.Global; callee: WebAssembly.Global; classId: (o: object) => number; link: (slot: number) => void; nop: Function };
+type Global = WebAssembly.Global;
+export type Runtime = {
+  tag: WebAssembly.Tag;
+  alloc: Global; hash: Global; ctab: Global; unsafeSlots: Global; sid: Global; thr: Global; depth: Global; iw: Global; wait: Global; callee: Global;
+  classId: (o: object) => number; link: (slot: number) => void; nop: Function;
+};
 
 function addLinker(mb: ModuleBuilder, state: [number, number, number]): number {
   const sig = mb.addFuncType([T.i32], []), link = mb.importFunc("linker", "link", sig);
@@ -66,5 +71,6 @@ export function startRuntime(w: World): Runtime {
     sync: (op: number, obj: object | null, a: number) => w.sched.sync(op, obj, a),
   };
   const x = w.instantiate(mb.build(), { rt: { table: w.table }, linker }).exports as Record<string, any>;
-  return { tag: x.tag, alloc: x.alloc, hash: x.hash, ctab: x.ctab, unsafeSlots: x.unsafeSlots, sid: x.sid, thr: x.thr, depth: x.depth, iw: x.iw, wait: x.wait, callee: x.callee, classId: x.classId, link: x.link, nop: x.nop };
+  return { tag: x.tag, alloc: x.alloc, hash: x.hash, ctab: x.ctab, unsafeSlots: x.unsafeSlots, sid: x.sid, thr: x.thr, depth: x.depth, iw: x.iw, wait: x.wait,
+    callee: x.callee, classId: x.classId, link: x.link, nop: x.nop };
 }

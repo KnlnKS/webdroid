@@ -35,7 +35,10 @@ interface State {
   /** the ClassLoader object that opened the app's own dex files, which the classes of the default namespace that the app defines answer to getClassLoader */
   appLoader: object | null;
 }
-const states = new PerWorld((w): State => ({ byObject: new WeakMap(), cookies: new WeakMap(), nextDexHandle: 1n, parentOf: w.helpers.fieldReader<object | null>("java/lang/ClassLoader", "parent", "Ljava/lang/ClassLoader;"), libraries: new WeakMap(), copies: new WeakMap(), appLoader: null }));
+const states = new PerWorld((w): State => ({
+  byObject: new WeakMap(), cookies: new WeakMap(), nextDexHandle: 1n, libraries: new WeakMap(), copies: new WeakMap(), appLoader: null,
+  parentOf: w.helpers.fieldReader<object | null>("java/lang/ClassLoader", "parent", "Ljava/lang/ClassLoader;"),
+}));
 
 /** the namespace a ClassLoader object sees: its own if it opened dex files, else its nearest ancestor's, else the default one */
 function loaderFor(w: World, obj: object | null): Loader {

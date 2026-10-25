@@ -297,7 +297,14 @@ export class World {
     s.instantiateMs += performance.now() - t0 - (s.moduleMs + s.instantiateMs - counted); s.instances++;
     return inst;
   }
-  rtImports() { const { tag, alloc, hash, ctab, unsafeSlots, sid, thr, depth, iw, wait, callee, link } = this.rt; return { table: this.table, nm: this.nm, tag, alloc, hash, ctab, unsafeSlots, sid, thr, depth, iw, wait, callee, link, mem: this.mem, sp: this.sp, gmem: this.opts.guest?.memory, gflags: this.opts.guest?.flags }; }
+  /** the "rt" import module of the World's modules: the table, the runtime's globals and the memories, none of which change */
+  rtImports() { return this.rtImported ??= this.rtImportModule(); }
+  private rtImported?: ReturnType<World["rtImportModule"]>;
+  private rtImportModule() {
+    const { tag, alloc, hash, ctab, unsafeSlots, sid, thr, depth, iw, wait, callee, link } = this.rt, guest = this.opts.guest;
+    return { table: this.table, nm: this.nm, tag, alloc, hash, ctab, unsafeSlots, sid, thr, depth, iw, wait, callee, link,
+      mem: this.mem, sp: this.sp, gmem: guest?.memory, gflags: guest?.flags };
+  }
 
   /** the class module of `name`, built on first use */
   link(name: string): ClassRt {
@@ -312,7 +319,8 @@ export class World {
     const slotBase = this.slots.baseOf(name) ?? this.slots.numberBlock(name, methods.length + 1);
     if (!this.instantiates) {
       // a class a build numbers after the platform's has its data in the build's module of them
-      this.classes.set(name, rt = { name, id, ...this.opts.build ? { mod: "g" + this.aot!.extraGroup, from: "platform" as const } : { mod: "c" + id, from: "own" as const }, slotBase, nMethods: methods.length, exports: {} });
+      const layout = this.opts.build ? { mod: "g" + this.aot!.extraGroup, from: "platform" as const } : { mod: "c" + id, from: "own" as const };
+      this.classes.set(name, rt = { name, id, ...layout, slotBase, nMethods: methods.length, exports: {} });
       return rt;
     }
     this.classes.set(name, rt = this.classModules.lazy(name, id, slotBase, jc));

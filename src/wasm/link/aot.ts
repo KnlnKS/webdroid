@@ -152,7 +152,13 @@ export interface SHeader extends UnitHeader { names: string[] }
 /** what identifies a dex of the platform: DexFile.id is its SHA-1, but only where the engine has Uint8Array.toHex for views into a larger buffer */
 export const dexSig = (d: DexFile): string => [d.fileSize, d.classDefCount, d.stringCount, d.typeCount, d.version].join(":");
 
-const unrle = (a: number[]): Int32Array<ArrayBuffer> => { let n = 0; for (let i = 1; i < a.length; i += 2) n += a[i]; const o = new Int32Array(n); let k = 0; for (let i = 0; i < a.length; i += 2) o.fill(a[i], k, k += a[i + 1]); return o; };
+const unrle = (a: number[]): Int32Array<ArrayBuffer> => {
+  let n = 0;
+  for (let i = 1; i < a.length; i += 2) n += a[i];
+  const o = new Int32Array(n);
+  for (let i = 0, k = 0; i < a.length; i += 2) o.fill(a[i], k, k += a[i + 1]);
+  return o;
+};
 const customSection = (m: WebAssembly.Module, name: string): Uint8Array => new Uint8Array(WebAssembly.Module.customSections(m, name)[0]);
 /** a module's header, parsed once: linking asks a code module's on every lazy link until the module loads */
 const headers = new WeakMap<WebAssembly.Module, unknown>();
