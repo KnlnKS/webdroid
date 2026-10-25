@@ -10,7 +10,7 @@ type PackageSnapshot = { certificates: Uint8Array[]; pkg: string;
 export type ProcessBootstrap = { pid: number; pkg: string; process: string; uid: number; registry: PackageSnapshot[];
   launcher: { assetKey: string } | null; broker: MessagePort; display: MessagePort; screen: OffscreenCanvas;
   /** the pointer events and IME edits the page sends, and the IME state the page's text control hears */
-  input: MessagePort; ime: MessagePort; web: MessagePort; media: MessagePort;
+  input: MessagePort; web: MessagePort; media: MessagePort;
   /** a replica of the device storage its package reads (device-storage.ts) */
   storage: [string, string][];
   /** the display's rotation state its activities' requests resolve against */
@@ -20,7 +20,7 @@ export type ProcessBootstrap = { pid: number; pkg: string; process: string; uid:
 export const bootstrapTransfers = (data: ProcessBootstrap): Transferable[] => [...bootstrapPorts(data), data.screen];
 function bootstrapPorts(data: ProcessBootstrap): MessagePort[] {
   return [...data.registry.flatMap(record => [...("port" in record.source ? [record.source.port] : []),
-    ...record.splits.map(split => split.port)]), data.broker, data.display, data.input, data.ime, data.web, data.media];
+    ...record.splits.map(split => split.port)]), data.broker, data.display, data.input, data.web, data.media];
 }
 
 /** Close only this received bootstrap's capabilities after an unpublished startup fails. */

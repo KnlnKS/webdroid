@@ -1,5 +1,5 @@
 // The browser fixtures' Worker halves: each Worker plays the role its URL names (fixture-calls.ts).
-import { callProxy, serveCalls } from "../../../src/shell/rpc.ts";
+import { callProxy, duplex, serveCalls } from "../../../src/shell/rpc.ts";
 import { remoteProcessLife } from "../../../src/shell/process-life.ts";
 import { attachGuestClockPort, bootTime, guestClockControl, setGuestTimeout, uptimeMillis, wallMillis } from "../../../src/guest-clock.ts";
 import { attachWorkerBootstrap, serveWorkerEndpoint } from "../../../src/shell/worker-bootstrap.ts";
@@ -10,7 +10,7 @@ import { bootstrapTransfers } from "../../../src/shell/process-bootstrap-data.ts
 import type { ProcessWorkerMessage, ProcessWorkerStatus } from "../../../src/shell/process-host.ts";
 import type { ClockBootstrap } from "../../../src/shell/clock-port.ts";
 import type { BrokerCalls, ProcessEndpoint } from "../../../src/shell/broker-contract.ts";
-import type { ImeView } from "../../../src/shell/input-port.ts";
+import type { ImeView, InputCalls } from "../../../src/shell/input-port.ts";
 import type { BinderHandle, ParcelData, TransactionReply } from "../../../src/android/binder.ts";
 import { stubEndpoint, type BrokerInit, type PointerCalls } from "./fixture-calls.ts";
 
@@ -133,10 +133,9 @@ const roles: Record<string, () => (data: never) => void> = {
     let generation = 1, release = () => {}, page: ImeView;
     const state = (text: string, start: number, end: number, active: boolean) =>
       page.state({ generation, text, start, end, active, hasAction: false });
-    return (data: { input: MessagePort; view: MessagePort } | { kind: "release" | "switch" | "hide" }) => {
+    return (data: { input: MessagePort } | { kind: "release" | "switch" | "hide" }) => {
       if ("input" in data) {
-        page = callProxy<ImeView>(data.view, ["state"], { notifications: ["state"] }).endpoint;
-        serveCalls(data.input, {
+        page = duplex<Omit<InputCalls, "pointer">, ImeView>(data.input, {
           input: async (edit: number, text: string, start: number, end: number) => {
             if (edit !== generation) return;
             post({ input: text });
@@ -144,7 +143,7 @@ const roles: Record<string, () => (data: never) => void> = {
             state(text, start, end, true);
           },
           selection: async () => {}, finish: async () => {}, action: async () => true,
-        });
+        }, ["state"], { notifications: ["state"] }).endpoint;
         state("", 0, 0, true);
       } else if (data.kind === "release") release();
       else {

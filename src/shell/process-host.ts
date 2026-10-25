@@ -156,14 +156,14 @@ export class ProcessHost {
   }
   /** the bootstrap's ends of the process's display, input, web and media ports, once: the canvas
    *  hands its control to the display */
-  surfaces(): Pick<ProcessBootstrap, "display" | "screen" | "input" | "ime" | "web" | "media"> {
-    const display = new MessageChannel(), input = new MessageChannel(), ime = new MessageChannel(), web = new MessageChannel(), media = new MessageChannel();
+  surfaces(): Pick<ProcessBootstrap, "display" | "screen" | "input" | "web" | "media"> {
+    const display = new MessageChannel(), input = new MessageChannel(), web = new MessageChannel(), media = new MessageChannel();
     const canvas = this.canvas, frames = this.display = receiveFrames(display.port1, canvas, this.hosts.mirroring, () => this.presented.resolve());
-    const text = this.ime = attachRealmInput(canvas, device, input.port1, ime.port1);
+    const text = this.ime = attachRealmInput(canvas, device, input.port1);
     const surfaces = receiveWebSurfaces(web.port1, canvas, () => device);
     this.web = surfaces.layer;
     this.ends.push(text.close, frames.close, receiveMedia(media.port1), surfaces.close);
-    return { display: display.port2, screen: canvas.transferControlToOffscreen(), input: input.port2, ime: ime.port2, web: web.port2, media: media.port2 };
+    return { display: display.port2, screen: canvas.transferControlToOffscreen(), input: input.port2, web: web.port2, media: media.port2 };
   }
   /** its place among the processes shown: `z` from the bottom, or hidden; `interactive` takes the pointer */
   setLayer(z: number | null, interactive: boolean): void {

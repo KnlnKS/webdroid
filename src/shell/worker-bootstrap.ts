@@ -22,7 +22,7 @@ export async function attachWorkerBootstrap(data: ProcessBootstrap): Promise<Bro
     const [{ sendMedia }, { useAudioOut }, { useMediaElements }] = await Promise.all([import("./media-port.ts"), import("../android/audio-output.ts"), import("../android/mediaplayer.ts")]);
     const media = sendMedia(data.media);
     useAudioOut(media.audio); useMediaElements(media.createElement);
-    closeInput = await (await import("./input-port.ts")).serveInput(data.input, data.ime);
+    closeInput = await (await import("./input-port.ts")).serveInput(data.input);
     const surfaces = (await import("./web-surface-port.ts")).sendWebSurfaces(data.web);
     const {useWebSurfaces} = await import("../android/webframes.ts");
     useWebSurfaces(surfaces.create);
