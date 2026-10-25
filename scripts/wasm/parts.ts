@@ -1,8 +1,9 @@
 // The Wasm backend's suites (run.ts lists them) and the node processes each runs as. They need a JDK (../java.ts finds one) and the Android SDK, whose
 // d8 dexes every fixture.
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { AOT_ROOT, type AotManifest } from "../aot-key.ts";
+import { aotManifest } from "../aot-serve.ts";
 import { nodeCommand, run, type Ran } from "../node.ts";
 
 /** a test passes or fails, a tool builds, times or prints. A suite runs as the processes `parts` names (its script with its arguments by default). A
@@ -52,13 +53,13 @@ export const allParts = (): Part[] => Object.keys(SUITES).filter((n) => SUITES[n
 export const label = (p: Part): string => [p.script, ...p.args, p.aot ? "(aot)" : ""].join(" ").trim();
 
 let built: Promise<Ran & { dir: string }> | undefined;
-/** the platform build in `dir`, or else a small one of four jars made once per process, its output shown when `show` */
+/** the platform build in `dir`, or else the one the server offers, made first (`pnpm aot`, its output shown when `show`) when these sources have none */
 export function platformBuild(dir: string | undefined, show = false): Promise<Ran & { dir: string }> {
   if (dir) return Promise.resolve({ status: 0, stdout: "", stderr: "", dir });
   return built ??= (async () => {
-    const dir = mkdtempSync(join(tmpdir(), "wasm-aot-"));
-    process.on("exit", () => rmSync(dir, { recursive: true, force: true }));
-    return { ...await exec("aot-build", ["--out", dir, "--jars", "4"], process.env, show), dir };
+    const made = aotManifest().ok ? { status: 0, stdout: "", stderr: "" } : await exec("aot", [], process.env, show);
+    const { key } = made.status ? { key: "" } : JSON.parse(readFileSync(join(AOT_ROOT, "current.json"), "utf8")) as AotManifest;
+    return { ...made, dir: join(AOT_ROOT, key) };
   })();
 }
 

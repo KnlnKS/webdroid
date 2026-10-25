@@ -1,6 +1,6 @@
 // The compile worker and the persisted app build: the protocol (compile-serve.ts over a MessageChannel, so the numbering handshake runs as it does with a Worker), second-tier units
 // compiled elsewhere and adopted only while the numbering they rely on is the World's, an app build attached on top of the platform build and kept sound as dexes arrive, and the
-// bounded store (persist.ts). Needs javac, d8 and a platform build in WEBDROID_AOT (`pnpm wasm persist` makes a small one). The Chrome page runs the same over a real Worker and OPFS: boot-probe.
+// bounded store (persist.ts). Needs javac, d8 and a platform build in WEBDROID_AOT (`pnpm wasm persist` takes the current one, `pnpm aot`). The Chrome page runs the same over a real Worker and OPFS: boot-probe.
 import { vfs } from "../../src/shell/vfs.ts";
 import { BytesFile } from "../../src/shell/lazyfile.ts";
 import { readFileSync } from "node:fs";

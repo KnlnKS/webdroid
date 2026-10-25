@@ -7,8 +7,6 @@
 import type { ChildProcess } from "node:child_process";
 import { createServer } from "node:net";
 import { availableParallelism, totalmem } from "node:os";
-import { join } from "node:path";
-import { AOT_ROOT, type AotManifest } from "./aot-key.ts";
 import { aotManifest } from "./aot-serve.ts";
 import { cli } from "./args.ts";
 import { output, run, type Ran } from "./node.ts";
@@ -59,15 +57,12 @@ function task(name: string, cores: number, gb: number, failure: () => Promise<st
 process.env.WEBDROID_JOBS = String(PART_JOBS);
 const url = noE2e ? undefined : server(), stale = !aotManifest().ok;
 const aot = stale ? task("aot", 2, 2.5, async () => failure(await pnpm(["aot"]))) : undefined;
-// the AOT suites run over the build the flows load
-let aotDir: string | undefined;
-const builtDir = async () => aotDir ??= join(AOT_ROOT, (await aotManifest().json() as AotManifest).key);
 const tasks: PoolJob<void>[] = [
   ...aot ? [aot] : [],
   task("typecheck", 2, 1.5, async () => failure(await pnpm(["typecheck"]))),
   ...Array.from({ length: SHARDS }, (_, i) => task(`test ${i + 1}/${SHARDS}`, 4, 2.5, async () => failure(await pnpm(["test", `--shard=${i + 1}/${SHARDS}`, "--maxWorkers=4"])))),
   ...allParts().map((p) => task(`wasm ${label(p)}`, p.jobs ? PART_JOBS : 1, p.jobs ? 1.5 : 0.8,
-    async () => failure(await runPart(p, false, p.aot ? await builtDir() : undefined)), { after: p.aot ? aot : undefined })),
+    async () => failure(await runPart(p, false)), { after: p.aot ? aot : undefined })),
 ];
 let summary: (() => Promise<string>) | undefined;
 /** corpus apks that drew and the baseline does not hold */
