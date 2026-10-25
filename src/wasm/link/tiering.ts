@@ -135,7 +135,6 @@ export class Tiering {
   /** puts the lazy-link stub back for `slot` and for the methods compiled beside it, which call it directly */
   invalidate(slot: number): void {
     const w = this.w;
-    if (w.helpers.invalidate(slot)) { w.stats.invalidated++; return; }
     for (const x of this.groupOf.get(slot) ?? [slot]) {
       // a slot without state holds compiled code only if a loaded build module installed it
       const s = w.slots.peek(x) ?? (w.aot?.installed(x) ? w.slots.at(x) : undefined);

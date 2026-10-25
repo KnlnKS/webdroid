@@ -11,6 +11,7 @@
 //  - Soundness. Precompiled code relies on no class-hierarchy decision a later class could falsify (Compiler.devirt), so loading an app's
 //    classes never undoes it; only sites that fail on a class missing at the build are undone, once the class is there.
 import type { ClassRt, World } from "./world.ts";
+import type { Owner } from "./assumptions.ts";
 import { sameMarks, type Marks, type Numbering } from "./numbers.ts";
 import type { SymbolicSite } from "../compiler/sites.ts";
 
@@ -60,8 +61,9 @@ export interface AotIndex {
 }
 /** what a module says about itself, in its custom section "aot" */
 export interface DHeader { version?: number; classes: number[]; touch: number[]; synth: string[] }
-/** what compiled code relies on and needs before it runs: the same for a precompiled module and for a unit a worker compiled */
-export interface UnitHeader {
+/** what compiled code relies on and needs before it runs: the same for a precompiled module and for a unit a worker compiled. What its code relies on is
+ *  owned by the slot it is undone in, or by a helper of the host's (HostFunctions) for a unit compiled here */
+export interface UnitHeader<O extends Owner = number> {
   version?: number;
   classImports: [module: string, name: string][];
   /** the classes (ids) and runtime functions its code names a table slot of, which need their stubs */
@@ -70,10 +72,10 @@ export interface UnitHeader {
   natives: string[];
   symbols?: SymbolicSite[];
   /** class-hierarchy decisions: declaring class, name, descriptor, the one target's class and key ("" without one), and the slot of the method that relies on it */
-  assumptions: [string, string, string, string, string, number][];
+  assumptions: [string, string, string, string, string, O][];
   allocs: string[];
   /** classes missing at the build that sites of the module fail on, with the slot of the method they are in */
-  missing: [string, number][];
+  missing: [string, O][];
   /** the methods whose code holds another method's: its slot, then theirs (Compiler.held) */
   held?: number[][];
 }

@@ -2,45 +2,33 @@
 import { T } from "../compiler/wasmbin.ts";
 import { Code, OP } from "../compiler/code.ts";
 import type { Kind } from "../compiler/program.ts";
-import { Compiler, kindVT, type FnTrace } from "../compiler/j2w.ts";
+import { Compiler, kindVT } from "../compiler/j2w.ts";
 import type { Strand } from "./sched.ts";
-import type { Clock, World } from "./world.ts";
+import type { Built, World } from "./world.ts";
 
 export class HostFunctions {
   private readonly w: World;
   constructor(w: World) { this.w = w; }
   private hostFns = new Map<string, Function>();
-  // Private helper owners do not consume method-table numbering shared with compile workers.
-  private helperSlots: (Function | undefined)[] = [];
-  private helperInvalidations = new Map<number, () => void>();
-  /** whether `slot` belongs to a helper: helpers own their class-hierarchy decisions apart from the table */
-  isHelper(slot: number): boolean { return this.helperInvalidations.has(slot); }
-  /** has the helper of `slot` rebuilt before its next call; whether `slot` is a helper's */
-  invalidate(slot: number): boolean { const f = this.helperInvalidations.get(slot); f?.(); return !!f; }
-  private helperGetter(slot: number, rebuild: (slot: number) => Function): () => Function {
+  /** a helper `build` compiles into a unit of its own, with `imports` beside its own: its function, or, when its code relies on what no method owns (a
+   *  class-hierarchy decision, a missing class), a getter that compiles it again for the call after Assumptions undoes that */
+  private helper(build: (cx: Compiler) => Built, imports?: Record<string, unknown>): { get: () => Function; raw?: Function } {
     let dirty = false;
-    this.helperInvalidations.set(slot, () => { dirty = true; });
-    return () => {
-      // an invalidation while it rebuilds holds for the next call
-      if (dirty) { dirty = false; this.helperSlots[-slot - 1] = rebuild(slot); }
-      return this.helperSlots[-slot - 1]!;
+    const owner = { invalidate: () => { dirty = true; this.w.stats.invalidated++; } };
+    const link = () => {
+      const units = this.w.units, clock = units.clock(), cx = new Compiler(this.w), built = build(cx);
+      this.w.stats.units++;
+      const f = units.link(units.compiled(cx, { ...units.of(cx), ...imports }, built, owner), (e) => e.m as Function, clock)!;
+      return { f, dependent: cx.assumptions.some(([, , , , m]) => !m) || cx.absent.some(([, m]) => !m) };
     };
+    let { f, dependent } = link();
+    if (!dependent) return { get: () => f, raw: f };
+    // an invalidation while it compiles holds for the next call
+    return { get: () => { if (dirty) { dirty = false; f = link().f; } return f; } };
   }
-  private helperUnit(cx: Compiler, imports: Record<string, any>, built: { bytes: Uint8Array; traces: FnTrace[] }, clock: Clock, rebuild: (slot: number) => Function, slot?: number): { get: () => Function; raw?: Function } {
-    const dependent = cx.assumptions.some(([, , , , owner]) => !owner) || cx.absent.some(([, owner]) => !owner);
-    const units = this.w.units;
-    if (slot !== undefined || !dependent) return units.link(units.compiled(cx, imports, built, slot), (e) => { const raw = e.m as Function; return { get: () => raw, raw }; }, clock)!;
-    const at = -this.helperSlots.push(undefined);
-    return units.link(units.compiled(cx, imports, built, at), (e) => { this.helperSlots[-at - 1] = e.m as Function; return { get: this.helperGetter(at, rebuild) }; }, clock)!;
-  }
-  private hostRebuilder(name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code) => void, prepare?: (cx: Compiler) => void): (slot: number) => Function {
-    return slot => this.buildHostFn(name, params, ret, body, prepare, slot).get();
-  }
-  private buildHostFn(name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code) => void, prepare?: (cx: Compiler) => void, slot?: number) {
-    const clock = this.w.units.clock(), cx = new Compiler(this.w); prepare?.(cx);
-    const built = cx.buildSynthetic(name, params, c => body(cx, c), ret);
-    this.w.stats.units++;
-    return this.helperUnit(cx, this.w.units.of(cx), built, clock, this.hostRebuilder(name, params, ret, body, prepare), slot);
+  /** the helper of `body` over Java values, as hostFn's */
+  private hostHelper(name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code) => void, prepare?: (cx: Compiler) => void) {
+    return this.helper((cx) => { prepare?.(cx); return cx.buildSynthetic(name, params, (c) => body(cx, c), ret); });
   }
   /** a helper callable from the host: its function, or one that follows its rebuilds */
   private synchronousHelper({ get, raw: fixed }: { get: () => Function; raw?: Function }): Function {
@@ -61,9 +49,7 @@ export class HostFunctions {
   /** a function over Java values, generated once under `name` and callable from the host: an int is a number, a long a bigint, a reference an opaque value */
   hostFn(name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code) => void, prepare?: (cx: Compiler) => void): (...a: any[]) => any {
     let f = this.hostFns.get(name);
-    if (!f) {
-      this.hostFns.set(name, f = this.synchronousHelper(this.buildHostFn(name, params, ret, body, prepare)));
-    }
+    if (!f) this.hostFns.set(name, f = this.synchronousHelper(this.hostHelper(name, params, ret, body, prepare)));
     return f as never;
   }
   /** calls the method in table slot `slot`, first running the class initializer in slot `ensure` unless it is -1: one helper per signature serves every method of it */
@@ -78,38 +64,29 @@ export class HostFunctions {
     return suspend ? this.callFn(name, all, ret, body) : this.hostFn(name, all, ret, (cx, c) => body(cx, c, (i) => { c.lget(i); }));
   }
   private callFns = new Map<string, (s: Strand, ...a: any[]) => unknown>();
-  // The compiled call must not retain the emitter closure and its Compiler.
-  // Build it in a separate activation from the persistent token/caller state.
-  private callRebuilder(name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void, prepare: ((cx: Compiler) => void) | undefined, state: { d: WebAssembly.Global; v: WebAssembly.Global; thr: WebAssembly.Global }): (slot: number) => Function {
-    return slot => this.buildCallFn(name, params, ret, body, prepare, state, slot).get();
-  }
-  private buildCallFn(name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void, prepare?: (cx: Compiler) => void, state?: { d: WebAssembly.Global; v: WebAssembly.Global; thr: WebAssembly.Global }, slot?: number) {
-    const clock = this.w.units.clock(), cx = new Compiler(this.w), vt = ret === "V" ? T.i32 : ret === "L" ? T.externref : kindVT(ret);
-    prepare?.(cx);
-    const d = state?.d ?? new WebAssembly.Global({ value: "i32", mutable: true }, 0), thr = state?.thr ?? new WebAssembly.Global({ value: "externref", mutable: true }, null);
-    const v = state?.v ?? new WebAssembly.Global({ value: ret === "J" ? "i64" : ret === "L" ? "externref" : "i32", mutable: true }, ret === "J" ? 0n : ret === "L" ? null : 0);
-    const built = cx.buildSynthetic(name, ["I", ...params], (c) => {
-      const done = cx.global("call", "d", T.i32, true), value = cx.global("call", "v", vt, true), thrown = cx.global("call", "x", T.externref, true);
-      const e = c.newLocal(T.anyref), res = ret === "V" ? -1 : c.newLocal(kindVT(ret));
-      c.block(T.anyref).tryTable(null, [[0, cx.tag, 0]]);
-      body(cx, c, (i) => { c.lget(i + 1); });
-      if (res >= 0) { c.lset(res).lget(res); if (ret === "L") c.externConvertAny(); c.gset(value); }
-      c.lget(0).gset(done);
-      if (res >= 0) c.lget(res);
-      c.ret().end().unreachable().end();
-      c.lset(e).lget(e).externConvertAny().gset(thrown).i32(0).lget(0).raw(OP.i32_sub).gset(done).lget(e).throw_(cx.tag);
-    }, ret);
-    this.w.stats.units++;
-    const { get, raw } = this.helperUnit(cx, { ...this.w.units.of(cx), call: { d, v, x: thr } }, built, clock, this.callRebuilder(name, params, ret, body, prepare, { d, v, thr }), slot);
-    return { get, raw, d, v, thr };
-  }
   /** a Java call that may wait, made of `body` over the parameters (`arg(i)` pushes parameter i; the body leaves a result of kind `ret`), run on strand `s`: the result at once when the
    *  call did not wait (a Java exception is thrown as a WebAssembly.Exception), else a Promise of it. The module records how the call ended in globals of its own, which the
    *  call's token says are this call's: a promising export answers a Promise even when it never waited. */
   callFn(name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void, prepare?: (cx: Compiler) => void): (s: Strand, ...a: any[]) => unknown {
     let f = this.callFns.get(name);
     if (f) return f;
-    const { get, raw, d, v, thr } = this.buildCallFn(name, params, ret, body, prepare);
+    const vt = ret === "V" ? T.i32 : ret === "L" ? T.externref : kindVT(ret), d = new WebAssembly.Global({ value: "i32", mutable: true }, 0);
+    const v = new WebAssembly.Global({ value: ret === "J" ? "i64" : ret === "L" ? "externref" : "i32", mutable: true }, ret === "J" ? 0n : ret === "L" ? null : 0);
+    const thr = new WebAssembly.Global({ value: "externref", mutable: true }, null);
+    const { get, raw } = this.helper((cx) => {
+      prepare?.(cx);
+      return cx.buildSynthetic(name, ["I", ...params], (c) => {
+        const done = cx.global("call", "d", T.i32, true), value = cx.global("call", "v", vt, true), thrown = cx.global("call", "x", T.externref, true);
+        const e = c.newLocal(T.anyref), res = ret === "V" ? -1 : c.newLocal(kindVT(ret));
+        c.block(T.anyref).tryTable(null, [[0, cx.tag, 0]]);
+        body(cx, c, (i) => { c.lget(i + 1); });
+        if (res >= 0) { c.lset(res).lget(res); if (ret === "L") c.externConvertAny(); c.gset(value); }
+        c.lget(0).gset(done);
+        if (res >= 0) c.lget(res);
+        c.ret().end().unreachable().end();
+        c.lset(e).lget(e).externConvertAny().gset(thrown).i32(0).lget(0).raw(OP.i32_sub).gset(done).lget(e).throw_(cx.tag);
+      }, ret);
+    }, { call: { d, v, x: thr } });
     const enter = raw ? (s: Strand, ...args: unknown[]) => s.call(raw, ...args)
       : (s: Strand, ...args: unknown[]) => s.call(get(), ...args);
     Object.defineProperty(enter, "name", { value: "webdroid:callFn" });
@@ -162,7 +139,7 @@ export class HostFunctions {
     if (!read) {
       const f = this.w.prog.resolveField(cls, name, desc);
       if (!f) throw new Error(`field ${cls}.${name} not found`);
-      this.fieldReaders.set(key, read = this.synchronousHelper(this.buildHostFn("get:" + key, ["L"], f.kind, (cx, c) => {
+      this.fieldReaders.set(key, read = this.synchronousHelper(this.hostHelper("get:" + key, ["L"], f.kind, (cx, c) => {
         const st = cx.structFor(cls);
         c.lget(0).refAsNonNull().refCast(st).structGet(st, cx.fieldIndex(cls, f));
       })) as (obj: object) => unknown);
