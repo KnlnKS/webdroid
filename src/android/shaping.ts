@@ -17,7 +17,7 @@ import { type NativeFont, type NativeFamily, type NativeTypeface, FakedFont, res
 import { cssFace } from "./cssfonts.ts";
 import { type NativePaint, paintAt, setFontMetrics } from "./paint.ts";
 import { type HarfBuzz, type Font, harfBuzz, loadedHarfBuzz, HB_DIRECTION_INVALID, HB_DIRECTION_LTR, HB_DIRECTION_RTL } from "./harfbuzz.ts";
-import type { Ctx2D } from "./recording.ts";
+import type { Outline } from "./canvas.ts";
 import { END_REPLACE_WITH_HYPHEN, startHyphenString, endHyphenString } from "./hyphenator.ts";
 import type { NativePath } from "./path.ts";
 import { emptyBox, setEdges, type Box } from "./graphics.ts";
@@ -432,11 +432,9 @@ export function layoutOutlines(l: Layout, p: NativePaint, x: number, y: number, 
 // ── Canvas.drawGlyphs
 let glyphMatrix: DOMMatrix | null = null;
 /** Canvas::drawGlyphs: `count` glyphs of the Java Font `fontHandle` at their positions, drawn at the
- *  paint's size, scale and skew. `draw` fills or strokes with the paint as the canvas draws any
- *  shape; outlines become one Path2D, and color glyphs (which have none) draw the text they were
- *  shaped from in the font. The glyphs are copied first: the arrays are the native's, which a wait
- *  for the font must not hold. */
-export function drawGlyphs(draw: (fill: (c: Ctx2D) => void, stroke: (c: Ctx2D) => void) => void, ids: Int32Array, idOffset: number,
+ *  paint's size, scale and skew. `draw` draws the run with the paint as the canvas draws any shape.
+ *  The glyphs are copied first: the arrays are the native's, which a wait for the font must not hold. */
+export function drawGlyphs(draw: (run: Outline) => void, ids: Int32Array, idOffset: number,
   positions: Float32Array, positionOffset: number, count: number, fontHandle: bigint, p: NativePaint): void | Promise<void> {
   if (count <= 0) return;
   const font = fontOf(fontHandle), glyphs = ids.slice(idOffset, idOffset + count), at = positions.slice(positionOffset, positionOffset + count * 2);
@@ -454,17 +452,23 @@ export function drawGlyphs(draw: (fill: (c: Ctx2D) => void, stroke: (c: Ctx2D) =
       m.e = x; m.f = y;
       path.addPath(outline, m);
     }
+    // colour glyphs have no outlines: they draw the text they were shaped from in the font
     const css = color && `${p.textSize}px "${cssFace(new FakedFont(font, 0, -1, -1))}"`;
-    draw((c) => {
-      c.fill(path);
-      if (color) for (const [text, x, y] of color) {
-        c.save();
-        c.transform(p.textScaleX, 0, p.textSkewX, 1, x, y);
-        c.font = css!; c.textAlign = "left"; c.textBaseline = "alphabetic";
-        c.fillText(text, 0, 0);
-        c.restore();
-      }
-    }, (c) => c.stroke(path));
+    draw({
+      fill(c) {
+        c.fill(path);
+        if (color) for (const [text, x, y] of color) {
+          c.save();
+          c.transform(p.textScaleX, 0, p.textSkewX, 1, x, y);
+          c.font = css!; c.textAlign = "left"; c.textBaseline = "alphabetic";
+          c.fillText(text, 0, 0);
+          c.restore();
+        }
+      },
+      stroke: (c) => c.stroke(path),
+      clips: !color,
+      clip: (c) => c.clip(path),
+    });
   });
 }
 

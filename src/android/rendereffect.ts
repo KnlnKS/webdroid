@@ -2,9 +2,9 @@
 // node's rasterised content. An input of 0 is that content.
 import { rt } from "../jvm/runtime.ts";
 import { handle, deref, FINALIZER } from "./handles.ts";
-import { COMPOSITE, BLEND_MODES } from "./graphics.ts";
-import { type NativeColorFilter, recolor } from "./colorfilter.ts";
-import { NativeShader, fillWithShader } from "./shader.ts";
+import { compositeOf } from "./graphics.ts";
+import type { NativeColorFilter } from "./colorfilter.ts";
+import { NativeShader } from "./shader.ts";
 import type { NativeBitmap } from "./bitmap.ts";
 import { radiusToSigma } from "./maskfilter.ts";
 import type { RuntimeShaderBuilder } from "./runtime-shader.ts";
@@ -161,23 +161,23 @@ class ColorFilterEffect extends Unary {
   private readonly cf: NativeColorFilter;
   constructor(cf: NativeColorFilter, input: NativeRenderEffect | null) { super(input); this.cf = cf; }
   protected apply(f: Filtered): Filtered {
-    const c = this.out = flatten(this.out, f), cf = this.cf;
-    recolor(c.getContext("2d")!, c.width, c.height, cf.matrix ? null : cf.color, cf.matrix, cf.mode);
+    const c = this.out = flatten(this.out, f);
+    this.cf.apply(c.getContext("2d")!, c.width, c.height);
     return { img: c, x: f.x, y: f.y, w: f.w, h: f.h };
   }
 }
-/** SkImageFilters::Blend: src over dst by the mode, over the union of their placements */
+/** SkImageFilters::Blend: src over dst by the mode's op (null for DST, which keeps dst alone), over
+ *  the union of their placements */
 class BlendEffect extends NativeRenderEffect {
-  private readonly dst: NativeRenderEffect | null; private readonly src: NativeRenderEffect | null; private readonly mode: GlobalCompositeOperation;
-  constructor(dst: NativeRenderEffect | null, src: NativeRenderEffect | null, mode: GlobalCompositeOperation) { super(); this.dst = dst; this.src = src; this.mode = mode; }
+  private readonly dst: NativeRenderEffect | null; private readonly src: NativeRenderEffect | null; private readonly op: GlobalCompositeOperation | null;
+  constructor(dst: NativeRenderEffect | null, src: NativeRenderEffect | null, op: GlobalCompositeOperation | null) { super(); this.dst = dst; this.src = src; this.op = op; }
   filter(source: Filtered): Filtered {
     const d = this.dst ? this.dst.filter(source) : source, s = this.src ? this.src.filter(source) : source;
     const x = Math.min(d.x, s.x), y = Math.min(d.y, s.y), w = Math.max(d.x + d.w, s.x + s.w) - x, h = Math.max(d.y + d.h, s.y + s.h) - y;
     const c = this.out = sized(this.out, Math.max(1, Math.ceil(w)), Math.max(1, Math.ceil(h))), g = c.getContext("2d")!;
     g.reset();
     g.drawImage(d.img, d.x - x, d.y - y, d.w, d.h);
-    g.globalCompositeOperation = this.mode;
-    g.drawImage(s.img, s.x - x, s.y - y, s.w, s.h);
+    if (this.op) { g.globalCompositeOperation = this.op; g.drawImage(s.img, s.x - x, s.y - y, s.w, s.h); }
     return { img: c, x, y, w, h };
   }
 }
@@ -193,7 +193,7 @@ class ShaderEffect extends NativeRenderEffect {
   filter(source: Filtered): Filtered {
     const c = this.out = sized(this.out, Math.max(1, Math.ceil(source.w)), Math.max(1, Math.ceil(source.h))), g = c.getContext("2d")!;
     g.reset(); g.translate(-source.x, -source.y);
-    fillWithShader(g, this.shader);
+    this.shader.fillClip(g);
     return { img: c, x: source.x, y: source.y, w: source.w, h: source.h };
   }
 }
@@ -225,7 +225,7 @@ rt.registerJnis("android/graphics/RenderEffect", {
     handle(new BitmapEffect(deref<NativeBitmap>(b), [sl, st, sr, sb], [dl, dt, dr, db])),
   "nativeCreateColorFilterEffect(JJ)J": (cf: bigint, input: bigint) => handle(new ColorFilterEffect(deref<NativeColorFilter>(cf), effectAt(input))),
   "nativeCreateBlendModeEffect(JJI)J": (dst: bigint, src: bigint, mode: number) =>
-    handle(new BlendEffect(effectAt(dst), effectAt(src), COMPOSITE[BLEND_MODES[mode]] ?? "source-over")),
+    handle(new BlendEffect(effectAt(dst), effectAt(src), compositeOf(mode))),
   "nativeCreateChainEffect(JJ)J": (outer: bigint, inner: bigint) => handle(new Chain(effectAt(outer)!, effectAt(inner)!)),
   "nativeCreateShaderEffect(J)J": (s: bigint) => handle(new ShaderEffect(deref<NativeShader>(s))),
   "nativeCreateRuntimeShaderEffect(JLjava/lang/String;)J": (b: bigint, name: string) => handle(new RuntimeShaderEffect(deref<RuntimeShaderBuilder>(b), name)),

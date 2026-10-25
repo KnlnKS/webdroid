@@ -2,6 +2,7 @@
 // Region, Camera, RenderNode, the interpolators, NinePatch, PathParser and SurfaceTexture.
 import { newObj, vcall, scall } from "../../src/jvm/natives/jentry.ts";
 import { deref } from "../../src/android/handles.ts";
+import { SRC_ATOP } from "../../src/android/graphics.ts";
 import { presentSurface, surfaceTextureOf } from "../../src/android/glsurface.ts";
 import { loadSystemFonts } from "../../tests/java.ts";
 import { exercise, same, near, tokens, outcome, statics, listener, fontMetrics, vectorProbeLines, ltrb } from "./harness.ts";
@@ -44,12 +45,12 @@ await exercise("Matrix (compose, map, invert, fit, poly, values)", async () => {
 });
 
 await exercise("ColorFilters (native instances, updated in place)", async () => {
-  const native = async (f: unknown) => deref<{ matrix: Float32Array | null; color: number; mode: string }>(await vcall(f, "getNativeInstance", "()J"));
+  const native = async (f: unknown) => deref<{ matrix: Float32Array | null; color: number; mode: number }>(await vcall(f, "getNativeInstance", "()J"));
   const srcAtop = (await statics("android/graphics/PorterDuff$Mode")).s$SRC_ATOP;
   const porterDuff = await native(await newObj("android/graphics/PorterDuffColorFilter", "(ILandroid/graphics/PorterDuff$Mode;)V", -65536, srcAtop));
-  same("PorterDuffColorFilter", [porterDuff.color, porterDuff.mode, porterDuff.matrix], [-65536, "SRC_ATOP", null]);
+  same("PorterDuffColorFilter", [porterDuff.color, porterDuff.mode, porterDuff.matrix], [-65536, SRC_ATOP, null]);
   const multiply = (await statics("android/graphics/BlendMode")).s$MULTIPLY;
-  same("BlendModeColorFilter", (await native(await newObj("android/graphics/BlendModeColorFilter", "(ILandroid/graphics/BlendMode;)V", 7, multiply))).mode, "MULTIPLY");
+  same("BlendModeColorFilter", (await native(await newObj("android/graphics/BlendModeColorFilter", "(ILandroid/graphics/BlendMode;)V", 7, multiply))).mode, 24); // SkBlendMode::kMultiply
   const lighting = await newObj("android/graphics/LightingColorFilter", "(II)V", 0x0080ff00, 0x00104020);
   const k = (await native(lighting)).matrix!;
   same("Lighting", [k[0], k[6], k[12], k[4], k[9], k[14], k[18]], [128 / 255, 1, 0, 16, 64, 32, 1].map(Math.fround));
@@ -386,7 +387,8 @@ await exercise("Path, PathMeasure, PathIterator (device values)", async () => {
   near("arc bounds", rectOf(rf), [85.35534, 50, 100, 85.35534], 1e-3);
 
   // Path.op: SkPathOps' contours, curves and fill type (an inverse operand included). The device's
-  // Skia keeps the disc's quarter as its conic (K5,5,10,5); CanvasKit 0.38 returns it as two quads.
+  // Skia keeps the disc's quarter as its conic (K5,5,10,5); here conicTo keeps the two quads
+  // SkAutoConicToQuads makes of CanvasKit's conic.
   const ops = await statics("android/graphics/Path$Op");
   const o1 = await path(["addRect", `(FFFF${DIR})V`, 0, 0, 10, 10, CW]), o2 = await path(["addRect", `(FFFF${DIR})V`, 5, 5, 15, 15, CW]);
   const disc = await path(["addCircle", `(FFF${DIR})V`, 10, 10, 5, CW]), inverse = await path(["addRect", `(FFFF${DIR})V`, 0, 0, 10, 10, CW]);
@@ -399,7 +401,7 @@ await exercise("Path, PathMeasure, PathIterator (device values)", async () => {
   };
   same("op", [await op(o1, o2, "UNION"), await op(o1, o2, "REVERSE_DIFFERENCE"), await op(o1, disc, "DIFFERENCE"), await op(inverse, o2, "UNION")].join(" | "),
     ["EVEN_ODD M10,0 L0,0 L0,10 L5,10 L5,15 L15,15 L15,5 L10,5 L10,0 Z", "EVEN_ODD M5,10 L5,15 L15,15 L15,5 L10,5 L10,10 L5,10 Z",
-      "EVEN_ODD M10,0 L0,0 L0,10 L5,10 Q5,7.928932189941406,6.464466094970703,6.464466094970703 Q7.928932189941406,5,10,5 L10,0 Z", "INVERSE_EVEN_ODD M10,0 L0,0 L0,10 L5,10 L5,5 L10,5 L10,0 Z"].join(" | "));
+      "EVEN_ODD M10,0 L0,0 L0,10 L5,10 Q5,7.928931713104248,6.464466094970703,6.464466094970703 Q7.928931713104248,5,10,5 L10,0 Z", "INVERSE_EVEN_ODD M10,0 L0,0 L0,10 L5,10 L5,5 L10,5 L10,0 Z"].join(" | "));
 });
 
 // Expected values are the reference AVD's (API 35) for the same calls.

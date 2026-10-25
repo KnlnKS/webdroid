@@ -6,7 +6,7 @@ import { matrixColor } from "../src/android/colorfilter.ts";
 import { NativePaint, newPaint, paintOf } from "../src/android/paint.ts";
 import { typefaceOf } from "../src/android/fonts.ts";
 import { declaredField } from "../src/jvm/runtime.ts";
-import { NativePath, nativePathOf, pathIsConvex } from "../src/android/path.ts";
+import { NativePath, nativePathOf, pathIsConvex, MOVE, LINE } from "../src/android/path.ts";
 import { canvasOver, canvasOf } from "../src/android/canvas.ts";
 import { currentContext } from "../src/native/gl-context.ts";
 import { NativeRenderNode } from "../src/android/rendernode.ts";
@@ -290,12 +290,12 @@ describe("path-copy", () => {
     await vcall(target, "set", "(Landroid/graphics/Path;)V", target);
     await vcall(target, "rLineTo", "(FF)V", 5, 6);
     const t = nativePathOf(target);
-    expect(t.ops.at(-1)).toEqual(["l", 35, 46]);
+    expect(t.ops.slice(-3)).toEqual([LINE, 35, 46]);
     await vcall(target, "close", "()V");
     expect([t.pen.x, t.pen.y, t.fillRule, t.inverseFill]).toEqual([10, 20, "evenodd", true]);
     await vcall(copy, "offset", "(FF)V", 100, 200);
-    expect(nativePathOf(source).ops).toEqual([["m", 10, 20], ["l", 30, 40]]);
-    expect(t.ops.slice(0, 2)).toEqual(nativePathOf(source).ops);
+    expect(nativePathOf(source).ops).toEqual([MOVE, 10, 20, LINE, 30, 40]);
+    expect(t.ops.slice(0, 6)).toEqual(nativePathOf(source).ops);
   });
 
   test("appending a transformed path preserves independent geometry and its current contour", async () => {
@@ -308,14 +308,14 @@ describe("path-copy", () => {
     await vcall(target, "addPath", "(Landroid/graphics/Path;Landroid/graphics/Matrix;)V", source, matrix);
     await vcall(target, "rLineTo", "(FF)V", 5, 6);
     const t = nativePathOf(target);
-    expect(t.ops).toEqual([["m", 8, 21], ["l", 6, 23], ["l", 11, 29]]);
+    expect(t.ops).toEqual([MOVE, 8, 21, LINE, 6, 23, LINE, 11, 29]);
     await vcall(target, "close", "()V");
     expect([t.pen.x, t.pen.y]).toEqual([8, 21]);
     await vcall(target, "addPath", "(Landroid/graphics/Path;)V", target);
-    expect(t.ops.length).toBe(8);
+    expect(t.ops.length).toBe(20);
     await vcall(target, "offset", "(FF)V", 1, 1);
-    expect(t.ops[0]).toEqual(["m", 9, 22]);
-    expect(nativePathOf(source).ops).toEqual([["m", 1, 2], ["l", 3, 4]]);
+    expect(t.ops.slice(0, 3)).toEqual([MOVE, 9, 22]);
+    expect(nativePathOf(source).ops).toEqual([MOVE, 1, 2, LINE, 3, 4]);
   });
 
   test("Path convexity follows control points, closure and contour boundaries", async () => {

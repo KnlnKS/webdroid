@@ -4,7 +4,8 @@
 // and hairlines stepped as SkScan_Hairline steps them. bitmap-raster.ts decides which draws take them.
 
 import type { Ctx2D, Mat2D } from "./recording.ts";
-import { type NativePath, type Sink, chopCubicAt, chopQuadAt, walkPath } from "./path.ts";
+import { type NativePath, type Sink, walkPath } from "./path.ts";
+import { chopCubicAt, chopQuadAt } from "./pathmeasure.ts";
 import type { Box } from "./graphics.ts";
 
 type Point = [number, number];
@@ -183,15 +184,10 @@ class EdgeSink implements Sink {
     this.monoCubics([this.x, this.y, this.mapX(x1, y1), this.mapY(x1, y1), this.mapX(x2, y2), this.mapY(x2, y2), px, py]);
     this.x = px; this.y = py;
   }
-  /** SkAutoConicToQuads at the edge builder's quarter-pixel tolerance; an affine map keeps the weight */
+  /** an affine map keeps the weight */
   conicTo(cx: number, cy: number, x2: number, y2: number, w: number) {
-    const x1 = this.mapX(cx, cy), y1 = this.mapY(cx, cy), px = this.mapX(x2, y2), py = this.mapY(x2, y2);
-    const a = f(w - 1), k = f(a / f(4 * f(2 + a)));
-    let error = f(Math.hypot(f(k * f(f(this.x - f(2 * x1)) + px)), f(k * f(f(this.y - f(2 * y1)) + py))));
-    let pow2 = 0;
-    for (; pow2 < 5 && error > 0.25; pow2++) error = f(error * 0.25);
-    const pts: number[] = [this.x, this.y];
-    subdivideConic([this.x, this.y, x1, y1, px, py], w, pow2, pts);
+    const px = this.mapX(x2, y2), py = this.mapY(x2, y2);
+    const pts = conicToQuads(this.x, this.y, this.mapX(cx, cy), this.mapY(cx, cy), px, py, w, [this.x, this.y]);
     for (let i = 0; i + 5 < pts.length; i += 4) this.monoQuads(pts[i], pts[i + 1], pts[i + 2], pts[i + 3], pts[i + 4], pts[i + 5]);
     this.x = px; this.y = py;
   }
@@ -329,6 +325,16 @@ function chopCubic(p: number[], ts: number[]): number[] {
 function cubicDeltaFromLine(a: number, b: number, c: number, d: number): number {
   const oneThird = shr((a * 8 - b * 15 + 6 * c + d) * 19, 9), twoThird = shr((a + 6 * b - c * 15 + d * 8) * 19, 9);
   return Math.max(Math.abs(oneThird), Math.abs(twoThird));
+}
+/** SkAutoConicToQuads at the edge builder's quarter-pixel tolerance: the conic from (x0, y0) as
+ *  quads, each one's control and end point appended to `out` */
+export function conicToQuads(x0: number, y0: number, x1: number, y1: number, x2: number, y2: number, w: number, out: number[] = []): number[] {
+  const a = f(w - 1), k = f(a / f(4 * f(2 + a)));
+  let error = f(Math.hypot(f(k * f(f(x0 - f(2 * x1)) + x2)), f(k * f(f(y0 - f(2 * y1)) + y2))));
+  let pow2 = 0;
+  for (; pow2 < 5 && error > 0.25; pow2++) error = f(error * 0.25);
+  subdivideConic([x0, y0, x1, y1, x2, y2], w, pow2, out);
+  return out;
 }
 /** SkConic::chopIntoQuadsPOW2: the conic halved `level` times, each piece's control points kept */
 function subdivideConic(c: number[], w: number, level: number, out: number[]) {

@@ -1,6 +1,6 @@
 import { rt } from "../jvm/runtime.ts";
 import { handle, deref, FINALIZER } from "./handles.ts";
-import { NativeShader, fillWithShader } from "./shader.ts";
+import { NativeShader } from "./shader.ts";
 import { localMatrix, type Affine } from "./matrix.ts";
 import type { Ctx2D } from "./recording.ts";
 import { device } from "../shell/config.ts";
@@ -103,7 +103,7 @@ class ShaderProgram {
     gl.uniform2f(this.size, raster.width, raster.height);
     const c = raster.getContext("2d")!;
     c.reset();
-    if (child.shader) { c.setTransform(forward); fillWithShader(c, child.shader); }
+    if (child.shader) { c.setTransform(forward); child.shader.fillClip(c); }
     gl.activeTexture(gl.TEXTURE0 + i);
     gl.bindTexture(gl.TEXTURE_2D, this.textures[i] ??= gl.createTexture()!);
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
