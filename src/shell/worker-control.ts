@@ -10,10 +10,9 @@ import { device } from "./config.ts";
 import { ACTION_DOWN, ACTION_MOVE, ACTION_UP } from "../android/input-codes.ts";
 import { dumpWindows } from "./uiautomator.ts";
 import { imeInput, imeAction, imeState } from "../android/ime.ts";
-import { hostFrames, recordVsync, vsyncScheduled } from "../android/vsync.ts";
+import { displayShown, vsyncScheduled } from "../android/vsync.ts";
 import { pendingTransitions } from "../android/server/atm.ts";
 import { perf } from "../perf.ts";
-import { processPresentation } from "./process-endpoint.ts";
 import { nativeRequirements } from "./diagnostics.ts";
 import { existingAotProfile } from "./aot-profile.ts";
 import { timelineSince } from "../timeline.ts";
@@ -22,17 +21,6 @@ import { procIdentity } from "./procfs.ts";
 
 /** one finger's touch event, at `eventTime` on the guest's uptime clock */
 const touch = (action: number, x: number, y: number, eventTime?: number) => dispatchTouches(action, [{ id: 0, x, y }], eventTime);
-
-/** the vsyncs this realm's shown display has had while its process lives; `frame` runs first on each shown frame */
-export function countVsyncs(frame?: () => void): () => number {
-  let ticks = 0;
-  hostFrames(time => {
-    if (!processPresentation.visible) return;
-    frame?.();
-    if (!processExited() && recordVsync(time)) ticks++;
-  });
-  return () => ticks;
-}
 
 /** how far a process Worker's start has come (process-worker.ts) */
 export type WorkerPhase = "attaching" | StartPhase | "failed";
@@ -94,7 +82,7 @@ export function workerControl(logs: string[], phase: () => WorkerPhase, ticks: (
     enter: async () => imeAction(imeState().generation),
     imeState: async () => imeState(),
     back: async () => { await pressBack(); },
-    testFrame: async (): Promise<void> => { if (processPresentation.visible) await testFrame(); },
+    testFrame: async (): Promise<void> => { if (displayShown()) await testFrame(); },
     /** the frame-path events since `from` (ms since the epoch), each [ms since the epoch, event, arg] */
     timeline: async (from: number) => timelineSince(from - performance.timeOrigin),
   };

@@ -36,7 +36,7 @@ import { unregisterPackage } from "../android/installpackage.ts";
 import { asBroker, brokerMethods, javaFailure, receivers, type BroadcastData, type BrokerCalls, type ProcessEndpoint } from "./broker-contract.ts";
 import type { ProcessBroker } from "./processes.ts";
 import { callProxy, closePort } from "./rpc.ts";
-import { note, Ev } from "../timeline.ts";
+import { setDisplayShown } from "../android/vsync.ts";
 import { procIdentity } from "./procfs.ts";
 
 let calls: ReturnType<typeof callProxy<BrokerCalls>> | undefined;
@@ -109,7 +109,7 @@ function connectActivityCommands({ activity }: BrokerCalls): void {
     catch (error) { activityResults.delete(request); throw error; }
   };
   activityTransport.finished = (id, code, data) => {
-    setVisible(false);
+    setDisplayShown(false);
     detached(() => after(data && encodeIntent(data), encoded => activity.finish(id, code, encoded)), logUncaught);
   };
 }
@@ -129,9 +129,6 @@ const resultData = (result: BroadcastResult): BroadcastData | Promise<BroadcastD
   after(result.extras && parcelled(result.extras), (extras) => ({ ...result, extras }));
 const broadcastResult = (data: BroadcastData): BroadcastResult | Promise<BroadcastResult> =>
   after(data.extras && unparcelled("android/os/Bundle", data.extras), (extras) => ({ ...data, extras }));
-/** whether this process's windows are on screen, which its display loop follows */
-export const processPresentation = { visible: true };
-function setVisible(visible: boolean): void { note(Ev.Visible, +visible); processPresentation.visible = visible; }
 /** system_server's realm: it asks the broker over its own command port as a Worker does, but holds
  *  the stores and its descriptors itself */
 export function connectProcess(broker: ProcessBroker): ProcessEndpoint {
@@ -164,10 +161,10 @@ export function createProcessEndpoint(): ProcessEndpoint {
       return asBroker(function* (): Gen<void> {
         if (request.kind === "visibility") {
           yield taskVisibility(request.phase);
-          if (request.phase !== "pause") setVisible(request.phase !== "stop");
+          if (request.phase !== "pause") setDisplayShown(request.phase !== "stop");
         } else if (request.kind === "launch") {
           yield startActivityInProcess(request.component, yield* awaited(decodeIntent(request.intent)), request.id, request.caller);
-          setVisible(true);
+          setDisplayShown(true);
         } else {
           const deliver = activityResults.get(request.request);
           activityResults.delete(request.request);

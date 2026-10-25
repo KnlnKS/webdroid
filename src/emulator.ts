@@ -14,7 +14,7 @@ import { mark, perf } from "./perf.ts";
 import { loadTier } from "./jvm/tier.ts";
 import { jitStats } from "./native/core.ts";
 import { mountDiagnostics } from "./shell/diagnostics.ts";
-import { countVsyncs } from "./shell/worker-control.ts";
+import { startDisplayLoop } from "./android/vsync.ts";
 import type { Shell } from "./shell/ui.ts";
 import { openInstallLocal, openInstallRemote } from "./shell/install.ts";
 import { activateLocalAssets, localAsset } from "./shell/localassets.ts";
@@ -123,7 +123,7 @@ export function attach(shell: Shell) {
   jitStats.on = switchOn("jit", true);
 
   // several fingers' moves and a wheel's synthetic drag drain once per display frame
-  installHarness(canvas, countVsyncs(drainPointers), { boot, back });
+  installHarness(canvas, startDisplayLoop(true, drainPointers), { boot, back });
 
   attachIme(canvas, kbd, systemInput.element);
   attachKeyboard(kbd);
