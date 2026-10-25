@@ -128,9 +128,6 @@ export class NativeComposeShader extends NativeShader {
     return this.cached = pattern;
   }
 }
-/** a ComposeShader's native instance: `src` over `dst` by the SkBlendMode numbered `mode` */
-export const composeShader = (local: Affine | null, dst: NativeShader, src: NativeShader, mode: number) =>
-  new NativeComposeShader(local, dst, src, compositeOf(mode));
 /** a gradient's style: a CanvasGradient, or the pattern of a tiled one, which carries the local matrix */
 export class NativeGradient extends NativeShader {
   readonly style: CanvasGradient | CanvasPattern;
@@ -206,5 +203,5 @@ rt.registerJnis("android/graphics/BitmapShader", {
 });
 rt.registerJnis("android/graphics/ComposeShader", {
   "nativeCreate(JJJI)J": (m: bigint, dst: bigint, src: bigint, mode: number) =>
-    handle(composeShader(localMatrix(m), deref<NativeShader>(dst), deref<NativeShader>(src), mode)),
+    handle(new NativeComposeShader(localMatrix(m), deref<NativeShader>(dst), deref<NativeShader>(src), compositeOf(mode))),
 });

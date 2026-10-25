@@ -42,7 +42,7 @@ function canvasKit(): CanvasKit | Promise<CanvasKit> {
 /** SkPathOp, which Path$Op's ordinals follow */
 const DIFFERENCE = 0;
 /** Path.op: SkPathOps' result over two paths, and its fill type, into `dst`; false where Skia finds none */
-export function pathOp(dst: NativePath, a: NativePath, b: NativePath, op: number): boolean | Promise<boolean> {
+function pathOp(dst: NativePath, a: NativePath, b: NativePath, op: number): boolean | Promise<boolean> {
   const ca = expand(a.ops, true), cb = expand(b.ops, true);
   return after(canvasKit(), (k) => {
     const pa = k.Path.MakeFromCmds(ca), pb = k.Path.MakeFromCmds(cb);

@@ -19,7 +19,7 @@ import { conicToQuads } from "./scan.ts";
 export const MOVE = 0, LINE = 1, QUAD = 2, CONIC = 3, CUBIC = 4, CLOSE = 5, DONE = 6;
 export const RECT = 7, RRECT = 8, OVAL = 9, ARC = 10;
 /** each op's argument count, and how many leading (x, y) pairs of them are points */
-export const ARGS = [2, 2, 4, 5, 6, 0, 0, 6, 13, 6, 7];
+const ARGS = [2, 2, 4, 5, 6, 0, 0, 6, 13, 6, 7];
 const PAIRS = [1, 1, 2, 2, 3, 0, 0, 2, 2, 2, 2];
 /** how many numbers SkPath::RawIter gives a verb: its points from the segment's start, a conic's weight after them */
 export const RAW_SIZE = [2, 4, 6, 7, 8, 0];
