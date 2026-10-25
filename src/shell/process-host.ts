@@ -158,8 +158,7 @@ export class ProcessHost {
    *  hands its control to the display */
   surfaces(): Pick<ProcessBootstrap, "display" | "screen" | "input" | "ime" | "web" | "media"> {
     const display = new MessageChannel(), input = new MessageChannel(), ime = new MessageChannel(), web = new MessageChannel(), media = new MessageChannel();
-    const canvas = this.canvas, frames = this.display = receiveFrames(display.port1, canvas, () => this.presented.resolve());
-    if (this.hosts.mirroring) frames.mirror(this.hosts.mirroring);
+    const canvas = this.canvas, frames = this.display = receiveFrames(display.port1, canvas, this.hosts.mirroring, () => this.presented.resolve());
     const text = this.ime = attachRealmInput(canvas, device, input.port1, ime.port1);
     const surfaces = receiveWebSurfaces(web.port1, canvas, () => device);
     this.web = surfaces.layer;
