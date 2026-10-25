@@ -4,7 +4,6 @@
 import { Strand } from "./suspend.ts";
 import { never, processExited } from "../process-exit.ts";
 import { dotName, oomMessage } from "./abi.ts";
-import { isBytecode, isStageD } from "./provenance.ts";
 
 /** Root of the host's Java objects: a native spec's class, or an object a native makes by class name (`$i` names the Java class). */
 export class JObj {
@@ -115,10 +114,6 @@ export class Runtime {
   }
   /** a class the host implements, once */
   register(spec: NativeSpec) {
-    if (isBytecode(spec.name)) {   // provenance says AOSP's own bytecode answers for this
-      if (isStageD(spec.name)) console.warn("[webdroid] native spec Stage D always withholds:", spec.name);
-      return;
-    }
     if (this.natives.has(spec.name)) throw new Error(`${spec.name} is registered twice`);
     this.natives.set(spec.name, spec);
     this.registered?.(spec);

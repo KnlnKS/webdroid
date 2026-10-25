@@ -1,18 +1,15 @@
-// The framework delegates' exercises (scripts/fwtest/*) over a World: AOSP's own bytecode for the cut classes runs as Wasm against our delegates, and host code
-// drives it through the entry seam. Run: pnpm fwtest [prefix ...]
+// The framework delegates' exercises (scripts/fwtest/*) over a World: AOSP's own bytecode for the classes under the given prefixes runs as Wasm
+// against our delegates, and host code drives it through the entry seam; the coverage report counts their declared natives. Run: pnpm fwtest [prefix ...]
 import { DEFAULT_CUTS } from "../fwtest/cuts.ts";
-import { BYTECODE, isBytecode } from "../../src/jvm/provenance.ts";
 import { cli } from "../args.ts";
+import { world } from "./lib.ts";
+import { mountPlatform, startProcess } from "./harness.ts";
+import { natives } from "../../src/wasm/host/nativesource.ts";
+import { ROOT } from "./paths.ts";
+import { PLATFORM_PATHS } from "../aosp.ts";
 
-const { positionals: CUTS } = cli("pnpm fwtest [prefix ...]", {});
-BYTECODE.push(...(CUTS.length ? CUTS : DEFAULT_CUTS));
-
-// imported after the policy is set: rt.register consults it, so the specs never land
-const { world } = await import("./lib.ts");
-const { mountPlatform, startProcess } = await import("./harness.ts");
-const { natives } = await import("../../src/wasm/host/nativesource.ts");
-const { ROOT } = await import("./paths.ts");
-const { PLATFORM_PATHS } = await import("../aosp.ts");
+const { positionals } = cli("pnpm fwtest [prefix ...]", {});
+const PREFIXES = positionals.length ? positionals : DEFAULT_CUTS;
 
 await mountPlatform(ROOT);
 // the exercises' modules register more host classes as they load
@@ -25,14 +22,14 @@ await startProcess(w);
 let have = 0, total = 0;
 const unbound: string[] = [];
 for (const jc of w.prog.all()) {
-  if (!isBytecode(jc.name)) continue;
+  if (!PREFIXES.some((p) => jc.name.startsWith(p))) continue;
   for (const m of jc.methods) {
     if (m.codeOff || !(m.flags & 0x100)) continue;
     total++;
     if (natives.prepare(m)) have++; else unbound.push(`${jc.name}.${m.key}`);
   }
 }
-console.log(`withheld ${BYTECODE.length} prefixes; ${[...w.prog.all()].length} platform classes\n\ncoverage ${have}/${total} declared natives bound`);
+console.log(`${PREFIXES.length} prefixes; ${[...w.prog.all()].length} platform classes\n\ncoverage ${have}/${total} declared natives bound`);
 
 // the device's languages and the main looper the exercises' Handlers attach to, as a booted page has them
 await (await import("../../src/android/configuration.ts")).initDeviceLocales();

@@ -4,10 +4,9 @@ import { chromium, type Page } from "playwright";
 import { ERROR_LINE, appUp, pageDiagnostics, workerDiagnostics, workerRows, type ProcessSnapshot } from "../tests/e2e/lib/processes.ts";
 
 export const BASE_URL = process.env.WEBDROID_URL ?? "http://localhost:4080";
-/** webdroid's page at `base` with `params` in its query, and WEBDROID_BYTECODE's provenance cut */
+/** webdroid's page at `base` with `params` in its query */
 export function webdroidUrl(params: Record<string, string> = {}, base = BASE_URL): URL {
   const url = new URL(base);
-  if (process.env.WEBDROID_BYTECODE) url.searchParams.set("bytecode", process.env.WEBDROID_BYTECODE);
   for (const [name, value] of Object.entries(params)) url.searchParams.set(name, value);
   return url;
 }

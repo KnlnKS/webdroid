@@ -31,11 +31,9 @@ App DEX (unchanged)
 Browser: Canvas2D / WebGL, OPFS / IndexedDB, CORS proxy and TCP relay, Workers
 ```
 
-- **Bytecode by default.** `src/jvm/provenance.ts` is the one place that decides whether a class runs AOSP's
-  bytecode or a TS spec. Elsewhere a spec implements natives only; `TS_SPECS` lists the only classes where it may
-  stand in for bytecode bodies, each a boundary (HTTP over the fetch proxy, TLS at the relay, GL over WebGL, the
-  WebView provider). `?bytecode=<prefixes>` (`WEBDROID_BYTECODE`) cuts more prefixes over for one load, to A/B a
-  change against the same bundle.
+- **Bytecode by default.** AOSP's bytecode answers for every class; a spec implements natives only. `TS_SPECS`
+  (`src/jvm/provenance.ts`) lists the only classes where it may stand in for bytecode bodies, each a boundary
+  (HTTP over the fetch proxy, TLS at the relay, GL over WebGL, the WebView provider).
 - **A missing API is fixed at the boundary** with the native, service method or VM built-in that AOSP's body
   needs, never by reimplementing the Java method in TS or returning a constant to satisfy a query.
 - **No fabricated success.** An entry that cannot be supported throws or returns the error AOSP documents for an
