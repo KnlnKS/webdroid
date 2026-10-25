@@ -6,7 +6,7 @@ import { argRegisters, decodeInstructions, ifTarget, type PreparedInstruction } 
 import { ACC } from "../../jvm/dex.ts";
 import { isWide } from "../../jvm/abi.ts";
 import { failed, resolveFieldRef, resolveInvoke } from "./linkage.ts";
-import { Invoke, invokeKind, isInvoke, isMoveResult, narrowBits, wideBits } from "../../jvm/opcodes.ts";
+import { Family, Invoke, familyOf, invokeKind, narrowBits, typeLetter, variantOf, wideBits } from "../../jvm/opcodes.ts";
 import { STRING } from "./strings.ts";
 import type { FieldInfo, MethodInfo, Program } from "./program.ts";
 
@@ -18,7 +18,6 @@ export type Val = { p: number } | { bits: number | bigint } | { t: number };
 export type Step = { pc: number } & ({ sget: Field } | { get: Field; obj: number } | { put: Field; obj: number; v: Val } | { call: MethodInfo; args: Val[] });
 export type Seq = { k: "seq"; steps: Step[]; ret?: Val };
 export type Trivial = Seq | { k: "check" };
-const IGET = 0x52, IPUT = 0x59, SGET = 0x60, FIELD_OPS = 7, RETURN_VOID = 0x0e, RETURN = 0x0f, RETURN_OBJECT = 0x11, IF_EQZ = 0x38, IF_NEZ = 0x39;
 const isRef = (desc: string) => desc[0] === "L" || desc[0] === "[";
 
 /** what a call of `m` reduces to, if its code is trivial and its references link as the Program resolves them */
@@ -41,9 +40,9 @@ function classify(prog: Program, m: MethodInfo): Trivial | undefined {
 
 /** if-nez p0, :done … :done return-void, or if-eqz p0, :more; return-void */
 function check(m: MethodInfo, p0: number, insns: PreparedInstruction[]): Trivial | undefined {
-  const [a, b] = insns;
-  if (m.isStatic && m.ret === "V" && isRef(m.params[0] ?? "") && a.a === p0
-    && (a.op === IF_NEZ && insns.find((i) => i.pc === ifTarget(a))?.op === RETURN_VOID || a.op === IF_EQZ && b.op === RETURN_VOID)) return { k: "check" };
+  const [a, b] = insns, returns = (x?: PreparedInstruction) => !!x && familyOf(x.op) === Family.ReturnVoid, test = variantOf(a.op);
+  if (m.isStatic && m.ret === "V" && isRef(m.params[0] ?? "") && a.a === p0 && familyOf(a.op) === Family.IfZ
+    && (test === 1 && returns(insns.find((i) => i.pc === ifTarget(a))) || test === 0 && returns(b))) return { k: "check" };
 }
 
 /** static field reads, reads and stores of parameters' fields, at most one call, and a return of a parameter, a constant or a step's value */
@@ -64,19 +63,19 @@ function straight(prog: Program, m: MethodInfo, p0: number, insns: PreparedInstr
   const fits = (v: Val, desc: string) => !("bits" in v) || !isRef(desc) || v.bits === 0;
   const step = (s: Step): Val => ({ t: steps.push(s) - 1 });
   for (const x of insns) {
-    const op = x.op, afterCall = justCalled, kind = isInvoke(op) ? invokeKind(op) : -1;
+    const op = x.op, family = familyOf(op), wide = typeLetter(op) === "J", afterCall = justCalled, kind = family === Family.Invoke ? invokeKind(op) : -1;
     justCalled = false;
     if (done) return;
-    if (isMoveResult(op)) { if (!afterCall) return; define(x.a, op === 0x0b, { t: steps.length - 1 }); } // move-result
-    else if (op >= 0x12 && op <= 0x19) define(x.a, op >= 0x16, { bits: op <= 0x15 ? narrowBits(op, x.b) : wideBits(op, x.b, x.wideLit) });
-    else if (op >= SGET && op < SGET + FIELD_OPS) {
+    if (family === Family.MoveResult) { if (!afterCall) return; define(x.a, wide, { t: steps.length - 1 }); }
+    else if (family === Family.Const) define(x.a, wide, { bits: wide ? wideBits(op, x.b, x.wideLit) : narrowBits(op, x.b) });
+    else if (family === Family.Sget) {
       const f = resolveFieldRef(prog, m.dex, x.b, true, m.cls);
       if (failed(f)) return;
-      define(x.a, op === SGET + 1, step({ pc: x.pc, sget: f }));
-    } else if (op >= IGET && op < IPUT + FIELD_OPS) {
+      define(x.a, wide, step({ pc: x.pc, sget: f }));
+    } else if (family === Family.Iget || family === Family.Iput) {
       const obj = paramIn(x.b), f = resolveFieldRef(prog, m.dex, x.c, false, m.cls), v = val(x.a);
       if (obj === undefined || failed(f) || f.decl === STRING) return;
-      if (op < IPUT) { define(x.a, op === IGET + 1, step({ pc: x.pc, get: f, obj })); continue; }
+      if (family === Family.Iget) { define(x.a, wide, step({ pc: x.pc, get: f, obj })); continue; }
       if (!v || !fits(v, f.f.desc)) return;
       steps.push({ pc: x.pc, put: f, obj, v });
     } else if (kind === Invoke.Super || kind === Invoke.Direct || kind === Invoke.Static) {
@@ -88,8 +87,8 @@ function straight(prog: Program, m: MethodInfo, p0: number, insns: PreparedInstr
       for (let i = 0; i < regs.length; i++) { const v = val(regs[i]); if (!v || !fits(v, t.params[i])) return; args.push(v); }
       steps.push({ pc: x.pc, call: t, args });
       called = justCalled = true;
-    } else if (op === RETURN_VOID) done = true;
-    else if (op >= RETURN && op <= RETURN_OBJECT) {
+    } else if (family === Family.ReturnVoid) done = true;
+    else if (family === Family.Return) {
       ret = val(x.a);
       if (!ret || !fits(ret, m.ret)) return;
       done = true;

@@ -8,8 +8,8 @@
 // Kinds: I = int-like (boolean/byte/short/char/int), F float, R reference (or null), J long, D double.
 import { parseMethodDesc } from "../../jvm/abi.ts";
 import type { CodeItem, DexFile } from "../../jvm/dex.ts";
-import { argRegisters, type PreparedInstruction, type PreparedMethod } from "../../jvm/prepared.ts";
-import { isInvoke, isInstanceInvoke } from "../../jvm/opcodes.ts";
+import { argRegisters, invokeProto, type PreparedInstruction, type PreparedMethod } from "../../jvm/prepared.ts";
+import { BINOPS, Family, familyOf, isInstanceInvoke, isInvoke, typeLetter, variantOf } from "../../jvm/opcodes.ts";
 import { OP } from "./code.ts";
 import { T, type VT } from "./wasmbin.ts";
 import type { Kind } from "./program.ts";
@@ -55,7 +55,7 @@ interface WebAnalysis {
 function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic: boolean, prepared: PreparedMethod): WebAnalysis | string {
   const R_ = code.regs, ins = prepared.instructions;
   if (!ins.length) return "empty";
-  for (const x of ins) if (x.op >= 0xe3 && x.op <= 0xf2) return "quickened";
+  for (const x of ins) if (familyOf(x.op) === Family.None) return "quickened";
   const { first, last, succ, hsucc, handlers: handlerOfIdx } = prepared, B = first.length, n = ins.length;
   if (B * R_ > 30_000_000 || n * R_ > 150_000_000) return "too-large";
 
@@ -302,7 +302,7 @@ export function uninitAliases(dex: DexFile, code: CodeItem, prepared: PreparedMe
         forget(p);
         continue;
       }
-      if (x.op >= 0x07 && x.op <= 0x09) { st[x.a] = st[x.b]; continue; } // move-object
+      if (familyOf(x.op) === Family.Move && typeLetter(x.op) === "L") { st[x.a] = st[x.b]; continue; }
       const { d, dm } = effect(dex, x, i ? ins[i - 1] : null, 0);
       if (d >= 0) { st[d] = -1; if (dm & WIDE && d + 1 < n) st[d + 1] = -1; }
     }
@@ -319,97 +319,62 @@ export const UNARY: readonly [number, number][] = [
   [F, I], [F, J], [F, D], [D, I], [D, J], [D, F],
   [I, I], [I, I], [I, I],
 ];
-/** the operations of the binary ops in DEX order: int and long take all eleven, float and double the first five; a literal op's second is rsub */
-export const BINOPS = ["add", "sub", "mul", "div", "rem", "and", "or", "xor", "shl", "shr", "ushr"] as const;
-export type Binop = (typeof BINOPS)[number];
-/** the operand kind and operation of a binary op without a literal (0x90-0xcf, either form) */
-export const binopKind = (op: number): number => { const i = (op - 0x90) & 0x1f; return i < 11 ? I : i < 22 ? J : i < 27 ? F : D; };
-export const binopName = (op: number): Binop => { const i = (op - 0x90) & 0x1f; return BINOPS[i < 11 ? i : i < 22 ? i - 11 : i < 27 ? i - 22 : i - 27]; };
+
+/** the kind a move, move-result or return of type letter `t` (typeLetter) carries: a 32-bit value is an int, float or reference, a wide one a long or double */
+const MOVED: Record<string, number> = { I: N32, J: WIDE, L: R };
+/** the kind of an array element aget or aput of type letter `t` reads or writes: aget and aput take an int or float */
+const element = (t: string) => (t === "I" ? I | F : t === "J" ? WIDE : t === "L" ? R : I);
 
 function effect(dex: DexFile, x: PreparedInstruction, prev: PreparedInstruction | null, retMask: number): Eff {
-  const { op, a, b, c } = x;
+  const { op, a, b, c } = x, t = typeLetter(op), family = familyOf(op);
   const E = (u: number[], d = -1, dm = 0, link = 0): Eff => ({ u, d, dm, link });
-  if (op <= 0x00) return NOEFF;
-  if (op <= 0x03) return E([b, N32], a, N32, 1);
-  if (op <= 0x06) return E([b, WIDE], a, WIDE, 1);
-  if (op <= 0x09) return E([b, R], a, R);
-  if (op <= 0x0c) {
-    let m = N32;
-    if (op === 0x0b) m = WIDE; else if (op === 0x0c) m = R;
-    if (prev) {
-      if (isInvoke(prev.op)) { const r = retOf(dex, prev); if (r) m = valueKind(r); }
-      else if (prev.op === 0x24 || prev.op === 0x25) m = R;
+  switch (family) {
+    case Family.Move: return t === "L" ? E([b, R], a, R) : E([b, MOVED[t]], a, MOVED[t], 1);
+    case Family.MoveResult: {
+      let m = MOVED[t];
+      if (prev && isInvoke(prev.op)) { const r = retOf(dex, prev); if (r) m = valueKind(r); }
+      else if (prev && familyOf(prev.op) === Family.FilledNewArray) m = R;
+      return E([], a, m);
     }
-    return E([], a, m);
+    case Family.Return: return E([a, retMask & MOVED[t] ? retMask : MOVED[t]]);
+    case Family.Const: return E([], a, t === "J" ? WIDE : b === 0 ? N32 : I | F);
+    case Family.MoveException: case Family.ConstString: case Family.ConstClass: case Family.NewInstance: case Family.ConstMethodHandle: case Family.ConstMethodType:
+      return E([], a, R);
+    case Family.Monitor: case Family.FillArrayData: case Family.Throw: return E([a, R]);
+    case Family.CheckCast: return E([a, R], a, R);
+    case Family.InstanceOf: case Family.ArrayLength: return E([b, R], a, I);
+    case Family.NewArray: return E([b, I], a, R);
+    case Family.FilledNewArray: { const el = valueKind(dex.type(b)[1] ?? "L"); return E(x.regs.flatMap((r) => [r, el])); }
+    case Family.Switch: return E([a, I]);
+    case Family.Compare: { const m = valueKind(t); return E([b, m, c, m], a, I); }
+    // if-eq and if-ne also compare references, and tie their operands' kinds
+    case Family.If: return variantOf(op) < 2 ? E([a, I | R, b, I | R], -1, 0, 2) : E([a, I, b, I]);
+    case Family.IfZ: return E([a, variantOf(op) < 2 ? I | R : I]);
+    case Family.Aget: return E([b, R, c, I], a, element(t));
+    case Family.Aput: return E([a, element(t), b, R, c, I]);
+    case Family.Iget: return E([b, R], a, valueKind(dex.type(dex.field(c).type)));
+    case Family.Iput: return E([a, valueKind(dex.type(dex.field(c).type)), b, R]);
+    case Family.Sget: return E([], a, valueKind(dex.type(dex.field(b).type)));
+    case Family.Sput: return E([a, valueKind(dex.type(dex.field(b).type))]);
+    case Family.Invoke: {
+      const u: number[] = [];
+      let params: string[] = [];
+      try { params = dex.protoParamTypes(invokeProto(dex, x)); } catch { return E(x.regs.flatMap((r) => [r, N32])); }
+      const first = isInstanceInvoke(op) ? 1 : 0, regs = argRegisters(x, params, first);
+      if (first) u.push(x.regs[0], R);
+      for (let i = 0; i < regs.length && regs[i] !== undefined; i++) u.push(regs[i], valueKind(params[i]));
+      return E(u);
+    }
+    case Family.Unary: { const [from, to] = UNARY[variantOf(op)]; return E([b, from], a, to); }
+    case Family.Binop: case Family.Binop2addr: {
+      const k = valueKind(t), name = BINOPS[variantOf(op)], by = k === J && (name === "shl" || name === "shr" || name === "ushr") ? I : k;
+      return family === Family.Binop2addr ? E([a, k, b, by], a, k) : E([b, k, c, by], a, k);
+    }
+    case Family.BinopLit: return E([b, I], a, I);
+    default: return NOEFF;
   }
-  if (op === 0x0d) return E([], a, R);
-  if (op === 0x0e) return NOEFF;
-  if (op === 0x0f) return E([a, retMask & N32 ? retMask : N32]);
-  if (op === 0x10) return E([a, retMask & WIDE ? retMask : WIDE]);
-  if (op === 0x11) return E([a, R]);
-  if (op <= 0x15) return E([], a, b === 0 ? N32 : I | F);
-  if (op <= 0x19) return E([], a, WIDE);
-  if (op <= 0x1c) return E([], a, R);
-  if (op <= 0x1e) return E([a, R]);
-  if (op === 0x1f) return E([a, R], a, R);
-  if (op <= 0x21) return E([b, R], a, I);
-  if (op === 0x22) return E([], a, R);
-  if (op === 0x23) return E([b, I], a, R);
-  if (op === 0x24 || op === 0x25) {
-    const el = valueKind(dex.type(b)[1] ?? "L");
-    return E(x.regs.flatMap((r) => [r, el]));
-  }
-  if (op <= 0x27) return E([a, R]);
-  if (op <= 0x2a) return NOEFF;
-  if (op <= 0x2c) return E([a, I]);
-  if (op <= 0x2e) return E([b, F, c, F], a, I);
-  if (op <= 0x30) return E([b, D, c, D], a, I);
-  if (op === 0x31) return E([b, J, c, J], a, I);
-  if (op <= 0x37) {
-    const eq = op <= 0x33;
-    return eq ? E([a, I | R, b, I | R], -1, 0, 2) : E([a, I, b, I]);
-  }
-  if (op <= 0x3d) return E([a, op <= 0x39 ? I | R : I]);
-  if (op >= 0x44 && op <= 0x4a) {
-    const m = op === 0x44 ? I | F : op === 0x45 ? WIDE : op === 0x46 ? R : I;
-    return E([b, R, c, I], a, m);
-  }
-  if (op >= 0x4b && op <= 0x51) {
-    const m = op === 0x4b ? I | F : op === 0x4c ? WIDE : op === 0x4d ? R : I;
-    return E([a, m, b, R, c, I]);
-  }
-  if (op >= 0x52 && op <= 0x58) return E([b, R], a, valueKind(dex.type(dex.field(c).type)));
-  if (op >= 0x59 && op <= 0x5f) return E([a, valueKind(dex.type(dex.field(c).type)), b, R]);
-  if (op >= 0x60 && op <= 0x66) return E([], a, valueKind(dex.type(dex.field(b).type)));
-  if (op >= 0x67 && op <= 0x6d) return E([a, valueKind(dex.type(dex.field(b).type))]);
-  if (isInvoke(op)) {
-    const u: number[] = [];
-    let params: string[] = [];
-    try {
-      if (op === 0xfa || op === 0xfb) params = dex.protoParamTypes(c);
-      else if (op === 0xfc || op === 0xfd) params = dex.protoParamTypes(dex.callSiteProto(b));
-      else params = dex.protoParamTypes(dex.method(b).proto);
-    } catch { return E(x.regs.flatMap((r) => [r, N32])); }
-    const first = isInstanceInvoke(op) ? 1 : 0, regs = argRegisters(x, params, first);
-    if (first) u.push(x.regs[0], R);
-    for (let i = 0; i < regs.length && regs[i] !== undefined; i++) u.push(regs[i], valueKind(params[i]));
-    return E(u);
-  }
-  if (op >= 0x7b && op <= 0x8f) { const [from, to] = UNARY[op - 0x7b]; return E([b, from], a, to); }
-  if (op >= 0x90 && op <= 0xcf) {
-    const two = op >= 0xb0, t = binopKind(op), name = binopName(op);
-    const src2 = t === J && (name === "shl" || name === "shr" || name === "ushr") ? I : t;
-    return two ? E([a, t, b, src2], a, t) : E([b, t, c, src2], a, t);
-  }
-  if (op >= 0xd0 && op <= 0xe2) return E([b, I], a, I);
-  if (op >= 0xfe) return E([], a, R);
-  return NOEFF;
 }
 
 function retOf(dex: DexFile, x: PreparedInstruction): string | null {
-  try {
-    if (x.op === 0xfa || x.op === 0xfb) return dex.type(dex.proto(x.c).ret);
-    if (x.op === 0xfc || x.op === 0xfd) return dex.type(dex.proto(dex.callSiteProto(x.b)).ret);
-    return dex.type(dex.proto(dex.method(x.b).proto).ret);
-  } catch { return null; }
+  try { return dex.type(dex.proto(invokeProto(dex, x)).ret); } catch { return null; }
 }

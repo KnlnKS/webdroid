@@ -4,7 +4,7 @@ import { ACC, mid, type MethodInfo } from "../compiler/program.ts";
 import { staticallyBound, type CallPlan } from "../compiler/j2w.ts";
 import { failed, invokeSite, symbolicOverride } from "../compiler/linkage.ts";
 import { cyclic, decodeInstruction, decodeInstructions, prepareMethod, type PreparedInstruction } from "../../jvm/prepared.ts";
-import { insnLen, invokeKind, isInvoke } from "../../jvm/opcodes.ts";
+import { Family, Invoke, endsBlock, familyOf, insnLen, invokeKind, isIf, isInvoke } from "../../jvm/opcodes.ts";
 import { instructionClass } from "./resolution.ts";
 import type { Tiering } from "./tiering.ts";
 import type { World } from "./world.ts";
@@ -97,10 +97,10 @@ export class Planner {
       const seen = new Set<string>(), allocations = new Set<string>(), references = new Set<string>(), invokes: PreparedInstruction[] = [], calls: PreparedInstruction[] = [];
       const types = this.w.prog.typesOf(m.dex);
       for (const ins of decodeInstructions(m.dex.code(m.codeOff).insns)) {
-        const name = ins.op !== 0xfa && ins.op !== 0xfb && instructionClass(m, ins);
+        const kind = isInvoke(ins.op) ? invokeKind(ins.op) : -1, name = kind !== Invoke.Polymorphic && instructionClass(m, ins);
         if (name) references.add(name);
-        if (ins.op === 0x22) allocations.add(types.typeName(ins.b));
-        if (!isInvoke(ins.op) || ins.op >= 0xfa) continue;
+        if (familyOf(ins.op) === Family.NewInstance) allocations.add(types.typeName(ins.b));
+        if (kind < 0 || kind >= Invoke.Polymorphic) continue;
         invokes.push(ins);
         const key = `${ins.op}:${ins.b}`;
         if (!seen.has(key)) { seen.add(key); calls.push(ins); }
@@ -115,9 +115,9 @@ export class Planner {
     for (let pc = 0; pc < insns.length;) {
       const op = insns[pc] & 0xff;
       if (!op && insns[pc] >> 8) { pc += insnLen(insns, pc); continue; }
-      if (op >= 0x0e && op <= 0x11 || op >= 0x27 && op <= 0x2c || op >= 0x32 && op <= 0x3d) break;
-      const ins = decodeInstruction(insns, pc);
-      if (op === 0x70 || op === 0x71 || op === 0x76 || op === 0x77) entry.push(ins);
+      if (endsBlock(op) || isIf(op) || familyOf(op) === Family.Switch) break;
+      const ins = decodeInstruction(insns, pc), kind = isInvoke(op) ? invokeKind(op) : -1;
+      if (kind === Invoke.Direct || kind === Invoke.Static) entry.push(ins);
       pc += ins.len;
     }
     return entry;

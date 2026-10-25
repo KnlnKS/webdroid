@@ -11,6 +11,7 @@ import { ACC, kindOf, mid, type MethodInfo } from "../compiler/program.ts";
 import { elemKindOf, type ElemKind } from "../compiler/consts.ts";
 import { KINDS, valueKind } from "../compiler/infer.ts";
 import { decodeInstructions } from "../../jvm/prepared.ts";
+import { isFieldAccess } from "../../jvm/opcodes.ts";
 import { PRIMS, type PrimArray } from "../../jvm/abi.ts";
 import { isRetrying } from "../../jvm/runtime.ts";
 import { Bridge } from "./bridge.ts";
@@ -30,7 +31,7 @@ const abi = (d: string): VT | undefined => isRef(d) ? (isPrimArray(d) ? undefine
 const HOST_FIRST = /^(matches|replaceAll|replaceFirst)\(/;
 /** must `m`, a String method with a body, be replaced by its production override */
 function overridden(m: MethodInfo): boolean {
-  return HOST_FIRST.test(m.key) || decodeInstructions(m.dex.code(m.codeOff).insns).some((i) => (i.name.startsWith("iget") || i.name.startsWith("iput")) && m.dex.typeName(m.dex.field(i.c).cls) === STRING_CLASS);
+  return HOST_FIRST.test(m.key) || decodeInstructions(m.dex.code(m.codeOff).insns).some((i) => isFieldAccess(i.op) && m.dex.typeName(m.dex.field(i.c).cls) === STRING_CLASS);
 }
 
 /** natives that touch only [offset, offset + length) of a primitive array, as (array, offset, length) parameter positions (receiver first),

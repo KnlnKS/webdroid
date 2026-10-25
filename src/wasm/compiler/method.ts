@@ -16,11 +16,11 @@ import { failed, invokeSite, resolveFieldRef, typeFailure, type InvokeSite, type
 import { MethodFacts, cloneFacts, newFacts, type Facts } from "./facts.ts";
 import { isStackOverflow } from "./exc.ts";
 import { WHOLE_FRAME, planDepth, type DepthPlan } from "./depth.ts";
-import { endsBlock, invokeKind, isIf, isInvoke, isMoveResult, narrowBits, wideBits } from "../../jvm/opcodes.ts";
+import { BINOPS, Family, Invoke, endsBlock, familyOf, invokeKind, isIf, isInvoke, isMoveResult, narrowBits, typeLetter, variantOf, wideBits, type Binop } from "../../jvm/opcodes.ts";
 import { emitRestored } from "./hostcalls.ts";
 import { OutlinedCode, Outliner } from "./outline.ts";
 import { isEmpty, trivialOf, type Seq, type Trivial, type Val } from "./inline.ts";
-import { KINDS, BINOPS, UNARY, binopKind, binopName, uninitAliases, I as KI, F as KF, R as KR, J as KJ, D as KD, type Binop, type Typing } from "./infer.ts";
+import { KINDS, UNARY, uninitAliases, valueKind, I as KI, F as KF, R as KR, J as KJ, D as KD, type Typing } from "./infer.ts";
 
 /** how an invoke reaches the Java method it calls: a fixed one, whose body may run in place; a dispatch, through the only implementation the class hierarchy has if
  *  it has one (Compiler.devirt); String's constructor, which makes the string */
@@ -46,11 +46,12 @@ const UNARY_CODE: Around[] = [
   trunc(2), trunc(6), after(OP.f32_demote_f64),
   after(OP.i32_extend8_s), (c, x) => { x(); c.i32(0xffff).raw(OP.i32_and); }, after(OP.i32_extend16_s),
 ];
-/** the element type of each array access, aget (0x44) to aget-short (0x4a), and of the aput (0x4b-0x51) of the same type: its storage, the letter of its
- *  descriptor (an int's stands for a float's, a long's for a double's) and its value kind */
-const ELEMS = [..."IJLZBCS"].map((letter) => ({ k: elemKindOf("[" + letter), letter, kind: kindOf(letter) }));
+/** by the type letter of an array access (an int's stands for a float's, a long's for a double's): its storage and its value kind */
+const ELEMS: Record<string, { k: ElemKind; kind: Kind }> = Object.fromEntries([..."IJLZBCS"].map((letter) => [letter, { k: elemKindOf("[" + letter), kind: kindOf(letter) }]));
 /** the comparison of if-lt, if-ge, if-gt and if-le, and of their -z forms */
 const COMPARE = [OP.i32_lt_s, OP.i32_ge_s, OP.i32_gt_s, OP.i32_le_s];
+/** the helper of cmpl-float, cmpg-float, cmpl-double and cmpg-double */
+const COMPARE_HELPER = ["cmplf", "cmpgf", "cmpld", "cmpgd"] as const;
 
 export function compileMethod(cx: Compiler, m: MethodInfo): Code {
   const nparams = (m.isStatic ? 0 : 1) + m.params.length;
@@ -294,7 +295,7 @@ export class MC {
   }
   /** whether the first tier records the targets of call `ins` (profile.ts): a virtual call with more than one implementation */
   private profiles(ins: Ins): boolean {
-    if (!isInvoke(ins.op) || ins.op >= 0xfa || this.deferredSite(ins)) return false;
+    if (!isInvoke(ins.op) || invokeKind(ins.op) >= Invoke.Polymorphic || this.deferredSite(ins)) return false;
     const b = this.binding(ins);
     return b?.k === "virtual" && !b.only;
   }
@@ -438,52 +439,38 @@ export class MC {
   }
 
   protected emitOperation(ins: Ins): void {
-    const op = ins.op;
-    if (op >= 0x44 && op <= 0x6d) {
-      if (op <= 0x4a) return this.emitAget(ins);
-      if (op <= 0x51) return this.emitAput(ins);
-      if (op <= 0x58) return this.emitIget(ins);
-      if (op <= 0x5f) return this.emitIput(ins);
-      return this.emitStatic(ins);
-    }
-    if (isInvoke(op)) return this.emitInvoke(ins);
-    if (op >= 0x7b && op <= 0xe2) return this.emitArith(ins);
-    if (isIf(op)) return this.emitIf(ins);
-    const c = this.code, cx = this.cx, dex = this.dex, types = this.types, a = ins.a, b = ins.b;
-    switch (op) {
-      case 0x00: return; // nop
-      case 0x01: case 0x02: case 0x03: case 0x04: case 0x05: case 0x06: case 0x07: case 0x08: case 0x09: { // move, move-wide, move-object
+    const c = this.code, cx = this.cx, dex = this.dex, types = this.types, { op, a, b } = ins;
+    switch (familyOf(op)) {
+      case Family.Nop: return;
+      case Family.Move: {
         if (this.typing.def(ins.pc) < 0) return;
         if (this.load(b) !== this.typing.kind[this.typing.def(ins.pc)]) throw new Error(`move between kinds at ${ins.pc}`);
         this.store(ins); return;
       }
-      case 0x0a: case 0x0b: case 0x0c: throw new Error("move-result without invoke at " + ins.pc);
-      case 0x0d: c.lget(this.excLocal); this.set("L"); return; // move-exception
-      case 0x0e: this.methodReturn(); return; // return-void
-      case 0x0f: this.get("I", a); this.methodReturn(); return;
-      case 0x10: this.get("J", a); this.methodReturn(); return;
-      case 0x11: this.get("L", a); this.methodReturn(); return;
-      case 0x12: case 0x13: case 0x14: case 0x15: this.constNarrow(narrowBits(op, b)); return;
-      case 0x16: case 0x17: case 0x18: case 0x19: this.constWide(wideBits(op, b, ins.wideLit)); return;
-      case 0x1a: case 0x1b: cx.str.literal(c, dex.string(b)); this.set("L"); return; // const-string
-      case 0x1c: if (this.unresolved(types.type(b))) return; cx.constClass(c, types.typeName(b)); this.set("L"); return;
-      case 0x1d: case 0x1e: this.nonNull(a); this.monitor(op === 0x1d); return;
-      case 0x1f: { // check-cast
+      case Family.MoveResult: throw new Error("move-result without invoke at " + ins.pc);
+      case Family.MoveException: c.lget(this.excLocal); this.set("L"); return;
+      case Family.ReturnVoid: this.methodReturn(); return;
+      case Family.Return: this.get(typeLetter(op) as Kind, a); this.methodReturn(); return;
+      case Family.Const: if (typeLetter(op) === "J") this.constWide(wideBits(op, b, ins.wideLit)); else this.constNarrow(narrowBits(op, b)); return;
+      case Family.ConstString: cx.str.literal(c, dex.string(b)); this.set("L"); return;
+      case Family.ConstClass: if (this.unresolved(types.type(b))) return; cx.constClass(c, types.typeName(b)); this.set("L"); return;
+      case Family.Monitor: this.nonNull(a); this.monitor(variantOf(op) === 0); return;
+      case Family.CheckCast: {
         if (this.unresolved(types.type(b))) return;
         const name = types.typeName(b);
         if (name === "java/lang/Object") { this.copyReference(a); return; }
         this.get("L", a); cx.emitCast(c, name); this.set("L"); return;
       }
-      case 0x20: if (this.unresolved(types.type(ins.c))) return; this.get("L", ins.b); cx.emitInstanceOf(c, types.typeName(ins.c)); this.set("I"); return;
-      case 0x21: this.arrayLength(b); this.set("I"); return;
-      case 0x22: { // new-instance
+      case Family.InstanceOf: if (this.unresolved(types.type(ins.c))) return; this.get("L", ins.b); cx.emitInstanceOf(c, types.typeName(ins.c)); this.set("I"); return;
+      case Family.ArrayLength: this.arrayLength(b); this.set("I"); return;
+      case Family.NewInstance: {
         if (this.unresolved(types.type(b))) return;
         // a String is made by the constructor call, which assigns its registers
         if (stringSite(dex, ins) === "alloc") c.anyNull(); else { const name = types.typeName(b); this.ensure(name); cx.emitNew(c, name); }
         this.set("L"); return;
       }
-      case 0x23: if (this.unresolved(types.type(ins.c))) return; cx.emitNewArray(c, types.type(ins.c), () => this.get("I", ins.b)); this.set("L"); return;
-      case 0x24: case 0x25: { // filled-new-array
+      case Family.NewArray: if (this.unresolved(types.type(ins.c))) return; cx.emitNewArray(c, types.type(ins.c), () => this.get("I", ins.b)); this.set("L"); return;
+      case Family.FilledNewArray: {
         const desc = types.type(b), ek = elemKindOf(desc);
         if (this.unresolved(desc)) { this.consumeResult(ins); return; }
         c.gget(cx.vtGlobal(desc)).refAsNonNull().i64(0n);
@@ -491,7 +478,7 @@ export class MC {
         c.arrayNewFixed(cx.tData[ek], ins.regs.length).structNew(cx.tArr[ek]);
         this.finishResult(ins, "L"); return;
       }
-      case 0x26: { // fill-array-data
+      case Family.FillArrayData: {
         const payload = ins.pc + b, insns = this.item.insns, width = insns[payload + 1], count = insns[payload + 2] | (insns[payload + 3] << 16);
         const bytes = new Uint8Array(insns.buffer, insns.byteOffset + (payload + 4) * 2, width * count).slice();
         const seg = cx.mb.addDataPassive(bytes);
@@ -500,14 +487,24 @@ export class MC {
           .i32(0).i32(count).arrayNewData(cx.tData[ek], seg).i32(0).i32(count).arrayCopy(cx.tData[ek], cx.tData[ek]);
         return;
       }
-      case 0x27: this.nonNull(a); c.throw_(cx.tag); return;
-      case 0x28: case 0x29: case 0x2a: this.jump(this.block, ins.pc + a, true); return; // goto
-      case 0x2b: case 0x2c: this.emitSwitch(ins); return;
-      case 0x2d: case 0x2e: this.num(KF, b); this.num(KF, ins.c); c.call(cx.helper(op === 0x2d ? "cmplf" : "cmpgf")); this.set("I"); return;
-      case 0x2f: case 0x30: this.num(KD, b); this.num(KD, ins.c); c.call(cx.helper(op === 0x2f ? "cmpld" : "cmpgd")); this.set("I"); return;
-      case 0x31: this.get("J", b); this.get("J", ins.c); c.raw(OP.i64_gt_s); this.get("J", b); this.get("J", ins.c); c.raw(OP.i64_lt_s).raw(OP.i32_sub); this.set("I"); return; // cmp-long
-      case 0xfe: emitHandleConstant(this, b); return;
-      case 0xff: emitTypeConstant(this, b); return;
+      case Family.Throw: this.nonNull(a); c.throw_(cx.tag); return;
+      case Family.Goto: this.jump(this.block, ins.pc + a, true); return;
+      case Family.Switch: this.emitSwitch(ins); return;
+      case Family.Compare: {
+        if (typeLetter(op) === "J") { this.get("J", b); this.get("J", ins.c); c.raw(OP.i64_gt_s); this.get("J", b); this.get("J", ins.c); c.raw(OP.i64_lt_s).raw(OP.i32_sub); }
+        else { const k = typeLetter(op) === "F" ? KF : KD; this.num(k, b); this.num(k, ins.c); c.call(cx.helper(COMPARE_HELPER[variantOf(op)])); }
+        this.set("I"); return;
+      }
+      case Family.If: case Family.IfZ: return this.emitIf(ins);
+      case Family.Aget: return this.emitAget(ins);
+      case Family.Aput: return this.emitAput(ins);
+      case Family.Iget: return this.emitIget(ins);
+      case Family.Iput: return this.emitIput(ins);
+      case Family.Sget: case Family.Sput: return this.emitStatic(ins);
+      case Family.Invoke: return this.emitInvoke(ins);
+      case Family.Unary: case Family.Binop: case Family.Binop2addr: case Family.BinopLit: return this.emitArith(ins);
+      case Family.ConstMethodHandle: emitHandleConstant(this, b); return;
+      case Family.ConstMethodType: emitTypeConstant(this, b); return;
     }
     throw new Error(`no translation of ${ins.name} at ${ins.pc}`);
   }
@@ -553,14 +550,14 @@ export class MC {
   /** the local of each element kind that holds the data array of the array being accessed */
   private dloc(k: ElemKind): number { return this.scratchLocal(k, ref(this.cx.tData[k])); }
   emitAget(ins: Ins) {
-    const c = this.code, cx = this.cx, { k, letter, kind } = ELEMS[ins.op - 0x44], d = this.dloc(k), index = () => this.get("I", ins.c);
+    const c = this.code, cx = this.cx, letter = typeLetter(ins.op), { k, kind } = ELEMS[letter], d = this.dloc(k), index = () => this.get("I", ins.c);
     this.nonNull(ins.b); cx.arrayData(c, k).lset(d);
     cx.boundsCheck(c, index, () => c.lget(d).arrayLen());
     c.lget(d); index(); cx.emitElementLoad(c, letter);
     this.set(kind);
   }
   emitAput(ins: Ins) {
-    const c = this.code, cx = this.cx, { k, kind } = ELEMS[ins.op - 0x4b];
+    const c = this.code, cx = this.cx, { k, kind } = ELEMS[typeLetter(ins.op)];
     // a static initializer runs once, and its long array literals take the engine longer to compile than to run: their stores are a call
     if (this.m.name === "<clinit>") {
       this.nonNull(ins.b); this.get("I", ins.c); this.get(kind, ins.a);
@@ -600,7 +597,7 @@ export class MC {
     this.cx.emitFieldStore(this.code, decl, f, () => this.refTo(obj, st), value);
   }
   emitStatic(ins: Ins) {
-    const cx = this.cx, c = this.code, put = ins.op >= 0x67, r = this.fieldOf(ins.b, true);
+    const cx = this.cx, c = this.code, put = familyOf(ins.op) === Family.Sput, r = this.fieldOf(ins.b, true);
     if (failed(r)) return this.linkFail(r);
     const { f } = r;
     this.ensure(f.owner);
@@ -608,19 +605,20 @@ export class MC {
     if (put) { this.get(f.kind, ins.a); c.gset(g); } else { c.gget(g); this.set(f.kind); }
   }
   emitIf(ins: Ins) {
-    const c = this.code, flow = this.flow, target = ifTarget(ins), op = ins.op, zero = op >= 0x38;
-    const ref = (op <= 0x33 || op === 0x38 || op === 0x39) && this.kindOf(ins.a) === KR;
+    const c = this.code, flow = this.flow, target = ifTarget(ins), test = variantOf(ins.op), zero = familyOf(ins.op) === Family.IfZ;
+    // if-eq and if-ne (0, 1) also compare references
+    const ref = test < 2 && this.kindOf(ins.a) === KR;
     const cond = () => {
-      if (op <= 0x33 || op === 0x38 || op === 0x39) { // if-eq, if-ne, if-eqz, if-nez
+      if (test < 2) {
         this.get(ref ? "L" : "I", ins.a);
         if (zero) { if (ref) c.refIsNull(); else c.raw(OP.i32_eqz); }
         else { this.get(ref ? "L" : "I", ins.b); if (ref) c.call(this.cx.helper("acmp")); else c.raw(OP.i32_eq); }
-        if (op === 0x33 || op === 0x39) c.raw(OP.i32_eqz);
+        if (test === 1) c.raw(OP.i32_eqz);
         return;
       }
       this.get("I", ins.a);
       if (zero) c.i32(0); else this.get("I", ins.b);
-      c.raw(COMPARE[op - (zero ? 0x3a : 0x34)]);
+      c.raw(COMPARE[test - 2]);
     };
     const fall = ins.pc + ins.len;
     if (this.prepared.blockAt[target] === this.prepared.blockAt[fall]) return;
@@ -679,8 +677,9 @@ export class MC {
   }
   emitInvoke(ins: Ins) {
     const cx = this.cx, c = this.code;
-    if (ins.op >= 0xfc) return emitCustom(this, ins);
-    if (ins.op >= 0xfa) return emitPolymorphic(this, ins);
+    const kind = invokeKind(ins.op);
+    if (kind === Invoke.Custom) return emitCustom(this, ins);
+    if (kind === Invoke.Polymorphic) return emitPolymorphic(this, ins);
     const { desc, decl, target } = this.invoke(ins);
     const p = this.types.methodTypes(ins.b), retK: Kind | "V" = p.ret === "V" ? "V" : kindOf(p.ret);
     if (target === "clone") { this.nonNull(ins.regs[0]); cx.callRt(c, "aclone"); this.finishResult(ins, "L"); return; }
@@ -798,13 +797,13 @@ export class MC {
     return r;
   }
 
-  /** unary (0x7b-0x8f) and binary (0x90-0xe2) arithmetic, in the operand kinds infer.ts gives them */
+  /** unary and binary arithmetic, in the operand kinds infer.ts gives them */
   emitArith(ins: Ins) {
-    const c = this.code, op = ins.op;
-    if (op <= 0x8f) { const [from, to] = UNARY[op - 0x7b]; UNARY_CODE[op - 0x7b](c, () => this.num(from, ins.b)); this.setNum(to); return; }
-    const lit = op >= 0xd0, li = op - (op >= 0xd8 ? 0xd8 : 0xd0), k = lit ? KI : binopKind(op), name = lit ? BINOPS[li] : binopName(op);
-    const [x, y] = op >= 0xb0 && !lit ? [ins.a, ins.b] : [ins.b, ins.c];
-    if (lit && li === 1) { c.i32(ins.c); this.num(KI, x); c.raw(OP.i32_sub); this.set("I"); return; } // rsub-int
+    const c = this.code, op = ins.op, family = familyOf(op), v = variantOf(op);
+    if (family === Family.Unary) { const [from, to] = UNARY[v]; UNARY_CODE[v](c, () => this.num(from, ins.b)); this.setNum(to); return; }
+    const lit = family === Family.BinopLit, k = valueKind(typeLetter(op)), name = BINOPS[v];
+    const [x, y] = family === Family.Binop2addr ? [ins.a, ins.b] : [ins.b, ins.c];
+    if (lit && v === 1) { c.i32(ins.c); this.num(KI, x); c.raw(OP.i32_sub); this.set("I"); return; } // rsub-int
     const fmod = name === "rem" && (k === KF || k === KD), wideShift = k === KJ && (name === "shl" || name === "shr" || name === "ushr");
     this.num(k, x);
     if (fmod && k === KF) c.raw(OP.f64_promote_f32);

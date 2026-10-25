@@ -5,7 +5,7 @@
 // access reads it instead of casting again: baseline code does not remove repeated casts. Handler entries start empty: a throw can come from anywhere in the try range.
 import { ifTarget, type PreparedInstruction as Ins } from "../../jvm/prepared.ts";
 import { R as KR } from "./infer.ts";
-import { isFieldAccess, isInstanceInvoke } from "../../jvm/opcodes.ts";
+import { Family, Invoke, familyOf, invokeKind, isFieldAccess, nullChecked, typeLetter, variantOf } from "../../jvm/opcodes.ts";
 import { failed } from "./linkage.ts";
 import { stringSite } from "./strings.ts";
 import type { MC } from "./method.ts";
@@ -24,20 +24,6 @@ const meet = (a: Facts, b: Facts): boolean => {
   return changed;
 };
 
-/** the operand an instruction null-checks (every translation of it throws NullPointerException when it is null): 1 b, 2 a, 3 the receiver */
-const CHECKED = new Uint8Array(256);
-CHECKED.fill(1, 0x44, 0x60); // aget, aput, iget, iput
-CHECKED[0x21] = 1; // array-length
-for (const op of [0x1d, 0x1e, 0x26, 0x27]) CHECKED[op] = 2; // monitor-enter, monitor-exit, fill-array-data, throw
-for (let op = 0; op < 0xfa; op++) if (isInstanceInvoke(op)) CHECKED[op] = 3;
-function checkedReg(ins: Ins): number {
-  switch (CHECKED[ins.op]) {
-    case 1: return ins.b;
-    case 2: return ins.a;
-    case 3: return ins.regs.length ? ins.regs[0] : -1;
-    default: return -1;
-  }
-}
 
 /** the facts of one method's code: what each instruction adds to them, and what holds at the entry of each block */
 export class MethodFacts {
@@ -60,8 +46,8 @@ export class MethodFacts {
 
   /** applies the effect of `ins` to `f`, once it has been emitted */
   step(ins: Ins, f: Facts): void {
-    const mc = this.mc, reg = checkedReg(ins);
-    if (reg >= 0 && !((ins.op === 0x70 || ins.op === 0x76) && mc.binding(ins)?.k === "string")) { const w = mc.typing.use(ins.pc, reg); if (w >= 0 && mc.typing.kind[w] === KR) f.nonNull.add(w); }
+    const mc = this.mc, reg = nullChecked(ins);
+    if (reg >= 0 && !(familyOf(ins.op) === Family.Invoke && mc.binding(ins)?.k === "string")) { const w = mc.typing.use(ins.pc, reg); if (w >= 0 && mc.typing.kind[w] === KR) f.nonNull.add(w); }
     const d = mc.typing.def(ins.pc);
     for (const c of this.initedBy(ins)) f.inited.add(c);
     const shadow = this.shadowKey(ins);
@@ -99,21 +85,21 @@ export class MethodFacts {
         const out = cloneFacts(inf);
         for (let i = first[b]; i <= last[b]; i++) this.step(instructions[i], out);
         // a null test (if-eqz, if-nez) refines the facts along its two edges, unless both reach one block
-        const test = instructions[last[b]], op = test.op, w = op === 0x38 || op === 0x39 ? mc.typing.use(test.pc, test.a) : -1;
+        const test = instructions[last[b]], nez = variantOf(test.op) === 1, w = familyOf(test.op) === Family.IfZ && variantOf(test.op) < 2 ? mc.typing.use(test.pc, test.a) : -1;
         const taken = w >= 0 && mc.typing.kind[w] === KR && !out.nonNull.has(w) ? blockAt[ifTarget(test)] : -1, fall = falls[b];
         if (taken < 0 || taken === fall) { for (const s of succ[b]) push(s, out); continue; }
         const refined = cloneFacts(out);
         refined.nonNull.add(w);
-        push(taken, op === 0x39 ? refined : out);
-        if (fall >= 0) push(fall, op === 0x39 ? out : refined);
+        push(taken, nez ? refined : out);
+        if (fall >= 0) push(fall, nez ? out : refined);
       }
     }
     return entry.map((e) => e ?? newFacts());
   }
   /** the classes whose initialization `ins` requests, as its translation does: its target and the target's superclasses */
   private initedBy(ins: Ins): readonly string[] {
-    const op = ins.op;
-    if (op !== 0x22 && (op < 0x60 || op > 0x6d) && op !== 0x71 && op !== 0x77) return NONE; // new-instance, sget/sput, invoke-static
+    const f = familyOf(ins.op);
+    if (f !== Family.NewInstance && f !== Family.Sget && f !== Family.Sput && !(f === Family.Invoke && invokeKind(ins.op) === Invoke.Static)) return NONE;
     let r = this.initedAt.get(ins.pc);
     if (!r) { const cls = this.ensureTarget(ins); this.initedAt.set(ins.pc, r = cls ? this.mc.cx.prog.chain(cls) : []); }
     return r;
@@ -121,20 +107,20 @@ export class MethodFacts {
   private ensureTarget(ins: Ins): string | undefined {
     const mc = this.mc;
     if (mc.deferredSite(ins)) return undefined;
-    if (ins.op === 0x22) return stringSite(mc.dex, ins) ? undefined : mc.types.typeName(ins.b);
-    if (ins.op <= 0x6d) { const r = mc.fieldOf(ins.b, true); return failed(r) ? undefined : r.f.owner; }
+    const f = familyOf(ins.op);
+    if (f === Family.NewInstance) return stringSite(mc.dex, ins) ? undefined : mc.types.typeName(ins.b);
+    if (f !== Family.Invoke) { const r = mc.fieldOf(ins.b, true); return failed(r) ? undefined : r.f.owner; }
     const { target } = mc.invoke(ins);
     return target === "clone" || failed(target) ? undefined : target.cls;
   }
   /** whether the register `ins` defines surely holds a reference: an allocation, a constant, the exception caught, or a copy of one */
   private definesNonNull(ins: Ins, f: Facts): boolean {
-    const op = ins.op;
-    if (op === 0x22) return !stringSite(this.mc.dex, ins); // new-instance
-    // const-string, const-string/jumbo, const-class, new-array, move-exception
-    if ((op >= 0x1a && op <= 0x1c) || op === 0x23 || op === 0x0d) return true;
-    // move-object, move-object/from16, move-object/16, check-cast
-    if ((op >= 0x07 && op <= 0x09) || op === 0x1f) { const w = this.mc.typing.use(ins.pc, op === 0x1f ? ins.a : ins.b); return w >= 0 && f.nonNull.has(w); }
-    return false;
+    const family = familyOf(ins.op);
+    if (family === Family.NewInstance) return !stringSite(this.mc.dex, ins);
+    if (family === Family.ConstString || family === Family.ConstClass || family === Family.NewArray || family === Family.MoveException) return true;
+    const from = family === Family.CheckCast ? ins.a : family === Family.Move && typeLetter(ins.op) === "L" ? ins.b : -1;
+    const w = from < 0 ? -1 : this.mc.typing.use(ins.pc, from);
+    return w >= 0 && f.nonNull.has(w);
   }
   /** the shadow key of the field access `ins` if its object shares a cast, else undefined */
   private shadowKey(ins: Ins): string | undefined {
