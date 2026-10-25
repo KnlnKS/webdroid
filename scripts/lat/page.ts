@@ -4,7 +4,7 @@
 import { installLatencyObserver } from "./observe.ts";
 import { compileDeltas, matchesState, type Expectation } from "./expect.ts";
 import type { Ev } from "../../src/timeline.ts";
-import { ERROR_LINE, appUp, pageDiagnostics, workerDiagnostics, workerRows, type ProcessSnapshot, type WorkerProcess } from "../../tests/e2e/lib/processes.ts";
+import { ERROR_LINE, STARTING_MS, appUp, pageDiagnostics, workerDiagnostics, workerRows, type ProcessSnapshot, type WorkerProcess } from "../../tests/e2e/lib/processes.ts";
 
 /** what run.ts hands a launch's page: `steps` are the scenario's (scripts/lat/scenarios); `E` is the timeline's events, passed rather than
  *  imported so the bundle leaves out the timeline's ring */
@@ -34,11 +34,11 @@ async function run() {
   const result: Capture = w.__wdLat = { taps: [] };
   // a process Worker's state reaches the page over its control port
   const foreground = async () => (await w.wd.foregroundWorkerSnapshot())?.snapshot ?? null;
-  /** `settled` reads again while a Worker is starting (workerRows), which the reads around a tap do not wait for */
+  /** `settled` waits for processes still starting (workerRows), which the reads around a tap do not */
   const diagnostics = w.__wdLatRead = async (settled = false): Promise<Diagnostics> => {
     let workers: ProcessSnapshot[];
     try {
-      const rows: WorkerProcess[] = settled ? await workerRows() : await w.wd.workerProcesses();
+      const rows: WorkerProcess[] = settled ? await workerRows(STARTING_MS) : await w.wd.workerProcesses();
       workers = rows.map((row) => ({ url: `worker:${row.url}#pid=${row.pid}`, diagnostics: workerDiagnostics(row) }));
     } catch (error) { workers = [{ url: "worker:" + location.origin, diagnostics: { status: "failure", message: String(error) } }]; }
     return { at: performance.now(), aotKey: globalThis.__wdWasm?.aotKey ?? null,

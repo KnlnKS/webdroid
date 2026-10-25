@@ -18,8 +18,7 @@ export class SlotTable {
   readonly blockClass: string[] = [];
   /** the blocks of classes a replayed numbering (World.adopt) gave slots before their modules were made */
   readonly preassigned = new Map<string, number>();
-  /** the platform classes, which have the first blocks in id order (World.seedPlatform) */
-  seeded = 0;
+  private nSeeded = 0;
   private readonly synth = new Map<string, number>();
   /** the runtime functions whose stub or code is in their slot */
   private readonly stubbed = new Set<number>();
@@ -32,23 +31,35 @@ export class SlotTable {
     if (this.entries.length > table.length) table.grow(Math.max(this.entries.length - table.length, table.length));
     return base;
   }
-  /** reserves the slots of a class: one per method and one for its `ensure` */
-  addBlock(name: string, size: number): number {
-    const base = this.reserve(size);
-    this.blockBase.push(base); this.blockSize.push(size); this.blockClass.push(name);
-    return base;
-  }
   /** the slots of class `name` if they are numbered, though it may not be linked yet: a platform class's, or those a replayed numbering gave it */
   baseOf(name: string): number | undefined {
     const id = this.w.numbers.ids.get(name);
     return id !== undefined && id <= this.seeded ? this.blockBase[id - 1] : this.preassigned.get(name);
   }
+  /** the platform classes, which have the first blocks in id order (World.seedPlatform) */
+  get seeded(): number { return this.nSeeded; }
+  /** a class's block (one slot per method and one for its `ensure`) at `base` */
+  private addBlock(name: string, size: number, base: number): void { this.blockBase.push(base); this.blockSize.push(size); this.blockClass.push(name); }
   /** a class's block, numbered as the next reservation */
-  numberBlock(name: string, size: number): number { this.w.numbers.reserve([name, size]); return this.addBlock(name, size); }
-  /** replays the reservation of a runtime function's slot */
-  reserveSynth(name: string): void { this.synth.set(name, this.reserve(1)); }
+  numberBlock(name: string, size: number): number {
+    this.w.numbers.reserve([name, size]);
+    const base = this.reserve(size);
+    this.addBlock(name, size, base);
+    return base;
+  }
+  /** makes reservations `tail` at once, as many as the platform's classes or an app build's (tens of thousands); `block` sees each class's base */
+  private reserveAll(tail: readonly Tail[], block?: (name: string, base: number) => void): void {
+    let top = this.reserve(tail.reduce((n, t) => n + (typeof t === "string" ? 1 : t[1]), 0));
+    for (const t of tail) {
+      if (typeof t === "string") { this.synth.set(t, top++); continue; }
+      this.addBlock(t[0], t[1], top); block?.(t[0], top);
+      top += t[1];
+    }
+  }
+  /** reserves the blocks of the platform classes, the first, in id order (World.seedPlatform) */
+  seed(blocks: [string, number][]): void { this.reserveAll(blocks); this.nSeeded = blocks.length; }
   /** replays reservations `tail` numbered elsewhere */
-  replay(tail: Tail[]): void { for (const t of tail) if (typeof t === "string") this.reserveSynth(t); else this.preassigned.set(t[0], this.addBlock(t[0], t[1])); }
+  replay(tail: Tail[]): void { this.reserveAll(tail, (name, base) => this.preassigned.set(name, base)); }
   /** forgets the reservations `tail`, the last ones made */
   rollback(tail: Tail[]): void {
     let top = this.entries.length;

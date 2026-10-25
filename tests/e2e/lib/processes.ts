@@ -68,14 +68,19 @@ export function workerDiagnostics(worker: WorkerProcess): ProcessDiagnostics {
     errors: snapshot.logs.filter(line => ERROR_LINE.test(line)), perf: snapshot.perf,
     queue: { queued: snapshot.main.queued, depth: snapshot.main.depth } };
 }
-/** in the page: wd.workerProcesses(), read again for up to 2 s while a Worker is still starting */
-export async function workerRows(): Promise<WorkerProcess[]> {
-  const read = globalThis.wd?.workerProcesses;
+/** how long workerRows waits for processes still starting */
+export const STARTING_MS = 30_000;
+/** in the page: wd.workerProcesses() once no process is starting, waiting up to `waitMs`. A process another one started (a service it binds) boots
+ *  at its own pace, past a timed checkpoint under load, and has no diagnostics before it is ready; the wait asks the broker, not the booting Worker. */
+export async function workerRows(waitMs: number): Promise<WorkerProcess[]> {
+  const wd = globalThis.wd, read = wd?.workerProcesses;
   if (!read) throw new Error("Worker diagnostics unavailable");
-  const deadline = performance.now() + 2000;
+  const deadline = performance.now() + waitMs, pause = () => new Promise(resolve => setTimeout(resolve, 50));
+  while (wd.processStarting() && performance.now() < deadline) await pause();
   let rows: WorkerProcess[] = await read();
+  // the broker holds a Worker's endpoint a moment before the Worker says it is ready
   while (rows.some((row) => row.error?.startsWith("Worker is not ready:")) && performance.now() < deadline) {
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await pause();
     rows = await read();
   }
   return rows;

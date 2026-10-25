@@ -1,7 +1,7 @@
 // The Chrome every harness drives, and webdroid opened in it: one way to open the page, boot an APK, decide that its app is up and read
 // what each realm reports (tests/e2e/lib/processes.ts holds the halves that run in the page).
 import { chromium, type Page } from "playwright";
-import { ERROR_LINE, appUp, pageDiagnostics, workerDiagnostics, workerRows, type ProcessSnapshot } from "../tests/e2e/lib/processes.ts";
+import { ERROR_LINE, STARTING_MS, appUp, pageDiagnostics, workerDiagnostics, workerRows, type ProcessSnapshot } from "../tests/e2e/lib/processes.ts";
 
 export const BASE_URL = process.env.WEBDROID_URL ?? "http://localhost:4080";
 /** webdroid's page at `base` with `params` in its query, and WEBDROID_BYTECODE's provenance cut */
@@ -77,13 +77,14 @@ export async function bootApp(page: Page, apk: string, options?: UpOptions): Pro
   await waitForApp(page, options);
 }
 
-/** `read`, or a failure when it throws or takes over 6 s */
-async function bounded<T>(read: Promise<T>): Promise<T | { status: "failure"; message: string }> {
+const DIAGNOSTIC_MS = 6000;
+/** `read`, or a failure when it throws or takes over `ms` */
+async function bounded<T>(read: Promise<T>, ms = DIAGNOSTIC_MS): Promise<T | { status: "failure"; message: string }> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([read.catch(error => ({ status: "failure" as const, message: String(error) })),
       new Promise<{ status: "failure"; message: string }>(resolve => {
-        timer = setTimeout(() => resolve({ status: "failure", message: "diagnostic timeout" }), 6000);
+        timer = setTimeout(() => resolve({ status: "failure", message: "diagnostic timeout" }), ms);
       })]);
   } finally { clearTimeout(timer); }
 }
@@ -102,7 +103,7 @@ export async function readProcesses(page: Page): Promise<ProcessSnapshot[]> {
     })());
     return { url: frame.url(), diagnostics };
   })();
-  const workers = bounded(page.evaluate(workerRows)).then(result => Array.isArray(result)
+  const workers = bounded(page.evaluate(workerRows, STARTING_MS), STARTING_MS + DIAGNOSTIC_MS).then(result => Array.isArray(result)
     ? result.map(worker => ({ url: `worker:${worker.url ?? origin + "/process-worker.js"}#pid=${worker.pid}`, diagnostics: workerDiagnostics(worker) }))
     : [{ url: "worker:" + origin, diagnostics: result }]);
   const [page_, rows] = await Promise.all([root, workers]);

@@ -1,12 +1,15 @@
 // What the harnesses run Java in besides the World lib.world makes: the platform's jars and data mounted as a page mounts them, and the state a process starts in.
 // It is bundled for pages too (g1run.ts, boot-probe-page.ts), where node:fs is the files the page preloaded.
-import { mountPlatformJar } from "../../src/android/framework.ts";
+import { readFileSync } from "node:fs";
+import { installFramework, mountPlatformJar } from "../../src/android/framework.ts";
+import { zygoteInit } from "../../src/android/zygote.ts";
+import { setZygoteBitness } from "../../src/jvm/natives/jvmruntime.ts";
 import { mountPlatformData } from "../../src/shell/apex.ts";
 import { PLATFORM_DATA } from "../../src/jvm/bootclasspath.ts";
 import { isResident, mapExternal, pagesIn, unmapExternal } from "../../src/jvm/natives/jmemory.ts";
 import type { World } from "../../src/wasm/link/world.ts";
 import { vfs } from "../../src/shell/vfs.ts";
-import { localPlatformData, platformJarBytes } from "../aosp.ts";
+import { AOSP, localPlatformData, platformJarBytes } from "../aosp.ts";
 
 const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer), f64 = new Float64Array(1), u64 = new BigUint64Array(f64.buffer);
 /** float/double results and arguments cross harnesses as raw bits */
@@ -38,11 +41,18 @@ export async function mountPlatform(from: string | Uint8Array[]): Promise<(Uint8
   return jars;
 }
 
-/** the process state ActivityThread.main leaves, entered asynchronously as a process starts: System's initialization reads files and the user database, which wait */
+/** the least of a process start that Java needs, entered asynchronously: System's initialization reads files and the user database, which wait */
 export async function startProcess(w: World): Promise<void> {
   // Zygote preloads VMClassLoader before FileSystems. Its lazy resource jars otherwise
   // re-enter FileSystems while the default provider is still being constructed.
   await w.entryAsync("java/lang/VMClassLoader", "getBootClassPathEntries", "()[Ljava/lang/String;")();
   await w.entryAsync("dalvik/system/CloseGuard", "setEnabled", "(Z)V")(0);
   await w.entryAsync("java/lang/System", "setProperty", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;")("java.io.tmpdir", "/data/local/tmp");
+}
+
+/** a page's zygote (shell/device.ts startZygote) from the checkout's files, in a 64-bit process: the framework package installed, then zygoteInit */
+export async function startZygote(): Promise<void> {
+  installFramework(new Uint8Array(readFileSync(`${AOSP}/framework-res.apk`)));
+  setZygoteBitness(true);
+  await zygoteInit();
 }

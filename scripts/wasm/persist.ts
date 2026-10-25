@@ -308,12 +308,14 @@ if (saved) {
   const oldData = new Map(savedFiles!);
   const dataName = [...oldData.keys()].find(name => /^e\d+\.wasm$/.test(name))!;
   oldData.set(dataName, packModule({ version: VERSION - 1 }, Uint8Array.of(0, 97, 115, 109, 1, 0, 0, 0)));
-  check("previous data stub format is rejected by persistence", await SavedBuild.open(oldData), undefined);
+  const staleData = world(app, { app: { index, store: (await SavedBuild.open(oldData))! } });
+  check("a data module of the previous stub format answers as without", answers(staleData).join(), expected.join());
   const plain = world(app);
   answers(plain);
   const w = world(app, { app: { index, store } });
   check("the app build attaches", w.appAttached, true);
   check("answers as without", answers(w).join(), expected.join());
+  check("a data module of the previous stub format is not loaded", staleData.stats.aot.d, w.stats.aot.d - 1);
   const loaded = w.aot!.loaded.filter((f) => f[0] === "a");
   check("its modules were loaded", loaded.length > 0, true);
   check("it compiled fewer methods on demand", w.stats.methods < plain.stats.methods, true);
@@ -351,7 +353,7 @@ if (saved) {
   check("a changed format finds none", world(app, { app: { index: { ...index, version: index.version + 1 }, store } }).appAttached, false);
   const stale = world(app);
   stale.entry("Pst", "chain", "()I")();
-  check("a World that numbered something does not need the build to be sound", answers(stale).join(), expected.join());
+  check("a World that numbered something does not need the build to be sound", answers(staleData).join(), expected.join());
   // a platform build that lacks some of its modules, and an app build that lacks some of its own
   const partial = world(app, { app: { index, store: { get: (f) => (f === "a0.wasm" ? undefined : store.get(f)) } } });
   check("a module that is missing is compiled on demand", answers(partial).join(), expected.join());

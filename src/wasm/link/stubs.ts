@@ -9,6 +9,7 @@ import type { World } from "./world.ts";
 
 /** a lazy-link stub's signature, its name where a class module imports it */
 export const stubKey = (k: Kinds) => k.params.join("") + ":" + k.ret;
+const stubKinds = (key: string): Kinds => { const [params, ret] = key.split(":"); return { params: [...params] as Kind[], ret: ret as Kind | "V" }; };
 export const kindsType = (mb: ModuleBuilder, k: Kinds) => mb.addFuncType(k.params.map((p) => kindVT(p)), k.ret === "V" ? [] : [kindVT(k.ret)]);
 
 export class Stubs {
@@ -49,12 +50,10 @@ export class Stubs {
     }
     return kinds.map((k) => this.stubs.get(stubKey(k))!);
   }
-  /** the imports of a class module's shared stubs (classModule), named by signature */
-  stubImports(mod: WebAssembly.Module): Record<string, Function> {
-    const keys = WebAssembly.Module.imports(mod).filter((i) => i.module === "stub").map((i) => i.name);
-    const fns = this.stubsFor(keys.map((key) => { const [params, ret] = key.split(":"); return { params: [...params] as Kind[], ret: ret as Kind | "V" }; }));
-    return Object.fromEntries(keys.map((key, i) => [key, fns[i]]));
-  }
+  /** the import module of a class module's shared stubs (classModule), named by signature: each is made when instantiation first asks for it */
+  readonly imports: Record<string, Function> = new Proxy({}, {
+    get: (_, key) => typeof key === "string" ? this.stubs.get(key) ?? this.stubsFor([stubKinds(key)])[0] : undefined,
+  });
   /** puts the lazy-link stub back in `slot`, unless it holds code nothing here can stand in for */
   restoreStub(slot: number, s = this.w.slots.at(slot)): boolean {
     const k = s?.k === "method" ? methodKinds(s.m) : s?.k === "synth" ? s.d : s?.k === "thrower" ? { params: THROWERS[s.name].params, ret: "V" as const } : undefined;

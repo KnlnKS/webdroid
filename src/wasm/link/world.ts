@@ -212,13 +212,14 @@ export class World {
 
   /** gives every platform class (the Program's classes of the dexes `accept`s, in definition order) its id and its block of table slots, so that numbers do not depend on what runs first (aot.ts) */
   seedPlatform(accept: (dex: DexFile) => boolean): number {
-    let n = 0;
+    const blocks: [string, number][] = [];
     for (const c of this.prog.all()) {
       if (!c.dex || !accept(c.dex)) continue;
-      if (this.idOf(c.name) !== n + 1) throw new Error("platform classes must be numbered first");
-      this.slots.addBlock(c.name, c.methodCount + 1); n++;
+      if (this.idOf(c.name) !== blocks.length + 1) throw new Error("platform classes must be numbered first");
+      blocks.push([c.name, c.methodCount + 1]);
     }
-    return this.slots.seeded = n;
+    this.slots.seed(blocks);
+    return blocks.length;
   }
 
   // ---------- ids, selectors, vtable layout
@@ -287,9 +288,11 @@ export class World {
     return mod;
   }
   instantiate(mod: Uint8Array | WebAssembly.Module, imports: Record<string, Record<string, unknown>>): WebAssembly.Instance {
-    const m = ArrayBuffer.isView(mod) ? this.compile(mod as Uint8Array) : mod as WebAssembly.Module, t0 = performance.now();
+    const m = ArrayBuffer.isView(mod) ? this.compile(mod as Uint8Array) : mod as WebAssembly.Module, s = this.stats;
+    const t0 = performance.now(), counted = s.moduleMs + s.instantiateMs;
     const inst = new WebAssembly.Instance(m, imports as WebAssembly.Imports); // the lib's import values omit tags
-    this.stats.instantiateMs += performance.now() - t0; this.stats.instances++;
+    // the stub module Stubs.imports may make while the imports resolve counts its own time
+    s.instantiateMs += performance.now() - t0 - (s.moduleMs + s.instantiateMs - counted); s.instances++;
     return inst;
   }
   rtImports() { const { tag, alloc, hash, ctab, unsafeSlots, sid, thr, depth, iw, wait, callee, link } = this.rt; return { table: this.table, nm: this.nm, tag, alloc, hash, ctab, unsafeSlots, sid, thr, depth, iw, wait, callee, link, mem: this.mem, sp: this.sp, gmem: this.opts.guest?.memory, gflags: this.opts.guest?.flags }; }

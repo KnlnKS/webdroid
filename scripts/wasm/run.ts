@@ -38,7 +38,7 @@ const SUITES: Record<string, Suite> = {
   watdump: { tool: true, doc: "prints the code generated for a method: watdump <workload> <method-name-filter> (needs the dex g1 builds)" },
   aot: { tool: true, doc: "(pnpm aot) aot-build then aot-startup into vendor/wasm-aot/<key>, and makes it the build the server offers (--keep adds it beside that one, for ?aot=<key>)" },
   "aot-build": { tool: true, doc: "the platform assets alone (--out <dir> keeps them out of vendor/wasm-aot)" },
-  "aot-startup": { tool: true, doc: "the modules a start of the process loads, into the build's startup.json (WEBDROID_AOT=<dir>)" },
+  "aot-startup": { tool: true, doc: "the modules the zygote's start loads, into the build's startup.json (WEBDROID_AOT=<dir>)" },
   "aot-profile": { tool: true, doc: "regroups the build by what app launches use (--classes, then pnpm aot, then again without, with the server running) and writes its startup list" },
 };
 

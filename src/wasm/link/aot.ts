@@ -331,7 +331,7 @@ export class AotRuntime {
     if (!mod) return undefined;
     const head = header<DHeader>(mod);
     if (!w.units.admits(head)) { this.rejectedData.add(file); return undefined; }
-    ex = memo[g] = w.instantiate(mod, { rt: w.rtImports(), host: w.host, stub: w.stubs.stubImports(mod) }).exports;
+    ex = memo[g] = w.instantiate(mod, { rt: w.rtImports(), host: w.host, stub: w.stubs.imports }).exports;
     w.stats.aot.d++;
     // the classes the vtables and `ensure` functions of the group name must have stubs before anything runs
     w.units.linkHeader(head);
