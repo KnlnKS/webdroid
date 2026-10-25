@@ -112,8 +112,8 @@ export class Outliner {
   exit(from: number, targetPc: number, final: boolean, go: Go, label: string): boolean {
     const mc = this.mc, c = mc.code, ch = this.chunk;
     if (!ch) return false;
-    if (go === Go.Dispatch && ch.cycle?.includes(mc.regionOfPc.get(targetPc)!)) { c.i32(mc.regionOfPc.get(targetPc)!).lset(mc.regionLocal).br(mc.depth("$cycleDisp")); return true; }
-    if (go === Go.Next || mc.nest.includes(label)) return false;
+    if (go === Go.Dispatch && ch.cycle?.includes(mc.regionOfPc.get(targetPc)!)) { c.i32(mc.regionOfPc.get(targetPc)!).lset(mc.regionLocal).br("$cycleDisp"); return true; }
+    if (go === Go.Next || c.has(label)) return false;
     let i = ch.exits.findIndex((e) => e.pc === targetPc && e.block === from && e.final === final);
     if (i < 0) { i = ch.exits.length; ch.exits.push({ pc: targetPc, block: from, final }); }
     this.status(ChunkStatus.Exit + i);
@@ -163,52 +163,48 @@ export class Outliner {
   /** the regions of a dispatch cycle in its chunk: a jump between them dispatches here, each dispatch counting toward the chunk */
   private emitCycle(cycle: number[]): void {
     const mc = this.mc, c = mc.code;
-    mc.push("$cycleDisp"); c.loop();
+    c.loop(null, "$cycleDisp");
     this.iterate(this.chunk!);
-    for (let i = cycle.length - 1; i >= 0; i--) { mc.push("$C" + i); c.block(); }
+    for (let i = cycle.length - 1; i >= 0; i--) c.block();
     const at = new Map(cycle.map((k, i) => [k, i]));
     c.lget(mc.regionLocal).brTable(Array.from({ length: mc.flow.regions.length }, (_, k) => at.get(k) ?? 0), 0);
-    for (let i = 0; i < cycle.length; i++) { mc.pop(); c.end(); mc.emitRegion(cycle[i]); c.unreachable(); }
-    mc.pop(); c.end().unreachable();
+    for (let i = 0; i < cycle.length; i++) { c.end(); mc.emitRegion(cycle[i]); c.unreachable(); }
+    c.end().unreachable();
   }
   /** the loop in the method, left for its chunks at a fuel tick or once a loop inside it was */
   private deferLoop(r: Region, scope: Scope, scopes: Scope[]): void {
     const mc = this.mc, c = mc.code, label = scope.label, after = "$after" + label, xfer = "$xfer" + label;
-    mc.push(after); c.block();
-    mc.push(xfer); c.block();
-    mc.push(label); c.loop();
+    c.block(null, after).block(null, xfer).loop(null, label);
     const armed = this.armedLocal >= 0 ? this.armedLocal : (this.armedLocal = mc.root.newLocal(T.i32));
-    if (scopes.some((s) => s.loop)) c.lget(armed).brIf(mc.depth(xfer));
-    mc.push("if");
-    mc.fuel(() => c.i32(1).lset(armed).br(mc.depth(xfer)));
-    mc.pop();
+    if (scopes.some((s) => s.loop)) c.lget(armed).brIf(xfer);
+    mc.fuel(() => c.i32(1).lset(armed).br(xfer));
     mc.emitSpan(r, scope.open, scope.close, scopes);
-    mc.endBlk(); c.br(mc.depth(after));
-    mc.pop(); c.end();
+    c.end().br(after);
+    c.end();
     this.outline(r, scope, scopes);
-    mc.pop(); c.end();
+    c.end();
   }
   private outline(r: Region, scope: Scope, scopes: Scope[]): void {
     const mc = this.mc;
     this.call(this.body(scope.label, () => {
-      mc.push(scope.label); mc.code.loop();
+      mc.code.loop(null, scope.label);
       this.iterate(this.chunk!);
       mc.emitSpan(r, scope.open, scope.close, scopes);
-      mc.endBlk(); this.status(ChunkStatus.Done);
+      mc.code.end(); this.status(ChunkStatus.Done);
     }));
   }
   /** at the head of a chunk's loop: back to the dispatcher after CHUNK iterations, else count one */
   private iterate(ch: Chunk): void {
     const mc = this.mc, c = mc.code;
-    c.lget(ch.count).i32(CHUNK).raw(OP.i32_eq).if_(); mc.push("if"); this.status(ChunkStatus.Again); mc.pop(); c.end();
+    c.lget(ch.count).i32(CHUNK).raw(OP.i32_eq).if_(); this.status(ChunkStatus.Again); c.end();
     c.lget(ch.count).i32(1).raw(OP.i32_add).lset(ch.count);
   }
   private status(status: number): void {
-    this.mc.code.i32(status).br(this.mc.depth("$chunkReturn"));
+    this.mc.code.i32(status).br("$chunkReturn");
   }
   /** a function of its own for what `emit` emits, which answers a status (call) and takes and leaves the method's locals in the state struct */
   private body(label: string, emit: () => void, cycle?: number[]): Chunk {
-    const mc = this.mc, root = mc.root as OutlinedCode, parent = mc.code as OutlinedCode, nest = mc.nest, outer = this.chunk;
+    const mc = this.mc, root = mc.root as OutlinedCode, parent = mc.code as OutlinedCode, outer = this.chunk;
     const body = new ChunkCode(root);
     body.defer((c) => {
       // the chunk's own parameter, the state struct, which no local of the method maps to
@@ -218,24 +214,22 @@ export class Outliner {
     if (this.chunkFuel < 0) this.chunkFuel = root.newLocal(T.i32);
     const ch: Chunk = { code: body, label, count: parent.newLocal(T.i32), entry: parent.newLocal(T.i32), exits: [], locals: [], f: -1, dispatch: -1, cycle };
     parent.locals.add(ch.entry);
-    this.chunks.push(ch); mc.code = body; mc.nest = []; this.chunk = ch;
-    mc.push("$chunkReturn"); body.block(T.i32);
-    mc.push("$chunkCaught"); body.block(T.anyref);
-    mc.push("$chunkTry"); body.tryTable(null, [[0, mc.cx.tag, 0]]);
+    this.chunks.push(ch); mc.code = body; this.chunk = ch;
+    body.block(T.i32, "$chunkReturn").block(T.anyref).tryTable(null, [[0, mc.cx.tag, 0]]);
     emit();
-    mc.pop(); body.end().unreachable();
-    mc.pop(); body.end().lset(mc.excLocal); this.status(ChunkStatus.Throw);
-    mc.pop(); body.end();
+    body.end().unreachable();
+    body.end().lset(mc.excLocal); this.status(ChunkStatus.Throw);
+    body.end();
     if (mc.cx.counting) mc.cx.emitLoopCount(body, mc.m, ch.count);
     body.defer((c) => { this.saveState(c, ch.locals); c.ret(); });
     for (const l of body.locals) parent.locals.add(l);
-    mc.code = parent; mc.nest = nest; this.chunk = outer;
+    mc.code = parent; this.chunk = outer;
     return ch;
   }
   /** calls the chunk until it is done, then goes where it says: the method returns or throws, or control continues at one of its exits (Done falls through) */
   private call(ch: Chunk): void {
     const mc = this.mc, c = mc.code, cx = mc.cx;
-    mc.push("$chunkCall"); c.loop();
+    c.loop();
     c.i32(0).lset(ch.count);
     c.defer((c) => {
       c.lget(this.stateLocal).refIsNull().if_().gc(1, this.stateType).lset(this.stateLocal).end();
@@ -249,16 +243,16 @@ export class Outliner {
       this.loadState(c, ch.locals);
     });
     c.lget(this.controlLocal).i32(ChunkStatus.Again).raw(OP.i32_eq).brIf(0);
-    c.lget(this.controlLocal).i32(ChunkStatus.Return).raw(OP.i32_eq).if_(); mc.push("if");
+    c.lget(this.controlLocal).i32(ChunkStatus.Return).raw(OP.i32_eq).if_();
     if (this.resultLocal >= 0) c.lget(this.resultLocal);
-    mc.methodReturn(); mc.pop(); c.end();
+    mc.methodReturn(); c.end();
     c.lget(this.controlLocal).i32(ChunkStatus.Throw).raw(OP.i32_eq).if_().lget(mc.excLocal).throw_(cx.tag).end();
     for (let i = 0; i < ch.exits.length; i++) {
-      c.lget(this.controlLocal).i32(ChunkStatus.Exit + i).raw(OP.i32_eq).if_(); mc.push("if");
+      c.lget(this.controlLocal).i32(ChunkStatus.Exit + i).raw(OP.i32_eq).if_();
       const exit = ch.exits[i];
-      mc.jump(exit.block, exit.pc, exit.final); mc.pop(); c.end();
+      mc.jump(exit.block, exit.pc, exit.final); c.end();
     }
-    mc.pop(); c.end();
+    c.end();
   }
   private saveState(c: Code, locals: number[]): void {
     for (const i of locals) c.lget(this.stateLocal).refAsNonNull().lget(i, false).structSet(this.stateType, i);

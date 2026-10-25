@@ -55,15 +55,22 @@ export class Code {
     this.mark(); this.indirect++; this.b.push(0x11); uleb(type, this.b); uleb(table, this.b); return this;
   }
   callRef(type: number): this { this.indirect++; this.b.push(0x14); uleb(type, this.b); return this; }
-  block(bt: number | VT | null = null): this { this.b.push(0x02); this.bt(bt); return this; }
-  loop(bt: number | VT | null = null): this { this.b.push(0x03); this.bt(bt); return this; }
-  if_(bt: number | VT | null = null): this { this.b.push(0x04); this.bt(bt); return this; }
+  /** the label of each open block, innermost last: a branch names its target by label (depth) or by relative depth */
+  private labels: (string | undefined)[] = [];
+  /** the relative depth of the innermost open block labelled `label` */
+  depth(label: string): number { const i = this.labels.lastIndexOf(label); if (i < 0) throw new Error("no label " + label); return this.labels.length - 1 - i; }
+  /** whether a block labelled `label` is open */
+  has(label: string): boolean { return this.labels.includes(label); }
+  private open(op: number, label?: string): this { this.labels.push(label); this.b.push(op); return this; }
+  block(bt: number | VT | null = null, label?: string): this { this.open(0x02, label).bt(bt); return this; }
+  loop(bt: number | VT | null = null, label?: string): this { this.open(0x03, label).bt(bt); return this; }
+  if_(bt: number | VT | null = null): this { this.open(0x04).bt(bt); return this; }
   /** an if whose block type is the function type `type`: it takes that type's parameters from the stack under the condition */
-  ifType(type: number): this { this.b.push(0x04); sleb(type, this.b); return this; }
+  ifType(type: number): this { this.open(0x04); sleb(type, this.b); return this; }
   else_(): this { this.b.push(0x05); return this; }
-  end(): this { this.b.push(0x0b); return this; }
-  br(d: number): this { this.b.push(0x0c); uleb(d, this.b); return this; }
-  brIf(d: number): this { this.b.push(0x0d); uleb(d, this.b); return this; }
+  end(): this { this.labels.pop(); this.b.push(0x0b); return this; }
+  br(d: number | string): this { this.b.push(0x0c); uleb(typeof d === "number" ? d : this.depth(d), this.b); return this; }
+  brIf(d: number | string): this { this.b.push(0x0d); uleb(typeof d === "number" ? d : this.depth(d), this.b); return this; }
   brTable(targets: number[], dflt: number): this { this.b.push(0x0e); uleb(targets.length, this.b); for (const t of targets) uleb(t, this.b); uleb(dflt, this.b); return this; }
   ret(): this { this.b.push(0x0f); return this; }
   unreachable(): this { this.b.push(0x00); return this; }
@@ -72,10 +79,10 @@ export class Code {
   throw_(tag: number): this { this.mark(); this.b.push(0x08); uleb(tag, this.b); return this; }
   throwRef(): this { this.b.push(0x0a); return this; }
   /** try_table with catch clauses [kind, tag, label] ; kind 0 catch,1 catch_ref,2 catch_all,3 catch_all_ref */
-  tryTable(bt: number | VT | null, catches: [number, number, number][]): this { this.b.push(0x1f); this.bt(bt); return this.catches(catches); }
+  tryTable(bt: number | VT | null, catches: [number, number, number][], label?: string): this { this.open(0x1f, label).bt(bt); return this.catches(catches); }
   /** a block, and a try_table, whose type is the function type index `type` (the operands it takes and the results it leaves) */
-  blockType(type: number): this { this.b.push(0x02); sleb(type, this.b); return this; }
-  tryTableType(type: number, catches: [number, number, number][]): this { this.b.push(0x1f); sleb(type, this.b); return this.catches(catches); }
+  blockType(type: number): this { this.open(0x02); sleb(type, this.b); return this; }
+  tryTableType(type: number, catches: [number, number, number][]): this { this.open(0x1f); sleb(type, this.b); return this.catches(catches); }
   private catches(catches: [number, number, number][]): this {
     uleb(catches.length, this.b);
     for (const [k, tag, lab] of catches) { this.b.push(k); if (k < 2) uleb(tag, this.b); uleb(lab, this.b); }

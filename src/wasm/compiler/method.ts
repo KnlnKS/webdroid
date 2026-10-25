@@ -78,7 +78,6 @@ export class MC {
   webLocal: number[] = [];
   /** the instruction being emitted: its operands resolve to webs through it */
   cur!: Ins;
-  nest: string[] = [];
   block = 0;
   regionLocal = -1; pcLocal = -1; excLocal = -1; tmpL = -1;
   consumed = new Set<number>();            // move-result pcs folded into their invoke
@@ -218,32 +217,26 @@ export class MC {
     }
     this.regionLocal = c.newLocal(T.i32);
     if (this.excLocal < 0) this.excLocal = c.newLocal(T.anyref);
-    this.push("$disp"); c.loop();
-    if (this.tries) {
-      this.push("$caught"); c.block(T.anyref);
-      c.tryTable(null, [[0, cx.tag, 0]]); this.push("$try");
-    }
+    c.loop(null, "$disp");
+    if (this.tries) c.block(T.anyref).tryTable(null, [[0, cx.tag, 0]]);
     // the method's own entry is region 0 and falls into it; only a jump from a handler or another region chooses by region (and gives other strands a turn)
     const n = regions.length;
-    for (let k = n - 1; k >= 1; k--) { this.push("$R" + k); c.block(); }
+    for (let k = n - 1; k >= 1; k--) c.block();
     if (n > 1) {
-      c.lget(this.regionLocal).if_(); this.push("if");
+      c.lget(this.regionLocal).if_();
       this.fuel();
       c.lget(this.regionLocal).brTable(Array.from({ length: n }, (_, k) => Math.max(k, 1)), n - 1);
-      this.pop(); c.end();
+      c.end();
     }
     this.emitRegion(0); c.unreachable();
-    for (let k = 1; k < n; k++) { this.pop(); c.end(); this.emitRegion(k); c.unreachable(); }
+    for (let k = 1; k < n; k++) { c.end(); this.emitRegion(k); c.unreachable(); }
     if (this.tries) {
-      this.pop(); c.end();                          // try_table
-      c.unreachable();
-      this.pop(); c.end();                          // $caught: exception on stack
-      c.lset(this.excLocal);
+      c.end().unreachable();                        // try_table
+      c.end().lset(this.excLocal);                  // exception on stack
       this.emitCatch();
       c.lget(this.excLocal).throw_(cx.tag);
     }
-    this.pop(); c.end();                            // $disp loop
-    c.unreachable();
+    c.end().unreachable();                          // $disp loop
   }
   /** the local holding the depth before this method's frame, if it counts one */
   private entryDepth = -1;
@@ -317,18 +310,13 @@ export class MC {
     if (!s) this.invokes.set(ins.pc, s = invokeSite(this.cx.prog, this.m, ins.b, invokeKind(ins.op)));
     return s;
   }
-  push(l: string) { this.nest.push(l); }
-  pop() { this.nest.pop(); }
-  depth(label: string): number { const i = this.nest.lastIndexOf(label); if (i < 0) throw new Error("no label " + label); return this.nest.length - 1 - i; }
   /** a scope of the structured flow: a block (B), or a loop (L) that stays in the method */
   blk(label: string, loop: boolean) {
-    this.push(label);
-    if (!loop) { this.code.block(); return; }
-    this.code.loop();
+    if (!loop) { this.code.block(null, label); return; }
+    this.code.loop(null, label);
     // every cycle passes a natural loop's head, which can hold the browser thread however finite the loop
     this.fuel();
   }
-  endBlk() { this.pop(); this.code.end(); }
 
   emitRegion(k: number) {
     const r = this.flow.regions[k];
@@ -337,7 +325,7 @@ export class MC {
   emitSpan(r: Flow["regions"][number], start: number, end: number, scopes: Flow["regions"][number]["scopes"]) {
     const open: { close: number }[] = []; let next = 0, p = start;
     while (p <= end) {
-      while (open.length && open[open.length - 1].close === p) { open.pop(); this.endBlk(); }
+      while (open.length && open[open.length - 1].close === p) { open.pop(); this.code.end(); }
       let outlined = false;
       for (; next < scopes.length && scopes[next].open === p; next++) {
         const s = scopes[next];
@@ -382,18 +370,17 @@ export class MC {
     if (this.loops?.exit(from, targetPc, final, go, label)) return;
     switch (go) {
       case Go.Next: return;
-      case Go.Break: c.br(this.depth("B" + targetPc)); return;
-      case Go.Continue: c.br(this.depth("L" + targetPc)); return;
+      case Go.Break: case Go.Continue: c.br(label); return;
       case Go.Dispatch: {
         const ri = this.regionOfPc.get(targetPc); if (ri === undefined) throw new Error("dispatch to non-entry " + targetPc);
-        c.i32(ri).lset(this.regionLocal).br(this.depth("$disp")); return;
+        c.i32(ri).lset(this.regionLocal).br(label); return;
       }
     }
   }
   emitCatch() {
     const c = this.code;
     if (this.entryDepth >= 0) this.weights.push(...this.cx.emitLeave(c, this.entryDepth, true));
-    const dispatchTo = (addr: number) => { const ri = this.regionOfPc.get(addr); if (ri === undefined) throw new Error("handler not region entry"); c.i32(ri).lset(this.regionLocal).br(this.depth("$disp")); };
+    const dispatchTo = (addr: number) => { const ri = this.regionOfPc.get(addr); if (ri === undefined) throw new Error("handler not region entry"); c.i32(ri).lset(this.regionLocal).br("$disp"); };
     if (this.item.tries.some(t => t.handlers.length > 0)) {
       const target = c.newLocal(T.i32);
       const args = () => c.i32(this.cx.idOf(this.m.cls)).i32(this.m.index).lget(this.pcLocal).lget(this.excLocal).externConvertAny();
@@ -403,14 +390,14 @@ export class MC {
       });
       c.lset(target);
       for (const addr of this.prepared.handlerPcs) {
-        c.lget(target).i32(addr).raw(OP.i32_eq).if_(); this.push("if"); dispatchTo(addr); this.pop(); c.end();
+        c.lget(target).i32(addr).raw(OP.i32_eq).if_(); dispatchTo(addr); c.end();
       }
       return;
     }
     for (const t of this.item.tries) {
-      c.lget(this.pcLocal).i32(t.start).raw(OP.i32_ge_s).lget(this.pcLocal).i32(t.end).raw(OP.i32_lt_s).raw(OP.i32_and).if_(); this.push("if");
+      c.lget(this.pcLocal).i32(t.start).raw(OP.i32_ge_s).lget(this.pcLocal).i32(t.end).raw(OP.i32_lt_s).raw(OP.i32_and).if_();
       if (t.catchAllAddr >= 0) dispatchTo(t.catchAllAddr);
-      this.pop(); c.end();
+      c.end();
     }
   }
   /** whether the class of type `desc` is not loaded: the site then throws what ART throws, and nothing after it runs */
@@ -638,24 +625,21 @@ export class MC {
     const fall = ins.pc + ins.len;
     if (this.prepared.blockAt[target] === this.prepared.blockAt[fall]) return;
     cond();
-    if (flow.inverted.has(this.block)) { c.raw(OP.i32_eqz).if_(); this.push("if"); this.jump(this.block, fall, false); }
-    else { c.if_(); this.push("if"); this.jump(this.block, target, false); }
-    this.pop(); c.end();
+    if (flow.inverted.has(this.block)) { c.raw(OP.i32_eqz).if_(); this.jump(this.block, fall, false); }
+    else { c.if_(); this.jump(this.block, target, false); }
+    c.end();
   }
   emitSwitch(ins: Ins) {
     const c = this.code, cases = switchCases(this.item, ins), flow = this.flow, blockAt = this.prepared.blockAt;
     const lo = Math.min(...cases.map(([k]) => k)), hi = Math.max(...cases.map(([k]) => k));
     // keys dense enough make a jump table, when every target is a label (a hole and the fall-through go to the end of the block)
-    const labelled = cases.every(([, t]) => { const g = flow.go(this.block, blockAt[t], false); return g === Go.Break ? this.nest.includes("B" + t) : g === Go.Continue && this.nest.includes("L" + t); });
-    if (cases.length >= 4 && hi - lo < 4 * cases.length && labelled) {
+    const label = (t: number) => { const g = flow.go(this.block, blockAt[t], false); return g === Go.Break ? "B" + t : g === Go.Continue ? "L" + t : ""; };
+    if (cases.length >= 4 && hi - lo < 4 * cases.length && cases.every(([, t]) => c.has(label(t)))) {
       const target = new Map(cases);
-      this.push("$sw"); c.block();
+      c.block();
       this.get("I", ins.a); c.i32(lo).raw(OP.i32_sub);
-      c.brTable(Array.from({ length: hi - lo + 1 }, (_, i) => {
-        const t = target.get(lo + i);
-        return t === undefined ? 0 : this.depth((flow.go(this.block, blockAt[t], false) === Go.Break ? "B" : "L") + t);
-      }), 0);
-      this.pop(); c.end();
+      c.brTable(Array.from({ length: hi - lo + 1 }, (_, i) => { const t = target.get(lo + i); return t === undefined ? 0 : c.depth(label(t)); }), 0);
+      c.end();
       return;
     }
     // sparse keys: a binary search down to runs of at most three compares
@@ -663,11 +647,11 @@ export class MC {
     const search = (from: number, to: number) => {
       if (to - from > 3) {
         const mid = (from + to + 1) >> 1;
-        this.get("I", ins.a); c.i32(sorted[mid][0]).raw(OP.i32_lt_s).if_(); this.push("if"); search(from, mid - 1); this.pop(); c.else_(); this.push("if"); search(mid, to); this.pop(); c.end();
+        this.get("I", ins.a); c.i32(sorted[mid][0]).raw(OP.i32_lt_s).if_(); search(from, mid - 1); c.else_(); search(mid, to); c.end();
         return;
       }
       for (const [key, target] of sorted.slice(from, to + 1)) {
-        this.get("I", ins.a); c.i32(key).raw(OP.i32_eq).if_(); this.push("if"); this.jump(this.block, target, false); this.pop(); c.end();
+        this.get("I", ins.a); c.i32(key).raw(OP.i32_eq).if_(); this.jump(this.block, target, false); c.end();
       }
     };
     search(0, sorted.length - 1);
