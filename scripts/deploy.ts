@@ -24,4 +24,27 @@ if (branch === "main") {
   const alias = deployed?.alias && new URL(deployed.alias).hostname.split(".")[0];
   if (!alias) throw new Error("Pages gave the deployment no alias");
   wrangler("preview", ...worker, "--name", alias, "--var", `PREVIEW_ALIAS:${alias}`);
+  await reportDeployment(`https://${alias}.webdroid.pages.dev`);
+}
+
+// The Pages project has no Git integration, so a GitHub deployment is what puts the preview's link on the branch's PRs.
+async function reportDeployment(url: string) {
+  const token = process.env.GITHUB_TOKEN, ref = process.env.WORKERS_CI_COMMIT_SHA;
+  if (!token || !ref) return console.log("No GITHUB_TOKEN or WORKERS_CI_COMMIT_SHA: the preview is not reported to GitHub");
+  const github = async (path: string, body: object) => {
+    const response = await fetch(`https://api.github.com/repos/KnlnKS/webdroid${path}`, {
+      method: "POST", body: JSON.stringify(body),
+      headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "user-agent": "webdroid-deploy" },
+    });
+    if (!response.ok) throw new Error(`GitHub ${path}: ${response.status} ${await response.text()}`);
+    return response.json() as Promise<{ id: number }>;
+  };
+  // A failed report leaves a working deployment, so it warns rather than failing the build.
+  try {
+    const { id } = await github("/deployments", { ref, environment: `Preview (${branch})`, auto_merge: false, required_contexts: [], transient_environment: true });
+    await github(`/deployments/${id}/statuses`, { state: "success", environment_url: url, auto_inactive: true });
+    console.log(`Reported ${url} to GitHub`);
+  } catch (error) {
+    console.warn(`The preview was not reported to GitHub: ${error}`);
+  }
 }
