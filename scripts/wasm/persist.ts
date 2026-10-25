@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { APP_VERSION, VERSION } from "../../src/wasm/link/aot.ts";
 import { packModule } from "../../src/wasm/link/aotbuild.ts";
+import { APP, BUILT } from "../../src/wasm/link/slots.ts";
 import { sameMarks } from "../../src/wasm/link/numbers.ts";
 import { Program } from "../../src/wasm/compiler/program.ts";
 import type { World } from "../../src/wasm/link/world.ts";
@@ -117,20 +118,20 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
   check("it follows the page's numbering", uc.sync(page.numbers.since(page.base), true), true);
   check("and then numbers the same", sameMarks(worker.numbers.marks(), page.numbers.marks()), true);
   const slot = page.slotOf(page.prog.resolve("Pst", "hot", "(I)I")!);
-  const job = page.tiers.upgradeJob(slot)!, from = page.numbers.marks();
-  check("worker carries prepared hierarchy certificates", !!job.prepared?.length, true);
-  if (job.prepared?.length) {
+  const job = page.upgrades.job(slot)!, from = page.numbers.marks();
+  check("worker carries prepared hierarchy certificates", !!job.prepared.length, true);
+  if (job.prepared.length) {
     const bad = { ...job, prepared: job.prepared.map(([key, sup, ifaces], i) => [key, i ? sup : "fixture/WrongSuperclass", ifaces] as [string, string | null, string[]]) };
     const rejected = world(app, { compileOnly: true }), rejecting = new UnitCompiler(rejected);
     rejected.prog.dynamicRoot = true;
-    bad.resolved = [...job.resolved ?? [], ["Pst", "fixture/RejectedIdentity", "Pst"]];
+    bad.resolved = [...job.resolved, ["Pst", "fixture/RejectedIdentity", "Pst"]];
     if (!bad.prepared.some(([key]) => key === "Pst")) {
       const cls = rejected.prog.get("Pst")!;
       bad.prepared.push(["Pst", cls.sup, [...cls.ifaces]]);
     }
     check("worker rejects a mismatched prepared hierarchy", typeof rejecting.upgrade(bad), "string");
     check("rejected hierarchy leaves initiating identity untouched", rejected.prog.initiatedBy(rejected.prog.root, "fixture/RejectedIdentity"), undefined);
-    check("worker rejects missing hierarchy certificates", typeof uc.upgrade({ ...job, prepared: undefined }), "string");
+    check("worker rejects missing hierarchy certificates", typeof uc.upgrade({ ...job, prepared: [] }), "string");
   }
   worker.selectorId("pst.extra()V");      // what a unit that needs a selector the page lacks would number
   const unit = uc.upgrade(job);
@@ -138,27 +139,27 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
     check("the unit carries the selector it numbered", unit.numbering.selectors.join(), "pst.extra()V");
     check("it was numbered from the page's state", sameMarks(unit.numbering.from, from), true);
     page.selectorId("pst.other()V");        // the page numbered something meanwhile
-    check("a unit that numbered something is not taken after the page did", page.tiers.adoptUnit(slot, job, unit, page.epoch), false);
+    check("a unit that numbered something is not taken after the page did", page.tiers.adopt(slot, job, unit, page.epoch), false);
     check("and the page's numbering is untouched", page.numbers.selKeys.at(-1), "pst.other()V");
     // the worker forgets its numbering and follows the page: the next unit is made over the page's state
     check("the worker takes the page's numbering after dropping its own", uc.sync(page.numbers.since(from), false), true);
     check("it forgot the selector it numbered", worker.numbers.selectors.has("pst.extra()V"), false);
     check("and has the page's", sameMarks(worker.numbers.marks(), page.numbers.marks()), true);
-    const next = page.tiers.upgradeJob(slot)!, again = uc.upgrade(next);
+    const next = page.upgrades.job(slot)!, again = uc.upgrade(next);
     if (typeof again !== "string") {
-      check("a worker unit without a stub format is rejected", page.tiers.adoptUnit(slot, next, { ...again, header: { ...again.header, version: undefined } }, page.epoch), false);
-      check("a worker unit with the previous stub format is rejected", page.tiers.adoptUnit(slot, next, { ...again, header: { ...again.header, version: VERSION - 1 } }, page.epoch), false);
+      check("a worker unit without a stub format is rejected", page.tiers.adopt(slot, next, { ...again, header: { ...again.header, version: undefined } }, page.epoch), false);
+      check("a worker unit with the previous stub format is rejected", page.tiers.adopt(slot, next, { ...again, header: { ...again.header, version: VERSION - 1 } }, page.epoch), false);
     }
-    check("a unit made then is taken", typeof again !== "string" && page.tiers.adoptUnit(slot, next, again, page.epoch), true);
+    check("a unit made then is taken", typeof again !== "string" && page.tiers.adopt(slot, next, again, page.epoch), true);
   }
 }
 {
   const page = world(app), worker = world(app, { compileOnly: true }), uc = new UnitCompiler(worker);
   page.entry("Pst", "hot", "(I)I")(10);
   uc.sync(page.numbers.since(page.base), true);
-  const slot = page.slotOf(page.prog.resolve("Pst", "hot", "(I)I")!), job = page.tiers.upgradeJob(slot)!, unit = uc.upgrade(job);
+  const slot = page.slotOf(page.prog.resolve("Pst", "hot", "(I)I")!), job = page.upgrades.job(slot)!, unit = uc.upgrade(job);
   page.addDexes([]);
-  check("a unit made before dex files were added is not taken", typeof unit !== "string" && page.tiers.adoptUnit(slot, job, unit, page.epoch - 1), false);
+  check("a unit made before dex files were added is not taken", typeof unit !== "string" && page.tiers.adopt(slot, job, unit, page.epoch - 1), false);
 }
 
 // ---- second-tier units from the worker
@@ -325,7 +326,7 @@ if (saved) {
   {
     const dyn = world(app, { app: { index, store } });
     answers(dyn);
-    const unasked = dyn.slots.blockBase.flatMap((base, b) => Array.from({ length: dyn.slots.methodsIn(b) }, (_, i) => base + i)).find((s) => !dyn.slots.peek(s) && dyn.aot!.fromAppBuild(s));
+    const unasked = dyn.slots.blockBase.flatMap((base, b) => Array.from({ length: dyn.slots.methodsIn(b) }, (_, i) => base + i)).find((s) => !dyn.slots.peek(s) && dyn.slots.is(s, BUILT | APP));
     check("the app build installed a slot nothing asked for", unasked !== undefined, true);
     const code = dyn.table.get(unasked!);
     dyn.namespaces.dynamicRoot();

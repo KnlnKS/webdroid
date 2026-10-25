@@ -1,17 +1,28 @@
-// The funcref table's slots and what each holds. A class owns a block (one slot per method, then its `ensure`); runtime functions take one slot each
-// between blocks. Every reservation after the platform classes is numbered (numbers.ts) in the same order, so Worlds that replay it agree on every slot.
+// The funcref table's slots, what each stands for and the state of its code. A class owns a block (one slot per method, then its `ensure`); runtime functions take
+// one slot each between blocks. Every reservation after the platform classes is numbered (numbers.ts) in the same order, so Worlds that replay it agree on every slot.
+//
+// A slot holds its lazy-link stub until code is put in it: first-tier code compiled here (with the other methods of its unit, its group) or a build's, then
+// second-tier code (HOT). Undoing it (unlink) puts the stub back. Every change of a slot's code goes through install, built and unlink.
 import type { MethodInfo } from "../compiler/program.ts";
 import type { Synth } from "../compiler/rtfns.ts";
 import type { Thrower } from "../compiler/exc.ts";
+import { COUNT_BASE, COUNT_SLOTS } from "../compiler/consts.ts";
 import type { Tail } from "./numbers.ts";
 import type { World } from "./world.ts";
 
-export type MethodSlot = { k: "method"; m: MethodInfo; done: boolean };
-export type Slot = MethodSlot | { k: "thrower"; name: Thrower; done: boolean } | { k: "synth"; name: string; d?: Synth; done: boolean } | { k: "ensure"; done?: boolean };
+/** what a slot stands for: a method of its class's block, the class's ensure(), a runtime function or a thrower */
+export type Slot = { k: "method"; m: MethodInfo } | { k: "ensure" } | { k: "synth"; name: string; d: Synth } | { k: "thrower"; name: Thrower };
+/** a slot's state, by bit: first-tier or second-tier (HOT) code is in it, the first-tier code is a build's (BUILT); the build whose loaded module holds code
+ *  for it, whatever is in it now (PLATFORM or APP); a compile worker has the second-tier compile of its method (PENDING) */
+export const FIRST = 1, HOT = 2, BUILT = 4, PLATFORM = 8, APP = 16, PENDING = 32;
+const CODE = FIRST | HOT | BUILT;
 
 export class SlotTable {
   private readonly w: World;
   private entries: (Slot | undefined)[] = [];
+  private state = new Uint8Array(1 << 16);
+  /** the slots of the methods compiled in one unit, by slot: they call each other directly, so they are undone together */
+  private readonly groups = new Map<number, number[]>();
   /** the slots a class owns: [blockBase[i], blockBase[i] + blockSize[i]), in ascending order. A method's slot is the block's base plus its index, the last slot is the class's `ensure` */
   readonly blockBase: number[] = [];
   private readonly blockSize: number[] = [];
@@ -20,8 +31,7 @@ export class SlotTable {
   readonly preassigned = new Map<string, number>();
   private nSeeded = 0;
   private readonly synth = new Map<string, number>();
-  /** the runtime functions whose stub or code is in their slot */
-  private readonly stubbed = new Set<number>();
+  private countView?: Int32Array;
 
   constructor(w: World, fixed: number) { this.w = w; this.reserve(fixed); }
 
@@ -29,8 +39,11 @@ export class SlotTable {
     const base = this.entries.length, table = this.w.table;
     this.entries.length += n;
     if (this.entries.length > table.length) table.grow(Math.max(this.entries.length - table.length, table.length));
+    if (this.entries.length > this.state.length) { const grown = new Uint8Array(Math.max(this.entries.length, 2 * this.state.length)); grown.set(this.state); this.state = grown; }
     return base;
   }
+  /** how many slots are reserved */
+  get size(): number { return this.entries.length; }
   /** the slots of class `name` if they are numbered, though it may not be linked yet: a platform class's, or those a replayed numbering gave it */
   baseOf(name: string): number | undefined {
     const id = this.w.numbers.ids.get(name);
@@ -64,9 +77,10 @@ export class SlotTable {
   rollback(tail: Tail[]): void {
     let top = this.entries.length;
     for (const t of tail.reverse()) {
-      if (typeof t === "string") { top = this.synth.get(t)!; this.synth.delete(t); this.stubbed.delete(top); }
+      if (typeof t === "string") { top = this.synth.get(t)!; this.synth.delete(t); }
       else { top = this.blockBase.pop()!; this.blockSize.pop(); this.blockClass.pop(); this.preassigned.delete(t[0]); }
     }
+    this.state.fill(0, top, this.entries.length);
     this.entries.length = top;
   }
   /** the index of the class block that owns `slot` (platform classes come first, in id order), or -1 */
@@ -78,51 +92,79 @@ export class SlotTable {
   }
   /** how many methods the class of block `b` has (its `ensure` slot is the last of the block) */
   methodsIn(b: number): number { return this.blockSize[b] - 1; }
-  /** the slot's entry, if it has been made */
+  /** what the slot stands for, if that has been asked */
   peek(slot: number): Slot | undefined { return this.entries[slot]; }
-  /** the slot's entry; the slots of classes are made when first asked for */
+  /** what the slot stands for; the slots of classes are described when first asked */
   at(slot: number): Slot | undefined {
     const s = this.entries[slot];
     if (s) return s;
     const b = this.blockOf(slot);
     if (b < 0) return undefined;
     const i = slot - this.blockBase[b];
-    if (i === this.blockSize[b] - 1) return this.entries[slot] = { k: "ensure" };
-    return this.entries[slot] = { k: "method", m: this.w.prog.get(this.blockClass[b])!.methodAt(i)!, done: !!this.w.aot?.installed(slot) };
+    return this.entries[slot] = i === this.blockSize[b] - 1 ? { k: "ensure" } : { k: "method", m: this.w.prog.get(this.blockClass[b])!.methodAt(i)! };
   }
-  /** the method entry of `slot`, made if need be */
-  method(slot: number): MethodSlot | undefined { const s = this.at(slot); return s?.k === "method" ? s : undefined; }
-  /** the method entry of `slot` if it has been made */
-  peekMethod(slot: number): MethodSlot | undefined { const s = this.entries[slot]; return s?.k === "method" ? s : undefined; }
+  /** the method of `slot`, if it is a method's */
+  methodAt(slot: number): MethodInfo | undefined { const s = this.at(slot); return s?.k === "method" ? s.m : undefined; }
+  /** the method of `slot` if it is a method's that has been asked about */
+  peekMethod(slot: number): MethodInfo | undefined { const s = this.entries[slot]; return s?.k === "method" ? s.m : undefined; }
   set(slot: number, s: Slot): void { this.entries[slot] = s; }
-  /** made entries, for a scan */
-  made(): readonly (Slot | undefined)[] { return this.entries; }
 
-  /** the slot of runtime function `name`, reserved and numbered the first time; whether it still lacks its stub or code */
-  synthSlot(name: string): { slot: number; fresh: boolean } {
+  // ---------- the code
+  /** whether code is in `slot`, rather than its lazy-link stub */
+  compiled(slot: number): boolean { return (this.state[slot] & (FIRST | HOT)) !== 0; }
+  /** whether `slot` has all of state `bits` */
+  is(slot: number, bits: number): boolean { return (this.state[slot] & bits) === bits; }
+  /** whether `slot` has any of state `bits` */
+  any(slot: number, bits: number): boolean { return (this.state[slot] & bits) !== 0; }
+  /** a compile worker has, or no longer has, the second-tier compile of the method in `slot` */
+  pending(slot: number, on: boolean): void { if (on) this.state[slot] |= PENDING; else this.state[slot] &= ~PENDING; }
+  /** the slots compiled with `slot` in one unit, it included */
+  group(slot: number): number[] | undefined { return this.groups.get(slot); }
+  /** puts `f`, code made here, in `slot`: second-tier code (`hot`) or first-tier code, compiled with the slots of `group` */
+  install(slot: number, f: unknown, hot: boolean, group?: number[]): void {
+    this.w.table.set(slot, f as never);
+    this.state[slot] = this.state[slot] & ~CODE | (hot ? HOT : FIRST);
+    if (group) this.groups.set(slot, group); else this.groups.delete(slot);
+  }
+  /** a build's module (`from`: PLATFORM or APP) put its code in `slot` */
+  built(slot: number, from: number): void { this.state[slot] = this.state[slot] & ~(CODE | PLATFORM | APP) | FIRST | BUILT | from; this.groups.delete(slot); }
+  /** puts the lazy-link stub back in `slot`, which holds code; false if nothing here can stand in for that code (a class's ensure()) */
+  unlink(slot: number): boolean {
+    if (!this.w.stubs.restoreStub(slot, this.at(slot))) return false;
+    this.state[slot] &= ~CODE; this.groups.delete(slot);
+    return true;
+  }
+  /** calls and loop iterations counted so far for the method in `slot` */
+  count(slot: number): number { return slot < COUNT_SLOTS ? this.counts()[slot] : 0; }
+  /** the call and loop counters, a view kept until the memory grows */
+  counts(): Int32Array {
+    if (this.countView?.buffer !== this.w.mem.buffer) this.countView = new Int32Array(this.w.mem.buffer, COUNT_BASE, COUNT_SLOTS);
+    return this.countView;
+  }
+
+  // ---------- runtime functions
+  /** the slot of runtime function `name`, reserved and numbered the first time */
+  synthSlot(name: string): number {
     let slot = this.synth.get(name);
     if (slot === undefined) { this.w.numbers.reserve(name); this.synth.set(name, slot = this.reserve(1)); }
-    if (this.stubbed.has(slot)) return { slot, fresh: false };
-    this.stubbed.add(slot);
-    return { slot, fresh: true };
+    return slot;
   }
   /** the slot of runtime function `name`, if it has one */
   synthSlotOf(name: string): number | undefined { return this.synth.get(name); }
-  /** whether the runtime function in `slot` has its stub or code */
-  isStubbed(slot: number): boolean { return this.stubbed.has(slot); }
-  /** records that the code of runtime function `name` is in its slot */
-  holdsSynth(name: string, slot: number): void { this.stubbed.add(slot); this.entries[slot] = { k: "synth", name, done: true }; }
   /** the runtime functions that have their descriptors, in numbering order: what a build makes code for */
   synths(): { name: string; slot: number; d: Synth }[] {
     const out: { name: string; slot: number; d: Synth }[] = [];
-    for (const [name, slot] of this.synth) { const s = this.entries[slot]; if (s?.k === "synth" && s.d) out.push({ name, slot, d: s.d }); }
+    for (const [name, slot] of this.synth) { const s = this.entries[slot]; if (s?.k === "synth") out.push({ name, slot, d: s.d }); }
     return out.sort((a, b) => a.slot - b.slot);
   }
-  /** the classes with a method that has been called (a method's slot is done once it has run or its precompiled code is installed) */
+  /** the classes with a method that has been called: one whose code was made here, or a build's that has run */
   calledClasses(): string[] {
-    return this.blockClass.filter((name, b) => {
-      const n = this.w.prog.get(name)?.methods.length ?? 0;
-      for (let i = 0; i < n; i++) if (this.entries[this.blockBase[b] + i]?.done) return true;
+    const counts = this.counts();
+    return this.blockClass.filter((_, b) => {
+      for (let slot = this.blockBase[b], end = slot + this.methodsIn(b); slot < end; slot++) {
+        const s = this.state[slot];
+        if (s & HOT || s & FIRST && (!(s & BUILT) || slot < COUNT_SLOTS && counts[slot])) return true;
+      }
       return false;
     });
   }

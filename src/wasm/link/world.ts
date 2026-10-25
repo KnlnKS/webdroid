@@ -21,11 +21,13 @@ import { SLOT, FIRST_FREE_SLOT, isStackOverflow } from "../compiler/exc.ts";
 import type { PreparedInstruction } from "../../jvm/prepared.ts";
 import type { DexFile } from "../../jvm/dex.ts";
 import { compileModule } from "./module.ts";
-import { AotRuntime, type AotStore, type AppIndex } from "./aot.ts";
+import { AotRuntime, type AotLayout, type AotStore, type AppIndex } from "./aot.ts";
 import { Numbers, type Marks, type Numbering } from "./numbers.ts";
 import { SlotTable } from "./slots.ts";
 import { Planner } from "./planning.ts";
 import { Tiering } from "./tiering.ts";
+import { Upgrades } from "./upgrades.ts";
+import { Merges } from "./merges.ts";
 import { AheadCompiler } from "./ahead.ts";
 import { Burner } from "./burn.ts";
 import { Dispatch } from "./dispatch.ts";
@@ -60,8 +62,9 @@ export interface WorldOptions {
   claim?: (owner: object, handle: bigint) => void;
   /** precompiled platform code (aot.ts); the Program holds exactly the platform dexes it was built from, apps are added with addDexes */
   aot?: AotStore;
-  /** a World that makes that code (aotbuild.ts AotBuilder): classes, slots and selectors are numbered but nothing is instantiated */
-  build?: boolean;
+  /** a World that makes that code (aotbuild.ts AotBuilder), where classes, slots and selectors are numbered but nothing is instantiated: given the World, it
+   *  numbers the platform classes and answers how the build lays them out */
+  build?: (w: World) => AotLayout;
   /** timers and event loop turns for threads that wait (sched.ts); the host's own where there is one */
   loop?: HostLoop;
   /** marks a moment on the host's timeline (src/timeline.ts: Ev) */
@@ -120,8 +123,10 @@ export class World {
   };
   readonly slots = new SlotTable(this, FIRST_FREE_SLOT);
   readonly tiers = new Tiering(this);
-  readonly planner = new Planner(this, this.tiers);
-  readonly ahead = new AheadCompiler(this, this.tiers);
+  readonly upgrades = new Upgrades(this);
+  readonly merges = new Merges(this);
+  readonly planner = new Planner(this);
+  readonly ahead = new AheadCompiler(this);
   readonly burner = new Burner(this);
   readonly dispatch = new Dispatch(this);
   readonly classModules = new ClassModules(this);
@@ -150,7 +155,7 @@ export class World {
   rt!: Runtime;
   /** the threads: strands, monitors, waits (sched.ts) */
   sched!: Sched;
-  aot?: AotRuntime;
+  readonly aot?: AotRuntime;
   /** what the World had numbered when its constructor returned, or once an app build was attached: where a compile worker's numbering starts */
   base!: Marks;
   /** how many times the Program changed (World.changed): results a compile worker made before are not adopted */
@@ -172,7 +177,7 @@ export class World {
     this.sched = new Sched(this, this.rt, opts.loop ?? defaultLoop);
     this.host = hostImports(this);
     this.compiler = opts.compiler;
-    this.aot = opts.aot && !opts.build ? AotRuntime.attach(this, opts.aot) : undefined;
+    this.aot = opts.build ? new AotRuntime(this, opts.build(this)) : opts.aot && AotRuntime.attach(this, opts.aot);
     this.base = this.numbers.marks();
     if (opts.app) this.attachApp(opts.app);
   }
@@ -266,18 +271,16 @@ export class World {
    *  `eager`: its code is compiled now, for a caller about to call it, instead of after a stub's first call */
   synthSlot(name: string, d?: Synth, eager = false): number {
     this.touching?.add("!" + name);
-    const { slot, fresh } = this.slots.synthSlot(name);
-    if (!fresh) return slot;
+    const slots = this.slots, slot = slots.synthSlot(name);
+    if (slots.peek(slot) || slots.compiled(slot)) return slot;
     d ??= synthOf(this, name);
     if (!d) throw new Error(`no synthetic function ${name}`);
-    const s = { k: "synth" as const, name, d, done: false };
-    this.slots.set(slot, s);
+    slots.set(slot, { k: "synth", name, d });
     if (!this.instantiates) return slot;
     if (askedSynth(name)) this.demand.synths.push(name);
-    // the app build may hold its code, which its module puts in the slot
-    if (this.aot?.installSynth(name)) { s.done = true; return slot; }
-    if (eager) { this.tiers.linkSlot(slot); return slot; }
-    this.table.set(slot, this.stubs.stubsFor([d])[0]);
+    // a build may hold its code, which its module puts in the slot
+    if (this.aot?.installSynth(name)) return slot;
+    if (eager) this.tiers.linkSlot(slot); else this.table.set(slot, this.stubs.stubsFor([d])[0]);
     return slot;
   }
 
@@ -295,7 +298,14 @@ export class World {
     s.instantiateMs += performance.now() - t0 - (s.moduleMs + s.instantiateMs - counted); s.instances++;
     return inst;
   }
-  rtImports() { const { tag, alloc, hash, ctab, unsafeSlots, sid, thr, depth, iw, wait, callee, link } = this.rt; return { table: this.table, nm: this.nm, tag, alloc, hash, ctab, unsafeSlots, sid, thr, depth, iw, wait, callee, link, mem: this.mem, sp: this.sp, gmem: this.opts.guest?.memory, gflags: this.opts.guest?.flags }; }
+  /** the "rt" import module of the World's modules: the table, the runtime's globals and the memories, none of which change */
+  rtImports() { return this.rtImported ??= this.rtImportModule(); }
+  private rtImported?: ReturnType<World["rtImportModule"]>;
+  private rtImportModule() {
+    const { tag, alloc, hash, ctab, unsafeSlots, sid, thr, depth, iw, wait, callee, link } = this.rt, guest = this.opts.guest;
+    return { table: this.table, nm: this.nm, tag, alloc, hash, ctab, unsafeSlots, sid, thr, depth, iw, wait, callee, link,
+      mem: this.mem, sp: this.sp, gmem: guest?.memory, gflags: guest?.flags };
+  }
 
   /** the class module of `name`, built on first use */
   link(name: string): ClassRt {
@@ -310,7 +320,8 @@ export class World {
     const slotBase = this.slots.baseOf(name) ?? this.slots.numberBlock(name, methods.length + 1);
     if (!this.instantiates) {
       // a class a build numbers after the platform's has its data in the build's module of them
-      this.classes.set(name, rt = { name, id, ...this.opts.build ? { mod: "g" + this.aot!.extraGroup, from: "platform" as const } : { mod: "c" + id, from: "own" as const }, slotBase, nMethods: methods.length, exports: {} });
+      const layout = this.opts.build ? { mod: "g" + this.aot!.extraGroup, from: "platform" as const } : { mod: "c" + id, from: "own" as const };
+      this.classes.set(name, rt = { name, id, ...layout, slotBase, nMethods: methods.length, exports: {} });
       return rt;
     }
     this.classes.set(name, rt = this.classModules.lazy(name, id, slotBase, jc));
@@ -320,7 +331,7 @@ export class World {
   }
 
   // ---------- compiling methods on demand
-  /** the classes linked so far, and those with a method that has been called (a method's slot is done once it has run or its precompiled code is installed) */
+  /** the classes linked so far, and those with a method that has been called (SlotTable.calledClasses) */
   usage(): { linked: string[]; called: string[] } {
     return { linked: [...this.classes.keys()], called: this.slots.calledClasses() };
   }
@@ -381,17 +392,16 @@ export class World {
     this.hosts.loaded();
   }
   /** the Program changed: results a compile worker made before are not adopted (epoch), the compile service hears of it (`notice`), and what was worked out from
-   *  its classes is forgotten; where namespaces resolve them differently (`rebound`), what was worked out from their types too */
-  changed(notice?: (service: CompileService) => void, rebound = false): void {
+   *  its classes is forgotten */
+  changed(notice?: (service: CompileService) => void): void {
     this.epoch++;
     if (notice && this.compiler) notice(this.compiler);
-    this.planner.forgetImplementations();
-    if (rebound) { this.helpers.forgetFieldReaders(); PerWorld.rebound(this); }
+    PerWorld.forget(this, false);
   }
 
   /** ends the World for a host done with it: its threads' waits end and their strands unwind without running more Java, its Cleaners no longer run and
    *  its retired code is no longer waited on, so that nothing the engine or a timer holds keeps it */
-  close(): void { this.closed = true; this.sched.close(); this.tiers.close(); }
+  close(): void { this.closed = true; this.sched.close(); this.merges.close(); }
 
   // ---------- calling in from JS, and exceptions
   /** a JS function that calls the Java method; a Java exception arrives as a WebAssembly.Exception (see `throwable`) */

@@ -5,7 +5,7 @@ import { Program, methodOf, type MethodInfo, type LoaderId, type LoaderSnapshot 
 import { defineProxy, type ProxyDefinition } from "../link/proxy.ts";
 import { World } from "../link/world.ts";
 import { buildPart, type AppPart } from "../link/apps.ts";
-import { UnitCompiler, type UnitResult, type UpgradeJob } from "../link/unit.ts";
+import { UnitCompiler, type UnitResult, type UnitJob } from "../link/unit.ts";
 import type { AppIndex, Demand } from "../link/aot.ts";
 import type { Numbering } from "../link/numbers.ts";
 import type { Intrinsic } from "../compiler/j2w.ts";
@@ -41,7 +41,7 @@ export type CompileRequest =
   | { type: "add"; dexes: Containers; loader?: LoaderId; loaders?: LoaderSnapshot }
   | { type: "proxy"; definition: ProxyDefinition; loaders: LoaderSnapshot }
   | { type: "namespaces"; loaders: LoaderSnapshot }
-  | { type: "upgrade"; id: number; keep: boolean; sync: Numbering; job: UpgradeJob };
+  | { type: "upgrade"; id: number; keep: boolean; sync: Numbering; job: UnitJob };
 export type CompileResponse =
   /** the worker is listening: a module worker whose imports await something drops the messages sent before it is, so nothing is sent until this arrives */
   | { type: "loaded" }

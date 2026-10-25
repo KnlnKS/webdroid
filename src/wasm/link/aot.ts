@@ -11,6 +11,7 @@
 //  - Soundness. Precompiled code relies on no class-hierarchy decision a later class could falsify (Compiler.devirt), so loading an app's
 //    classes never undoes it; only sites that fail on a class missing at the build are undone, once the class is there.
 import type { ClassRt, World } from "./world.ts";
+import type { Owner } from "./assumptions.ts";
 import { sameMarks, type Marks, type Numbering } from "./numbers.ts";
 import type { SymbolicSite } from "../compiler/sites.ts";
 
@@ -18,7 +19,7 @@ import type { DexFile } from "../../jvm/dex.ts";
 import type { Loader, MethodInfo } from "../compiler/program.ts";
 import type { FnTrace } from "../compiler/j2w.ts";
 import { methodOf } from "../compiler/program.ts";
-import { COUNT_SLOTS } from "../compiler/consts.ts";
+import { APP, BUILT, PLATFORM } from "./slots.ts";
 import { LebReader } from "./module.ts";
 
 /** the files of a build, read synchronously: a page fetches them (and may compile them) before the code that needs them runs */
@@ -60,8 +61,9 @@ export interface AotIndex {
 }
 /** what a module says about itself, in its custom section "aot" */
 export interface DHeader { version?: number; classes: number[]; touch: number[]; synth: string[] }
-/** what compiled code relies on and needs before it runs: the same for a precompiled module and for a unit a worker compiled */
-export interface UnitHeader {
+/** what compiled code relies on and needs before it runs: the same for a precompiled module and for a unit a worker compiled. What its code relies on is
+ *  owned by the slot it is undone in, or by a helper of the host's (HostFunctions) for a unit compiled here */
+export interface UnitHeader<O extends Owner = number> {
   version?: number;
   classImports: [module: string, name: string][];
   /** the classes (ids) and runtime functions its code names a table slot of, which need their stubs */
@@ -70,10 +72,10 @@ export interface UnitHeader {
   natives: string[];
   symbols?: SymbolicSite[];
   /** class-hierarchy decisions: declaring class, name, descriptor, the one target's class and key ("" without one), and the slot of the method that relies on it */
-  assumptions: [string, string, string, string, string, number][];
+  assumptions: [string, string, string, string, string, O][];
   allocs: string[];
   /** classes missing at the build that sites of the module fail on, with the slot of the method they are in */
-  missing: [string, number][];
+  missing: [string, O][];
   /** the methods whose code holds another method's: its slot, then theirs (Compiler.held) */
   held?: number[][];
 }
@@ -150,7 +152,13 @@ export interface SHeader extends UnitHeader { names: string[] }
 /** what identifies a dex of the platform: DexFile.id is its SHA-1, but only where the engine has Uint8Array.toHex for views into a larger buffer */
 export const dexSig = (d: DexFile): string => [d.fileSize, d.classDefCount, d.stringCount, d.typeCount, d.version].join(":");
 
-const unrle = (a: number[]): Int32Array<ArrayBuffer> => { let n = 0; for (let i = 1; i < a.length; i += 2) n += a[i]; const o = new Int32Array(n); let k = 0; for (let i = 0; i < a.length; i += 2) o.fill(a[i], k, k += a[i + 1]); return o; };
+const unrle = (a: number[]): Int32Array<ArrayBuffer> => {
+  let n = 0;
+  for (let i = 1; i < a.length; i += 2) n += a[i];
+  const o = new Int32Array(n);
+  for (let i = 0, k = 0; i < a.length; i += 2) o.fill(a[i], k, k += a[i + 1]);
+  return o;
+};
 const customSection = (m: WebAssembly.Module, name: string): Uint8Array => new Uint8Array(WebAssembly.Module.customSections(m, name)[0]);
 /** a module's header, parsed once: linking asks a code module's on every lazy link until the module loads */
 const headers = new WeakMap<WebAssembly.Module, unknown>();
@@ -161,6 +169,16 @@ export const header = <H>(m: WebAssembly.Module): H => {
 };
 
 const LIVE = 1, DEAD = 2, LOADING = 3;
+/** a code module of a build, from its first use: loaded (LIVE), unusable (DEAD) or neither yet (0) */
+interface CodeModule {
+  state: number;
+  module?: WebAssembly.Module;
+  /** where each function's trace starts in its section, by slot: indexed the first time a stack needs one of its functions */
+  traces?: { bytes: Uint8Array; starts: Map<number, number> };
+  /** its one bounded delivery attempt (prepare), while it waits and once it was made */
+  preparation?: Promise<void>;
+  prepared?: boolean;
+}
 
 /** where a build puts the platform classes: the D and C module of each (by id - 1; -1 for none) and the D module of the classes it reserved slots for after them */
 export interface AotLayout { dOf: Int32Array; cOf: Int32Array; extraGroup: number }
@@ -178,15 +196,11 @@ export class AotRuntime {
   private dExports: (WebAssembly.Exports | undefined)[] = [];
   private fallbackD = new Set<number>();
   private rejectedData = new Set<string>();
-  private cState: number[] = [];
-  private cAbsent: (Set<number> | undefined)[] = [];
+  /** the code modules, the app build's after the platform's */
+  private code: (CodeModule | undefined)[] = [];
   /** the slots the host took over by the code module that holds them, made again when the host has taken more (HostClasses.takes) */
   private overriddenBy = new Map<number, number[]>();
   private overriddenSeen = 0;
-  private cModule: (WebAssembly.Module | undefined)[] = [];
-  private cClasses: number[][] = [];
-  /** where each function's trace starts in the section of a loaded code module, by slot */
-  private cTraces = new Map<number, { bytes: Uint8Array; starts: Map<number, number> }>();
   /** how many classes with bytecode the platform build's dexes define */
   private readonly programClasses: number;
   /** what the World had numbered once the platform build was attached */
@@ -206,7 +220,7 @@ export class AotRuntime {
     this.nSeeded = w.slots.seeded; this.platformBlocks = w.slots.blockBase.length; this.platformMarks = w.numbers.marks();
     this.dOf = layout.dOf; this.cOf = layout.cOf; this.extraGroup = layout.extraGroup;
     this.dExports.length = this.dOf.reduce((m, v) => Math.max(m, v + 1), 0);
-    this.cState.length = this.cOf.reduce((m, v) => Math.max(m, v + 1), 0);
+    this.code.length = this.cOf.reduce((m, v) => Math.max(m, v + 1), 0);
   }
 
   /** attaches the build in `store` to `w`, whose Program holds the platform dexes it was made from (and possibly more after them); undefined if it was made from other ones */
@@ -282,11 +296,11 @@ export class AotRuntime {
       if (fresh) w.rollback(since.from);
       this.appRejected = "numbering"; return false; }
     this.appLibraries = app.libraries;
-    const platform = this.store!, cOf = new Int32Array(w.slots.blockBase.length).fill(-1), from = this.appFrom = this.cState.length;
+    const platform = this.store!, cOf = new Int32Array(w.slots.blockBase.length).fill(-1), from = this.appFrom = this.code.length;
     cOf.set(this.cOf);
     for (const [block, module] of app.cOf) cOf[block] = from + module;
     this.cOf = cOf;
-    this.cState.length = from + app.modules;
+    this.code.length = from + app.modules;
     const patchesOver = new Map<number, number[]>();
     for (const [module, over] of app.patches) (patchesOver.get(over) ?? patchesOver.set(over, []).get(over)!).push(from + module);
     this.app = { d: new Array(app.dModules), dOf: new Map(app.dOf), patchesOver };
@@ -351,7 +365,7 @@ export class AotRuntime {
     if (!w.units.admits(head)) return dead();
     // the functions of this module are not made twice: they are in it
     const placed = w.units.link({ head, module: mod, defines: (s) => this.synthIn.get(s) === file }, () => {
-      for (const n of head.names) { const slot = w.slots.synthSlotOf(n); if (slot !== undefined && !w.slots.isStubbed(slot)) w.slots.holdsSynth(n, slot); }
+      for (const n of head.names) { const slot = w.slots.synthSlotOf(n); if (slot !== undefined) w.slots.built(slot, file[0] === "s" ? APP : PLATFORM); }
       return true;
     });
     // a class whose module is being built, naming this function, has no globals yet: a stub stands in for the function, and the module serves the next one asked for
@@ -400,41 +414,26 @@ export class AotRuntime {
     return w.compile(f as Uint8Array);
   }
 
-  /** whether a loaded code module or app patch installed the method of `slot` */
-  installed(slot: number): boolean {
-    const b = this.w.slots.blockOf(slot), c = b < 0 ? -1 : this.cOf[b];
-    if (c >= 0 && this.cState[c] === LIVE && this.has(c, slot)) return true;
-    for (const p of this.app?.patchesOver.get(c) ?? []) if (this.cState[p] === LIVE && this.cClasses[p].includes(b) && this.has(p, slot)) return true;
-    return false;
-  }
-  private has(c: number, slot: number): boolean { return !this.cAbsent[c]!.has(slot); }
+  /** the code module of `slot`'s class, -1 if no build has one */
+  private moduleOf(slot: number): number { const b = this.w.slots.blockOf(slot); return b < 0 ? -1 : this.cOf[b] ?? -1; }
+  private stateOf(c: number): number { return this.code[c]?.state ?? 0; }
   /** whether a code module of the build holds `slot`'s class, which its first call loads */
-  holds(slot: number): boolean {
-    const b = this.w.slots.blockOf(slot), c = b < 0 ? -1 : this.cOf[b];
-    return c >= 0 && this.cState[c] !== DEAD;
-  }
-  /** the loaded code module that holds `slot`'s code, or -1 */
-  loadedFrom(slot: number): number {
-    const b = this.w.slots.blockOf(slot), c = b < 0 ? -1 : this.cOf[b];
-    return c >= 0 && this.cState[c] === LIVE && this.has(c, slot) ? c : -1;
-  }
-  /** whether the attached app build has `slot`'s code loaded */
-  fromAppBuild(slot: number): boolean { return this.loadedFrom(slot) >= this.appFrom; }
+  holds(slot: number): boolean { const c = this.moduleOf(slot); return c >= 0 && this.stateOf(c) !== DEAD; }
   /** the slots whose code from a loaded module has run here (a method's count restarts once a unit replaces its code), the platform build's and the app build's
    *  apart: what a later launch has the engine compile ahead (host/warm-worker.ts) */
   ranSlots(): { platform: number[]; app: number[] } {
-    const tiers = this.w.tiers, counts = tiers.counts(), ran = { platform: [] as number[], app: [] as number[] };
-    const add = (slot: number) => { const c = this.loadedFrom(slot); if (c >= 0) (c >= this.appFrom ? ran.app : ran.platform).push(slot); };
-    for (let slot = 0; slot < COUNT_SLOTS; slot++) if (counts[slot]) add(slot);
-    for (const slot of tiers.unitSlots()) if (slot < COUNT_SLOTS && !counts[slot]) add(slot);
+    const slots = this.w.slots, ran = { platform: [] as number[], app: [] as number[] };
+    for (let slot = 0, n = slots.size; slot < n; slot++) {
+      if (!slots.any(slot, PLATFORM | APP) || !slots.count(slot) && (!slots.compiled(slot) || slots.any(slot, BUILT))) continue;
+      (slots.any(slot, APP) ? ran.app : ran.platform).push(slot);
+    }
     return ran;
   }
-  private preparation = new Map<number, Promise<void>>();
-  private prepared = new Set<number>();
   private preparationModule(slot: number): number {
-    const b = this.w.slots.blockOf(slot), c = b < 0 ? -1 : this.cOf[b] ?? -1;
-    return !this.store?.prefetch || !this.w.instantiates || c < 0 || c >= this.appFrom || this.cState[c] ? -1 : c;
+    const c = this.moduleOf(slot);
+    return !this.store?.prefetch || !this.w.instantiates || c < 0 || c >= this.appFrom || this.stateOf(c) ? -1 : c;
   }
+  private record(c: number): CodeModule { return this.code[c] ??= { state: 0 }; }
   private preparationFiles(c: number): string[] {
     const file = aotFile("c", c), mod = this.store!.get(file);
     if (!mod) return [file];
@@ -451,19 +450,19 @@ export class AotRuntime {
   }
   needsPreparation(slot: number): boolean {
     const c = this.preparationModule(slot);
-    return c >= 0 && (this.preparation.has(c) || !this.prepared.has(c) && this.preparationFiles(c).length > 0);
+    const r = this.code[c];
+    return c >= 0 && (!!r?.preparation || !r?.prepared && this.preparationFiles(c).length > 0);
   }
   /** One bounded delivery attempt per demanded code group, before the ordinary linker publishes any globals. */
   prepare(slot: number): Promise<void> | undefined {
     const c = this.preparationModule(slot);
     if (c < 0) return;
-    const pending = this.preparation.get(c);
-    if (pending) return pending;
-    if (this.prepared.has(c)) return;
+    const r = this.record(c);
+    if (r.preparation || r.prepared) return r.preparation;
     const files = this.preparationFiles(c);
     if (!files.length) return;
     const store = this.store!;
-    this.prepared.add(c);
+    r.prepared = true;
     const deadline = performance.now() + PREPARATION_MS;
     let timer: ReturnType<typeof setTimeout>;
     const bound = new Promise<void>(done => { timer = setTimeout(done, PREPARATION_MS); });
@@ -474,21 +473,20 @@ export class AotRuntime {
       if (data.length) await store.prefetch!(data);
     })();
     const result = Promise.race([delivery.catch(() => {}), bound]).finally(() => {
-      clearTimeout(timer); this.preparation.delete(c);
+      clearTimeout(timer); r.preparation = undefined;
     });
-    this.preparation.set(c, result);
+    r.preparation = result;
     const note = this.w.opts.note;
     if (note) { note(18, c); void result.then(() => note(19, this.preparationFiles(c).length ? -c : c)); }
     return result;
   }
   /** whether the build's code of `slot` is in place, its code module loaded first if need be (the method's first call): not once something undid it */
   provide(slot: number): boolean {
-    const b = this.w.slots.blockOf(slot), c = b < 0 ? -1 : this.cOf[b];
-    if (!(c >= 0)) return false;
-    let loaded = this.loadC(c);
+    const c = this.moduleOf(slot);
+    if (c < 0) return false;
     // App patches can remain valid when their platform unit is rejected.
-    if (!loaded && this.cState[c] === DEAD) for (const p of this.app?.patchesOver.get(c) ?? []) loaded = this.loadC(p) || loaded;
-    return loaded && !!this.w.slots.at(slot)?.done;
+    if (!this.loadC(c) && this.stateOf(c) === DEAD) for (const p of this.app?.patchesOver.get(c) ?? []) this.loadC(p);
+    return this.w.slots.compiled(slot);
   }
   /** the code modules linkAhead links, the next last */
   private linkQueue: number[] = [];
@@ -496,16 +494,15 @@ export class AotRuntime {
   planLinks(files: readonly string[], slots: Int32Array = new Int32Array()): void {
     const order = new Set<number>();
     for (const file of files) { const f = parseAotFile(file); if (f?.kind === "c") order.add(f.n); }
-    for (const slot of slots) { const b = this.w.slots.blockOf(slot), c = b < 0 ? -1 : this.cOf[b] ?? -1; if (c >= 0) order.add(c); }
+    for (const slot of slots) { const c = this.moduleOf(slot); if (c >= 0) order.add(c); }
     this.linkQueue = [...order].reverse();
   }
   /** Idle time: links the planned code modules until `until`, as the first call of one of their methods would, so that an interaction's first calls find their
    *  code in place rather than link it on the way (the training run of ahead-of-time class loading and linking, JEP 483). Whether any is left. */
   linkAhead(until: number): boolean {
-    if (!this.w.instantiates) return false;
     while (this.linkQueue.length && performance.now() < until) {
       const c = this.linkQueue.pop()!;
-      if (!this.cState[c] && this.linkable(c) && this.loadC(c)) this.w.stats.aot.linkedAhead++;
+      if (!this.stateOf(c) && this.linkable(c) && this.loadC(c)) this.w.stats.aot.linkedAhead++;
     }
     return this.linkQueue.length > 0;
   }
@@ -519,22 +516,24 @@ export class AotRuntime {
     const head = header<CHeader>(mod);
     return this.w.units.admits(head) && this.dataReady(head, false);
   }
+  /** loads code module `c`, whose code goes in the slots of its classes but those it lacks; whether it is loaded */
   private loadC(c: number): boolean {
-    if (this.cState[c]) return this.cState[c] === LIVE;
-    const w = this.w, app = c >= this.appFrom, file = app ? aotFile("a", c - this.appFrom) : aotFile("c", c), mod = this.module(file);
-    if (!mod) { if (app) this.cState[c] = DEAD; return false; }
+    const r = this.record(c);
+    if (r.state) return r.state === LIVE;
+    const w = this.w, slots = w.slots, app = c >= this.appFrom, file = app ? aotFile("a", c - this.appFrom) : aotFile("c", c), mod = this.module(file);
+    const dead = () => { r.state = DEAD; w.stats.aot.dead++; return false; };
+    if (!mod) { if (app) r.state = DEAD; return false; }
     const head = header<CHeader>(mod);
-    if (!w.units.admits(head)) { this.cState[c] = DEAD; w.stats.aot.dead++; return false; }
+    if (!w.units.admits(head)) return dead();
     if (!this.dataReady(head)) return false;
-    if (!head.mods.every(g => this.fallbackD.has(g) || !!this.loadD(g))) { this.cState[c] = DEAD; w.stats.aot.dead++; return false; }
+    if (!head.mods.every(g => this.fallbackD.has(g) || !!this.loadD(g))) return dead();
     const absent = new Set(head.absent), taken = w.hosts.taken();
     if (this.overriddenSeen !== taken.size) {
       this.overriddenBy.clear();
-      for (const slot of taken) { const m = this.cOf[w.slots.blockOf(slot)]; if (m >= 0) (this.overriddenBy.get(m) ?? this.overriddenBy.set(m, []).get(m)!).push(slot); }
+      for (const slot of taken) { const m = this.moduleOf(slot); if (m >= 0) (this.overriddenBy.get(m) ?? this.overriddenBy.set(m, []).get(m)!).push(slot); }
       this.overriddenSeen = taken.size;
     }
-    this.cState[c] = LIVE; this.cModule[c] = mod; this.cAbsent[c] = absent;
-    if (app) this.cClasses[c] = head.classes;
+    r.state = LIVE; r.module = mod;
     // Retired data groups bind each class's published globals instead of creating another owner.
     const modules: Record<string, WebAssembly.Exports> = {};
     for (const g of head.mods) { const ex = this.dExports[g]; if (ex) modules["g" + g] = ex; }
@@ -542,15 +541,12 @@ export class AotRuntime {
     const placed = w.units.link({ head, module: mod, modules }, () => {
       w.stats.aot.c++;
       t2 = performance.now();
-      // slots made before the module was loaded say it is not there; the rest are made from the module's state
-      for (const b of head.classes) {
-        const base = w.slots.blockBase[b], n = w.slots.methodsIn(b);
-        for (let i = 0; i < n; i++) { const s = w.slots.peek(base + i); if (s?.k === "method" && this.has(c, base + i)) s.done = true; }
-      }
+      const from = app ? APP : PLATFORM;
+      for (const b of head.classes) for (let slot = slots.blockBase[b], end = slot + slots.methodsIn(b); slot < end; slot++) if (!absent.has(slot)) slots.built(slot, from);
       return true;
     });
-    if (!placed) { this.cState[c] = 0; return false; }
-    for (const slot of this.overriddenBy.get(c) ?? []) if (!this.cAbsent[c]!.has(slot)) { w.assumptions.undoCode(slot); this.cAbsent[c]!.add(slot); }
+    if (!placed) { r.state = 0; return false; }
+    for (const slot of this.overriddenBy.get(c) ?? []) if (!absent.has(slot)) w.assumptions.undoCode(slot);
     // code that holds a method of another module the host took since the build: that module may have undone the method before this one was loaded
     for (const [callee, ...by] of head.held ?? []) if (taken.has(callee)) for (const x of by) w.assumptions.undoCode(x);
     w.stats.aot.ms += performance.now() - t2;
@@ -562,7 +558,7 @@ export class AotRuntime {
   // ---- invalidation
   /** App units were compiled before the runtime loader's library graph was known. Keep platform modules and stable numbering, but discard the app's old resolution. */
   unbindApp(): void {
-    for (let c = this.appFrom; c < this.cState.length; c++) this.cState[c] = DEAD;
+    for (let c = this.appFrom; c < this.code.length; c++) this.record(c).state = DEAD;
     this.app = undefined;
     this.synthIn.clear();
   }
@@ -571,23 +567,21 @@ export class AotRuntime {
   trace(name: string): FnTrace | undefined {
     const w = this.w, m = methodOf(w.prog, name);
     if (!m) return undefined;
-    const base = w.slots.baseOf(m.cls);
-    if (base === undefined) return undefined;
-    const c = this.cOf[w.slots.blockOf(base)];
+    const base = w.slots.baseOf(m.cls), c = base === undefined ? -1 : this.moduleOf(base);
     if (c < 0) return undefined;
     // a patch of the module has the code of the methods it replaced
     for (const module of [...this.app?.patchesOver.get(c) ?? [], c]) {
-      const t = this.cState[module] === LIVE ? this.traceIn(module, base + m.index, m, name) : undefined;
+      const t = this.stateOf(module) === LIVE ? this.traceIn(this.code[module]!, base! + m.index, m, name) : undefined;
       if (t) return t;
     }
     return undefined;
   }
-  private traceIn(c: number, slot: number, m: MethodInfo, name: string): FnTrace | undefined {
-    let section = this.cTraces.get(c);
+  private traceIn(code: CodeModule, slot: number, m: MethodInfo, name: string): FnTrace | undefined {
+    let section = code.traces;
     if (!section) {
-      const bytes = customSection(this.cModule[c]!, "aottrace"), r = new LebReader(bytes), starts = new Map<number, number>();
+      const bytes = customSection(code.module!, "aottrace"), r = new LebReader(bytes), starts = new Map<number, number>();
       while (r.i < bytes.length) { const s = r.u32(), len = r.u32(); starts.set(s, r.i); r.i += len; }
-      this.cTraces.set(c, section = { bytes, starts });
+      section = code.traces = { bytes, starts };
     }
     const from = section.starts.get(slot);
     if (from === undefined) return undefined;
@@ -597,7 +591,7 @@ export class AotRuntime {
       const z = r.u32(); pcs[i] = p += (z >>> 1) ^ -(z & 1);
     }
     const t: FnTrace = { name, m, offsets, pcs }, k = r.u32();
-    if (k) t.inline = Array.from({ length: k }, () => [this.w.slots.method(r.u32())!.m, r.u32(), r.u32()]);
+    if (k) t.inline = Array.from({ length: k }, () => [this.w.slots.methodAt(r.u32())!, r.u32(), r.u32()]);
     this.w.stacks.traces.set(name, t);
     return t;
   }

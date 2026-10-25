@@ -83,8 +83,8 @@ function withSupers(names: string[]): string[] {
 const prog = platform();
 rmSync(out, { recursive: true, force: true }); mkdirSync(out, { recursive: true });
 // the build is numbered without the host's classes, which a page's World adds after the build's (boot.ts createWorld)
-const w = world(prog, { hostClasses: false, build: true });
-const aot = new AotBuilder(w, { dGroup: hotChunked(withSupers(hot.linked.length ? hot.linked : hot.called), classSize("d"), MAX_HOT, "hotD", chunked(classSize("d"), maxModule)), cGroup: hotChunked(hot.called.filter((n) => prog.get(n)?.dex), classSize("c"), MAX_HOT, "hotC", chunked(classSize("c"), maxModule)), dexes: new Set(platformDexes(jars)) });
+let aot!: AotBuilder;
+const w = world(prog, { hostClasses: false, build: (w) => (aot = new AotBuilder(w, { dGroup: hotChunked(withSupers(hot.linked.length ? hot.linked : hot.called), classSize("d"), MAX_HOT, "hotD", chunked(classSize("d"), maxModule)), cGroup: hotChunked(hot.called.filter((n) => prog.get(n)?.dex), classSize("c"), MAX_HOT, "hotC", chunked(classSize("c"), maxModule)), dexes: new Set(platformDexes(jars)) })).layout });
 const t0 = performance.now();
 let cBytes = 0, dBytes = 0, nMethods = 0, mapBytes = 0, largest = 0;
 /** a module the estimate let grow past what Chrome compiles on the main thread (8 MiB) is a build error: the estimates (link/aotbuild.ts) need re-measuring */

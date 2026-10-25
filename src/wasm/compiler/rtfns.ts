@@ -8,8 +8,8 @@ export interface Synth { params: Kind[]; ret: Kind | "V"; body: (cx: Compiler, c
 /** the runtime functions, which link's modules register as they load: the class model's (classes.ts, members.ts, fields.ts, reflect.ts, signatures.ts), the
  *  scheduler's (sched.ts), Unsafe's (unsafe.ts), guest memory's (guest.ts) and the String literals' (strings.ts) */
 export type RtName = `g${"ld" | "st"}${8 | 16 | 32 | 64}` | `g${"get" | "put"}_${ElemKind}`
-  | "classOf" | "mkClass" | "instArr" | "astore" | "acopy" | "aclone" | "cnfe" | "initErroneous" | "initFail" | "mkField" | "declFields" | "nameEq" | "newMulti"
-  | "methodArray" | "ctorArray" | "throwsArray" | "mkExec" | "mnameEq" | "findMethod" | "classArray" | "argp" | "fprep" | "fgetp" | "fbox" | "fget" | "fstore" | "fset"
+  | "classOf" | "mkClass" | "instArr" | "astore" | "acopy" | "aclone" | "cnfe" | "initErroneous" | "initFail" | "mkField" | "declFields" | "newMulti"
+  | "methodArray" | "ctorArray" | "throwsArray" | "mkExec" | "findMethod" | "classArray" | "argp" | "fprep" | "fgetp" | "fbox" | "fget" | "fstore" | "fset"
   | "validateSignatures" | "blockStatus" | "menterSlow" | "mexitSlow" | "yieldNow" | "initWait" | "initWake" | "curThread" | "threadLoaderReady"
   | "ufield" | "uget" | "uput" | "strLit";
 export const rtfns = new Map<string, Synth>();

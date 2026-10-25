@@ -1,7 +1,7 @@
 // The second tier compiled for another World: a compile worker holds a World over the same Program and the same numbering, built from a copy of the dex files, and compiles what
-// the World it works for asks (Tiering.upgradeJob). The code it makes names classes, selectors, slots and gaps by number, so it is the other World's only while that World has
+// the World it works for asks (Tiering.job). The code it makes names classes, selectors, slots and gaps by number, so it is the other World's only while that World has
 // numbered the same things in the same order: the worker follows the numbering of the World it compiles for (`sync`), numbers what its unit needs beyond that as that World
-// would (`numbering`), and the World takes the unit only if it has not numbered anything meanwhile (Tiering.adoptUnit); otherwise the worker forgets what it numbered.
+// would (`numbering`), and the World takes the unit only if it has not numbered anything meanwhile (Tiering.adopt); otherwise the worker forgets what it numbered.
 import { Compiler } from "../compiler/j2w.ts";
 import { methodOf, mid } from "../compiler/program.ts";
 import type { InlineFrame } from "../compiler/code.ts";
@@ -16,20 +16,19 @@ export function hasHierarchy(cls: JClass | undefined, sup: string | null, ifaces
   return !!cls && cls.sup === sup && cls.ifaces.length === ifaces.length && cls.ifaces.every((name, i) => name === ifaces[i]);
 }
 
-/** the second-tier compile of a method, as Tiering.upgradeJob describes it */
-export interface UpgradeJob {
+/** a unit a compile worker compiles, as Tiering.job describes it: the second tier of a method (Upgrades.job), or the first-tier code of methods already
+ *  linked merged into one module (Merges.job) */
+export interface UnitJob {
+  kind: "upgrade" | "merge";
   /** the number its unit's function names carry */
   unit: number;
-  /** first-tier code of methods already linked, merged into one module (Tiering.mergeJob) */
-  merge?: boolean;
   /** the methods it installs, and the small ones it copies in for its own calls (method ids), first the method asked for */
   installed: string[]; copies: string[];
   /** per call site (caller and DEX pc), the implementations worth a guarded direct call (method ids) */
   plan: [string, string[]][];
-  /** Successful, prepared initiating identities needed by these methods. */
-  resolved?: [referrer: string, name: string, key: string][];
-  /** Declaration hierarchies prepared by Java loading in the source World. */
-  prepared?: [key: string, sup: string | null, ifaces: string[]][];
+  /** the initiating identities its methods' code resolves, and the hierarchies of those classes as the World asking has them */
+  resolved: [referrer: string, name: string, key: string][];
+  prepared: [key: string, sup: string | null, ifaces: string[]][];
   /** the methods of the unit that ran a long loop (World.longLoops) */
   long: string[];
 }
@@ -57,21 +56,20 @@ export class UnitCompiler {
     return true;
   }
   /** the unit for `job`: an error message if the job does not follow this World */
-  upgrade(job: UpgradeJob): UnitResult | string {
+  upgrade(job: UnitJob): UnitResult | string {
     const w = this.w, method = (id: string) => methodOf(w.prog, id)!;
-    for (const [referrer, name, key] of job.resolved ?? []) {
+    for (const [referrer, name, key] of job.resolved) {
       if (!w.prog.has(referrer) || !w.prog.has(key)) return `missing resolved worker identity ${referrer}: ${name} -> ${key}`;
       const prior = w.prog.initiatedBy(w.prog.loaderOf(referrer), name);
       if (prior && prior !== key) return `conflicting resolved worker identity ${referrer}: ${name} -> ${key}, already ${prior}`;
     }
-    if (job.resolved?.length && !job.prepared?.length) return "missing prepared worker hierarchies";
-    const prepared = new Set((job.prepared ?? []).map(([key]) => key));
-    for (const [, , key] of job.resolved ?? []) if (!prepared.has(key)) return `missing prepared worker hierarchy ${key}`;
-    for (const [key, sup, ifaces] of job.prepared ?? []) if (!hasHierarchy(w.prog.get(key), sup, ifaces)) return `mismatched prepared worker hierarchy ${key}`;
-    for (const [referrer, name, key] of job.resolved ?? []) w.namespaces.initiateClass(w.prog.loaderOf(referrer), name, key);
+    const prepared = new Set(job.prepared.map(([key]) => key));
+    for (const [, , key] of job.resolved) if (!prepared.has(key)) return `missing prepared worker hierarchy ${key}`;
+    for (const [key, sup, ifaces] of job.prepared) if (!hasHierarchy(w.prog.get(key), sup, ifaces)) return `mismatched prepared worker hierarchy ${key}`;
+    for (const [referrer, name, key] of job.resolved) w.namespaces.initiateClass(w.prog.loaderOf(referrer), name, key);
     w.longLoops = new Set(job.long);
     const cx = new Compiler(w, job.unit), plan = new Map(job.plan.map(([key, ids]) => [key, ids.map(method)]));
-    const [{ bytes, traces }, touched] = w.touched(() => cx.buildUnit(job.installed.map(method), { copies: job.copies.map(method), hot: !job.merge, install: job.merge ? "merge" : undefined, plan }));
+    const [{ bytes, traces }, touched] = w.touched(() => cx.buildUnit(job.installed.map(method), { copies: job.copies.map(method), hot: job.kind === "upgrade", install: job.kind === "merge" ? "merge" : undefined, plan }));
     return { header: unitHeader(w, cx, touched), numbering: w.numbers.since(this.known), module: bytes,
       traces: traces.map((t) => ({ name: t.name, m: t.m ? mid(t.m) : "", offsets: t.offsets, pcs: t.pcs, inline: t.inline?.map(([m, pc, at]) => [mid(m), pc, at]) })) };
   }

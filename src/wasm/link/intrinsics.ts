@@ -109,4 +109,5 @@ for (const [d, { title }] of Object.entries(PRIMS)) {
 }
 for (const [name, op] of [["floor", 0x9c], ["ceil", 0x9b], ["rint", 0x9e]] as const) def(`java/lang/Math.${name}(D)D`, f64Op(op));
 
-for (const [key, f] of [...classIntrinsics, ...unsafeIntrinsics, ...reflectIntrinsics, ...threadIntrinsics, ...refIntrinsics, ...memoryIntrinsics, ...fieldIntrinsics, ...memberIntrinsics, ...inetIntrinsics, ...proxyIntrinsics, ...annotationIntrinsics, ...loaderIntrinsics, ...handleIntrinsics]) intrinsics.set(key, f);
+for (const family of [classIntrinsics, unsafeIntrinsics, reflectIntrinsics, threadIntrinsics, refIntrinsics, memoryIntrinsics, fieldIntrinsics, memberIntrinsics,
+  inetIntrinsics, proxyIntrinsics, annotationIntrinsics, loaderIntrinsics, handleIntrinsics]) for (const [key, f] of family) intrinsics.set(key, f);

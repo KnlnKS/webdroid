@@ -2,6 +2,7 @@
 import type { Strand } from "./sched.ts";
 import { javaFrames, deepStack, engineFrames, type EngineFrame, type JavaFrame } from "../compiler/exc.ts";
 import type { FnTrace } from "../compiler/j2w.ts";
+import { methodOf, type MethodInfo } from "../compiler/program.ts";
 import type { World } from "./world.ts";
 
 type BridgeStack = { stack?: Error; prior?: BridgeStack; done: boolean };
@@ -14,6 +15,15 @@ export class StackTraces {
   /** the traces of the functions compiled here, by name; a build's are read from its modules as stacks need them (AotRuntime.trace) */
   readonly traces = new Map<string, FnTrace>();
   private frameTraces = { get: (name: string) => this.traces.get(name) ?? this.w.aot?.trace(name) };
+  /** the methods of the running stack's frames, innermost first: V8 names a Wasm function by its method's id, which a dispatch entry or an outlined loop extends */
+  methodsOnStack(): MethodInfo[] {
+    const out: MethodInfo[] = [];
+    for (const { name } of engineFrames(deepStack())) {
+      const m = name ? methodOf(this.w.prog, name.replace(/^\$dispatch:/, "").split("#")[0]) : undefined;
+      if (m) out.push(m);
+    }
+    return out;
+  }
   private captured = new WeakMap<object, Error | JavaFrame[]>();
   private bridgeStacks = new WeakMap<Strand, BridgeStack>();
   private javaStack(frames: EngineFrame[], count = Infinity, lines = true): JavaFrame[] {

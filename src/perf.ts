@@ -33,7 +33,7 @@ export const perf = {
   wasmUpgrades: 0, wasmAhead: 0,
   // build methods the warm Worker had the engine compile ahead of this process (host/warm-worker.ts), and modules it could not instantiate
   wasmWarmed: 0, wasmWarmSkipped: 0,
-  // first-tier units merged away and dropped for collection a batch at a time (Tiering.retire), and those the collector has freed
+  // first-tier units merged away and dropped for collection a batch at a time (Merges.retire), and those the collector has freed
   wasmRetired: 0, wasmCollected: 0,
   // first-tier methods the burner had the engine optimize in idle time (link/burn.ts), and build code modules linked in idle time (AotRuntime.linkAhead)
   wasmBurned: 0, wasmLinkedAhead: 0,

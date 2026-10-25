@@ -8,8 +8,10 @@ import type { DexFile } from "../../jvm/dex.ts";
 import type { World } from "./world.ts";
 import type { UnitHeader } from "./aot.ts";
 
+/** what is undone when something its code relies on no longer holds: the code in a table slot, or a helper of the host's (HostFunctions) */
+export type Owner = number | { invalidate(): void };
 /** a class-hierarchy decision: calls of decl.name+desc run only the method `tk` of class `tc` (none if empty) */
-interface Assumption { decl: string; name: string; desc: string; tc: string; tk: string; slots: Set<number> }
+interface Assumption { decl: string; name: string; desc: string; tc: string; tk: string; owners: Set<Owner> }
 /** what each decision's target and declaration resolved to before a namespace change (Assumptions.rebound) */
 export type Resolved = Map<Assumption, { target: MethodInfo; declared: MethodInfo }>;
 
@@ -17,14 +19,14 @@ export class Assumptions {
   private readonly w: World;
   /** the decisions by decl.name+desc */
   readonly decisions = new Map<string, Assumption>();
-  /** the slots whose code fails a site because a class is not loaded, by class name: loading it undoes them */
-  readonly absent = new Map<string, Set<number>>();
+  /** the code that fails a site because a class is not loaded, by class name: loading it undoes it */
+  readonly absent = new Map<string, Set<Owner>>();
   /** the slots of the methods whose code holds a method's, by its slot */
   private holders = new Map<number, Set<number>>();
   constructor(w: World) { this.w = w; }
 
   /** records what the code of a unit relies on, once it is in its slots: a site failing on a class missing where it was made is undone if the class is here */
-  record(head: Pick<UnitHeader, "assumptions" | "missing" | "held">): void {
+  record(head: Pick<UnitHeader<Owner>, "assumptions" | "missing" | "held">): void {
     const late = this.lateFor(head.assumptions);
     for (const [decl, name, desc, tc, tk, at] of head.assumptions) this.decide(decl, name, desc, tc, tk, at, late);
     for (const [name, at] of head.missing) if (this.w.prog.get(name)) this.undoCode(at); else this.absentAt(name, at);
@@ -34,31 +36,32 @@ export class Assumptions {
   private lateFor(decisions: readonly (readonly [string, ...unknown[]])[]): Map<string, string[]> | undefined {
     return this.w.cha.late.size && decisions.length ? this.lateBy(new Set(decisions.map(([decl]) => decl)), this.w.cha.late) : undefined;
   }
-  /** code in slot `at` runs only `tc`'s method `tk` for calls of decl.name+desc, unless a class linked late (`late`) already falsifies that */
-  private decide(decl: string, name: string, desc: string, tc: string, tk: string, at: number, late: Map<string, string[]> | undefined): void {
+  /** the code of `at` runs only `tc`'s method `tk` for calls of decl.name+desc, unless a class linked late (`late`) already falsifies that */
+  private decide(decl: string, name: string, desc: string, tc: string, tk: string, at: Owner, late: Map<string, string[]> | undefined): void {
     const by = late?.get(decl);
-    if (by && !this.holds({ name, desc, tc, tk }, by)) { this.w.tiers.invalidate(at); return; }
+    if (by && !this.holds({ name, desc, tc, tk }, by)) { this.invalidate(at); return; }
     const key = `${decl}.${name}${desc}`;
     let a = this.decisions.get(key);
-    if (!a) this.decisions.set(key, a = { decl, name, desc, tc, tk, slots: new Set() });
-    a.slots.add(at);
+    if (!a) this.decisions.set(key, a = { decl, name, desc, tc, tk, owners: new Set() });
+    a.owners.add(at);
   }
+  private invalidate(at: Owner): void { if (typeof at === "number") this.w.tiers.invalidate(at); else at.invalidate(); }
   /** the code of the methods after each slot of `held` holds the code of the method of that slot (Compiler.held) */
   hold(held: readonly number[][]): void {
     for (const [callee, ...by] of held) { const s = this.holders.get(callee); if (s) for (const x of by) s.add(x); else this.holders.set(callee, new Set(by)); }
   }
-  /** undoes the code of `slot` and, transitively, the code that holds it */
-  undoCode(slot: number): void {
-    const todo = [slot];
+  /** undoes the code of `at` and, transitively, the code that holds it */
+  undoCode(at: Owner): void {
+    const todo = [at];
     for (let i = 0; i < todo.length; i++) {
-      const by = this.holders.get(todo[i]);
-      if (by) { this.holders.delete(todo[i]); todo.push(...by); }
-      this.w.tiers.invalidate(todo[i]);
+      const x = todo[i], by = typeof x === "number" ? this.holders.get(x) : undefined;
+      if (by) { this.holders.delete(x as number); todo.push(...by); }
+      this.invalidate(x);
     }
   }
-  /** the code of `slot` fails a site because class `name` is not loaded */
-  absentAt(name: string, slot: number): void {
-    (this.absent.get(name) ?? this.absent.set(name, new Set()).get(name)!).add(slot);
+  /** the code of `at` fails a site because class `name` is not loaded */
+  absentAt(name: string, at: Owner): void {
+    (this.absent.get(name) ?? this.absent.set(name, new Set()).get(name)!).add(at);
   }
   /** classes `added` were defined: undoes the decisions they falsify and the code that failed sites for their absence. The classes of `deferred` dexes (a loader's
    *  other than the app's and the boot class path's) join the hierarchy only as they are linked (admit) */
@@ -66,9 +69,9 @@ export class Assumptions {
     const cha = this.w.cha;
     if (deferred) cha.defer(deferred); else this.joined(cha.index(added));
     if (this.absent.size) for (const name of added) {
-      const slots = this.absent.get(name);
-      if (!slots) continue;
-      for (const slot of slots) this.undoCode(slot);
+      const owners = this.absent.get(name);
+      if (!owners) continue;
+      for (const at of owners) this.undoCode(at);
       this.absent.delete(name);
     }
   }
@@ -103,12 +106,8 @@ export class Assumptions {
     let lateBy: Map<string, string[]> | undefined;
     const subtypes = new Map<(name: string) => boolean, Map<string, string[]>>();
     for (const [key, a] of this.decisions) {
-      for (const slot of a.slots) {
-        const state = w.slots.peek(slot);
-        // Unmaterialized AOT slots and private helper owners can still hold live code.
-        if (!w.helpers.isHelper(slot) && state && (state.k === "ensure" || !state.done)) a.slots.delete(slot);
-      }
-      if (!a.slots.size) { this.decisions.delete(key); continue; }
+      for (const at of a.owners) if (typeof at === "number" && (!w.slots.compiled(at) || w.slots.peek(at)?.k === "ensure")) a.owners.delete(at);
+      if (!a.owners.size) { this.decisions.delete(key); continue; }
       const saved = before.get(a), declared = prog.resolve(a.decl, a.name, a.desc);
       const sameTarget = saved && saved.target === prog.get(a.tc)?.byKey.get(a.tk) && saved.target.key === a.tk && saved.target.desc === a.desc;
       const samePrototype = declared && declared === saved?.declared && !declared.isStatic && declared.desc === a.desc;
@@ -118,11 +117,11 @@ export class Assumptions {
       if (sameTarget && samePrototype && this.holds(a, by)) continue;
       this.undo(key, a);
     }
-    for (const slots of this.absent.values()) for (const slot of slots) this.undoCode(slot);
+    for (const owners of this.absent.values()) for (const at of owners) this.undoCode(at);
     this.absent.clear();
   }
   private undo(key: string, a: Assumption): void {
-    for (const slot of a.slots) this.w.tiers.invalidate(slot);
+    for (const at of a.owners) this.invalidate(at);
     this.decisions.delete(key);
   }
   private decls(): Set<string> { return new Set([...this.decisions.values()].map((a) => a.decl)); }

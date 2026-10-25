@@ -6,11 +6,12 @@ import { bindInvoke, failed, invokeSite, symbolicOverride } from "../compiler/li
 import { cyclic, decodeInstruction, decodeInstructions, prepareMethod, type PreparedInstruction } from "../../jvm/prepared.ts";
 import { Family, Invoke, endsBlock, familyOf, insnLen, invokeKind, isIf, isInvoke } from "../../jvm/opcodes.ts";
 import { instructionClass } from "./resolution.ts";
-import type { Tiering } from "./tiering.ts";
+import { PENDING } from "./slots.ts";
 import type { World } from "./world.ts";
 import { siteKey } from "../compiler/sites.ts";
 import { siteProfile } from "../compiler/profile.ts";
 import { HOT_BUDGET } from "../compiler/consts.ts";
+import { PerWorld } from "./perworld.ts";
 
 /** the most methods a first-tier unit holds (Planner.batch) */
 const BATCH = 32;
@@ -20,13 +21,16 @@ const MAX_GROUP = 24, SMALL_CALLEE = 100, MAX_GUARDS = 2, COPY_MIN = 64;
 /** a virtual call with more implementations than this gets no guards: the busiest few of the whole app rarely are a given site's */
 const MEGAMORPHIC = 32;
 
+/** the implementations of virtual calls among the allocated classes (Planner.implementations), and the allocated classes by supertype, made again once classes are
+ *  added or the namespace changes */
+const implementations = new PerWorld((w) => ({
+  implemented: new Map<string, Map<string, { seen: number; targets: Set<MethodInfo> | null }>>(),
+  allocated: { seen: 0, cursor: w.allocated.values(), types: new Map<string, string | string[]>() },
+}), "changed");
+
 export class Planner {
   private readonly w: World;
-  /** what the methods' first tier has done, which planning reads */
-  private readonly tiers: Pick<Tiering, "pending" | "asked" | "count">;
-  constructor(w: World, tiers: Pick<Tiering, "pending" | "asked" | "count">) { this.w = w; this.tiers = tiers; }
-  /** the implementations of virtual calls are found again: classes were added or the namespace changed */
-  forgetImplementations(): void { this.implemented.clear(); this.allocatedIndex = undefined; }
+  constructor(w: World) { this.w = w; }
   /** `m` and the methods without code that its first run will call: its static and direct calls before its first branch, and theirs. They are compiled beside
    *  it rather than in a module each, which costs the engine far more than the functions */
   batch(m: MethodInfo): MethodInfo[] {
@@ -39,8 +43,8 @@ export class Planner {
         if (this.w.needsSymbolicSite(c, ins)) continue;
         const t = invokeSite(this.w.prog, c, ins.b, invokeKind(ins.op)).target;
         if (t === "clone" || failed(t) || out.includes(t) || !t.codeOff || t.flags & ACC.NATIVE || this.w.intrinsic(t)) continue;
-        const at = this.w.slotOf(t), ts = this.w.slots.at(at);
-        if (ts?.k !== "method" || ts.done || this.tiers.pending(at) || this.w.aot?.provide(at)) continue;
+        const at = this.w.slotOf(t);
+        if (this.w.slots.compiled(at) || this.w.slots.any(at, PENDING) || this.w.aot?.provide(at)) continue;
         out.push(t);
       }
     }
@@ -68,7 +72,7 @@ export class Planner {
       const callees: { t: MethodInfo; id: string; ran: number }[] = [];
       for (const t of this.callees(out[i], plan)) {
         const id = mid(t);
-        if (ids.has(id) || this.w.slots.at(this.w.slotOf(t))?.k !== "method") continue;
+        if (ids.has(id)) continue;
         const ran = this.ran(t);
         if (ran >= COPY_MIN) callees.push({ t, id, ran });
       }
@@ -77,17 +81,17 @@ export class Planner {
         if (out.length >= MAX_GROUP) break;
         if (ids.has(id)) continue;
         out.push(t); ids.add(id);
-        this.w.slots.method(this.w.slotOf(t))!.done ? copies.push(t) : installed.push(t);
+        (this.w.slots.compiled(this.w.slotOf(t)) ? copies : installed).push(t);
       }
     }
     return { installed, copies, plan };
   }
   /** calls and loop iterations counted for `t` so far: methods compiled by the second tier count as busy, the Wasm-written intrinsics always run */
   private ran(t: MethodInfo): number {
-    const slot = this.w.slotOf(t), sl = this.w.slots.method(slot)!;
+    const slot = this.w.slotOf(t);
     // a method that has asked for the second tier has used up a budget, whatever its count since
-    if (this.tiers.asked(slot) || this.w.opts.intrinsics.has(mid(t))) return HOT_BUDGET;
-    return sl.done ? this.tiers.count(slot) : 0;
+    if (this.w.upgrades.asked(slot) || this.w.opts.intrinsics.has(mid(t))) return HOT_BUDGET;
+    return this.w.slots.compiled(slot) ? this.w.slots.count(slot) : 0;
   }
   /** a method's call sites (`invokes`) and its first call of each method reference (`calls`), and the classes it allocates and refers to */
   private planningSites = new Map<MethodInfo, { invokes: PreparedInstruction[]; calls: PreparedInstruction[]; allocations: string[]; references: string[] }>();
@@ -156,7 +160,7 @@ export class Planner {
     if (profile === "broad") return [];
     // a row another call collided into names that call's targets
     return profile.flatMap((slot) => {
-      const t = this.w.slots.peekMethod(slot)?.m;
+      const t = this.w.slots.peekMethod(slot);
       return t && !t.isStatic && t.name === name && t.desc === desc && this.inlinable(t) ? [t] : [];
     });
   }
@@ -181,11 +185,9 @@ export class Planner {
     }
     return chosen;
   }
-  private implemented = new Map<string, Map<string, { seen: number; targets: Set<MethodInfo> | null }>>();
-  private allocatedIndex?: { seen: number; cursor: SetIterator<string>; types: Map<string, string | string[]> };
   /** Index each allocation once across its supertypes, preserving allocation order. */
   private allocatedSubtypes(decl: string): readonly string[] {
-    const index = this.allocatedIndex ??= { seen: 0, cursor: this.w.allocated.values(), types: new Map() };
+    const index = implementations.get(this.w).allocated;
     // Never exhaust the iterator: later allocations must remain visible.
     while (index.seen < this.w.allocated.size) {
       const cls = index.cursor.next().value!;
@@ -205,8 +207,9 @@ export class Planner {
   /** the implementations of a virtual call among the allocated classes, null once there are more than MEGAMORPHIC */
   private implementations(decl: string, name: string, desc: string): Set<MethodInfo> | null {
     const classes = this.allocatedSubtypes(decl);
-    let methods = this.implemented.get(decl);
-    if (!methods) this.implemented.set(decl, methods = new Map());
+    const implemented = implementations.get(this.w).implemented;
+    let methods = implemented.get(decl);
+    if (!methods) implemented.set(decl, methods = new Map());
     const key = name + desc;
     let memo = methods.get(key);
     if (!memo) methods.set(key, memo = { seen: 0, targets: new Set() });

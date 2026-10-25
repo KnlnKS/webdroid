@@ -6,7 +6,7 @@ import { unresolvedClass } from "../compiler/linkage.ts";
 import type { InvokeMode } from "../compiler/handles.ts";
 import { HEAP_LIMIT } from "../../jvm/abi.ts";
 import { NO_INDEX } from "../../jvm/dex.ts";
-import { className, hostInfo } from "./classes.ts";
+import { className, findMember, hostInfo } from "./classes.ts";
 import { MInfo, hostMembers, hostText } from "./members.ts";
 import { RInfo, hostReflect } from "./reflect.ts";
 import { hostUnsafe } from "./unsafe.ts";
@@ -57,8 +57,8 @@ export function hostImports(w: World): HostImports {
     gap: (id: number) => { lastGap = id; w.onGap(w.numbers.gapList[id]); },
     sync: (op: number, obj: object | null, a: number) => sched.sync(op, obj, a),
     block: sched.suspending((op: number, obj: object | null, a: number, b: number) => sched.block(op, obj, a, b)),
-    hot: (slot: number) => w.tiers.upgrade(slot),
-    long: (slot: number) => { const s = w.slots.at(slot); if (s?.k === "method") w.longLoops.add(mid(s.m)); },
+    hot: (slot: number) => w.upgrades.upgrade(slot),
+    long: (slot: number) => { const m = w.slots.methodAt(slot); if (m) w.longLoops.add(mid(m)); },
     imtMiss: (cls: number, sel: number) => w.dispatch.imtMiss(cls, sel),
     heapCheck: () => (heap() - heapBase > limit && (opts.collect?.(), heap() - heapBase > limit) ? 1 : 0),
     info: (kind: number, a: number, b: number) => kind >= MInfo.ExecCount ? hostMembers(w, kind, a, b) : kind >= RInfo.MethodCount ? hostReflect(w, kind, a, b)
@@ -90,6 +90,7 @@ export function hostImports(w: World): HostImports {
       const text = w.hostString(name) as string;
       return park(mode === Lookup.ForName ? resolveForName(w, text, scope as object | null, sched.current()) : classByName(w, text, scope, mode), 0);
     },
+    findMember: (cid: number, name: unknown, kind: number, n: number, from: number) => findMember(w, cid, w.hostString(name) as string | null, kind, n, from),
     dexOpen: (path: unknown, loader: object | null) => park(dexOpen(w, path, loader), null),
     dexOpenMemory: (buffers: object, arrays: object, starts: object, ends: object, loader: object | null) => park(dexOpenMemory(w, buffers, arrays, starts, ends, loader), null),
     // the class `n` frames out from the caller of the native; 0 when the stack is not that deep

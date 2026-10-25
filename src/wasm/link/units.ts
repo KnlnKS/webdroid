@@ -4,13 +4,14 @@ import type { FunctionType } from "../compiler/wasmbin.ts";
 import type { Compiler, FnTrace } from "../compiler/j2w.ts";
 import { methodOf } from "../compiler/program.ts";
 import type { HostContext } from "./hostapi.ts";
+import type { Owner } from "./assumptions.ts";
 import { VERSION, type UnitHeader } from "./aot.ts";
 import { compiledHeader } from "./aotbuild.ts";
 import type { Built, Clock, World } from "./world.ts";
 
 /** a unit to install (Units.link): what its code needs and relies on, and its module */
 export interface LinkedUnit {
-  head: UnitHeader;
+  head: UnitHeader<Owner>;
   module: Uint8Array | WebAssembly.Module;
   /** the stack traces of its functions, where its module does not hold them (AotRuntime.trace) */
   traces?: readonly FnTrace[];
@@ -63,9 +64,9 @@ export class Units {
     w.assumptions.record(head);
     return placed;
   }
-  /** unit `built`, compiled here by `cx` with `imports` (Units.of): `slot` owns what its code relies on that no method of it does */
-  compiled(cx: Compiler, imports: Record<string, any>, built: Built, slot?: number): LinkedUnit {
-    return { head: compiledHeader(this.w, cx, slot), module: built.bytes, traces: built.traces, local: { imports, shared: cx.sharedOut } };
+  /** unit `built`, compiled here by `cx` with `imports` (Units.of): `owner` owns what its code relies on that no method of it does */
+  compiled(cx: Compiler, imports: Record<string, any>, built: Built, owner?: Owner): LinkedUnit {
+    return { head: compiledHeader(this.w, cx, owner), module: built.bytes, traces: built.traces, local: { imports, shared: cx.sharedOut } };
   }
   /** links what the code of a module made elsewhere names, before it runs: the classes it touches (their modules), and its synthetic functions but those it `defines` */
   linkHeader(head: Pick<UnitHeader, "touch" | "synth">, defines?: (name: string) => boolean): void {

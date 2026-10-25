@@ -6,6 +6,7 @@
 // of its real calls. Nothing of the method runs.
 import { COUNT_SLOTS, WARM_AT } from "../compiler/consts.ts";
 import { methodKinds, type Kind } from "../compiler/program.ts";
+import { FIRST } from "./slots.ts";
 import type { World } from "./world.ts";
 
 /** the calls and loop iterations a method has run before its feedback is worth optimizing with: an inlined call's count must outweigh its callee's size */
@@ -28,19 +29,18 @@ export class Burner {
   constructor(w: World) { this.w = w; }
   /** the unburned first-tier code of `slot`'s method, which has the warm exit: second-tier code runs its method whatever the warm word says, and a stub compiles it */
   private code(slot: number): Function | undefined {
-    if (!this.w.slots.method(slot)?.done || this.w.tiers.hot(slot)) return undefined;
+    if (!this.w.slots.is(slot, FIRST) || !this.w.slots.methodAt(slot)) return undefined;
     const f = this.w.table.get(slot) as Function;
     return this.burned.has(f) ? undefined : f;
   }
   /** the first-tier methods that have run BURN_AT calls or asked for the second tier, busiest first */
   private scan(): number[] {
-    const counts = this.w.tiers.counts(), n = Math.min(COUNT_SLOTS, this.w.slots.made().length, this.w.table.length), found: number[] = [];
-    for (let slot = 0; slot < n; slot++) if ((counts[slot] >= BURN_AT || this.w.tiers.asked(slot)) && this.code(slot)) found.push(slot);
+    const counts = this.w.slots.counts(), n = Math.min(COUNT_SLOTS, this.w.slots.size), found: number[] = [];
+    for (let slot = 0; slot < n; slot++) if ((counts[slot] >= BURN_AT || this.w.upgrades.asked(slot)) && this.code(slot)) found.push(slot);
     return found.sort((a, b) => counts[a] - counts[b]);
   }
   /** Idle time: burns the busy first-tier methods until `until`. Whether any is left. */
   burn(until: number): boolean {
-    if (!this.w.instantiates) return false;
     if (!this.queue.length) this.queue = this.scan();
     const warm = new Int32Array(this.w.mem.buffer, WARM_AT, 1);
     warm[0] = 1;
@@ -48,7 +48,7 @@ export class Burner {
       while (this.queue.length && performance.now() < until) {
         const slot = this.queue[this.queue.length - 1], f = this.code(slot);
         if (!f) { this.queue.pop(); this.left = BURN_CALLS; continue; }
-        const { m } = this.w.slots.method(slot)!, args = methodKinds(m).params.map(zero), depth = this.w.rt.depth.value;
+        const m = this.w.slots.methodAt(slot)!, args = methodKinds(m).params.map(zero), depth = this.w.rt.depth.value;
         for (let i = Math.min(this.left, BURN_CHUNK); i > 0; i--) f(...args);
         if (this.w.rt.depth.value !== depth) throw new Error(`${m.cls}.${m.name} ran while burning`);
         if ((this.left -= BURN_CHUNK) > 0) continue;

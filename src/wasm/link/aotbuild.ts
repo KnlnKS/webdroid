@@ -5,14 +5,15 @@ import { mid } from "../compiler/program.ts";
 import { uleb } from "../compiler/wasmbin.ts";
 import type { JClass, MethodInfo } from "../compiler/program.ts";
 import { compileModule } from "./module.ts";
-import { AotRuntime, dexSig, VERSION, type AotBuild, type AotIndex, type CHeader, type DHeader, type SHeader, type UnitHeader } from "./aot.ts";
+import { dexSig, VERSION, type AotBuild, type AotLayout, type AotIndex, type CHeader, type DHeader, type SHeader, type UnitHeader } from "./aot.ts";
 import { hostTakeover } from "./hostclass.ts";
 import type { Marks } from "./numbers.ts";
+import type { Owner } from "./assumptions.ts";
 import type { Touched, World } from "./world.ts";
 
 const rle = (a: number[]): number[] => { const o: number[] = []; for (const v of a) { if (o.length && o[o.length - 2] === v) o[o.length - 1]++; else o.push(v, 1); } return o; };
 
-/** The platform build's grouping, over a World made to build it (WorldOptions.build): the classes of the build's dexes are numbered first, in definition order,
+/** The platform build's grouping, made by the World that builds it (WorldOptions.build): the classes of the build's dexes are numbered first, in definition order,
  *  and given the D and C module of their group (-1 for no C module); the World links them as the build lays them out (AotRuntime) */
 export class AotBuilder {
   private readonly w: World;
@@ -41,8 +42,9 @@ export class AotBuilder {
       this.dGroupOf.push(id(dIds, this.dKeys, build.dGroup(name)));
       this.cGroupOf.push(id(cIds, this.cKeys, build.cGroup(name)));
     }
-    w.aot = new AotRuntime(w, { dOf: Int32Array.from(this.dGroupOf), cOf: new Int32Array(0), extraGroup: this.dKeys.length });
   }
+  /** where the build puts the platform classes (WorldOptions.build) */
+  get layout(): AotLayout { return { dOf: Int32Array.from(this.dGroupOf), cOf: new Int32Array(0), extraGroup: this.dKeys.length }; }
   /** the index of the finished build, whose runtime functions are in `synths` */
   finish(synths: string[][]): AotIndex {
     const w = this.w, withCode = [...w.prog.all()].filter((c) => c.dex);
@@ -69,28 +71,28 @@ export function invalidFunction(bytes: Uint8Array, cx?: Compiler): { name: strin
   return undefined;
 }
 
-/** what code built by `cx` relies on, by the numbers of `w`: `slot` owns what no method of it does (a helper's code, a symbolic site's) */
-function reliance(w: World, cx: Compiler, slot?: number): Pick<UnitHeader, "assumptions" | "allocs" | "missing" | "held"> {
-  const owner = (m: MethodInfo | undefined): number => {
-    const at = m ? w.slotOf(m) : slot;
+/** what code built by `cx` relies on, by the numbers of `w`: `owner` owns what no method of it does (a helper's code, a symbolic site's) */
+function reliance<O extends Owner>(w: World, cx: Compiler, owner?: O): Pick<UnitHeader<number | O>, "assumptions" | "allocs" | "missing" | "held"> {
+  const ownerOf = (m: MethodInfo | undefined): number | O => {
+    const at = m ? w.slotOf(m) : owner;
     if (at === undefined) throw new Error("compiled code relies on something with no invalidation owner");
     return at;
   };
-  const held = cx.held, seen = new Set<string>(), assumptions: UnitHeader["assumptions"] = [];
+  const held = cx.held, seen = new Set<string>(), assumptions: UnitHeader<number | O>["assumptions"] = [];
   for (const [decl, name, desc, target, m] of cx.assumptions) {
-    const at = owner(m), key = `${decl}.${name}${desc}@${at}`;
+    const at = ownerOf(m), key = `${decl}.${name}${desc}@${typeof at === "number" ? at : "owner"}`;
     if (!seen.has(key)) { seen.add(key); assumptions.push([decl, name, desc, target?.cls ?? "", target?.key ?? "", at]); }
   }
-  return { assumptions, allocs: [...cx.allocs], missing: cx.absent.map(([name, m]) => [name, owner(m)] as [string, number]), ...held.length && { held } };
+  return { assumptions, allocs: [...cx.allocs], missing: cx.absent.map(([name, m]) => [name, ownerOf(m)] as [string, number | O]), ...held.length && { held } };
 }
 /** what code made by `cx` for another World (naming the table slots `touched`) needs and relies on, by the numbers of `w` */
 export function unitHeader(w: World, cx: Compiler, touched: Touched): UnitHeader {
-  return { version: VERSION, ...touched, classImports: cx.classImports(), natives: [...cx.nativeImports.keys()], symbols: [...cx.symbolicImports.values()].map(v => v.site), ...reliance(w, cx) };
+  return { version: VERSION, ...touched, classImports: cx.classImports(), natives: [...cx.nativeImports.keys()], symbols: [...cx.symbolicImports.values()].map(v => v.site), ...reliance<number>(w, cx) };
 }
-/** the header of a unit compiled here by `cx`, whose imports are made from what its compile linked (Units.of): what its code relies on, `slot` owning what no
+/** the header of a unit compiled here by `cx`, whose imports are made from what its compile linked (Units.of): what its code relies on, `owner` owning what no
  *  method of it does */
-export function compiledHeader(w: World, cx: Compiler, slot?: number): UnitHeader {
-  return { version: VERSION, touch: [], synth: [], classImports: [], natives: [], ...reliance(w, cx, slot) };
+export function compiledHeader(w: World, cx: Compiler, owner?: Owner): UnitHeader<Owner> {
+  return { version: VERSION, touch: [], synth: [], classImports: [], natives: [], ...reliance(w, cx, owner) };
 }
 /** `wasm` with the custom sections the runtime reads: the header, and the traces of its functions (methods numbered by `w`) */
 export function packModule(header: object, wasm: Uint8Array, traced?: { w: World; traces: FnTrace[] }): Uint8Array {

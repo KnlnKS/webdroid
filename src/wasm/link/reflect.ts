@@ -7,7 +7,7 @@ import { OP } from "../compiler/code.ts";
 import { T, refNull } from "../compiler/wasmbin.ts";
 import { ACC, kindOf, type JClass, type MethodInfo, typeName } from "../compiler/program.ts";
 import { descToName } from "../../jvm/abi.ts";
-import { idOfClass, emitName, emitNameEq, TextKind } from "./classes.ts";
+import { idOfClass, emitName, Member, TextKind } from "./classes.ts";
 import { UInfo } from "../compiler/info.ts";
 import { WIDEN, BOX, box } from "../compiler/primitives.ts";
 import { rt, type Synth } from "../compiler/rtfns.ts";
@@ -31,41 +31,27 @@ function members(w: World, jc: JClass | undefined): string[] {
 }
 
 /** the class ids of a method's parameter and return types in a World, which a lookup compares for every method of a class */
-const sigs = new PerWorld(() => new WeakMap<MethodInfo, { params: number[]; ret: number }>(), true);
+const sigs = new PerWorld(() => new WeakMap<MethodInfo, { params: number[]; ret: number }>(), "rebound");
 function sigOf(w: World, m: MethodInfo) {
   const byMethod = sigs.get(w);
   let s = byMethod.get(m); if (!s) byMethod.set(m, s = { params: m.params.map((p) => w.idOf(typeName(p))), ret: w.idOf(typeName(m.ret)) });
   return s;
 }
 
-/** String.hashCode of a name */
-function nameHash(name: string): number { let h = 0; for (let i = 0; i < name.length; i++) h = (Math.imul(h, 31) + name.charCodeAt(i)) | 0; return h; }
-const byName = new WeakMap<JClass, Map<number, number[]>>();
 /** host.info kinds about Method and Constructor */
-export const RInfo = { MethodCount: 200, MethodNameLen: 201, MethodNameChar: 202, MethodKind: 203, MethodParams: 204, MethodParamType: 205, MethodRet: 206, MethodFlags: 207, MethodInvoke: 208, MethodCall: 209, MethodCallDirect: 210, IfaceCount: 211, Iface: 212, MemberCount: 213, Member: 214, MethodsNamed: 215, MethodNamedAt: 216, SerialInit: 217, MethodSlot: 218 } as const;
+export const RInfo = { MethodCount: 200, MethodParams: 204, MethodParamType: 205, MethodRet: 206, MethodFlags: 207, MethodInvoke: 208, MethodCall: 209, MethodCallDirect: 210, IfaceCount: 211, Iface: 212, MemberCount: 213, Member: 214, SerialInit: 217, MethodSlot: 218 } as const;
 export type RInfo = (typeof RInfo)[keyof typeof RInfo];
-/** the methods of the class `MethodsNamed` last counted, which `MethodNamedAt` indexes */
-let named: number[] = [];
 
 export function hostReflect(w: World, kind: number, a: number, b: number): number {
   const jc = w.prog.get(w.nameOf(a));
   if (kind === RInfo.MethodCount) return jc?.def ? jc.methods.length : 0;
   if (kind === RInfo.IfaceCount) return jc?.ifaces.length ?? 0;
   if (kind === RInfo.Iface) return w.idOf(jc!.ifaces[b]);
-  if (kind === RInfo.MethodsNamed) {
-    let index = jc && byName.get(jc);
-    if (jc && !index) { byName.set(jc, index = new Map()); jc.methods.forEach((m, k) => { const h = nameHash(m.name); index!.get(h)?.push(k) ?? index!.set(h, [k]); }); }
-    return (named = index?.get(b) ?? []).length;
-  }
-  if (kind === RInfo.MethodNamedAt) return named[b];
   if (kind === RInfo.SerialInit) return jc?.byKey.has("<init>()V") ? w.synthSlot("sinit:" + jc.name) : 0;
   if (kind === RInfo.MemberCount) return members(w, jc).length;
   if (kind === RInfo.Member) return w.idOf(members(w, jc)[b]);
-  const idx = kind === RInfo.MethodParamType ? b >> 8 : b, m = jc!.methods[kind === RInfo.MethodNameChar ? b >>> 16 : idx];
+  const m = jc!.methods[kind === RInfo.MethodParamType ? b >> 8 : b];
   switch (kind) {
-    case RInfo.MethodNameLen: return m.name.length;
-    case RInfo.MethodNameChar: return m.name.charCodeAt(b & 0xffff);
-    case RInfo.MethodKind: return m.name === "<init>" ? 1 : m.name === "<clinit>" ? 2 : 0;
     case RInfo.MethodParams: return m.params.length;
     case RInfo.MethodParamType: return sigOf(w, m).params[b & 0xff];
     case RInfo.MethodRet: return sigOf(w, m).ret;
@@ -92,9 +78,9 @@ synthFamily("call", reflectiveCall(false, false), true);
 synthFamily("callDirect", reflectiveCall(false, true), true);
 
 export function methodAt(w: World, slot: number): MethodInfo {
-  const entry = w.slots.at(slot);
-  if (entry?.k !== "method") throw new Error(`invalid executable slot ${slot}`);
-  return entry.m;
+  const m = w.slots.methodAt(slot);
+  if (!m) throw new Error(`invalid executable slot ${slot}`);
+  return m;
 }
 
 /** the thunk body: params (receiver, Object[]) -> Object. Method.invoke wraps what the method throws in InvocationTargetException (`wrap`); a method handle
@@ -155,8 +141,6 @@ function callBoxed(cx: Compiler, c: Code, m: MethodInfo, direct: boolean, values
 
 const execField = (cx: Compiler, cls: string, name: string, d: string) => cx.fieldIndex(cls, { owner: EXEC, name, desc: d });
 const info = (cx: Compiler, c: Code, kind: RInfo, cid: number, b: () => void = () => c.i32(0)) => cx.info(c, kind, () => c.lget(cid), b);
-const INIT_HASH = nameHash("<init>");
-const ACC_BRIDGE = 0x40;
 
 // mkExec(cid, idx, ctor): the Method or Constructor object of a method of class cid
 rt("mkExec", ["I", "I", "I"], "L", (cx, c) => {
@@ -173,32 +157,21 @@ rt("mkExec", ["I", "I", "I"], "L", (cx, c) => {
   }
   c.anyNull();
 });
-// mnameEq(cid, k, name, len): nameEq of method k
-rt("mnameEq", ["I", "I", "L", "I"], "I", (cx, c) => emitNameEq(cx, c, RInfo.MethodNameChar));
-// findMethod(cid, name, params, ctor): the index of the declared method (constructor: name null) with those parameter classes, or -1. The host lists the
-// methods whose name hashes as this one does, so a class of hundreds of methods is not scanned for every lookup
+// findMethod(cid, name, params, ctor): the index of the declared method (constructor: name null) with those parameter classes, or -1. The host names the
+// candidates (findMember); their parameter classes are compared here
 rt("findMethod", ["I", "L", "L", "I"], "I", (cx, c) => {
-  const nc = c.newLocal(T.i32), j = c.newLocal(T.i32), k = c.newLocal(T.i32), plen = c.newLocal(T.i32), len = c.newLocal(T.i32), i = c.newLocal(T.i32);
-  const pdata = c.newLocal(refNull(cx.tData.ref));
-  c.lget(1).refIsNull().raw(OP.i32_eqz).if_().lget(1); cx.callNamed(c, "java/lang/String", "length", "()I"); c.lset(len).end();
+  const name = c.newLocal(T.externref), k = c.newLocal(T.i32), plen = c.newLocal(T.i32), i = c.newLocal(T.i32), pdata = c.newLocal(refNull(cx.tData.ref));
+  c.lget(1); cx.str.toHost(c); c.lset(name);
   c.lget(2).refIsNull().raw(OP.i32_eqz).if_().lget(2).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).lset(pdata).lget(pdata).refAsNonNull().arrayLen().lset(plen).end();
-  info(cx, c, RInfo.MethodsNamed, 0, () => { c.lget(3).if_(T.i32); c.i32(INIT_HASH).else_().lget(1).call(cx.helper("shash")).end(); }); c.lset(nc);
-  c.block().loop().lget(j).lget(nc).raw(OP.i32_ge_s).brIf(1);
-  info(cx, c, RInfo.MethodNamedAt, 0, () => c.lget(j)); c.lset(k);
-  c.block();                                                   // next
-  info(cx, c, RInfo.MethodKind, 0, () => c.lget(k)); c.lget(3).raw(OP.i32_ne).brIf(0);
-  info(cx, c, RInfo.MethodFlags, 0, () => c.lget(k)); c.i32(ACC_BRIDGE).raw(OP.i32_and).brIf(0);
-  info(cx, c, RInfo.MethodParams, 0, () => c.lget(k)); c.lget(plen).raw(OP.i32_ne).brIf(0);
-  c.lget(3).raw(OP.i32_eqz).if_();
-  info(cx, c, RInfo.MethodNameLen, 0, () => c.lget(k)); c.lget(len).raw(OP.i32_ne).brIf(1);
-  c.lget(0).lget(k).lget(1).lget(len); cx.callRt(c, "mnameEq"); c.raw(OP.i32_eqz).brIf(1).end();
+  const next = (from: () => void) => { c.lget(0).lget(name).lget(3).lget(plen); from(); c.call(cx.imp.findMember).lset(k); };
+  next(() => c.i32(0));
+  c.block().loop().lget(k).i32(0).raw(OP.i32_lt_s).brIf(1);
   c.i32(0).lset(i);
-  c.block().loop().lget(i).lget(plen).raw(OP.i32_ge_s).brIf(1);
+  c.block().loop().lget(i).lget(plen).raw(OP.i32_ge_s).if_().lget(k).ret().end();
   c.lget(pdata).refAsNonNull().lget(i).arrayGet(cx.tData.ref); idOfClass(cx, c);
-  info(cx, c, RInfo.MethodParamType, 0, () => c.lget(k).i32(8).raw(OP.i32_shl).lget(i).raw(OP.i32_or)); c.raw(OP.i32_ne).brIf(2);
+  info(cx, c, RInfo.MethodParamType, 0, () => c.lget(k).i32(8).raw(OP.i32_shl).lget(i).raw(OP.i32_or)); c.raw(OP.i32_ne).brIf(1);
   c.lget(i).i32(1).raw(OP.i32_add).lset(i).br(0).end().end();
-  c.lget(k).ret().end();                                       // end of `next`
-  c.lget(j).i32(1).raw(OP.i32_add).lset(j).br(0).end().end().i32(-1);
+  next(() => c.lget(k).i32(1).raw(OP.i32_add)); c.br(0).end().end().i32(-1);
 });
 // classArray(cid, k, what): the Class[] of the parameter classes (what 0) of method k, of the direct interfaces (what 1), or of the member classes (what 2)
 rt("classArray", ["I", "I", "I"], "L", (cx, c) => {
@@ -233,7 +206,7 @@ export function executableSlot(cx: Compiler, c: Code, local = 0): void {
 const exec = (cx: Compiler, c: Code, nameLocal: number | null, paramsLocal: number, ctor: 0 | 1) => {
   const cid = c.newLocal(T.i32), idx = c.newLocal(T.i32);
   c.lget(0); idOfClass(cx, c); c.lset(cid);
-  c.lget(cid); nameLocal === null ? c.anyNull() : c.lget(nameLocal); c.lget(paramsLocal).i32(ctor); cx.callRt(c, "findMethod"); c.ltee(idx).i32(0).raw(OP.i32_lt_s);
+  c.lget(cid); nameLocal === null ? c.anyNull() : c.lget(nameLocal); c.lget(paramsLocal).i32(ctor ? Member.Ctor : Member.Method); cx.callRt(c, "findMethod"); c.ltee(idx).i32(0).raw(OP.i32_lt_s);
   c.if_(T.anyref).anyNull().else_().lget(cid).lget(idx).i32(ctor); cx.callRt(c, "mkExec"); c.end();
 };
 def("java/lang/Class.getDeclaredMethodInternal(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;", (cx, c) => exec(cx, c, 1, 2, 0));
