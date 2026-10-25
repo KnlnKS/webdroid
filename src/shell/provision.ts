@@ -6,6 +6,7 @@ import { Resources, resString } from "../android/res.ts";
 import { deviceQualifiers } from "../android/configuration.ts";
 import { packages, componentState } from "../android/packages.ts";
 import { registerPackage } from "../android/installpackage.ts";
+import { restorePackages } from "./packages.ts";
 import { mkComponentName, newIntent, putExtra } from "../android/intent.ts";
 import { vcall } from "../jvm/natives/jentry.ts";
 import { awaited, rt, type Gen } from "../jvm/runtime.ts";
@@ -31,7 +32,8 @@ export function provisionPackages(): Promise<void> {
       const component = { pkg: record.pkg, cls: name };
       if (componentState.get(component) === null) componentState.set(component, 2);
     }
-  })).then(() => {});
+  // the packages the installer committed, which no system package replaces
+  })).then(restorePackages);
 }
 /** the system starting each package's provisioning service */
 export const provisionServices = (options: { attestationEnabled: boolean }): Promise<void> => asSystem(() => rt.drive(function* (): Gen<void> {

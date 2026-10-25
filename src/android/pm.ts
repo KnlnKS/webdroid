@@ -4,17 +4,13 @@
 // system_server's part in resolving intents and providers; permissions.ts answers for permissions.
 // Intents and component names are read through their Java API only.
 import { awaited, JObj, rt, noops, setDeclared, driven, type Gen } from "../jvm/runtime.ts";
-import { jarray, strArray, intBitsToFloat, hexBytes, sameBytes } from "../jvm/abi.ts";
+import { jarray, strArray, intBitsToFloat, sameBytes } from "../jvm/abi.ts";
 import { device } from "../shell/config.ts";
 import { uuidDefault } from "./os.ts";
 import { vcall, after, newObj } from "../jvm/natives/jentry.ts";
 import { logUncaught, detached } from "../jvm/natives/jthrowable.ts";
 import { type XmlNode, attrStr, attr, TV } from "./axml.ts";
 import { resolved, resString, type Resources } from "./res.ts";
-import { parsePackageArchive, packageArchive, type PackageArchive } from "./packagearchive.ts";
-import { packedArchives } from "../shell/packedarchive.ts";
-import { verifyApkSignature } from "./apksignature.ts";
-import { persistPackage, restorePackages } from "../shell/packages.ts";
 import { appHost } from "./apphost.ts";
 import { vfs, apkPath } from "../shell/vfs.ts";
 import { systemProviders, systemProviderInfo$ } from "./systemproviders.ts";
@@ -23,11 +19,10 @@ import { SHARED_LIBRARIES } from "../jvm/bootclasspath.ts";
 import { once } from "../jvm/suspend.ts";
 import { systemActivity, SYSTEM_ACTIVITY, intentQuery$, type IntentQuery } from "./intent.ts";
 import { intentTarget$, manifestFilter$, matches$ } from "./intent-filter.ts";
-import { type PackageRecord, packages, uidPackages, qualifyComponent, componentState, installedPath, installTime, type ComponentKind,
+import { type PackageRecord, packages, uidPackages, qualifyComponent, componentState, installTime, type ComponentKind,
   GET_ACTIVITIES, GET_RECEIVERS, GET_SERVICES, GET_PROVIDERS, GET_INSTRUMENTATION, GET_SIGNATURES, GET_META_DATA, GET_SHARED_LIBRARY_FILES,
   GET_PERMISSIONS, GET_CONFIGURATIONS, GET_SIGNING_CERTIFICATES, MATCH_DISABLED_COMPONENTS, MATCH_DEFAULT_ONLY, MATCH_DIRECT_BOOT_UNAWARE,
   MATCH_DIRECT_BOOT_AWARE, MATCH_SYSTEM_ONLY } from "./packages.ts";
-import { registerPackage } from "./installpackage.ts";
 import { digestBytes } from "../crypto/digest.ts";
 import { hostService, oneway, parceledList } from "./binder.ts";
 import { deleteVersioned, enforceDeletePackages } from "./appdata.ts";
@@ -513,17 +508,6 @@ function* packageInfo$(record: PackageRecord, flags: number): Gen<JObj> {
   return pi;
 }
 
-// ── installed archives under /data/app, registered when first asked for
-const archiveCache = new WeakMap<Uint8Array, Promise<PackageArchive>>();
-async function readArchive(path: string): Promise<PackageArchive | null> {
-  const packed = packedArchives.get(path);
-  if (packed) return packageArchive(packed.zip, packed.index.certificates.map(hexBytes));
-  const bytes = await vfs.readFile(path);
-  if (!bytes) return null;
-  let archive = archiveCache.get(bytes);
-  if (!archive) archiveCache.set(bytes, archive = parsePackageArchive(bytes));
-  try { return await archive; } catch { return null; }
-}
 // There is no IncFS: no file is incremental and none carries a v4 signature, so
 // ApkSignatureVerifier reads the APK's v3/v2/v1 signatures
 rt.registerJnis("android/os/incremental/IncrementalManager", {
@@ -531,39 +515,6 @@ rt.registerJnis("android/os/incremental/IncrementalManager", {
   "nativeIsIncrementalFd(I)Z": () => 0, "nativeIsIncrementalPath(Ljava/lang/String;)Z": () => 0,
   "nativeUnsafeGetFileSignature(Ljava/lang/String;)[B": () => null,
 });
-/** the package's record, registering its persisted install on first use; synchronous when known */
-function packageRecord(pkg: string): PackageRecord | Promise<PackageRecord | null> {
-  return packages.get(pkg) ?? (async () => {
-    await restorePackages();
-    const path = installedPath(pkg), archive = await readArchive(path);
-    return archive ? packages.get(pkg) ?? registerPackage(archive, { path }) : null;
-  })();
-}
-async function installedPackages(): Promise<PackageRecord[]> {
-  await restorePackages();
-  // a persisted install is restored as bytes; a mounted one registered when it was mounted
-  for (const [path, { content }] of vfs.entries("/data/app/")) {
-    if (!(content instanceof Uint8Array) || !/^\/data\/app\/[^/]+\/base\.apk$/.test(path)) continue;
-    const archive = await readArchive(path);
-    if (archive && !packages.has(archive.pkg)) registerPackage(archive, { path });
-  }
-  return [...packages.values()];
-}
-export async function installPackageArchive(bytes: Uint8Array, expectedPackage: string | null = null): Promise<string> {
-  const archive = await parsePackageArchive(bytes, await verifyApkSignature(bytes));
-  if (expectedPackage && expectedPackage !== archive.pkg) throw new Error("Session package name differs from APK");
-  if (archive.pkg === appHost?.pkg) throw new Error("Replacing the running package is unsupported");
-  if (!archive.certificates.length) throw new Error("APK is unsigned");
-  await restorePackages();
-  const previous = await readArchive(installedPath(archive.pkg));
-  if (previous && longVersionCode(archive.root) < longVersionCode(previous.root)) throw new Error("APK version is older than installed package");
-  if (previous && (previous.certificates.length !== archive.certificates.length ||
-      previous.certificates.some((cert, i) => !sameBytes(cert, archive.certificates[i])))) throw new Error("APK signing certificate differs from installed package");
-  await persistPackage(installedPath(archive.pkg), bytes);
-  registerPackage(archive, { source: bytes });
-  return archive.pkg;
-}
-
 // ── checksums and signatures
 const wholeChecksumAlgorithms: readonly [number, string][] = [[2, "MD5"], [4, "SHA-1"], [8, "SHA-256"], [16, "SHA-512"]];
 async function apkDigests(record: PackageRecord, includeSplits: boolean, required: number): Promise<[string | null, number, Uint8Array][]> {
@@ -640,15 +591,15 @@ function* properties$(name: string, type: number): Gen<JObj[]> {
 const S = "Ljava/lang/String;", INTENT = "Landroid/content/Intent;", CN = "Landroid/content/ComponentName;", SLICE = "Landroid/content/pm/ParceledListSlice;";
 hostService("package", "webdroid/PackageManagerService", "android/content/pm/IPackageManager$Stub", {
   [`getPackageInfo(${S}JI)Landroid/content/pm/PackageInfo;`]: driven(function* getPackageInfo$(pkg: string, flags: bigint): Gen {
-    const record = yield* awaited(packageRecord(pkg));
+    const record = packages.get(pkg);
     return record ? yield* packageInfo$(record, flag(flags)) : null;
   }),
   [`getApplicationInfo(${S}JI)Landroid/content/pm/ApplicationInfo;`]: driven(function* getApplicationInfo$(pkg: string, flags: bigint): Gen {
-    const record = yield* awaited(packageRecord(pkg));
+    const record = packages.get(pkg);
     return record ? yield* applicationInfo$(record, flag(flags)) : null;
   }),
-  [`getPackageUid(${S}JI)I`]: (pkg: string) => after(packageRecord(pkg), (record) => record?.uid ?? -1),
-  [`getTargetSdkVersion(${S})I`]: (pkg: string) => after(packageRecord(pkg), (record) => record?.sdk.target ?? -1),
+  [`getPackageUid(${S}JI)I`]: (pkg: string) => packages.get(pkg)?.uid ?? -1,
+  [`getTargetSdkVersion(${S})I`]: (pkg: string) => packages.get(pkg)?.sdk.target ?? -1,
   [`getActivityInfo(${CN}JI)Landroid/content/pm/ActivityInfo;`]: componentInfoFor("activity"),
   [`getReceiverInfo(${CN}JI)Landroid/content/pm/ActivityInfo;`]: componentInfoFor("receiver"),
   [`getServiceInfo(${CN}JI)Landroid/content/pm/ServiceInfo;`]: componentInfoFor("service"),
@@ -682,10 +633,10 @@ hostService("package", "webdroid/PackageManagerService", "android/content/pm/IPa
   [`setComponentEnabledSetting(${CN}IIILjava/lang/String;)V`]: driven(function* setComponentEnabledSetting$(c: JObj, state: number): Gen {
     const [pkg, cls] = yield* componentArgs$(c);
     if (state < 0 || state > 4) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid new component state: " + state);
-    if (!(yield* awaited(packageRecord(pkg)))) throw unknownPackage(pkg);
+    if (!packages.has(pkg)) throw unknownPackage(pkg);
     componentState.set({ pkg, cls: qualifyComponent(cls, pkg) }, state);
   }),
-  [`getApplicationEnabledSetting(${S}I)I`]: (pkg: string) => after(packageRecord(pkg), (record) => { if (!record) throw unknownPackage(pkg); return 0; }),
+  [`getApplicationEnabledSetting(${S}I)I`]: (pkg: string) => { if (!packages.has(pkg)) throw unknownPackage(pkg); return 0; },
   [`hasSystemFeature(${S}I)Z`]: (name: string, version: number) => device.features.includes(name) && version <= 0 ? 1 : 0,
   "getSystemAvailableFeatures()Landroid/content/pm/ParceledListSlice;": driven(function* getSystemAvailableFeatures$(): Gen {
     return parceledList([...yield* all$(device.features, (name) => featureInfo$(name)), yield* featureInfo$(null, 0, GL_ES_VERSION)]);
@@ -693,11 +644,11 @@ hostService("package", "webdroid/PackageManagerService", "android/content/pm/IPa
   "getSystemSharedLibraryNames()[Ljava/lang/String;": () => jarray([], S),
   [`checkPermission(${S}${S}I)I`]: (permission: string, pkg: string) => checkPermission(permission, pkg),
   [`getInstallSourceInfo(${S}I)Landroid/content/pm/InstallSourceInfo;`]: driven(function* getInstallSourceInfo$(pkg: string): Gen {
-    if (!(yield* awaited(packageRecord(pkg)))) return null;
+    if (!packages.has(pkg)) return null;
     // APK loading has no Android installer of record or installer-supplied source metadata
     return newObj(PKG + "InstallSourceInfo", `(${S}Landroid/content/pm/SigningInfo;${S}${S}${S}I)V`, null, null, null, null, null, 0);
   }),
-  [`getInstallerPackageName(${S})${S}`]: (pkg: string) => after(packageRecord(pkg), (record) => { if (!record) throw unknownPackage(pkg); return null; }),
+  [`getInstallerPackageName(${S})${S}`]: (pkg: string) => { if (!packages.has(pkg)) throw unknownPackage(pkg); return null; },
   "getPackageInstaller()Landroid/content/pm/IPackageInstaller;": () => installerService(),
   // DELETE_PACKAGES deletes without asking; the observer hears the result once the package is gone
   [`deletePackageAsUser(${S}ILandroid/content/pm/IPackageDeleteObserver;II)V`]: (pkg: string, version: number, observer: JObj | null) =>
@@ -709,13 +660,13 @@ hostService("package", "webdroid/PackageManagerService", "android/content/pm/IPa
   }),
   // installs need no user approval here, so a package asking for the permission may request them
   [`canRequestPackageInstalls(${S}I)Z`]: (pkg: string) =>
-    after(packageRecord(pkg), (record) => record?.requested.has("android.permission.REQUEST_INSTALL_PACKAGES") ? 1 : 0),
+    packages.get(pkg)?.requested.has("android.permission.REQUEST_INSTALL_PACKAGES") ? 1 : 0,
   [`isInstantApp(${S}I)Z`]: () => 0,
-  [`isPackageSuspendedForUser(${S}I)Z`]: (pkg: string) => after(packageRecord(pkg), (record) => {
-    if (!record) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Unknown target package: " + pkg);
+  [`isPackageSuspendedForUser(${S}I)Z`]: (pkg: string) => {
+    if (!packages.has(pkg)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Unknown target package: " + pkg);
     return 0;
-  }),
-  [`isPackageAvailable(${S}I)Z`]: (pkg: string) => after(packageRecord(pkg), (record) => record ? 1 : 0),
+  },
+  [`isPackageAvailable(${S}I)Z`]: (pkg: string) => packages.has(pkg) ? 1 : 0,
   "isSafeMode()Z": () => 0,
   [`queryProperty(${S}I)${SLICE}`]: driven(function* queryProperty$(name: string, type: number): Gen { return parceledList(yield* properties$(name, type)); }),
   [`getPropertyAsUser(${S}${S}${S}I)Landroid/content/pm/PackageManager$Property;`]: driven(function* getPropertyAsUser$(name: string, pkg: string, cls: string | null): Gen {
@@ -738,7 +689,7 @@ hostService("package", "webdroid/PackageManagerService", "android/content/pm/IPa
     return names.length ? jarray(names, S) : null;
   },
   [`checkSignatures(${S}${S}I)I`]: async (a: string, b: string) => {
-    const x = await packageRecord(a), y = await packageRecord(b);
+    const x = packages.get(a), y = packages.get(b);
     return x && y ? compareSignatures(await x.visibleCertificates(), await y.visibleCertificates()) : -4;
   },
   "checkUidSignatures(II)I": async (a: number, b: number) => {
@@ -746,7 +697,7 @@ hostService("package", "webdroid/PackageManagerService", "android/content/pm/IPa
     return x && y ? compareSignatures(await x.visibleCertificates(), await y.visibleCertificates()) : -4;
   },
   [`hasSigningCertificate(${S}[BI)Z`]: async (pkg: string, certificate: Int8Array, type: number) => {
-    const record = await packageRecord(pkg);
+    const record = packages.get(pkg);
     return record ? certificateMatches(await record.visibleCertificates(), certificate, type) : 0;
   },
   "hasUidSigningCertificate(I[BI)Z": async (uid: number, certificate: Int8Array, type: number) => {
@@ -754,14 +705,14 @@ hostService("package", "webdroid/PackageManagerService", "android/content/pm/IPa
     return 0;
   },
   [`getInstalledPackages(JI)${SLICE}`]: driven(function* getInstalledPackages$(flags: bigint): Gen {
-    return parceledList(yield* all$(yield* awaited(installedPackages()), (record) => packageInfo$(record, flag(flags))));
+    return parceledList(yield* all$([...packages.values()], (record) => packageInfo$(record, flag(flags))));
   }),
   [`getInstalledApplications(JI)${SLICE}`]: driven(function* getInstalledApplications$(flags: bigint): Gen {
-    return parceledList(yield* all$(yield* awaited(installedPackages()), (record) => applicationInfo$(record, flag(flags))));
+    return parceledList(yield* all$([...packages.values()], (record) => applicationInfo$(record, flag(flags))));
   }),
   [`requestPackageChecksums(${S}ZIILjava/util/List;Landroid/content/pm/IOnChecksumsReadyListener;I)V`]: driven(function* requestPackageChecksums$(
     pkg: string, includeSplits: number, _optional: number, required: number, _installers: unknown, listener: JObj): Gen {
-    const record = yield* awaited(packageRecord(pkg));
+    const record = packages.get(pkg);
     if (!record) throw rt.mkThrowable(PKG + "PackageManager$NameNotFoundException", pkg);
     const checksums: JObj[] = [];
     for (const [split, type, value] of yield* awaited(apkDigests(record, includeSplits !== 0, required)))

@@ -66,6 +66,7 @@ export function createProcessEndpoint(): ProcessEndpoint {
     cookiesChanged: async () => cookiesChanged(),
     storageChanged: async (key, value) => storageChanged(key, value),
     packageRemoved: async pkg => unregisterPackage(pkg),
+    packageAdded: async snapshot => (await import("./process-bootstrap.ts")).registerSnapshot(snapshot),
     kill: (signal, note) => { if (note) noteAppKill(note); exitProcess({ signal }); },
     activity: async (request) => {
       if (request.kind === "back") return (await import("./device.ts")).pressBack();

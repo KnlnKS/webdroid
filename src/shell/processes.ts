@@ -6,7 +6,8 @@ import { PendingIntents, type PendingOperation } from "./pendingintents.ts";
 import { accountStore } from "../android/accounts.ts";
 import { encodeIntent, intentCodec } from "../android/intentipc.ts";
 import type { IntentCodec } from "./pendingintents.ts";
-import { packages } from "../android/packages.ts";
+import { packages, type PackageRecord } from "../android/packages.ts";
+import { installPackage } from "./packages.ts";
 import { unregisterPackage } from "../android/installpackage.ts";
 import { releaseRights, SYSTEM_CALLER, INTERFACE_TRANSACTION, exportParcel, type ParcelData, type Transaction, type TransactionReply, type BinderHandle } from "../android/binder.ts";
 import { NativeParcel, writeString } from "../android/parcel.ts";
@@ -39,7 +40,7 @@ import { bootstrapTransfers, type ProcessBootstrap } from "./process-bootstrap-d
 import { serveCalls, closePort } from "./rpc.ts";
 import { serveBrokerPort } from "./broker-port.ts";
 import { hostUi } from "./host-ui.ts";
-import { asBroker, permissionDenied, processProxy, receivers, unawaited, type BroadcastData, type ProcessEndpoint, type Receiver } from "./broker-contract.ts";
+import { asBroker, permissionDenied, processProxy, receivers, unawaited, type BroadcastData, type PackageSnapshot, type ProcessEndpoint, type Receiver } from "./broker-contract.ts";
 import { procIdentity } from "./procfs.ts";
 
 export type { ProcessBootstrap } from "./process-bootstrap-data.ts";
@@ -200,25 +201,29 @@ export class ProcessBroker {
     if (!packages.has(pkg)) throw new Error("Package not installed: " + pkg);
     this.packageSplits.set(pkg, [...sources]);
   }
-  /** what the Worker of `pid` starts from: every package's archive, its broker port and its surfaces */
-  private async bootstrap(pid: number): Promise<ProcessBootstrap> {
-    const entry = this.entry(pid), owner = packages.get(entry.pkg)!;
-    const registry = [...packages.values()].filter((record) => !(record.system && record.pkg === "android")).map((record) => {
+  /** each of `records` as a Worker registers it, its archive and splits served over ports `ports` collects */
+  private async snapshots(records: PackageRecord[], ports: (() => void)[]): Promise<PackageSnapshot[]> {
+    const registry = records.map((record) => {
       const packed = packedArchives.get(record.path);
       const source = packed ? { index: packed.index, base: packed.base } : null, file = packed ? null : vfs.source(record.path);
       if (!source && !file) throw new Error("Package bytes unavailable: " + record.pkg);
       const splits = this.packageSplits.get(record.pkg) ?? [];
       return { certificates: record.certificates(), pkg: record.pkg, source, file, splits, uid: record.uid, system: record.system, grants: [...record.grants], signatures: record.compatibilityCertificates };
     });
+    const certificates = await Promise.all(registry.map(record => record.certificates));
+    const publish = (source: NonNullable<ReturnType<typeof vfs.source>>) => {
+      const served = serveFile(source); ports.push(served.close); return served.data;
+    };
+    return registry.map(({ file, ...record }, i) => ({ ...record, certificates: certificates[i],
+      source: record.source ?? publish(file!), splits: record.splits.map(publish) }));
+  }
+  /** what the Worker of `pid` starts from: every package's archive, its broker port and its surfaces */
+  private async bootstrap(pid: number): Promise<ProcessBootstrap> {
+    const entry = this.entry(pid), owner = packages.get(entry.pkg)!;
     const ports: (() => void)[] = [];
     try {
-      const publish = (source: NonNullable<ReturnType<typeof vfs.source>>) => {
-        const served = serveFile(source); ports.push(served.close); return served.data;
-      };
-      const certificates = await Promise.all(registry.map(record => record.certificates));
+      const snapshots = await this.snapshots([...packages.values()].filter((record) => !(record.system && record.pkg === "android")), ports);
       this.entry(pid);
-      const snapshots = registry.map(({ file, ...record }, i) => ({ ...record, certificates: certificates[i],
-        source: record.source ?? publish(file!), splits: record.splits.map(publish) }));
       const broker = serveBrokerPort(this, pid);
       ports.push(broker.close);
       const payload: ProcessBootstrap = { pid: entry.pid, pkg: owner.pkg, process: entry.process, uid: entry.uid,
@@ -297,6 +302,13 @@ export class ProcessBroker {
     this.services.forceStop(pkg);
     const uid = packages.get(pkg)?.uid;
     await this.each((e) => e.pkg === pkg || e.uid === uid, (endpoint, entry) => this.kill(entry, endpoint, 9, note));
+  }
+  /** a package process `pid` installs joins this package manager, then every app process's, whose
+   *  archive ports close with it */
+  async installPackage(pid: number, bytes: Uint8Array, expected: string | null): Promise<string> {
+    const record = await installPackage(bytes, expected, this.entry(pid).pkg);
+    await this.each((e) => e.pid !== procIdentity.pid, async (endpoint, entry) => endpoint.packageAdded((await this.snapshots([record], entry.bootstrap))[0]));
+    return record.pkg;
   }
   /** a removed package leaves every process's package manager, this one's too */
   async packageRemoved(pkg: string): Promise<void> {

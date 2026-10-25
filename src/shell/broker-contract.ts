@@ -19,6 +19,7 @@ import type { HostUi } from "./host-ui.ts";
 import type { PackageDataChange } from "./packagedata.ts";
 import type { ProcessLifeCalls } from "./process-life.ts";
 import type { ServiceRequest, ServiceStarts } from "./servicerecords.ts";
+import type { ProcessBootstrap } from "./process-bootstrap-data.ts";
 import type { SettingsAccess } from "./settings.ts";
 import { asSystem } from "../android/binder.ts";
 import { checkPermission } from "../android/permissions.ts";
@@ -33,6 +34,8 @@ export type Calls<T> = { [K in keyof T]: T[K] extends (...args: infer A) => infe
 export type Answers<C> = { [K in keyof C]: C[K] extends (...args: infer A) => Promise<infer R> ? (...args: A) => R | Promise<R> :
   C[K] extends (...args: never[]) => unknown ? C[K] : Answers<C[K]> };
 
+/** a package as a process registers it, its archive served by the broker */
+export type PackageSnapshot = ProcessBootstrap["registry"][number];
 export type Receiver = { pkg: string; cls: string; priority: number };
 export type BroadcastData = { code: number; data: string | null; extras: ParcelData | null; aborted: boolean };
 /** ActivityTaskManager's starts in other processes and their results */
@@ -63,6 +66,8 @@ export type BrokerCalls = CookieCalls & {
   storageWrite: (key: string, value: string | null) => void;
   /** a package's own clear, one the caller holds the permission for, or one the user agrees to */
   packageDataChange: (pkg: string, change: PackageDataChange, broadcasts: { data: ParcelData; targets: Receiver[] }[], prompt?: string) => Promise<boolean>;
+  /** a committed base APK: the installed package's name once every process knows it */
+  installPackage: (bytes: Uint8Array, expected: string | null) => Promise<string>;
   displayOrientation: (landscape: boolean) => Promise<void>;
   sqlite: (request: SQLiteRequest) => Promise<SQLiteReply>;
   transact: (request: Transaction) => Promise<TransactionReply>;
@@ -76,7 +81,7 @@ type Domains<C> = { [K in keyof C]: C[K] extends (...args: never[]) => unknown ?
 export const brokerMethods = {
   "": methodsOf<Own<BrokerCalls>>()(["serviceConnected", "systemService", "systemProvider", "notificationForeground", "exitRecords", "processExited",
     "displayOrientation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas",
-    "cookieRemove", "cookieFlush", "cookieNetwork", "cookieDocument", "cookieWatch", "storageWrite", "packageDataChange"]),
+    "cookieRemove", "cookieFlush", "cookieNetwork", "cookieDocument", "cookieWatch", "storageWrite", "packageDataChange", "installPackage"]),
   process: methodsOf<ProcessLifeCalls>()(["processAlive", "processSignal", "processWatch", "processUnwatch"]),
   webStorage: methodsOf<WebStorageCalls>()(["webRenderer", "webStorage"]),
   starts: methodsOf<ServiceStarts>()(["created", "destroyed", "start", "deliver", "requested", "stop", "stopSelf", "done", "foreground"]),
@@ -109,15 +114,18 @@ export type ProcessEndpoint = {
   storageChanged: (key: string, value: string | null) => Promise<void>;
   /** a package was removed: this process's package manager forgets it */
   packageRemoved: (pkg: string) => Promise<void>;
+  /** a package was installed: this process's package manager registers it */
+  packageAdded: (snapshot: PackageSnapshot) => Promise<void>;
   /** the kernel's SIGKILL: the process ends where it stands, with the reason the kill noted */
   kill: (signal: number, note?: KillNote) => void;
 };
 const processMethods = methodsOf<ProcessEndpoint>()(["processDied", "activity", "transact", "service", "serviceConnected", "contentProvider", "broadcast",
-  "cookiesChanged", "storageChanged", "packageRemoved", "kill"]);
+  "cookiesChanged", "storageChanged", "packageRemoved", "kill", "packageAdded"]);
 /** a failure as this realm's exception: a Java exception is rebuilt in this VM */
 export const javaFailure = (error: CallFailure): unknown => error.javaClass ? rt.mkThrowable(error.javaClass, error.message) : callError(error);
 export const processProxy = (port: MessagePort, options: Pick<ProxyOptions<ProcessEndpoint>, "makeError" | "onClose"> = {}) =>
-  callProxy<ProcessEndpoint>(port, processMethods, { notifications: ["kill"], makeError: javaFailure, ...options });
+  callProxy<ProcessEndpoint>(port, processMethods, { notifications: ["kill"], makeError: javaFailure, ...options,
+    transfer: { packageAdded: ({ source, splits }) => [..."port" in source ? [source.port] : [], ...splits.map(split => split.port)] } });
 
 export const permissionDenied = async (permission: string, pkg: string) =>
   await checkPermission(permission, pkg) !== 0;
