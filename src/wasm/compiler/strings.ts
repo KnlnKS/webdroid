@@ -4,12 +4,12 @@
 // cached on first use; a JS string a native answers is copied into an array once.
 import { Code, OP } from "./code.ts";
 import { HT, T, ref, refNull, type VT } from "./wasmbin.ts";
-import { kindOf } from "./program.ts";
 import { parseMethodDesc } from "../../jvm/abi.ts";
 import type { Compiler } from "./j2w.ts";
 import { bytesFactory } from "./strfactory.ts";
 import type { DexFile } from "../../jvm/dex.ts";
-import type { PreparedInstruction } from "../../jvm/prepared.ts";
+import type { PreparedInstruction, PreparedMethod } from "../../jvm/prepared.ts";
+import { kindOf } from "./kinds.ts";
 
 export const STRING = "java/lang/String";
 /** field indices of the struct after the Object header (0, 1) */
@@ -22,6 +22,13 @@ export function stringSite(dex: DexFile, ins: PreparedInstruction): "alloc" | "i
   if (ins.op !== 0x70 && ins.op !== 0x76) return undefined;
   const m = dex.method(ins.b);
   return m.name === "<init>" && dex.type(m.cls) === "Ljava/lang/String;" ? "init" : undefined;
+}
+
+/** the String allocations and constructor calls of a method (stringSite), by pc */
+export function stringSites(dex: DexFile, prepared: PreparedMethod): Map<number, "alloc" | "init"> {
+  const sites = new Map<number, "alloc" | "init">();
+  for (const ins of prepared.instructions) { const site = stringSite(dex, ins); if (site) sites.set(ins.pc, site); }
+  return sites;
 }
 
 export class StructStrings {
@@ -84,7 +91,7 @@ export class StructStrings {
   /** mk(chars) -> String */
   mk(): number {
     return this.fn("mk", [ref(this.chars)], [ref(this.st)], (c) => {
-      this.cx.w.allocated.add(STRING);
+      this.cx.allocs.add(STRING);
       c.gget(this.cx.vtGlobal(STRING)).refAsNonNull().i64(0n).lget(0).i32(0).refNull(HT.extern).structNew(this.st);
     });
   }

@@ -22,8 +22,9 @@ import { PerWorld } from "./perworld.ts";
 import { fieldCookie } from "./unsafe.ts";
 import { Lookup, LOADER_OF_CLASS, emitClassAnswer } from "./loaders.ts";
 import { emitRestored } from "../compiler/hostcalls.ts";
-import { Info, TextKind } from "../compiler/info.ts";
+import { Info } from "../compiler/info.ts";
 import { FIELD_INDEX_MAX, emitFieldId, fieldClass, fieldIdOf, fieldIndex, splitFieldId } from "../compiler/fieldid.ts";
+import { kindVT } from "../compiler/kinds.ts";
 
 const CLASS = "java/lang/Class", OBJ_ARRAY = "[Ljava/lang/Object;", FIELD = "java/lang/reflect/Field", FIELD_ARRAY = "[Ljava/lang/reflect/Field;";
 const CLONEABLE = ["java/lang/Cloneable", "java/io/Serializable"];
@@ -106,7 +107,7 @@ const field = (cx: Compiler, name: string, d: string) => cx.fieldIndex(CLASS, { 
 
 // classOf(id): the cached Class object; the table grows to hold the id
 rt("classOf", ["I"], "L", (cx, c) => {
-  const { tData } = cx, g = cx.ctab(), tab = c.newLocal(refNull(tData.ref)), o = c.newLocal(cx.vtOf("L")), n = c.newLocal(T.i32);
+  const { tData } = cx, g = cx.ctab(), tab = c.newLocal(refNull(tData.ref)), o = c.newLocal(kindVT("L")), n = c.newLocal(T.i32);
   c.gget(g).lset(tab).lget(tab).refAsNonNull().arrayLen().lset(n);
   c.lget(0).lget(n).raw(OP.i32_ge_s).if_();
   c.lget(0).i32(1).raw(OP.i32_add).lget(n).i32(1).raw(OP.i32_shl).lget(0).i32(1).raw(OP.i32_add).lget(n).i32(1).raw(OP.i32_shl).raw(OP.i32_gt_s).select().arrayNewDefault(tData.ref).lset(tab);
@@ -116,7 +117,7 @@ rt("classOf", ["I"], "L", (cx, c) => {
 // mkClass(id): allocate, cache before linking (supers and interfaces may refer back), then fill from the host's answers
 rt("mkClass", ["I"], "L", (cx, c) => {
   const { tData, tArr } = cx, cs = cx.structFor(CLASS), g = cx.ctab();
-  const o = c.newLocal(cx.vtOf("L")), k = c.newLocal(refNull(cs)), n = c.newLocal(T.i32), i = c.newLocal(T.i32), data = c.newLocal(refNull(tData.ref));
+  const o = c.newLocal(kindVT("L")), k = c.newLocal(refNull(cs)), n = c.newLocal(T.i32), i = c.newLocal(T.i32), data = c.newLocal(refNull(tData.ref));
   cx.emitNew(c, CLASS); c.lset(o);
   c.gget(g).refAsNonNull().lget(0).lget(o).arraySet(tData.ref);
   c.lget(o).refCast(cs).lset(k);
@@ -169,7 +170,7 @@ rt("astore", ["L", "L"], "V", (cx, c) => {
 // acopy(src, sp, dst, dp, n): element-wise copy between reference arrays of different classes; an element dst cannot hold throws
 // ArrayStoreException after the elements before it have been copied (System.arraycopy)
 rt("acopy", ["L", "I", "L", "I", "I"], "V", (cx, c) => {
-  const { tArr, tData } = cx, i = c.newLocal(T.i32), v = c.newLocal(cx.vtOf("L")), sd = c.newLocal(refNull(tData.ref)), dd = c.newLocal(refNull(tData.ref));
+  const { tArr, tData } = cx, i = c.newLocal(T.i32), v = c.newLocal(kindVT("L")), sd = c.newLocal(refNull(tData.ref)), dd = c.newLocal(refNull(tData.ref));
   c.lget(0).refCast(tArr.ref).structGet(tArr.ref, 2).lset(sd).lget(2).refCast(tArr.ref).structGet(tArr.ref, 2).lset(dd);
   c.block().loop().lget(i).lget(4).raw(OP.i32_ge_s).brIf(1);
   c.lget(sd).refAsNonNull().lget(1).lget(i).raw(OP.i32_add).arrayGet(tData.ref).lset(v);
@@ -201,7 +202,7 @@ rt("initErroneous", ["I"], "V", (cx, c) => { c.lget(0); cx.callThrower(c, "ncdfe
 // initFail(e): <clinit> threw e. An Error propagates as it is; anything else is wrapped in ExceptionInInitializerError, which here only
 // stores the cause (ART's constructor also fills in the stack trace)
 rt("initFail", ["L"], "V", (cx, c) => {
-  const err = "java/lang/Error", eiie = "java/lang/ExceptionInInitializerError", w = c.newLocal(cx.vtOf("L")), st = cx.structFor(eiie);
+  const err = "java/lang/Error", eiie = "java/lang/ExceptionInInitializerError", w = c.newLocal(kindVT("L")), st = cx.structFor(eiie);
   c.lget(0).i32(cx.idOf(err)).i32(cx.prog.chain(err).length - 1).call(cx.helper("iof")).if_().lget(0).throw_(cx.tag).end();
   cx.emitNew(c, eiie); c.lset(w);
   if (cx.prog.get(eiie)?.dex) c.lget(w).refCast(st).lget(0).structSet(st, cx.fieldIndex(eiie, { owner: "java/lang/Throwable", name: "cause", desc: "Ljava/lang/Throwable;" }));
@@ -210,7 +211,7 @@ rt("initFail", ["L"], "V", (cx, c) => {
 
 // ---------- reflection on declared fields: Field objects carry the field id (compiler/fieldid.ts) in artFieldIndex and offset
 rt("mkField", ["I", "I"], "L", (cx, c) => {
-  const fs = cx.structFor(FIELD), f = c.newLocal(cx.vtOf("L")), o = c.newLocal(refNull(fs)), id = c.newLocal(T.i32);
+  const fs = cx.structFor(FIELD), f = c.newLocal(kindVT("L")), o = c.newLocal(refNull(fs)), id = c.newLocal(T.i32);
   const fi = (name: string, d: string) => cx.fieldIndex(FIELD, { owner: FIELD, name, desc: d });
   const info = (kind: number) => cx.info(c, kind, () => c.lget(0), () => c.lget(1));
   cx.emitNew(c, FIELD); c.lset(f).lget(f).refCast(fs).lset(o);
@@ -253,6 +254,9 @@ rt("nameEq", ["I", "I", "L", "I"], "I", (cx, c) => emitNameEq(cx, c, Info.FieldN
 export const classIntrinsics = new Map<string, Intrinsic>();
 const def = (key: string, f: (cx: Compiler, c: Code) => void) => classIntrinsics.set(key, (cx, m, c) => f(cx, c));
 export const idOfClass = (cx: Compiler, c: Code) => { const cs = cx.structFor(CLASS); c.refCast(cs).structGet(cs, field(cx, "dexTypeIndex", "I")); };
+/** host.text(kind, a, b): the simple name of class a, or the name of class a, of its method b or of its field b (members.ts) */
+export const TextKind = { SimpleName: 0, ClassName: 1, MethodName: 2, FieldName: 3 } as const;
+export type TextKind = (typeof TextKind)[keyof typeof TextKind];
 /** the String of the name host.text answers (TextKind), interned: ART interns the names of classes and members, which Method.equals compares by identity */
 export function emitName(cx: Compiler, c: Code, kind: TextKind, a: () => void, b: () => void): void {
   c.i32(kind); a(); b(); c.call(cx.imp.text); cx.str.fromHost(c); c.call(cx.str.intern());
@@ -262,7 +266,7 @@ export function emitName(cx: Compiler, c: Code, kind: TextKind, a: () => void, b
 // invoking its private constructor. Allocation and publication cannot suspend
 // in this process realm, so competing strands observe the same extension.
 def("java/lang/Class.ensureExtDataPresent()Ldalvik/system/ClassExt;", (cx, c) => {
-  const cs = cx.structFor(CLASS), ext = c.newLocal(cx.vtOf("L"));
+  const cs = cx.structFor(CLASS), ext = c.newLocal(kindVT("L"));
   c.lget(0).refCast(cs).structGet(cs, field(cx, "extData", "Ldalvik/system/ClassExt;")).ltee(ext).refIsNull().if_();
   cx.emitNew(c, "dalvik/system/ClassExt"); c.lset(ext);
   c.lget(0).refCast(cs).lget(ext).structSet(cs, field(cx, "extData", "Ldalvik/system/ClassExt;"));
@@ -354,7 +358,7 @@ def("java/lang/reflect/Array.createMultiArray(Ljava/lang/Class;[I)Ljava/lang/Obj
 
 // Object.internalClone(): a shallow copy; Object.clone has checked Cloneable
 def("java/lang/Object.internalClone()Ljava/lang/Object;", (cx, c) => {
-  const s = c.newLocal(T.i32), copy = c.newLocal(cx.vtOf("L"));
+  const s = c.newLocal(T.i32), copy = c.newLocal(kindVT("L"));
   c.lget(0); cx.callRt(c, "aclone"); c.ltee(copy).refIsNull().raw(OP.i32_eqz).if_().lget(copy).ret().end();
   cx.info(c, Info.CloneSlot, () => { c.lget(0); cx.vtId(c); }); c.ltee(s).raw(OP.i32_eqz).if_(); cx.gap(c, "Object.internalClone: abstract class"); c.end();
   c.lget(0).lget(s).callIndirect(cx.sig(["L"], "L"));

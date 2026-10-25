@@ -1,5 +1,5 @@
-import type { CodeItem } from "./dex.ts";
-import { FMT_LEN, OPS, endsBlock, insnLen, isGoto, isIf, type Fmt } from "./opcodes.ts";
+import type { CodeItem, DexFile } from "./dex.ts";
+import { FMT_LEN, Family, Invoke, OPS, endsBlock, familyOf, insnLen, invokeKind, isGoto, isIf, mayThrow, type Fmt } from "./opcodes.ts";
 import { isWide } from "./abi.ts";
 
 export interface PreparedInstruction {
@@ -118,11 +118,6 @@ export function decodeInstructions(insns: Uint16Array): MutableInstruction[] {
   return instructions;
 }
 
-/** ops that cannot throw: no handler edge is needed for them */
-const NO_THROW = new Uint8Array(256);
-for (const [lo, hi] of [[0x00, 0x19], [0x28, 0x2a], [0x2d, 0x3d], [0x7b, 0xe2]] as const) for (let o = lo; o <= hi; o++) NO_THROW[o] = 1;
-for (const o of [0x93, 0x94, 0x9e, 0x9f, 0xb3, 0xb4, 0xbe, 0xbf, 0xd3, 0xd4, 0xdb, 0xdc]) NO_THROW[o] = 0; // int/long div, rem
-
 export function ifTarget(instruction: PreparedInstruction): number {
   return instruction.pc + (instruction.fmt === "22t" ? instruction.c : instruction.b);
 }
@@ -146,7 +141,7 @@ export function switchCases(code: CodeItem, instruction: PreparedInstruction): [
 export function branchTargets(code: CodeItem, instruction: PreparedInstruction): readonly number[] {
   const op = instruction.op;
   if (isGoto(op)) return [instruction.pc + instruction.a];
-  if (op === 0x2b || op === 0x2c) return switchCases(code, instruction).map(([, target]) => target);
+  if (familyOf(op) === Family.Switch) return switchCases(code, instruction).map(([, target]) => target);
   if (isIf(op)) return [ifTarget(instruction)];
   return NO_TARGETS;
 }
@@ -162,6 +157,11 @@ export function registersOf({ fmt, a, b, c, regs }: PreparedInstruction): readon
     case "12x": case "22x": case "32x": case "22b": case "22t": case "22s": case "22c": return [a, b];
     default: return [a];
   }
+}
+/** the proto_id of the prototype an invoke passes its arguments by: invoke-polymorphic's own, invoke-custom's call site's, else its method's */
+export function invokeProto(dex: DexFile, ins: PreparedInstruction): number {
+  const k = invokeKind(ins.op);
+  return k === Invoke.Polymorphic ? ins.c : k === Invoke.Custom ? dex.callSiteProto(ins.b) : dex.method(ins.b).proto;
 }
 /** the registers an invoke passes `params` in, the first at `ins.regs[from]`: a wide value takes two */
 export function argRegisters(ins: PreparedInstruction, params: readonly string[], from: number): number[] {
@@ -212,7 +212,7 @@ export function prepareMethod(code: CodeItem): PreparedMethod {
     for (let hi = nb; b < hi;) { const mid = (b + hi) >> 1; if (first[mid] <= i) b = mid + 1; else hi = mid; }
     for (b--; i < n && instructions[i].pc < region.end; i++) {
       if (blockAt[instructions[i].pc] >= 0) b = blockAt[instructions[i].pc];
-      if (NO_THROW[instructions[i].op]) continue;
+      if (!mayThrow(instructions[i].op)) continue;
       handlers[i] = blocks;
       const at = hsucc[b] === NO_TARGETS ? (hsucc[b] = []) : hsucc[b] as number[];
       for (const h of blocks) if (!at.includes(h)) at.push(h);

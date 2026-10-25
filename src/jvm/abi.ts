@@ -75,11 +75,6 @@ export function utf8Length(s: string): number {
 
 export function isWide(desc: string): boolean { return desc === "J" || desc === "D"; }
 
-/** default value of a field of the given type descriptor */
-export function defaultValue(desc: string): 0 | 0n | null {
-  return desc[0] === "J" ? 0n : desc[0] === "L" || desc[0] === "[" ? null : 0;
-}
-
 /** "Ljava/lang/String;" → "java/lang/String"; passthrough for already-plain names */
 export function descToName(desc: string): string {
   return desc[0] === "L" ? desc.slice(1, -1) : desc;

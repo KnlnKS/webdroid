@@ -1,7 +1,8 @@
 // Exceptions the compiled code raises itself: the implicit throwers, their messages and stack traces.
 import { T } from "./wasmbin.ts";
 import { Code, OP, inlineMark } from "./code.ts";
-import type { Kind, MethodInfo } from "./program.ts";
+import { descOf, type MethodInfo } from "./program.ts";
+import type { Kind } from "./kinds.ts";
 import type { Compiler, FnTrace } from "./j2w.ts";
 import { dotName as dotted, oomMessage } from "../../jvm/abi.ts";
 import { prettyType } from "./linkage.ts";
@@ -53,7 +54,7 @@ export const THROWERS: Record<Thrower, { cls: string; params: Kind[] }> = {
 };
 
 /** a class name as java.lang.Class.getTypeName prints it */
-const pretty = (n: string): string => prettyType(n[0] === "#" ? n[1] : n[0] === "[" ? n : `L${n};`);
+const pretty = (n: string): string => prettyType(descOf(n));
 /** The message ART gives the exception (null: none). `a` and `b` are the thrower's arguments, a wide one split into halves. */
 export function excMessage(kind: number, a: number, b: number, c: number, d: number, e: number, className: (id: number) => string, linkMessage: (id: number) => string): string | null {
   switch (kind) {

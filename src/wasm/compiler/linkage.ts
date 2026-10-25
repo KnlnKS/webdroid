@@ -2,10 +2,13 @@
 // common_throws.cc): NoClassDefFoundError, NoSuchFieldError, NoSuchMethodError and IncompatibleClassChangeError, with ART's messages. These are
 // not gaps: the program asks for something the loaded classes lack, and the error is what it gets.
 import type { DexFile } from "../../jvm/dex.ts";
+import type { PreparedInstruction } from "../../jvm/prepared.ts";
+import type { LinkEnv } from "./j2w.ts";
+import { stringSite } from "./strings.ts";
 import { PRIMS, descToName, dotName } from "../../jvm/abi.ts";
-import { ACC, javaName, sameRuntimePackage, selectDefault, type DispatchTarget, type FieldInfo, type JClass, type MethodInfo, type Program } from "./program.ts";
+import { ACC, descOf, javaName, sameRuntimePackage, selectDefault, type DispatchTarget, type FieldInfo, type JClass, type MethodInfo, type Program } from "./program.ts";
 import type { Thrower } from "./exc.ts";
-import { Invoke } from "../../jvm/opcodes.ts";
+import { Invoke, invokeKind } from "../../jvm/opcodes.ts";
 
 export interface LinkFailure {
   thrower: Extract<Thrower, "ncdfr" | "nsme" | "nsfer" | "icce">;
@@ -17,7 +20,6 @@ export interface LinkFailure {
 const dotted = (n: string) => dotName(javaName(n));
 /** a descriptor as ART's PrettyDescriptor prints it */
 export const prettyType = (d: string): string => (d[0] === "[" ? prettyType(d.slice(1)) + "[]" : d[0] === "L" ? dotted(d.slice(1, -1)) : PRIMS[d]?.name ?? "void");
-const descriptor = (cls: string) => (cls[0] === "[" ? cls : `L${cls};`);
 /** ART appends where the referring class was declared */
 const declared = (prog: Program, cls: string, extra?: DexFile) => ` (declaration of '${dotted(cls)}' appears in ${prog.get(cls)?.dex?.name ?? extra?.name ?? "?"})`;
 const fail = (thrower: LinkFailure["thrower"], message: string, absent?: string): LinkFailure => ({ thrower, message, absent });
@@ -108,13 +110,13 @@ function interfaceSuper(prog: Program, cls: string, name: string, desc: string):
 /** the method an invoke names, or why it does not resolve. `referrer` is the class of the calling method. */
 export function resolveInvoke(prog: Program, kind: Invoke, declaredCls: string, name: string, desc: string, referrer: string): MethodInfo | LinkFailure {
   const cls = declaredCls[0] === "[" ? "java/lang/Object" : declaredCls, c = prog.get(cls), at = () => declared(prog, referrer);
-  if (!c) return fail("ncdfr", UNRESOLVED + descriptor(declaredCls), declaredCls);
+  if (!c) return fail("ncdfr", UNRESOLVED + descOf(declaredCls), declaredCls);
   if (kind === Invoke.Interface && !c.isInterface) return fail("icce", `Found class ${dotted(cls)}, but interface was expected${at()}`);
   if (kind === Invoke.Virtual && c.isInterface) return fail("icce", `Found interface ${dotted(cls)}, but class was expected${at()}`);
   const expected = INVOKE_TYPE[kind];
   const owner = kind === Invoke.Super && !c.isInterface ? prog.get(referrer)?.sup ?? cls : cls;
   const m = kind === Invoke.Super && c.isInterface ? interfaceSuper(prog, cls, name, desc) : resolveSymbolicMethod(prog, owner, name, desc);
-  if (!m) return fail("nsme", `No ${expected} method ${name}${desc} in class ${descriptor(cls)} or its super classes${declared(prog, cls)}`);
+  if (!m) return fail("nsme", `No ${expected} method ${name}${desc} in class ${descOf(cls)} or its super classes${declared(prog, cls)}`);
   if (failed(m)) return m;
   if (m.isStatic !== (kind === Invoke.Static)) {
     const found = invokeType(m, prog);
@@ -125,7 +127,7 @@ export function resolveInvoke(prog: Program, kind: Invoke, declaredCls: string, 
 
 /** what an invoke names: the method's name and descriptor, the class whose methods it searches (an array's are Object's) and the resolved target, except an array's clone, which copies it */
 export interface InvokeSite { name: string; desc: string; decl: string; target: MethodInfo | LinkFailure | "clone" }
-/** the site that invoke `kind` of method reference `ref` makes in `m`, as the compiler binds it (MC.binding) and the planner plans it (Planner.calls) */
+/** the site that invoke `kind` of method reference `ref` makes in `m` */
 export function invokeSite(prog: Program, m: MethodInfo, ref: number, kind: Invoke): InvokeSite {
   const types = prog.typesOf(m.dex), mr = m.dex.method(ref), desc = types.methodDesc(ref), declared = types.typeName(mr.cls);
   const decl = declared[0] === "[" ? "java/lang/Object" : declared;
@@ -133,6 +135,23 @@ export function invokeSite(prog: Program, m: MethodInfo, ref: number, kind: Invo
   const resolve = () => resolveInvoke(prog, kind, declared, mr.name, desc, m.cls);
   // invoke-super's target depends on the caller
   return { name: mr.name, desc, decl, target: kind === Invoke.Super ? resolve() : resolved(prog.refsOf(m.dex).invokes, 8 * ref + kind, resolve) };
+}
+/** whether a virtual call of `t` through class `decl` runs `t` whatever the receiver: ART links no subclass of a final class and no override of a final method */
+export function finalDispatch(prog: Program, decl: string, t: MethodInfo): boolean {
+  const d = prog.get(decl);
+  return !!d && !d.isInterface && (!!(d.flags & ACC.FINAL) || !!(t.flags & ACC.FINAL) && prog.isSubclass(decl, t.cls));
+}
+/** how an invoke reaches the method it resolves to (`m`): a fixed one; a dispatch from it; String's constructor, which makes the string */
+export type Binding = { k: "fixed" | "virtual"; m: MethodInfo } | { k: "string" };
+/** how invoke `ins` (not invoke-polymorphic or invoke-custom) of `m` at `site` binds, as the compiler compiles it and the planner plans it; null when it calls
+ *  no method (an array's clone, a site that does not link). A static, direct or super call is fixed, and a virtual call that dispatches finally and reaches no
+ *  host spec's native; only a build knows every spec (a split bundle registers some late), so a World without one fixes no virtual call */
+export function bindInvoke(w: Pick<LinkEnv, "prog" | "hosts">, m: MethodInfo, ins: PreparedInstruction, site: InvokeSite): Binding | null {
+  const { decl, target } = site, kind = invokeKind(ins.op);
+  if (target === "clone" || failed(target)) return null;
+  if (stringSite(m.dex, ins) === "init") return { k: "string" };
+  const fixed = kind !== Invoke.Virtual && kind !== Invoke.Interface || finalDispatch(w.prog, decl, target) && !w.hosts.mayReach(decl, target);
+  return { k: fixed ? "fixed" : "virtual", m: target };
 }
 /** a resolution of a reference of a dex: what succeeded is the same for every caller while the Program's classes hold (Program.refsOf), a failure names its caller */
 function resolved<T extends object>(memo: Map<number, T>, key: number, resolve: () => T | LinkFailure): T | LinkFailure {
@@ -149,7 +168,7 @@ function fieldRef(prog: Program, dex: DexFile, idx: number, isStatic: boolean, r
   const fr = dex.field(idx), types = prog.typesOf(dex), decl = types.typeName(fr.cls), type = dex.rawType(fr.type);
   if (!prog.get(decl)) return fail("ncdfr", UNRESOLVED + types.type(fr.cls), decl);
   const raw = javaName(type), f = prog.resolveFieldBy(decl, (x) => x.name === fr.name && javaName(x.desc) === raw);
-  if (!f) return fail("nsfer", `No ${isStatic ? "static " : "instance "}field ${fr.name} of type ${type} in class ${descriptor(decl)} or its superclasses${declared(prog, decl)}`);
+  if (!f) return fail("nsfer", `No ${isStatic ? "static " : "instance "}field ${fr.name} of type ${type} in class ${descOf(decl)} or its superclasses${declared(prog, decl)}`);
   if (f.isStatic !== isStatic) {
     return fail("icce", `Expected '${prettyType(f.desc)} ${dotted(f.owner)}.${f.name}' to be a ${isStatic ? "static" : "instance"} field rather than a ${isStatic ? "instance" : "static"} field${declared(prog, referrer)}`);
   }

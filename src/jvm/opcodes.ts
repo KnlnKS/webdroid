@@ -115,35 +115,98 @@ export function insnLen(insns: Uint16Array, pc: number): number {
   if (!entry) throw new Error(`bad opcode 0x${op.toString(16)} at pc ${pc}`);
   return FMT_LEN[entry[1]];
 }
-export const isMoveResult = (op: number) => op >= 0x0a && op <= 0x0c;
-export const isReturn = (op: number) => op >= 0x0e && op <= 0x11;
-export const isGoto = (op: number) => op >= 0x28 && op <= 0x2a;
-export const isIf = (op: number) => op >= 0x32 && op <= 0x3d;
+/** what an instruction does, which each pass over a method's code switches on; quickened and unused opcodes are None, as nothing compiles them */
+export const Family = {
+  None: 0, Nop: 1, Move: 2, MoveResult: 3, MoveException: 4, ReturnVoid: 5, Return: 6, Const: 7, ConstString: 8, ConstClass: 9, Monitor: 10,
+  CheckCast: 11, InstanceOf: 12, ArrayLength: 13, NewInstance: 14, NewArray: 15, FilledNewArray: 16, FillArrayData: 17, Throw: 18, Goto: 19,
+  Switch: 20, Compare: 21, If: 22, IfZ: 23, Aget: 24, Aput: 25, Iget: 26, Iput: 27, Sget: 28, Sput: 29, Invoke: 30, Unary: 31, Binop: 32,
+  Binop2addr: 33, BinopLit: 34, ConstMethodHandle: 35, ConstMethodType: 36,
+} as const;
+export type Family = (typeof Family)[keyof typeof Family];
+/** an invoke's kind in opcode order; a range form has its plain form's */
+export const Invoke = { Virtual: 0, Super: 1, Direct: 2, Static: 3, Interface: 4, Polymorphic: 5, Custom: 6 } as const;
+export type Invoke = (typeof Invoke)[keyof typeof Invoke];
+/** the operations of the binary ops in DEX order: int and long take all eleven, float and double the first five; a literal op's second is rsub */
+export const BINOPS = ["add", "sub", "mul", "div", "rem", "and", "or", "xor", "shl", "shr", "ushr"] as const;
+export type Binop = (typeof BINOPS)[number];
+
+/** the constant pool an instruction's reference indexes; the quickened forms hold offsets instead */
+export const Pool = { None: 0, String: 1, Type: 2, Field: 3, Method: 4, Proto: 5, Handle: 6, CallSite: 7 } as const;
+export type Pool = (typeof Pool)[keyof typeof Pool];
+const FAMILY = new Uint8Array(256), VARIANT = new Uint8Array(256), TYPE = new Array<string>(256).fill(""), THROWS = new Uint8Array(256).fill(1);
+const POOL = new Uint8Array(256), IN_C = new Uint8Array(256);
+/** opcodes `lo` to `hi` as `family`: each its variant and type letter by its position in the run */
+function def(family: Family, lo: number, hi: number, type: (i: number) => string = () => "", variant: (i: number) => number = (i) => i) {
+  for (let op = lo; op <= hi; op++) { FAMILY[op] = family; TYPE[op] = type(op - lo); VARIANT[op] = variant(op - lo); }
+}
+const letters = (s: string) => (i: number) => s[i];
+/** a binary op's operand type and operation, by its position among the 32 of its form */
+const binopType = (i: number) => (i < 11 ? "I" : i < 22 ? "J" : i < 27 ? "F" : "D"), binop = (i: number) => (i < 11 ? i : i < 22 ? i - 11 : i < 27 ? i - 22 : i - 27);
+def(Family.Nop, 0x00, 0x00); def(Family.Move, 0x01, 0x09, (i) => "IJL"[(i / 3) | 0]); def(Family.MoveResult, 0x0a, 0x0c, letters("IJL"));
+def(Family.MoveException, 0x0d, 0x0d); def(Family.ReturnVoid, 0x0e, 0x0e); def(Family.Return, 0x0f, 0x11, letters("IJL"));
+def(Family.Const, 0x12, 0x19, (i) => (i < 4 ? "I" : "J")); def(Family.ConstString, 0x1a, 0x1b); def(Family.ConstClass, 0x1c, 0x1c);
+def(Family.Monitor, 0x1d, 0x1e); def(Family.CheckCast, 0x1f, 0x1f); def(Family.InstanceOf, 0x20, 0x20); def(Family.ArrayLength, 0x21, 0x21);
+def(Family.NewInstance, 0x22, 0x22); def(Family.NewArray, 0x23, 0x23); def(Family.FilledNewArray, 0x24, 0x25); def(Family.FillArrayData, 0x26, 0x26);
+def(Family.Throw, 0x27, 0x27); def(Family.Goto, 0x28, 0x2a); def(Family.Switch, 0x2b, 0x2c); def(Family.Compare, 0x2d, 0x31, letters("FFDDJ"));
+def(Family.If, 0x32, 0x37); def(Family.IfZ, 0x38, 0x3d);
+([[Family.Aget, 0x44], [Family.Aput, 0x4b], [Family.Iget, 0x52], [Family.Iput, 0x59], [Family.Sget, 0x60], [Family.Sput, 0x67]] as const)
+  .forEach(([family, lo]) => def(family, lo, lo + 6, letters("IJLZBCS")));
+def(Family.Invoke, 0x6e, 0x72); def(Family.Invoke, 0x74, 0x78);
+def(Family.Invoke, 0xfa, 0xfb, undefined, () => Invoke.Polymorphic); def(Family.Invoke, 0xfc, 0xfd, undefined, () => Invoke.Custom);
+def(Family.Unary, 0x7b, 0x8f); def(Family.Binop, 0x90, 0xaf, binopType, binop); def(Family.Binop2addr, 0xb0, 0xcf, binopType, binop);
+def(Family.BinopLit, 0xd0, 0xd7, () => "I"); def(Family.BinopLit, 0xd8, 0xe2, () => "I");
+def(Family.ConstMethodHandle, 0xfe, 0xfe); def(Family.ConstMethodType, 0xff, 0xff);
+for (let op = 0; op < 256; op++) {
+  switch (FAMILY[op]) {
+    case Family.Nop: case Family.Move: case Family.MoveResult: case Family.MoveException: case Family.ReturnVoid: case Family.Return: case Family.Const:
+    case Family.Goto: case Family.Compare: case Family.If: case Family.IfZ: case Family.Unary: THROWS[op] = 0; break;
+    // int and long division and remainder throw ArithmeticException
+    case Family.Binop: case Family.Binop2addr: case Family.BinopLit: THROWS[op] = +((VARIANT[op] === 3 || VARIANT[op] === 4) && (TYPE[op] === "I" || TYPE[op] === "J")); break;
+    case Family.ConstString: POOL[op] = Pool.String; break;
+    case Family.ConstClass: case Family.CheckCast: case Family.NewInstance: case Family.FilledNewArray: POOL[op] = Pool.Type; break;
+    case Family.InstanceOf: case Family.NewArray: POOL[op] = Pool.Type; IN_C[op] = 1; break;
+    case Family.Iget: case Family.Iput: POOL[op] = Pool.Field; IN_C[op] = 1; break;
+    case Family.Sget: case Family.Sput: POOL[op] = Pool.Field; break;
+    case Family.Invoke: POOL[op] = VARIANT[op] === Invoke.Custom ? Pool.CallSite : Pool.Method; break;
+    case Family.ConstMethodHandle: POOL[op] = Pool.Handle; break;
+    case Family.ConstMethodType: POOL[op] = Pool.Proto; break;
+  }
+}
+export const familyOf = (op: number): Family => FAMILY[op] as Family;
+/** an instruction's place in its family: an invoke's kind (Invoke), a test's comparison (eq, ne, lt, ge, gt, le), a binary op's operation (BINOPS), a
+ *  unary op's position from neg-int, a monitor-exit's or sparse-switch's 1 */
+export const variantOf = (op: number): number => VARIANT[op];
+/** the descriptor letter of what an instruction moves, returns, defines as a constant, compares or computes, or of an array element or field it accesses;
+ *  a 32-bit move, return or constant's is I and a wide one's J */
+export const typeLetter = (op: number): string => TYPE[op];
+/** whether an instruction can throw: one that cannot takes no handler edge */
+export const mayThrow = (op: number): boolean => THROWS[op] === 1;
+export const isMoveResult = (op: number) => FAMILY[op] === Family.MoveResult;
+export const isGoto = (op: number) => FAMILY[op] === Family.Goto;
+export const isIf = (op: number) => FAMILY[op] === Family.If || FAMILY[op] === Family.IfZ;
 /** return, throw and goto: nothing falls through them */
-export const endsBlock = (op: number) => isReturn(op) || op === 0x27 || isGoto(op);
-export const isInvoke = (op: number) => (op >= 0x6e && op <= 0x78 && op !== 0x73) || (op >= 0xfa && op <= 0xfd);
+export const endsBlock = (op: number) => { const f = FAMILY[op]; return f === Family.Return || f === Family.ReturnVoid || f === Family.Throw || f === Family.Goto; };
+export const isInvoke = (op: number) => FAMILY[op] === Family.Invoke;
 /** iget and iput: quickened forms never compile */
-export const isFieldAccess = (op: number) => op >= 0x52 && op <= 0x5f;
-export const isInstanceInvoke = (op: number) => isInvoke(op) && op !== 0x71 && op !== 0x77 && op < 0xfc;
+export const isFieldAccess = (op: number) => FAMILY[op] === Family.Iget || FAMILY[op] === Family.Iput;
+/** the kind of an invoke opcode (isInvoke) */
+export const invokeKind = (op: number): Invoke => VARIANT[op] as Invoke;
+/** an invoke whose first register is its receiver */
+export const isInstanceInvoke = (op: number) => FAMILY[op] === Family.Invoke && VARIANT[op] !== Invoke.Static && VARIANT[op] !== Invoke.Custom;
+/** the register an instruction null-checks (each translation of it throws NullPointerException when it holds null), -1 for none */
+export function nullChecked(ins: { op: number; a: number; b: number; regs: readonly number[] }): number {
+  switch (FAMILY[ins.op]) {
+    case Family.Aget: case Family.Aput: case Family.Iget: case Family.Iput: case Family.ArrayLength: return ins.b;
+    case Family.Monitor: case Family.FillArrayData: case Family.Throw: return ins.a;
+    case Family.Invoke: return isInstanceInvoke(ins.op) && VARIANT[ins.op] !== Invoke.Polymorphic && ins.regs.length ? ins.regs[0] : -1;
+    default: return -1;
+  }
+}
 /** the bits of a narrow constant, const/4 to const/high16 (0x12-0x15) */
 export const narrowBits = (op: number, b: number): number => op === 0x15 ? b << 16 : b;
 /** the bits of a wide constant, const-wide/16 to const-wide/high16 (0x16-0x19) */
 export const wideBits = (op: number, b: number, wide: bigint): bigint => op === 0x18 ? wide : op === 0x19 ? BigInt(b) << 48n : BigInt(b);
 
-/** an invoke's kind in opcode order; a range form has its plain form's */
-export const Invoke = { Virtual: 0, Super: 1, Direct: 2, Static: 3, Interface: 4, Polymorphic: 5, Custom: 6 } as const;
-export type Invoke = (typeof Invoke)[keyof typeof Invoke];
-/** the kind of an invoke opcode (isInvoke) */
-export const invokeKind = (op: number): Invoke => (op >= 0xfa ? op >= 0xfc ? Invoke.Custom : Invoke.Polymorphic : (op - 0x6e) % 6) as Invoke;
-
-/** the constant pool an instruction's reference indexes; the quickened forms hold offsets instead */
-export const Pool = { None: 0, String: 1, Type: 2, Field: 3, Method: 4, Proto: 5, Handle: 6, CallSite: 7 } as const;
-export type Pool = (typeof Pool)[keyof typeof Pool];
-const POOL = new Uint8Array(256), IN_C = new Uint8Array(256);
-POOL.fill(Pool.String, 0x1a, 0x1c).fill(Pool.Type, 0x22, 0x26).fill(Pool.Field, 0x52, 0x6e).fill(Pool.Method, 0x6e, 0x79).fill(Pool.Method, 0xfa, 0xfc).fill(Pool.CallSite, 0xfc, 0xfe);
-POOL[0x1c] = POOL[0x1f] = POOL[0x20] = Pool.Type;
-POOL[0x73] = Pool.None; POOL[0xfe] = Pool.Handle; POOL[0xff] = Pool.Proto;
-IN_C.fill(1, 0x52, 0x60); IN_C[0x20] = IN_C[0x23] = 1;
 /** the pool an instruction's reference indexes: invoke-polymorphic's is its method, whose prototype is its c */
 export const referenceOf = (op: number): Pool => POOL[op] as Pool;
 /** the index of an instruction's reference: c for instance-of, new-array, iget and iput, b for the others */

@@ -22,6 +22,7 @@ import { rt } from "../compiler/rtfns.ts";
 import { nativeLeaf } from "./memory.ts";
 import { UInfo } from "../compiler/info.ts";
 import { fieldClass, fieldIndex } from "../compiler/fieldid.ts";
+import { kindVT } from "../compiler/kinds.ts";
 
 /** the first array element's offset, above every field id */
 const ARRAY_BASE = 1 << 30;
@@ -179,9 +180,9 @@ const onArray = (c: Code) => c.lget(OFF).i64(BigInt(ARRAY_BASE)).raw(OP.i64_ge_s
 
 function emitGet(cx: Compiler, c: Code, t: Ty): void {
   const k = kindOf(t), w = width(t), ek = elemKindOf("[" + t), { tArr } = cx;
-  onArray(c).if_(cx.vtOf(k));
+  onArray(c).if_(kindVT(k));
   const idx = index(c, t);
-  c.lget(OBJ).refTest(tArr[ek]).if_(cx.vtOf(k));
+  c.lget(OBJ).refTest(tArr[ek]).if_(kindVT(k));
   c.lget(OBJ).refCast(tArr[ek]).structGet(tArr[ek], 2).lget(idx);
   cx.emitElementLoad(c, t);
   c.else_();

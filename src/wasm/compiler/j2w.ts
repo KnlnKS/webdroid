@@ -2,20 +2,20 @@
 import { parseMethodDesc } from "../../jvm/abi.ts";
 import { HT, ModuleBuilder, T, ref, refNull, type VT, type FunctionType } from "./wasmbin.ts";
 import { Code, OP, type InlineFrame } from "./code.ts";
-import { ACC, kindOf, methodKinds, mid, type FieldInfo, type Program, type Kind, type MethodInfo } from "./program.ts";
-import { H, ELEM, MATH_ARITY, elemKindOf, FUEL, INIT_DONE, MAX_DEPTH, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, SAMPLE_EVERY, WARM_AT, type ElemKind } from "./consts.ts";
+import { methodKinds, mid, type FieldInfo, type Program, type MethodInfo } from "./program.ts";
+import { H, ELEM, MATH_ARITY, FUEL, INIT_DONE, MAX_DEPTH, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, SAMPLE_EVERY, WARM_AT } from "./consts.ts";
 import { declareSymbolicSites, siteKey, type SymbolicSite } from "./sites.ts";
 import { prepareMethod, type PreparedMethod } from "../../jvm/prepared.ts";
-import { Invoke } from "../../jvm/opcodes.ts";
 import { inferTyping, type Typing } from "./infer.ts";
 import { compileMethod } from "./method.ts";
 import type { ClassRt, World } from "../link/world.ts";
 import { rtfns, type RtName } from "./rtfns.ts";
-import type { LinkFailure } from "./linkage.ts";
+import { finalDispatch, type LinkFailure } from "./linkage.ts";
 import { SLOT, THROWERS, type Thrower } from "./exc.ts";
-import { STRING, StructStrings } from "./strings.ts";
+import { STRING, StructStrings, stringSites } from "./strings.ts";
 import { helpers as HELPERS, type HelperName } from "./helpers.ts";
 import type { NativeBinder } from "../link/hostapi.ts";
+import { elemKindOf, kindOf, kindVT, type ElemKind, type Kind } from "./kinds.ts";
 
 export interface Intrinsic { (cx: Compiler, m: MethodInfo, c: Code): void }
 /** a String constructor is never called: each call site makes the String with its factory (Compiler.construct) */
@@ -40,8 +40,7 @@ export function declareBase(mb: ModuleBuilder): Base {
   const tStr = mb.addType({ k: "struct", fields: [{ t: ref(tVT), mut: false }, { t: T.i64, mut: true }, { t: ref(tData.i16), mut: false }, { t: T.i32, mut: true }, { t: T.externref, mut: true }], sup: tObj, final: true });
   return { tVT, tObj, tStr, tData, tArr, tTagFn: mb.addFuncType([T.anyref], []) };
 }
-/** every reference slot is an anyref: a Java object is a struct subtype of $Obj, a String the JS string behind any.convert_extern (strings.ts) */
-export const kindVT = (k: Kind): VT => (k === "I" ? T.i32 : k === "J" ? T.i64 : T.anyref);
+export { kindVT } from "./kinds.ts";
 
 export const MATH_IMPORTS = Object.fromEntries(Object.entries(MATH_ARITY).map(([f, n]): [string, FunctionType] => [f, { params: Array(n).fill(T.f64), results: [T.f64] }])) as Record<keyof typeof MATH_ARITY, FunctionType>;
 const HOST_IMPORTS = {
@@ -99,12 +98,14 @@ const MAX_NESTING = 64;
 /** what a frozen numbering (Numbers.frozen) would have had to number, and the method whose compile asked for it (the innermost, when compiling it compiled others) */
 export class NeedsNumber extends Error { method?: MethodInfo }
 /** the linker state a Compiler reads and records into */
-export type LinkEnv = Pick<World, "prog" | "natives" | "intrinsic" | "link" | "claims" | "allocated" | "longLoops" | "idOf" | "slotOf" | "selectorId" | "ensureSlot"
+export type LinkEnv = Pick<World, "prog" | "natives" | "intrinsic" | "link" | "claims" | "longLoops" | "idOf" | "slotOf" | "selectorId" | "ensureSlot"
   | "synthSlot" | "gapId" | "linkId" | "needsInit" | "initialized" | "needsSymbolicSite" | "guestShared"> & {
   opts: Pick<World["opts"], "build" | "guest" | "intrinsics">; hosts: Pick<World["hosts"], "mayReach" | "takes">;
   stats: Pick<World["stats"], "phase">; cha: Pick<World["cha"], "targets">; dispatch: Pick<World["dispatch"], "vslot">;
   classModules: Pick<World["classModules"], "ensureBody">; units: Pick<World["units"], "sharedHelpers">;
 };
+/** what compiling a method reads of its code (Compiler.analysis) */
+export interface Analysis { prepared: PreparedMethod; typing: Typing; strings: ReadonlyMap<number, "alloc" | "init"> }
 /** per call site (caller and DEX pc): the implementations worth a guarded direct call (Planner.group) */
 export type CallPlan = ReadonlyMap<string, readonly MethodInfo[]>;
 /** a function of Compiler.buildSynthetics */
@@ -124,17 +125,6 @@ export interface UnitOptions {
   plan?: CallPlan;
 }
 const NO_PLAN: CallPlan = new Map();
-/** whether a virtual call of `t` through class `decl` runs `t` whatever the receiver: ART links no subclass of a final class and no override of a final method */
-function finalDispatch(prog: Program, decl: string, t: MethodInfo): boolean {
-  const d = prog.get(decl);
-  return !!d && !d.isInterface && (!!(d.flags & ACC.FINAL) || !!(t.flags & ACC.FINAL) && prog.isSubclass(decl, t.cls));
-}
-/** whether invoke `kind` of `target` through `decl` runs `target`'s slot whatever the receiver: a static, direct or super call, or a virtual call that dispatches finally
- *  and reaches no host spec's native. Only a build knows every spec (a split bundle registers some late), so a World without one binds no virtual call */
-export function staticallyBound(w: Pick<LinkEnv, "prog" | "hosts">, kind: Invoke, decl: string, target: MethodInfo): boolean {
-  if (kind !== Invoke.Virtual && kind !== Invoke.Interface) return true;
-  return finalDispatch(w.prog, decl, target) && !w.hosts.mayReach(decl, target);
-}
 export class Compiler implements Base {
   w: LinkEnv;
   mb = new ModuleBuilder();
@@ -176,7 +166,7 @@ export class Compiler implements Base {
   str: StructStrings;
   /** the production natives this module imports, by method id, and their import indices */
   nativeImports = new Map<string, number>();
-  private analyses = new Map<MethodInfo, { prepared: PreparedMethod; typing: Typing }>();
+  private analyses = new Map<MethodInfo, Analysis>();
   symbolicTable?: number;
   symbolicImports = new Map<string, { slot: number; site: SymbolicSite }>();
   private memory = false;
@@ -266,11 +256,10 @@ export class Compiler implements Base {
   get prog(): Program { return this.w.prog; }
 
   // ---------- types
-  vtOf(k: Kind): VT { return kindVT(k); }
   sig(params: Kind[], ret: Kind | "V"): number {
     const key = params.join("") + ">" + ret;
     let s = this.sigType.get(key);
-    if (s === undefined) this.sigType.set(key, s = this.mb.addFuncType(params.map((k) => this.vtOf(k)), ret === "V" ? [] : [this.vtOf(ret)]));
+    if (s === undefined) this.sigType.set(key, s = this.mb.addFuncType(params.map((k) => kindVT(k)), ret === "V" ? [] : [kindVT(ret)]));
     return s;
   }
   private descSigs = [new Map<string, number>(), new Map<string, number>()];
@@ -293,7 +282,7 @@ export class Compiler implements Base {
     const sup = this.structFor(c.sup ?? "java/lang/Object");
     // a class with no own fields shares its super's struct type
     if (!c.fields.some(f => !f.isStatic)) { this.classStruct.set(cls, sup); return sup; }
-    const fields = [{ t: ref(this.tVT) as VT, mut: false }, { t: T.i64 as VT, mut: true }, ...this.prog.layout(cls).map((f) => ({ t: this.vtOf(f.kind), mut: true }))];
+    const fields = [{ t: ref(this.tVT) as VT, mut: false }, { t: T.i64 as VT, mut: true }, ...this.prog.layout(cls).map((f) => ({ t: kindVT(f.kind), mut: true }))];
     t = this.mb.addType({ k: "struct", fields, sup, final: false });
     this.classStruct.set(cls, t); return t;
   }
@@ -327,7 +316,7 @@ export class Compiler implements Base {
   staticGlobal(owner: string, name: string, desc?: string): number {
     const f = this.prog.get(owner)?.fields.find((x) => x.isStatic && x.name === name && (desc === undefined || x.desc === desc));
     if (!f) throw new Error(`static ${owner}.${name} not found`);
-    return this.classGlobal(owner, "s:" + name + ":" + f.desc, this.vtOf(f.kind));
+    return this.classGlobal(owner, "s:" + name + ":" + f.desc, kindVT(f.kind));
   }
   /** the frame weight of `m` and what it calls, if it is a direct call of this unit and counts no depth. A method is compiled before its first caller finishes
    *  its prologue; a method that is being compiled (a cycle) has no bound */
@@ -590,7 +579,7 @@ export class Compiler implements Base {
   emitNew(c: Code, cls: string): void {
     // a String is not an object with fields: ART's Unsafe.allocateInstance(String.class) is the empty string
     if (cls === STRING) { this.str.literal(c, ""); return; }
-    this.w.allocated.add(cls); this.allocs.add(cls);
+    this.allocs.add(cls);
     c.call(this.defineFn("new:" + cls, [], [ref(this.structFor(cls))], (n) => {
       const lay = this.prog.layout(cls);
       this.allocBytes(n, () => n.i32(12 + lay.reduce((b, f) => b + (f.kind === "J" ? 8 : 4), 0)));
@@ -641,12 +630,12 @@ export class Compiler implements Base {
     return this.defineFn(name, params, results, body, true);
   }
 
-  /** `m`'s decoded code and typing, timed as phases: kept from the declaring of its symbolic sites until its compile takes them (`last`) */
-  analysis(m: MethodInfo, last = false): { prepared: PreparedMethod; typing: Typing } {
+  /** `m`'s decoded code, typing and String sites, timed as phases: kept from the declaring of its symbolic sites until its compile takes them (`last`) */
+  analysis(m: MethodInfo, last = false): Analysis {
     let a = this.analyses.get(m);
     if (a) { if (last) this.analyses.delete(m); return a; }
     const phase = this.w.stats.phase, item = m.dex.code(m.codeOff), t0 = performance.now(), prepared = prepareMethod(item), t1 = performance.now();
-    a = { prepared, typing: inferTyping(m.dex, item, m.desc, m.isStatic, prepared) };
+    a = { prepared, typing: inferTyping(m.dex, item, m.desc, m.isStatic, prepared), strings: stringSites(m.dex, prepared) };
     phase.prepare += t1 - t0; phase.infer += performance.now() - t1;
     if (!last) this.analyses.set(m, a);
     return a;

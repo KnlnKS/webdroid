@@ -4,7 +4,7 @@
 import { OP } from "../compiler/code.ts";
 import { T } from "../compiler/wasmbin.ts";
 import { ACC, javaName, type JClass, typeName } from "../compiler/program.ts";
-import { idOfClass, fieldId, PRIM, className } from "./classes.ts";
+import { idOfClass, fieldId, PRIM, className, TextKind } from "./classes.ts";
 
 import { rt } from "../compiler/rtfns.ts";
 import { executableSlot, methodAt } from "./reflect.ts";
@@ -12,7 +12,6 @@ import type { EncAnnotation } from "../../jvm/dex.ts";
 import type { Code } from "../compiler/code.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
 import type { World } from "./world.ts";
-import { MInfo, TextKind } from "../compiler/info.ts";
 import { PerWorld } from "./perworld.ts";
 import { fieldClass, fieldIndex } from "../compiler/fieldid.ts";
 
@@ -39,6 +38,9 @@ function listed(w: World, cid: number, which: number): number[] {
   return list;
 }
 
+/** host.info kinds about members, annotations and enclosing classes */
+export const MInfo = { ExecCount: 300, ExecAt: 301, ClassAnn: 302, ExecAnn: 303, FieldAnn: 304, IsRecord: 305, DeclaringClass: 306, EnclosingClass: 307, EnclosingIndex: 308, CompareParams: 309, ThrowsCount: 310, ThrowsAt: 311, EnclosingOwner: 312, IsAnonymous: 313 } as const;
+export type MInfo = (typeof MInfo)[keyof typeof MInfo];
 export function hostMembers(w: World, kind: number, a: number, b: number): number {
   const cls = (id: number) => w.prog.get(w.nameOf(id));
   switch (kind as MInfo) {

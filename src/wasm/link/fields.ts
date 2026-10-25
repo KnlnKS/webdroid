@@ -13,6 +13,7 @@ import { Info, UInfo } from "../compiler/info.ts";
 import { BOX, WIDEN } from "../compiler/primitives.ts";
 import { PRIMS } from "../../jvm/abi.ts";
 import { splitFieldId } from "../compiler/fieldid.ts";
+import { kindVT } from "../compiler/kinds.ts";
 
 const FIELD = "java/lang/reflect/Field", ACCESSIBLE = "java/lang/reflect/AccessibleObject";
 const LETTERS = Object.keys(PRIMS);
@@ -69,7 +70,7 @@ rt("fgetp", ["L", "L", "I"], "J", (cx, c) => {
   const { id, cid, flags, letter } = describe(cx, c);
   for (const l of LETTERS) {
     c.lget(letter).i32(code(l)).raw(OP.i32_eq).if_();
-    const k = kindOf(l), slot = accessor(cx, c, id, flags, false, k === "J" ? 1 : 0), raw = c.newLocal(cx.vtOf(k));
+    const k = kindOf(l), slot = accessor(cx, c, id, flags, false, k === "J" ? 1 : 0), raw = c.newLocal(kindVT(k));
     c.lget(1).lget(slot).callIndirect(cx.sig(["L"], k)).lset(raw);
     // the value as a signed integer (i64) or a double, whichever the letter is
     const asInt = () => { c.lget(raw); if (k === "I" && l !== "F") c.raw(OP.i64_extend_i32_s); else if (l === "F") c.raw(OP.i64_extend_i32_u); };

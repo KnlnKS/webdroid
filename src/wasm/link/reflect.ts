@@ -7,8 +7,8 @@ import { OP } from "../compiler/code.ts";
 import { T, refNull } from "../compiler/wasmbin.ts";
 import { ACC, kindOf, type JClass, type MethodInfo, typeName } from "../compiler/program.ts";
 import { descToName } from "../../jvm/abi.ts";
-import { idOfClass, emitName, emitNameEq } from "./classes.ts";
-import { UInfo, RInfo, TextKind } from "../compiler/info.ts";
+import { idOfClass, emitName, emitNameEq, TextKind } from "./classes.ts";
+import { UInfo } from "../compiler/info.ts";
 import { WIDEN, BOX, box } from "../compiler/primitives.ts";
 import { rt, type Synth } from "../compiler/rtfns.ts";
 import type { Code } from "../compiler/code.ts";
@@ -16,6 +16,7 @@ import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
 import type { World } from "./world.ts";
 import { memberArg, synthFamily } from "./synths.ts";
 import { PerWorld } from "./perworld.ts";
+import { kindVT } from "../compiler/kinds.ts";
 
 const EXEC = "java/lang/reflect/Executable", METHOD = "java/lang/reflect/Method", CTOR = "java/lang/reflect/Constructor";
 const CLASS_ARRAY = "[Ljava/lang/Class;";
@@ -40,6 +41,9 @@ function sigOf(w: World, m: MethodInfo) {
 /** String.hashCode of a name */
 function nameHash(name: string): number { let h = 0; for (let i = 0; i < name.length; i++) h = (Math.imul(h, 31) + name.charCodeAt(i)) | 0; return h; }
 const byName = new WeakMap<JClass, Map<number, number[]>>();
+/** host.info kinds about Method and Constructor */
+export const RInfo = { MethodCount: 200, MethodNameLen: 201, MethodNameChar: 202, MethodKind: 203, MethodParams: 204, MethodParamType: 205, MethodRet: 206, MethodFlags: 207, MethodInvoke: 208, MethodCall: 209, MethodCallDirect: 210, IfaceCount: 211, Iface: 212, MemberCount: 213, Member: 214, MethodsNamed: 215, MethodNamedAt: 216, SerialInit: 217, MethodSlot: 218 } as const;
+export type RInfo = (typeof RInfo)[keyof typeof RInfo];
 /** the methods of the class `MethodsNamed` last counted, which `MethodNamedAt` indexes */
 let named: number[] = [];
 
@@ -110,7 +114,7 @@ function invokeBody(cx: Compiler, c: Code, m: MethodInfo, wrap: boolean, direct:
     if (wrap) { c.lget(0); cx.emitInstanceOf(c, m.cls); c.raw(OP.i32_eqz).if_().i32(cx.idOf(m.cls)).lget(0); cx.vtId(c); cx.callThrower(c, "recv"); c.end(); }
   }
   const values = m.params.map((p, i) => {
-    const v = c.newLocal(cx.vtOf(kindOf(p))), ty = cx.idOf(typeName(p));
+    const v = c.newLocal(kindVT(kindOf(p))), ty = cx.idOf(typeName(p));
     c.lget(args).refAsNonNull().i32(i).arrayGet(cx.tData.ref);
     if (BOX[p]) { c.i32(p.charCodeAt(0)).i32(i).i32(ty); cx.callRt(c, "argp"); if (kindOf(p) === "I") c.raw(OP.i32_wrap_i64); }
     else if (wrap && p !== "Ljava/lang/Object;") {

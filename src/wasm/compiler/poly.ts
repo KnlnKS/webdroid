@@ -2,8 +2,7 @@
 // Guarded accessor types and null reference operands use storage operations; other conversions and views use the Java bridge.
 import { OP } from "./code.ts";
 import { T, ref, refNull, type VT } from "./wasmbin.ts";
-import { ACC, kindOf, type FieldInfo, type Kind, typeName } from "./program.ts";
-import { elemKindOf } from "./consts.ts";
+import { ACC, type FieldInfo, typeName } from "./program.ts";
 import { descToName, varHandleValues } from "../../jvm/abi.ts";
 import { argRegisters, type PreparedInstruction as Ins } from "../../jvm/prepared.ts";
 import type { Compiler } from "./j2w.ts";
@@ -11,8 +10,8 @@ import type { Code } from "./code.ts";
 import type { MC } from "./method.ts";
 import { emitHandleCall } from "./handles.ts";
 import { Info, UInfo } from "./info.ts";
-import { valueKind, I as KI, F as KF, D as KD, R as KR } from "./infer.ts";
 import { FIELD_INDEX_MAX, fieldIdOf, splitFieldId } from "./fieldid.ts";
+import { elemKindOf, kindOf, kindVT, valueKind, I as KI, F as KF, D as KD, R as KR, type Kind } from "./kinds.ts";
 
 const VH = "java/lang/invoke/VarHandle", FVH = "java/lang/invoke/FieldVarHandle", MAX_CANDIDATES = 64;
 type Op = "get" | "set" | "cas" | "cae" | "getAndSet" | "getAndAdd" | "getAndBitwiseOr" | "getAndBitwiseAnd" | "getAndBitwiseXor";
@@ -28,7 +27,7 @@ const narrowTo = (c: Code, letter: string) => { if (letter === "B") c.raw(OP.i32
 export function emitVarHandleOperation(cx: Compiler, c: Code, mode: string, type: string, p: Place, vals: number[]): void {
   const op = opOf(mode), K = kindOf(type), vf = valueKind(type);
   const eq = () => K === "L" ? c.call(cx.helper("acmp")) : c.raw(K === "I" ? OP.i32_eq : OP.i64_eq);
-  const old = op === "get" || op === "set" || op === "cas" ? -1 : c.newLocal(cx.vtOf(K));
+  const old = op === "get" || op === "set" || op === "cas" ? -1 : c.newLocal(kindVT(K));
   switch (op) {
     case "get": p.load(); return;
     case "set": p.store(vals[0]); return;
@@ -36,7 +35,7 @@ export function emitVarHandleOperation(cx: Compiler, c: Code, mode: string, type
     case "cae": p.load(); c.lset(old).lget(old).lget(vals[0]); eq(); c.if_(); p.store(vals[1]); c.end(); c.lget(old); return;
     case "getAndSet": p.load(); c.lset(old); p.store(vals[0]); c.lget(old); return;
     default: { // getAndAdd, getAndBitwiseOr/And/Xor
-      const next = c.newLocal(cx.vtOf(K));
+      const next = c.newLocal(kindVT(K));
       p.load(); c.lset(old).lget(old);
       if (vf === KF) c.raw(OP.f32_reinterpret_i32).lget(vals[0]).raw(OP.f32_reinterpret_i32, OP.f32_add, OP.i32_reinterpret_f32);
       else if (vf === KD) c.raw(OP.f64_reinterpret_i64).lget(vals[0]).raw(OP.f64_reinterpret_i64, OP.f64_add, OP.i64_reinterpret_f64);
@@ -129,16 +128,16 @@ export function emitVarHandleAccess(cx: Compiler, c: Code, mode: string, params:
 
   const nonNull = (read: () => void) => { const local = c.newLocal(T.anyref); read(); c.ltee(local); cx.nullCheck(c); c.lget(local); };
   const produces: Kind | null = op === "cas" ? "I" : op === "set" ? null : K;
-  const bt: VT | null = produces && cx.vtOf(produces);
+  const bt: VT | null = produces && kindVT(produces);
   const classCast = () => { c.i32(0).i32(0); cx.callThrower(c, "cce"); };
 
   const access = (p: Place, vals: number[]) => emitVarHandleOperation(cx, c, mode, nv ? valueTypes[0] : ret, p, vals);
-  const readValues = () => valueTypes.map((t, i) => { const k = kindOf(t), l = c.newLocal(cx.vtOf(k)); read(k, coords.length + i); c.lset(l); return l; });
+  const readValues = () => valueTypes.map((t, i) => { const k = kindOf(t), l = c.newLocal(kindVT(k)); read(k, coords.length + i); c.lset(l); return l; });
 
   if (array) {
     const letter = coords[0][1], ek = elemKindOf(coords[0]);
     if (valueKind(coords[0].slice(1)) !== vf) return gap("element type");
-    const t = cx.tArr[ek], d = cx.tData[ek], handleType = c.newLocal(T.anyref), wrapper = c.newLocal(cx.vtOf("L")), data = c.newLocal(refNull(d)), idx = c.newLocal(T.i32);
+    const t = cx.tArr[ek], d = cx.tData[ek], handleType = c.newLocal(T.anyref), wrapper = c.newLocal(kindVT("L")), data = c.newLocal(refNull(d)), idx = c.newLocal(T.i32);
     const vhs = cx.structFor(VH);
     nonNull(handle); c.refCast(vhs).structGet(vhs, cx.fieldIndex(VH, { owner: VH, name: "coordinateType0", desc: "Ljava/lang/Class;" })).lset(handleType);
     nonNull(() => read("L", 0)); c.lset(wrapper);
@@ -167,7 +166,7 @@ export function emitVarHandleAccess(cx: Compiler, c: Code, mode: string, params:
     }
     if (R === "java/lang/Void") { cx.callThrower(c, "npe"); c.unreachable(); }        // the receiver is the literal null
     else if (cands.length && cands.length <= MAX_CANDIDATES) {
-      const vh = c.newLocal(cx.vtOf("L")), recv = c.newLocal(cx.vtOf("L")), fid = c.newLocal(T.i32);
+      const vh = c.newLocal(kindVT("L")), recv = c.newLocal(kindVT("L")), fid = c.newLocal(T.i32);
       nonNull(handle); c.lset(vh); nonNull(() => read("L", 0)); c.lset(recv);
       const vals = readValues();
       fieldId(vh, fid);
@@ -182,7 +181,7 @@ export function emitVarHandleAccess(cx: Compiler, c: Code, mode: string, params:
       classCast(); c.unreachable().end();
     } else {
       // any receiver class, and static fields: the accessor of the handle's field, found at run time
-      const vh = c.newLocal(cx.vtOf("L")), recv = c.newLocal(cx.vtOf("L")), fid = c.newLocal(T.i32), getter = c.newLocal(T.i32), setter = c.newLocal(T.i32), kind = { I: 0, J: 1, L: 2 }[K];
+      const vh = c.newLocal(kindVT("L")), recv = c.newLocal(kindVT("L")), fid = c.newLocal(T.i32), getter = c.newLocal(T.i32), setter = c.newLocal(T.i32), kind = { I: 0, J: 1, L: 2 }[K];
       nonNull(handle); c.lset(vh);
       if (!stat) { nonNull(() => read("L", 0)); c.lset(recv); }
       const vals = readValues();
