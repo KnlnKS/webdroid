@@ -5,7 +5,7 @@ import { handle, deref, FINALIZER } from "./handles.ts";
 import { type NativeBitmap, colorLongAt } from "./bitmap.ts";
 import type { Ctx2D } from "./recording.ts";
 import { canvasLocalBounds, localMatrix, type Affine } from "./matrix.ts";
-import { COMPOSITE, BLEND_MODES, cssColor } from "./graphics.ts";
+import { compositeOf, cssColor } from "./graphics.ts";
 
 /**
  * A Shader's native instance: what it paints, under the local matrix it was created with (null
@@ -120,7 +120,7 @@ export class NativeComposeShader extends NativeShader {
 }
 /** a ComposeShader's native instance: `src` over `dst` by the SkBlendMode numbered `mode` */
 export const composeShader = (local: Affine | null, dst: NativeShader, src: NativeShader, mode: number) =>
-  new NativeComposeShader(local, dst, src, mode === 2 ? null : COMPOSITE[BLEND_MODES[mode]] ?? "source-over");
+  new NativeComposeShader(local, dst, src, compositeOf(mode));
 /** a gradient's style: a CanvasGradient, or the pattern of a tiled one, which carries the local matrix */
 export class NativeGradient extends NativeShader {
   readonly style: CanvasGradient | CanvasPattern;

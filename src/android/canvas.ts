@@ -13,15 +13,15 @@ import { inversePath } from "./skia.ts";
 import { type NativeBitmap, bitmapAt } from "./bitmap.ts";
 import { BlurMask, cssBlur } from "./maskfilter.ts";
 import { strokeRec } from "./patheffect.ts";
-import { NativePaint, UNBOUNDED, copyPaint, beginPaintShadow, applyStroke } from "./paint.ts";
-import { setEdges, emptyBox, type Box, COMPOSITE } from "./graphics.ts";
-import { type NativeColorFilter, recolor } from "./colorfilter.ts";
+import { NativePaint, copyPaint, beginPaintShadow, applyStroke } from "./paint.ts";
+import { setEdges, emptyBox, type Box, DST, SRC_OVER, compositeOf } from "./graphics.ts";
+import type { NativeColorFilter } from "./colorfilter.ts";
 import { NativeBitmapShader, fillWithShader, shaderIdentity } from "./shader.ts";
 import { type Affine, PLANE, setAffine, applyMatrix, matrixAt, deviceScale, deviceBounds, localBounds, canvasLocalBounds } from "./matrix.ts";
 
 /** the Java canvases TS hands framework and app code: a Canvas or RecordingCanvas peer */
 export type JavaCanvas = JObj;
-type LayerStyle = { alpha: number; blend: GlobalCompositeOperation | null; filter: NativeColorFilter | null };
+export type LayerStyle = { alpha: number; blend: GlobalCompositeOperation | null; filter: NativeColorFilter | null };
 /** an open layer: the save count its restore closes, the context drawn into before it, and the close */
 type Layer = { count: number; parent: Ctx2D; close: () => void; behind?: Behind };
 /** what a save-behind set aside: the target's pixels under its bounds, in device space */
@@ -43,9 +43,8 @@ export const SHAPE = 0, MASK = 1, IMAGE = 2;
 export type Fill = (ctx: Ctx2D, clip: boolean) => void;
 /** how one draw applies its paint, as planDraw decides it */
 export class DrawPlan {
-  /** the blend mode by BlendMode's name (drawMode's for a solid colour), null for SRC_OVER; by DST
-   *  the draw changes nothing */
-  mode: string | null = null;
+  /** the SkBlendMode (drawMode's for a solid colour); by DST the draw changes nothing */
+  mode = SRC_OVER;
   /** the composite op, null for source-over; `unbounded` when Canvas2D's would clear beyond the draw */
   op: GlobalCompositeOperation | null = null;
   unbounded = false;
@@ -57,6 +56,10 @@ export class DrawPlan {
   /** into a bitmap, the op Skia's own raster rules composite a solid colour with (bitmap-raster.ts) */
   raster: GlobalCompositeOperation | null = null;
 }
+
+/** Canvas2D's composite ops that blend over the whole clip, clearing what a draw does not cover,
+ *  where SkBlendMode leaves it */
+const UNBOUNDED: ReadonlySet<string> = new Set(["copy", "source-in", "destination-in", "source-out", "destination-atop"]);
 
 /** SkiaCanvas: a 2D context and the state Canvas2D does not expose — the save count, the device
  *  clip bounds, open layers */
@@ -105,12 +108,12 @@ export class NativeCanvas {
   /** the plan of one draw of `p` (`kind` SHAPE, MASK or IMAGE): the canvas's one plan, which its
    *  next draw replaces */
   planDraw(p: NativePaint, kind = SHAPE): DrawPlan {
-    const plan = this.drawPlan, mode = kind === IMAGE ? p.blendName : p.drawMode();
-    const op = mode === null ? null : COMPOSITE[mode] ?? null, unbounded = op !== null && UNBOUNDED.has(op);
+    const plan = this.drawPlan, mode = kind === IMAGE ? p.blend : p.drawMode();
+    const op = mode === SRC_OVER ? null : compositeOf(mode), unbounded = op !== null && UNBOUNDED.has(op);
     const mf = kind === IMAGE ? null : p.maskFilter, blur = kind === SHAPE && mf instanceof BlurMask && mf.style === 0 ? mf : null;
     plan.mode = mode; plan.op = op; plan.unbounded = unbounded; plan.blur = blur;
     plan.viaMask = kind !== IMAGE && (mf !== null && blur === null || unbounded || p.shader !== null && (kind === MASK || p.colorFilter !== null));
-    plan.raster = kind === SHAPE && this.bmp && mode !== "DST" && !unbounded && !p.shader && !mf && (!p.pathEffect || p.dash) && !p.shadowRadius
+    plan.raster = kind === SHAPE && this.bmp && mode !== DST && !unbounded && !p.shader && !mf && (!p.pathEffect || p.dash) && !p.shadowRadius
       ? op ?? "source-over" : null;
     return plan;
   }
@@ -201,7 +204,7 @@ export class NativeCanvas {
    *  is the draw's when the caller has made it */
   drawShape(p: NativePaint, fill: Fill, stroke: (ctx: Ctx2D) => void, geom?: () => NativePath, plan = this.planDraw(p)) {
     if (p.pathEffect && !p.dash && geom) return this.drawEffected(p, geom());
-    if (plan.mode === "DST") return;
+    if (plan.mode === DST) return;
     // through the shape's coverage: a clip to the shape would confine an unbounded mode, but the
     // context's clips are aliased
     if (plan.viaMask || plan.raster && aliasedStroke(this, p)) return maskShape(this, p, plan.op, fill, stroke);
@@ -511,11 +514,10 @@ export function clipRoundRect(ctx: Ctx2D, l: number, t: number, r: number, b: nu
 type LayerRaster = { ctx: OffscreenCanvasRenderingContext2D; pool: OffscreenCanvas[]; x: number; y: number; w: number; h: number };
 /** what a layer's paint (and an extra 0-255 `alpha`) does to its pixels when it is restored: its
  *  pixels are the source, not the paint's colour, so the mode is the paint's own (and DST keeps none) */
-function layerStyle(paint: NativePaint | null, alpha = 255): LayerStyle {
-  return {
-    alpha: !paint ? alpha : paint.blendName === "DST" ? 0 : (paint.color >>> 24) * alpha / 255,
-    blend: paint?.blend ?? null, filter: paint?.colorFilter ?? null,
-  };
+export function layerStyle(paint: NativePaint | null, alpha = 255): LayerStyle {
+  if (!paint) return { alpha, blend: null, filter: null };
+  const mode = paint.blend;
+  return { alpha: mode === DST ? 0 : (paint.color >>> 24) * alpha / 255, blend: mode === SRC_OVER ? null : compositeOf(mode), filter: paint.colorFilter };
 }
 // Free rasters, grown to the largest target they served: a layer opened every frame (Lottie
 // masks and mattes) must not allocate every frame. A layer lives where its target does — CPU for
@@ -548,7 +550,7 @@ function closeLayer(target: Ctx2D, { ctx, pool, x, y, w, h }: LayerRaster, style
   pool.push(ctx.canvas); // nothing below opens a layer, so the raster is not reused before it is read
   if (w <= 0 || h <= 0) return;
   const filter = style.filter;
-  if (filter) recolor(ctx, w, h, filter.color, filter.matrix, filter.mode, x, y);
+  if (filter) filter.apply(ctx, w, h, x, y);
   target.save();
   try {
     target.resetTransform();
@@ -669,7 +671,7 @@ function maskShape(nc: NativeCanvas, p: NativePaint, op: GlobalCompositeOperatio
 /** the paint drawMask draws a shape's coverage with: its geometry, in opaque white */
 function whitePaint(p: NativePaint, into: NativePaint): NativePaint {
   copyPaint(p, into);
-  into.maskFilter = null; into.setBlendName(null); into.shadowRadius = 0;
+  into.maskFilter = null; into.blend = SRC_OVER; into.shadowRadius = 0;
   into.color = -1; into.shader = null; into.colorFilter = null;
   return into;
 }
@@ -696,13 +698,13 @@ function fillSource(c: OffscreenCanvasRenderingContext2D, p: NativePaint, op: Gl
 /** the paint's shader at its alpha, over all of `c` under `m`, then through its colour filter, as
  *  Skia filters what a shader makes before coverage */
 function filteredShader(c: OffscreenCanvasRenderingContext2D, p: NativePaint, m: DOMMatrix): OffscreenCanvas {
-  const w = c.canvas.width, h = c.canvas.height, f = p.colorFilter!;
+  const w = c.canvas.width, h = c.canvas.height;
   c.resetTransform(); c.clearRect(0, 0, w, h); c.setTransform(m);
   c.globalAlpha = (p.color >>> 24) / 255;
   fillWithShader(c, p.shader!);
   c.globalAlpha = 1;
   c.resetTransform();
-  recolor(c, w, h, f.color, f.matrix, f.mode);
+  p.colorFilter!.apply(c, w, h);
   return c.canvas;
 }
 

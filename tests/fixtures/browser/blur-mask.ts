@@ -1,6 +1,7 @@
 import "../../../src/natives.ts";
 import { newObj, vcall, scall, linkInit, iof } from "../../../src/jvm/natives/jentry.ts";
 import { tintedBmp } from "../../../src/android/colorfilter.ts";
+import { SRC_IN, PLUS, MODULATE } from "../../../src/android/graphics.ts";
 import { newPaint } from "../../../src/android/paint.ts";
 import { canvasOver } from "../../../src/android/canvas.ts";
 import { NativeBitmap, bitmapOf } from "../../../src/android/bitmap.ts";
@@ -76,11 +77,11 @@ async function probe() {
   const plane = { inside: Array.from(ctx.getImageData(20, 20, 1, 1).data), outside: Array.from(ctx.getImageData(0, 0, 1, 1).data), restored: ctx.getTransform().toString() === before };
   const bitmap = new NativeBitmap(1, 1);
   bitmap.ctx.fillStyle = "#80402080"; bitmap.ctx.fillRect(0, 0, 1, 1);
-  const pixel = (mode: string, color: number) => Array.from((tintedBmp(bitmap, color, null, mode) as OffscreenCanvas).getContext("2d")!.getImageData(0, 0, 1, 1).data);
-  const tints = { identity: tintedBmp(bitmap, 0, null, "PLUS") === bitmap.image,
-    clear: pixel("SRC_IN", 0), add: pixel("PLUS", 0x40102040), multiply: pixel("MODULATE", 0x8080ff00), before: pixel("SRC_IN", 0x80ff0000) };
+  const pixel = (mode: number, color: number) => Array.from((tintedBmp(bitmap, color, null, mode) as OffscreenCanvas).getContext("2d")!.getImageData(0, 0, 1, 1).data);
+  const tints = { identity: tintedBmp(bitmap, 0, null, PLUS) === bitmap.image,
+    clear: pixel(SRC_IN, 0), add: pixel(PLUS, 0x40102040), multiply: pixel(MODULATE, 0x8080ff00), before: pixel(SRC_IN, 0x80ff0000) };
   bitmap.ctx.fillStyle = "#fff"; bitmap.ctx.fillRect(0, 0, 1, 1);
-  const changed = pixel("SRC_IN", 0x80ff0000);
+  const changed = pixel(SRC_IN, 0x80ff0000);
   return { results, extracted, shaded, position, copiedAlpha, originalAlpha, plane, tints, changed, effects: await effects(), filters: await filters() };
 }
 /** colour filters on a solid colour, on a shader and on a nine-patch's paint */

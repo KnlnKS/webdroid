@@ -17,7 +17,7 @@ import { drawGlyphs, cssFont, shapeTextRun, hyphenEdited, graphemes, clusterwise
 import { withFonts } from "./fonts.ts";
 import { advances, paintAdvance } from "./minikin.ts";
 import { NativePaint, copyPaint, defaultPaint, underlinePosition, underlineThickness, strikeThruPosition, strikeThruThickness } from "./paint.ts";
-import { cssColor, BLEND_MODES, COMPOSITE } from "./graphics.ts";
+import { CLEAR, DST, SRC_OVER, compositeOf, cssColor } from "./graphics.ts";
 import { tintedBmp } from "./colorfilter.ts";
 import { NativeBitmapShader } from "./shader.ts";
 import { type NinePatchChunk, drawNinePatch } from "./ninepatch.ts";
@@ -54,12 +54,12 @@ function shapePath(build: (p: NativePath) => void): NativePath {
 }
 /** SkCanvas::drawColor: the whole clip filled with `color` under the SkBlendMode numbered `mode` */
 function drawColor(nc: NativeCanvas, color: number, mode: number) {
-  if (mode === 2) return; // DST
-  const fill = cssColor(color), op = mode === 3 ? null : COMPOSITE[BLEND_MODES[mode]] ?? null;
+  if (mode === DST) return;
+  const fill = cssColor(color), op = mode === SRC_OVER ? null : compositeOf(mode);
   recordOrRun(nc.ctx, (ctx) => {
     ctx.save();
     ctx.resetTransform();
-    if (mode === 0) ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    if (mode === CLEAR) ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
     else {
       if (op) ctx.globalCompositeOperation = op;
       ctx.fillStyle = fill;
@@ -190,13 +190,13 @@ function punchHole(nc: NativeCanvas, l: number, t: number, r: number, b: number,
 export function drawBitmap(nc: NativeCanvas, b: NativeBitmap, paint: NativePaint | null, dx: number, dy: number, dw: number, dh: number,
   sx?: number, sy?: number, sw?: number, sh?: number) {
   const p = paint ?? defaultPaint, alpha8 = b.config === ALPHA_8, plan = nc.planDraw(p, alpha8 ? MASK : IMAGE);
-  if (plan.mode === "DST") return;
+  if (plan.mode === DST) return;
   const op = plan.op, unbounded = plan.unbounded;
   if (plan.viaMask) return maskBitmap(nc, b, p, op, dx, dy, dw, dh, sx, sy, sw, sh);
-  const ctx = nc.ctx, clear = plan.mode === "CLEAR";
+  const ctx = nc.ctx, clear = plan.mode === CLEAR;
   // CLEAR ignores the source: what the image covers is its destination rect
   if (clear && !alpha8) return ctx.clearRect(dx, dy, dw, dh);
-  const f = p.colorFilter, source = alpha8 ? tintedBmp(b, clear ? -16777216 : p.filteredColor()) : f ? tintedBmp(b, f.color, f.matrix, f.mode) : b.image;
+  const source = alpha8 ? tintedBmp(b, clear ? -16777216 : p.filteredColor()) : p.colorFilter?.image(b) ?? b.image;
   const undo = beginPaint(ctx, p, op, !alpha8, null);
   try {
     if (!unbounded) image(ctx, source, dx, dy, dw, dh, sx, sy, sw, sh);
@@ -235,14 +235,14 @@ function drawBitmapAt(nc: NativeCanvas, b: NativeBitmap, x: number, y: number, p
  *  the others, so the lattice is drawn into a layer that blends once. */
 function drawPatch(nc: NativeCanvas, bmp: NativeBitmap, chunk: NinePatchChunk, l: number, t: number, r: number, b: number, paint: NativePaint | null, dstDensity: number, srcDensity: number) {
   const p = paint ?? defaultPaint, plan = nc.planDraw(p, IMAGE);
-  if (plan.mode === "DST") return;
+  if (plan.mode === DST) return;
   if (plan.unbounded) {
     const count = saveLayer(nc, { left: l, top: t, right: r, bottom: b }, p);
     try { ninePatch(nc.ctx, bmp.image, bmp, chunk, l, t, r, b, dstDensity, srcDensity); } finally { nc.restoreToCount(count); }
     return;
   }
-  const ctx = nc.ctx, f = p.colorFilter, undo = beginPaint(ctx, p, plan.op, true, null);
-  try { ninePatch(ctx, f ? tintedBmp(bmp, f.color, f.matrix, f.mode) : bmp.image, bmp, chunk, l, t, r, b, dstDensity, srcDensity); }
+  const ctx = nc.ctx, undo = beginPaint(ctx, p, plan.op, true, null);
+  try { ninePatch(ctx, p.colorFilter?.image(bmp) ?? bmp.image, bmp, chunk, l, t, r, b, dstDensity, srcDensity); }
   finally { endPaint(ctx, undo); }
 }
 function ninePatch(ctx: Ctx2D, image: CanvasImageSource, bmp: NativeBitmap, chunk: NinePatchChunk, l: number, t: number, r: number, b: number, dstDensity: number, srcDensity: number) {
@@ -262,7 +262,7 @@ function tryDrawBitmapText(nc: NativeCanvas, s: string, x: number, y: number, p:
     p.style === 1 && p.strokeWidth === 0 && p.strokeCapN === "butt" && p.strokeJoinN === "miter" && !p.dash) &&
     p.antiAlias && p.textAlignN === 0 && !p.letterSpacingEm && p.textScaleX === 1 && !p.textSkewX &&
     !p.underline && !p.strikeThru && !p.shader && !p.maskFilter && !p.pathEffect && !p.shadowRadius &&
-    !p.colorFilter && !p.blend && skiaFace(p))) return false;
+    !p.colorFilter && p.blend === SRC_OVER && skiaFace(p))) return false;
   const l = shapeTextRun(s, 0, s.length, 0, s.length, false, p);
   if (l instanceof Promise) return false;
   const path = l.fonts[0]?.font.path;
@@ -283,7 +283,7 @@ function drawText(nc: NativeCanvas, text: string, x: number, y: number, p: Nativ
   const s = p.startHyphenEdit || p.endHyphenEdit ? hyphenEdited(text, p) : text, font = cssFont(s, p);
   if (tryDrawBitmapText(nc, text, x, y, p)) return;
   const plan = nc.planDraw(p);
-  if (plan.mode === "DST") return;
+  if (plan.mode === DST) return;
   if (plan.viaMask) return maskText(nc, text, s, font, x, y, p, plan.op);
   const undo = beginPaint(nc.ctx, p, plan.op, p.shader !== null, plan.blur);
   try { textRun(nc, text, s, font, x, y, p); } finally { endPaint(nc.ctx, undo); }

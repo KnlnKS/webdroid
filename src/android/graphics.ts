@@ -34,28 +34,21 @@ export function setEdges(r: object, box: Box): void {
 }
 export const emptyBox: Readonly<Box> = { left: 0, top: 0, right: 0, bottom: 0 };
 
+/** SkBlendMode, as PorterDuff.Mode.nativeInt, Xfermode.porterDuffMode and the ColorFilter,
+ *  ComposeShader and RenderEffect natives number it */
+export const CLEAR = 0, SRC = 1, DST = 2, SRC_OVER = 3, DST_OVER = 4, SRC_IN = 5, DST_IN = 6, SRC_OUT = 7,
+  SRC_ATOP = 9, DST_ATOP = 10, XOR = 11, PLUS = 12, MODULATE = 13;
 /**
- * A blend mode, by BlendMode's name, → the Canvas2D composite operation with the same meaning;
- * modes Canvas2D cannot express are absent and fall back to plain source-over.
+ * Each SkBlendMode's Canvas2D composite operation, null for DST, by which a draw changes nothing.
  * CLEAR maps to destination-out, which clears only where the source is opaque: NativePaint.fillStyle
  * fills a CLEAR shape opaquely, since Skia's CLEAR ignores the paint's colour (Compose punches holes
- * with a transparent one). DST is absent too: a draw by it changes nothing.
+ * with a transparent one).
  */
-export const COMPOSITE: Record<string, GlobalCompositeOperation> = {
-  CLEAR: "destination-out", SRC: "copy", SRC_OVER: "source-over", DST_OVER: "destination-over",
-  SRC_IN: "source-in", DST_IN: "destination-in", SRC_OUT: "source-out", DST_OUT: "destination-out",
-  SRC_ATOP: "source-atop", DST_ATOP: "destination-atop", XOR: "xor", PLUS: "lighter",
-  MODULATE: "multiply", MULTIPLY: "multiply", SCREEN: "screen", OVERLAY: "overlay",
-  DARKEN: "darken", LIGHTEN: "lighten", COLOR_DODGE: "color-dodge", COLOR_BURN: "color-burn",
-  HARD_LIGHT: "hard-light", SOFT_LIGHT: "soft-light", DIFFERENCE: "difference",
-  EXCLUSION: "exclusion", HUE: "hue", SATURATION: "saturation", COLOR: "color", LUMINOSITY: "luminosity",
-};
-/** SkBlendMode by value, in BlendMode's names: PorterDuff.Mode.nativeInt, Xfermode.porterDuffMode
- *  and the ColorFilter and ComposeShader natives all number modes this way */
-export const BLEND_MODES = ["CLEAR", "SRC", "DST", "SRC_OVER", "DST_OVER", "SRC_IN", "DST_IN", "SRC_OUT", "DST_OUT",
-  "SRC_ATOP", "DST_ATOP", "XOR", "PLUS", "MODULATE", "SCREEN", "OVERLAY", "DARKEN", "LIGHTEN",
-  "COLOR_DODGE", "COLOR_BURN", "HARD_LIGHT", "SOFT_LIGHT", "DIFFERENCE", "EXCLUSION", "MULTIPLY",
-  "HUE", "SATURATION", "COLOR", "LUMINOSITY"];
+const COMPOSITES: readonly (GlobalCompositeOperation | null)[] = ["destination-out", "copy", null, "source-over",
+  "destination-over", "source-in", "destination-in", "source-out", "destination-out", "source-atop", "destination-atop",
+  "xor", "lighter", "multiply", "screen", "overlay", "darken", "lighten", "color-dodge", "color-burn", "hard-light",
+  "soft-light", "difference", "exclusion", "multiply", "hue", "saturation", "color", "luminosity"];
+export const compositeOf = (mode: number): GlobalCompositeOperation | null => mode === DST ? null : COMPOSITES[mode] ?? "source-over";
 // Skia's SkRGBToHSV and SkHSVToColor, in float as Skia computes them
 const f = Math.fround, round = (x: number) => Math.floor(x + 0.5);
 rt.registerJnis("android/graphics/Color", {

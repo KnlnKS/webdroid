@@ -2,6 +2,7 @@
 // Region, Camera, RenderNode, the interpolators, NinePatch, PathParser and SurfaceTexture.
 import { newObj, vcall, scall } from "../../src/jvm/natives/jentry.ts";
 import { deref } from "../../src/android/handles.ts";
+import { SRC_ATOP } from "../../src/android/graphics.ts";
 import { presentSurface, surfaceTextureOf } from "../../src/android/glsurface.ts";
 import { loadSystemFonts } from "../../tests/java.ts";
 import { exercise, same, near, tokens, outcome, statics, listener, fontMetrics, vectorProbeLines, ltrb } from "./harness.ts";
@@ -44,12 +45,12 @@ await exercise("Matrix (compose, map, invert, fit, poly, values)", async () => {
 });
 
 await exercise("ColorFilters (native instances, updated in place)", async () => {
-  const native = async (f: unknown) => deref<{ matrix: Float32Array | null; color: number; mode: string }>(await vcall(f, "getNativeInstance", "()J"));
+  const native = async (f: unknown) => deref<{ matrix: Float32Array | null; color: number; mode: number }>(await vcall(f, "getNativeInstance", "()J"));
   const srcAtop = (await statics("android/graphics/PorterDuff$Mode")).s$SRC_ATOP;
   const porterDuff = await native(await newObj("android/graphics/PorterDuffColorFilter", "(ILandroid/graphics/PorterDuff$Mode;)V", -65536, srcAtop));
-  same("PorterDuffColorFilter", [porterDuff.color, porterDuff.mode, porterDuff.matrix], [-65536, "SRC_ATOP", null]);
+  same("PorterDuffColorFilter", [porterDuff.color, porterDuff.mode, porterDuff.matrix], [-65536, SRC_ATOP, null]);
   const multiply = (await statics("android/graphics/BlendMode")).s$MULTIPLY;
-  same("BlendModeColorFilter", (await native(await newObj("android/graphics/BlendModeColorFilter", "(ILandroid/graphics/BlendMode;)V", 7, multiply))).mode, "MULTIPLY");
+  same("BlendModeColorFilter", (await native(await newObj("android/graphics/BlendModeColorFilter", "(ILandroid/graphics/BlendMode;)V", 7, multiply))).mode, 24); // SkBlendMode::kMultiply
   const lighting = await newObj("android/graphics/LightingColorFilter", "(II)V", 0x0080ff00, 0x00104020);
   const k = (await native(lighting)).matrix!;
   same("Lighting", [k[0], k[6], k[12], k[4], k[9], k[14], k[18]], [128 / 255, 1, 0, 16, 64, 32, 1].map(Math.fround));
