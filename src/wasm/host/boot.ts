@@ -35,7 +35,7 @@ import { openPersist } from "./persist.ts";
 import { spawnCompileWorker, type CompileClient } from "./compiler.ts";
 import { WORKER_SCRIPTS } from "../../worker-scripts.ts";
 import { onProcessExit, processExited } from "../../process-exit.ts";
-import type { WarmAnswer } from "./warm-worker.ts";
+import type { WarmAnswer, WarmStart } from "./warm-worker.ts";
 
 /** what the JS heap of a tab, which every process's Java heap and the program models share, may grow by before an allocation fails */
 const TAB_HEAP = 2048 * 1024 * 1024;
@@ -290,10 +290,10 @@ export function serveWarm(port: MessagePort): void {
     warmer = warming() ? new Worker(WORKER_SCRIPTS.warm.url, { type: "module" }) : null;
     if (warmer) {
       warmer.onmessage = ({ data }: MessageEvent<WarmAnswer>) => countWarm(data);
-      void openAot().then((store) => { if (store) warmer!.postMessage({ base: store.base }); });
+      void openAot().then((store) => { if (store) warmer!.postMessage({ base: store.base } satisfies WarmStart); });
     }
   }
-  if (warmer) warmer.postMessage({ port }, [port]); else port.close();
+  if (warmer) warmer.postMessage({ port } satisfies WarmStart, [port]); else port.close();
 }
 
 /** The platform build (scripts/wasm/aot-build.ts) the server holds for these sources, with the modules a start of the process loads compiled. Undefined when the

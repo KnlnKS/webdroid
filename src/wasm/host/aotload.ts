@@ -2,8 +2,11 @@
 // fetched them, which for 130 MB of modules keeps the page's main thread from anything else for hundreds of milliseconds; a compiled module crosses to the page as it is. Several
 // workers share the files, as the machine has threads for them.
 import { COMPILE_OPTIONS } from "../link/module.ts";
-import type { FetchStore } from "./aotstore.ts";
+import type { FetchStore, StoreAnswer, StoreRequest } from "./aotstore.ts";
 
+/** what a prefetch worker is asked (SOURCE), and what it answers for each file and once all are done */
+type PrefetchRequest = { base: string; files: string[]; options: typeof COMPILE_OPTIONS; width: number };
+type PrefetchAnswer = StoreAnswer | { done: true };
 // each worker keeps a few requests in flight (aotstore.ts WIDTH: Chrome fails requests once about 1,600 are pending)
 const SOURCE = `onmessage = async ({ data: { base, files, options, width } }) => {
   const queue = [...files];
@@ -28,11 +31,11 @@ export function prefetchInWorker(store: FetchStore, files: string[]): Promise<vo
       const here = () => { store.load(share.filter((f) => !store.module(f) && !store.failed.includes(f))); resolve(); };
       let worker: Worker;
       try { worker = new Worker(url); } catch { here(); return; }
-      worker.onmessage = ({ data }: MessageEvent<{ file?: string; module?: WebAssembly.Module; done?: boolean }>) => {
-        if (data.done) { worker.terminate(); resolve(); } else if (data.module) store.put(data.file!, data.module); else store.fail(data.file!);
+      worker.onmessage = ({ data }: MessageEvent<PrefetchAnswer>) => {
+        if ("done" in data) { worker.terminate(); resolve(); } else if (data.module) store.put(data.file, data.module); else store.fail(data.file);
       };
       worker.onerror = () => { worker.terminate(); here(); };
-      worker.postMessage({ base, files: share, options: COMPILE_OPTIONS, width: WIDTH });
+      worker.postMessage({ base, files: share, options: COMPILE_OPTIONS, width: WIDTH } satisfies PrefetchRequest);
     }))).then(() => URL.revokeObjectURL(url));
   }
   return store.arrived(files);
@@ -40,8 +43,8 @@ export function prefetchInWorker(store: FetchStore, files: string[]): Promise<vo
 
 /** answers another thread's store (`FetchStore.remote`) with the modules `store` holds or compiles, so that the tab compiles its build once */
 export function serveStore(store: FetchStore | undefined, port: MessagePort): void {
-  port.onmessage = ({ data: files }: MessageEvent<string[]>) => {
+  port.onmessage = ({ data: files }: MessageEvent<StoreRequest>) => {
     if (store) void (files.length > 1 ? prefetchInWorker(store, files) : store.prefetch(files));
-    for (const file of files) void (store?.arrived([file]) ?? Promise.resolve()).then(() => port.postMessage({ file, module: store?.module(file) }));
+    for (const file of files) void (store?.arrived([file]) ?? Promise.resolve()).then(() => port.postMessage({ file, module: store?.module(file) } satisfies StoreAnswer));
   };
 }

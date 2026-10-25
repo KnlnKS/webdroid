@@ -1,21 +1,14 @@
+import { fetchBytes } from "./aotstore.ts";
+
 let catalog: { base: string; keys: Promise<string[]> } | undefined;
+const json = async <T>(url: string): Promise<T> => JSON.parse(new TextDecoder().decode(await fetchBytes(url))) as T;
 
 /** the files of the app build `key` that the platform build at `base` ships, if it ships one */
 export async function fetchBundle(base: string, key: string): Promise<Map<string, Uint8Array> | undefined> {
   try {
-    if (catalog?.base !== base) catalog = { base, keys: fetch(`${base}apps.json`).then(async (res) => {
-      if (!res.ok) throw new Error(`apps.json: ${res.status}`);
-      return await res.json() as string[];
-    }) };
+    if (catalog?.base !== base) catalog = { base, keys: json<string[]>(`${base}apps.json`) };
     if (!(await catalog.keys).includes(key)) return undefined;
-    const list = await fetch(`${base}app.${key}.json`);
-    if (!list.ok) return undefined;
-    const names = await list.json() as string[];
-    const files = await Promise.all(names.map(async (name) => {
-      const res = await fetch(`${base}app.${key}.${name}`);
-      if (!res.ok) throw new Error(`${name}: ${res.status}`);
-      return [name, new Uint8Array(await res.arrayBuffer())] as const;
-    }));
-    return new Map(files);
+    const names = await json<string[]>(`${base}app.${key}.json`);
+    return new Map(await Promise.all(names.map(async (name) => [name, await fetchBytes(`${base}app.${key}.${name}`)] as const)));
   } catch { return undefined; }
 }

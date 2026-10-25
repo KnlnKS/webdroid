@@ -9,6 +9,16 @@ import { compileStream } from "../link/module.ts";
  *  of them), and a page reaches its server over a few connections, so more than a few dozen in flight only queue in the network stack. */
 const WIDTH = 16;
 
+/** the body of `url`, which fails unless the server answers it */
+export async function fetchBytes(url: string): Promise<Uint8Array<ArrayBuffer>> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${url}: ${res.status}`);
+  return new Uint8Array(await res.arrayBuffer());
+}
+/** what a store asks of another thread's store of the same build (serveStore): the files to fetch and compile; and its answer, a file's module or its failure */
+export type StoreRequest = string[];
+export type StoreAnswer = { file: string; module?: WebAssembly.Module };
+
 export class FetchStore implements AotStore {
   readonly base: string; readonly remote?: MessagePort;
   private files = new Map<string, WebAssembly.Module | Uint8Array>();
@@ -25,7 +35,7 @@ export class FetchStore implements AotStore {
   /** `remote`: another thread's store of the same build, which fetches and compiles for this one (serveStore) */
   constructor(base: string, remote?: MessagePort) {
     this.base = base; this.remote = remote;
-    if (remote) remote.onmessage = ({ data }: MessageEvent<{ file: string; module?: WebAssembly.Module }>) => {
+    if (remote) remote.onmessage = ({ data }: MessageEvent<StoreAnswer>) => {
       if (data.module) this.put(data.file, data.module); else this.fail(data.file);
     };
   }
@@ -48,7 +58,7 @@ export class FetchStore implements AotStore {
   }
   /** fetches claimed `files` on this thread, or asks the remote store for them */
   load(files: string[], first = false): void {
-    if (this.remote) { if (files.length) this.remote.postMessage(files); return; }
+    if (this.remote) { if (files.length) this.remote.postMessage(files satisfies StoreRequest); return; }
     if (first) this.queue.unshift(...files); else this.queue.push(...files);
     while (this.active < WIDTH && this.queue.length) {
       const f = this.queue.shift()!;
@@ -68,9 +78,7 @@ export class FetchStore implements AotStore {
   module(file: string): WebAssembly.Module | undefined { const m = this.files.get(file); return m instanceof WebAssembly.Module ? m : undefined; }
   /** fetches `file` as bytes: the index and the list of a start's modules */
   async fetchBytes(file: string): Promise<Uint8Array> {
-    const res = await fetch(this.base + file);
-    if (!res.ok) throw new Error(`${this.base + file}: ${res.status}`);
-    const bytes = new Uint8Array(await res.arrayBuffer());
+    const bytes = await fetchBytes(this.base + file);
     this.files.set(file, bytes);
     return bytes;
   }
