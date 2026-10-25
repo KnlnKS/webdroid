@@ -1,15 +1,9 @@
 import { expect, test } from "vite-plus/test";
-import { chromium } from "playwright";
-import { serveModules } from "./browser.ts";
+import { withPage } from "./browser.ts";
 
 test("process endpoints preserve Parcel isolation, reentrant callbacks, errors and death across Workers", async () => {
-  const server = await serveModules(["src/perf.ts", "src/shell/rpc.ts", "src/shell/broker-contract.ts", "tests/fixtures/browser/process-bootstrap.ts", "tests/fixtures/browser/process-worker-fixture.ts",
-    "tests/fixtures/browser/fixture-calls.ts"]);
-  const browser = await chromium.launch({ headless: true });
-  try {
-    const page = await browser.newPage(), errors: string[] = [];
-    page.on("pageerror", error => errors.push(error.message));
-    await page.goto(server.url.href);
+  await withPage(["src/perf.ts", "src/shell/rpc.ts", "src/shell/broker-contract.ts", "tests/fixtures/browser/process-bootstrap.ts", "tests/fixtures/browser/process-worker-fixture.ts",
+    "tests/fixtures/browser/fixture-calls.ts"], async (page) => {
     const counterReceipt = await page.evaluate(async () => {
       const previous = location.href, absent = window.__wdCounterReceipt === undefined;
       history.replaceState(null, "", "?perfProbe=1");
@@ -110,6 +104,5 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
       return imeOwnership();
     });
     expect(ime).toEqual({inputs:["a","abc"],switched:"new editor",inactive:true,closed:true});
-    expect(errors).toEqual([]);
-  } finally { await browser.close(); server.stop(true); }
+  });
 }, 30_000);

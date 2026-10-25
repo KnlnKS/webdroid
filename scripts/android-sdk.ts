@@ -1,6 +1,6 @@
 import { existsSync, readdirSync } from "node:fs";
 
-export const androidSdkRoot = (): string => process.env.ANDROID_SDK_ROOT ?? process.env.ANDROID_HOME ??
+const androidSdkRoot = (): string => process.env.ANDROID_SDK_ROOT ?? process.env.ANDROID_HOME ??
   [`${process.env.HOME}/Library/Android/sdk`, "/opt/homebrew/share/android-commandlinetools"].find(existsSync) ?? `${process.env.HOME}/Library/Android/sdk`;
 
 export function androidPlatform(api: number): string {

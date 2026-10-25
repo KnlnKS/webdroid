@@ -62,7 +62,7 @@ pnpm ts scripts/perfsum.ts tests/e2e/actual <baseline.json>
   repeats each scenario with the code a first launch persisted. `pnpm conform <suite>`
   compares a conformance suite with its baseline in `tests/conformance/`. `pnpm gen-framework` (reference AVD booted) refreshes the
   platform class path, framework-res, ICU/tz data and the device overlays' values.
-- Smoke-compile affected APKs (`smoke <apk>` is the Wasm sweep; `wasm all` sweeps FitNotes); require no unexplained failures or
+- Smoke-compile affected APKs (`wasm sweep <apk>`; `wasm all` sweeps FitNotes); require no unexplained failures or
   explicitly report a reproduced baseline failure. Use `fwtest [prefix ...]` for real framework delegate coverage.
 - Inspect per-step `run.json`: `newMissing`, `newErrors`, `nativeRequired`, layout/draw errors,
   completed rendering and performance. Empty telemetry proves only observed-path coverage.

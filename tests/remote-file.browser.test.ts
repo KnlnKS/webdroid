@@ -1,15 +1,8 @@
 import { expect, test } from "vite-plus/test";
-import { chromium } from "playwright";
-import { serveModules } from "./browser.ts";
+import { withPage } from "./browser.ts";
 
 test("lazy archive reads cross a Worker without sharing buffers and fail on process teardown", async () => {
-  const server = await serveModules(["src/shell/remote-file.ts", "tests/fixtures/browser/process-bootstrap.ts", "tests/fixtures/browser/process-worker-fixture.ts"]);
-  const browser = await chromium.launch({ headless: true });
-  try {
-    const page = await browser.newPage();
-    const errors: string[] = [];
-    page.on("pageerror", error => errors.push(error.message));
-    await page.goto(server.url.href + "?testClock=controlled");
+  await withPage(["src/shell/remote-file.ts", "tests/fixtures/browser/process-bootstrap.ts", "tests/fixtures/browser/process-worker-fixture.ts"], async (page) => {
     const result = await page.evaluate(async () => {
       const { serveFile } = await import(location.origin + "/remote-file.js") as typeof import("../src/shell/remote-file.ts");
       const source = Uint8Array.of(10, 11, 12, 13);
@@ -47,7 +40,6 @@ test("lazy archive reads cross a Worker without sharing buffers and fail on proc
         return { ...await reply, source: Array.from(source), requests };
       } finally { worker.terminate(); URL.revokeObjectURL(url); served.close(); }
     });
-    expect(errors).toEqual([]);
     expect(result).toEqual({ size: 4, bytes: [[10, 11], [12, 13]], readAgain: [10],
       failure: ["RangeError", "archive unavailable"], closed: "Archive source closed", later: "Archive source closed",
       source: [10, 11, 12, 13], requests: [0, 2, 0, 99, 100] });
@@ -63,6 +55,5 @@ test("lazy archive reads cross a Worker without sharing buffers and fail on proc
     });
     expect(clock).toEqual({crash:{expected:false,reason:4,error:true,fatal:{exceptionClassName:"fixture.FatalException",exceptionMessage:"fatal fixture",throwFileName:"Fixture.java",throwLineNumber:17,stackTrace:"fixture.FatalException: fatal fixture\n at fixture.run(Fixture.java:17)"},copied:true},terminals:[{expected:true,reason:1,status:0,error:false,copied:true},{expected:false,reason:1,status:7,error:true,copied:true},{expected:true,reason:10,status:9,error:false,copied:true}],display:true,exit:{pid:8201,uid:15000,process:"test.clock.worker",pkg:"test.clock.worker",reason:4,status:0,dialog:true,description:"crash"}, controlled: true, archive: [31], origin: true, wall: true, uptime: true, identity: [8201,15000,"test.clock.worker"], commands: {cookies:false}, ticks: ["first", "nested"],
       advanced: 2, pendingBeforeDeath: 2, pendingAfterDeath: 1, brokerTimer: 1, pendingAfterAdvance: 0 });
-    expect(errors).toEqual([]);
-  } finally { await browser.close(); server.stop(true); }
+  }, { query: "?testClock=controlled" });
 }, 30_000);

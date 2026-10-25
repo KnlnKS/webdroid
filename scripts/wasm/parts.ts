@@ -1,8 +1,9 @@
 // The Wasm backend's suites (run.ts lists them) and the node processes each runs as. They need a JDK (../java.ts finds one) and the Android SDK, whose
 // d8 dexes every fixture.
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { AOT_ROOT, type AotManifest } from "../aot-key.ts";
+import { aotManifest } from "../aot-serve.ts";
 import { nodeCommand, run, type Ran } from "../node.ts";
 
 /** a test passes or fails, a tool builds, times or prints. A suite runs as the processes `parts` names (its script with its arguments by default). A
@@ -22,7 +23,7 @@ export const SUITES: Record<string, Suite> = {
   threads: { all: true, doc: "threads, monitors, parking, class initialization waits and natives that wait, on JSPI strands (Java cases against the JDK)" },
   nested: { all: true, doc: "natives that enter Java, a thousand times in one entry (the engine's stacks)" },
   "conform-quick": { all: true, jobs: true, doc: "conform quick: a few classes of each kind", parts: () => [["conform", ["quick"]]] },
-  sweep: { all: true, jobs: true, doc: "every method of the boot jars and FitNotes compiled alone, failures by cause (`pnpm smoke <apk>` sweeps others)" },
+  sweep: { all: true, jobs: true, doc: "every method of the boot jars and FitNotes compiled alone, failures by cause (`pnpm wasm sweep <apk>` sweeps others)" },
   aottest: { all: true, aot: "need", doc: "precompiled platform code stays sound as classes arrive" },
   persist: { all: true, aot: "need", doc: "the compile worker (second-tier units made elsewhere, adopted while the numbering holds), the app build attached to the platform build and the bounded store for it" },
   conform: { doc: "the scripts/conform suites against their baselines: conform <suite|quick> [class] [--update]" },
@@ -52,13 +53,13 @@ export const allParts = (): Part[] => Object.keys(SUITES).filter((n) => SUITES[n
 export const label = (p: Part): string => [p.script, ...p.args, p.aot ? "(aot)" : ""].join(" ").trim();
 
 let built: Promise<Ran & { dir: string }> | undefined;
-/** the platform build in `dir`, or else a small one of four jars made once per process, its output shown when `show` */
+/** the platform build in `dir`, or else the one the server offers, made first (`pnpm aot`, its output shown when `show`) when these sources have none */
 export function platformBuild(dir: string | undefined, show = false): Promise<Ran & { dir: string }> {
   if (dir) return Promise.resolve({ status: 0, stdout: "", stderr: "", dir });
   return built ??= (async () => {
-    const dir = mkdtempSync(join(tmpdir(), "wasm-aot-"));
-    process.on("exit", () => rmSync(dir, { recursive: true, force: true }));
-    return { ...await exec("aot-build", ["--out", dir, "--jars", "4"], process.env, show), dir };
+    const made = aotManifest().ok ? { status: 0, stdout: "", stderr: "" } : await exec("aot", [], process.env, show);
+    const { key } = made.status ? { key: "" } : JSON.parse(readFileSync(join(AOT_ROOT, "current.json"), "utf8")) as AotManifest;
+    return { ...made, dir: join(AOT_ROOT, key) };
   })();
 }
 

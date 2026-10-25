@@ -15,7 +15,6 @@
     "check": "scripts/node scripts/check.ts",
     "ts": "scripts/node",
     "inspect": "scripts/node scripts/inspect.ts",
-    "smoke": "scripts/node scripts/wasm/run.ts sweep",
     "audit": "scripts/node scripts/audit.ts",
     "opscan": "scripts/node scripts/opscan.ts",
     "corpus": "scripts/node scripts/corpus.ts",

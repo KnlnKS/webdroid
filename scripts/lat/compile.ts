@@ -1,16 +1,5 @@
+// What a gated tap compiled: the counter deltas of each realm between pointerup and the window's close.
 import { COMPILE_COUNTERS } from "../../src/shell/perf-receipts.ts";
-
-export type Region = [number, number, number, number];
-export type Selector = { text?: string; desc?: string; resId?: string; within?: Region };
-/** `ms`: how long after the action (a launch: after its first presentation) the state may take to appear, 8 s unless given */
-export type Expectation = { nodes: Selector[]; absent?: Selector[]; pixels: { region: Region; changed?: boolean; nonUniform?: boolean; rgb?: [number, number, number][] }[]; ms?: number };
-
-export function matchesState(nodes: { text: string; desc: string; resId: string; bounds: Region }[], expectation: Expectation) {
-  const normal = (s: string) => s.replace(/\s+/g, " ").trim();
-  const matches = (s: Selector) => nodes.some(n => (!s.text || normal(n.text) === normal(s.text)) && (!s.desc || normal(n.desc) === normal(s.desc)) &&
-    (!s.resId || n.resId === s.resId) && (!s.within || n.bounds[0] >= s.within[0] && n.bounds[1] >= s.within[1] && n.bounds[2] <= s.within[2] && n.bounds[3] <= s.within[3]));
-  return expectation.nodes.length > 0 && expectation.nodes.every(matches) && !(expectation.absent ?? []).some(matches);
-}
 
 /** why a counter receipt (src/shell/perf-receipts.ts) does not certify its counters, or null */
 function receiptError(r: any): string | null {

@@ -1,6 +1,6 @@
 // Precompiled platform code (aot.ts) stays sound when classes arrive after the build: it relies on no class-hierarchy decision, so a dex that
 // overrides a method it calls takes effect through dispatch, whether the dex is added later or present from the start, and the code stays installed.
-// Needs javac, d8 and a build of the platform in WEBDROID_AOT (aot-build.ts), which `pnpm wasm aottest` makes when it is unset.
+// Needs javac, d8 and a build of the platform in WEBDROID_AOT (aot-build.ts), which is the current one (`pnpm aot`, made first when stale) when it is unset.
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { aotFile, header, VERSION, type AotStore, type CHeader, type DHeader } from "../../src/wasm/link/aot.ts";

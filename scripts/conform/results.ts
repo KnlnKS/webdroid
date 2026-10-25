@@ -12,7 +12,7 @@ const nearNow = (calendar: string) => [-864e5, 0, 864e5].map((offset) => {
   return `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`;
 });
 /** a parameter taken from the clock (Instant.now(), a chronology's dateNow()) would rename its test on every run */
-export const clockFree = (name: string) => name
+const clockFree = (name: string) => name
   .replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/g, (t) => Math.abs(Date.parse(t) - Date.now()) < 864e5 ? "<now>" : t)
   .replace(/\b(Japanese|Minguo|ThaiBuddhist|Hijrah-umalqura) \S+ (\d+-\d\d-\d\d)\b/g, (date, chronology: string, ymd: string) =>
     nearNow(CALENDARS[chronology]).includes(ymd) ? `${chronology} <now>` : date);

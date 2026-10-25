@@ -10,7 +10,7 @@ import { WEB_FRAME, WEB_FRAME_SANDBOX, WEB_PROXY_WORKER } from "../src/shell/web
 import { holdFrames } from "../src/shell/webpage/holdframes.ts";
 import { webViewBrands } from "../src/shell/webpage/clienthints.ts";
 import { bundle } from "../scripts/bundle.ts";
-import { serveModules } from "./browser.ts";
+import { serveModules, withPage } from "./browser.ts";
 import { serve } from "../scripts/serve.ts";
 
 let browser: Browser;
@@ -847,11 +847,7 @@ test("Worker WebStorage commands retain canonical package origins and ordered de
 });
 
 test("dropped WebView frame owners release their surface without destroy", async () => {
-  const server = await serveModules(["src/android/webframes.ts","src/android/webkit.ts","src/android/webfunctor.ts"]);
-  const gcBrowser = await chromium.launch({headless:true,args:["--js-flags=--expose-gc"]});
-  const page = await gcBrowser.newPage();
-  try {
-    await page.goto(`http://localhost:${server.port}/`);
+  await withPage(["src/android/webframes.ts","src/android/webkit.ts","src/android/webfunctor.ts"], async (page) => {
     await page.evaluate(async () => {
       const frames = await import(location.origin+"/webframes.js") as typeof import("../src/android/webframes.ts");
       (globalThis as any).frames = frames;
@@ -874,5 +870,5 @@ test("dropped WebView frame owners release their surface without destroy", async
     }
     expect(released).toBe(true);
     expect(await page.evaluate(()=>(globalThis as any).frames.webViewInfo())).toEqual([]);
-  } finally {await gcBrowser.close();await server.stop(true);}
+  }, { host: "localhost", jsFlags: "--expose-gc" });
 });
