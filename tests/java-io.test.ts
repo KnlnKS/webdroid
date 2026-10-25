@@ -13,7 +13,7 @@ import { E } from "../src/native/abi.ts";
 import { Cpu, setA64 } from "../src/native/cpu.ts";
 import { defineHost, lookupHost } from "../src/native/host.ts";
 import { kernelCalls } from "../src/native/calls.testkit.ts";
-import { libcInit } from "../src/native/libc.ts";
+import { libcInit } from "../src/native/libc32/libc.ts";
 import { mem, guestAt } from "../src/native/mem.ts";
 import { jarray } from "../src/jvm/abi.ts";
 import { FS_SYSCALLS, localOpen } from "../src/native/fs.ts";

@@ -144,7 +144,3 @@ export const readUcred = (data: Uint8Array): Ucred | null => {
   const v = new DataView(data.buffer, data.byteOffset, 12);
   return { pid: v.getInt32(0, true), uid: v.getInt32(4, true), gid: v.getInt32(8, true) };
 };
-/** struct timeval: tv_sec and tv_usec, longs */
-export const TIMEVAL_SIZE = (): number => 2 * PTR;
-export const readTimeval = (p: number): { sec: number; usec: number } => ({ sec: ldLong(p), usec: ldLong(p + PTR) });
-export function writeTimeval(p: number, ms: number): void { stLong(p, Math.floor(ms / 1000)); stLong(p + PTR, ms % 1000 * 1000); }

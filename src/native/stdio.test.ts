@@ -3,7 +3,7 @@ import { mainThread } from "../jvm/natives/jentry.ts";
 import { vfs } from "../shell/vfs.ts";
 import { Cpu, setA64 } from "./cpu.ts";
 import { lookupHost, stp } from "./host.ts";
-import { libcInit } from "./libc.ts";
+import { libcInit } from "./libc32/libc.ts";
 import { mem } from "./mem.ts";
 import { fdFile, localOpen } from "./fs.ts";
 import { closeFd, readRest, seekFd, dupFd, readFd, openFd } from "./fd.ts";

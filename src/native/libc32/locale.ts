@@ -2,9 +2,9 @@
 // token, uselocale keeps one per thread, and every *_l variant is its base function with the
 // trailing locale_t unread.
 
-import { wrote, mem } from "./mem.ts";
-import { hostLib, type HostFn, retF, retD, stp, ldp, ARG0, ptr, vaList } from "./host.ts";
-import { utf8 as codec } from "../jvm/abi.ts";
+import { wrote, mem } from "../mem.ts";
+import { type HostFn, retF, retD, stp, ldp, ARG0, ptr, vaList } from "../host.ts";
+import { utf8 as codec } from "../../jvm/abi.ts";
 import { format } from "./printf.ts";
 
 export const mbLen = (b0: number) => b0 < 0x80 ? 1 : b0 >= 0xf0 ? 4 : b0 >= 0xe0 ? 3 : b0 >= 0xc0 ? 2 : 1;
@@ -38,7 +38,7 @@ function wparse(s: string, base: number): [bigint, number] {
   return [m[1] === "-" ? -v : v, i + n];
 }
 
-export function localeInit(): void {
+export function localeLibc(): Record<string, HostFn> {
   const cLocale = mem.hostAlloc(16);          // an opaque locale_t
   const current = new Map<number, bigint>();  // tid → opaque locale_t, including LC_GLOBAL_LOCALE
   const wint = (bits: 32 | 64, unsigned: boolean): HostFn => (_c, a) => {
@@ -95,7 +95,7 @@ export function localeInit(): void {
     wcsnrtombs: (_c, a) => wcsToMbs(a.p(), a.p(), a.u(), a.u()),
   };
   for (const k of ["alnum", "xdigit", "print", "blank", "cntrl", "punct", "graph"]) M["isw" + k] = M["isw" + k + "_l"] = (_c, a) => wtest(a.i(), WCTEST[k]);
-  hostLib("libc.so", M);
+  return M;
 }
 function wtest(c: number, re: RegExp): number { return c >= 0 && c <= 0x10ffff && re.test(String.fromCodePoint(c)) ? 1 : 0; }
 /** mbs(n)rtowcs: convert up to `nms` bytes of *src into `len` wide chars; *src advances (NULL at the end) */

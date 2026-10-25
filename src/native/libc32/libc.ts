@@ -1,30 +1,32 @@
-// bionic libc surface: strings, memory, time, ctype, math, process stubs. An ARM32 process's
-// libc (libcInit), which also answers the kernel's calls as bionic's wrappers do; a 64-bit process
-// runs bionic itself (bionic.ts). stdio is in stdio.ts, printf/scanf in printf.ts.
+// An ARM32 process's libc (libcInit): strings, memory, time and ctype here, the rest in this
+// directory's modules (stdio, printf, pthread, signal, proc, net, locale, libm, zlib), composed into
+// one libc.so that also answers the kernel's calls as bionic's wrappers do, and each thread's libc
+// data through the Cpu's thread hooks. A 64-bit process runs bionic itself (bionic.ts).
 
-import { mem } from "./mem.ts";
-import { hostLib, hostData, NORET, ARG0, SERVED, ptr, vaList, type HostFn, retF, retD, PTR, stp, ldp, cstr } from "./host.ts";
-import { E, strerror, PAGE_SIZE } from "./abi.ts";
-import { utf8 as codec } from "../jvm/abi.ts";
-import { invalidateRange, type Cpu } from "./cpu.ts";
-import { exitGroup } from "./crash.ts";
-import { abortThread } from "./signals.ts";
+import { mem } from "../mem.ts";
+import { hostLib, hostData, markKernelEntries, NORET, ARG0, SERVED, ptr, vaList, type HostFn, retF, retD, PTR, stp, ldp, cstr } from "../host.ts";
+import { E, strerror, PAGE_SIZE } from "../abi.ts";
+import { utf8 as codec } from "../../jvm/abi.ts";
+import { invalidateRange, setThreadHooks, type Cpu } from "../cpu.ts";
+import { exitGroup } from "../crash.ts";
+import { abortThread } from "../signals.ts";
 import { format, scan, scanSink, snprintfInto } from "./printf.ts";
-import { stdioInit } from "./stdio.ts";
-import { pthreadInit } from "./pthread.ts";
-import { KERNEL_SYSCALLS, syscallEntry } from "./syscall.ts";
-import { asWrappers, fail, fillRandom, logLine, wrapped } from "./kernel.ts";
-import { mmapWith } from "./vm.ts";
-import { zlibInit } from "./zlib.ts";
-import { libmInit } from "./libm.ts";
-import { localeInit, mbLen, wlen, wstr, WCTEST, WCTYPES } from "./locale.ts";
-import { auxv, procInit, niceOf, setNice, strncpy, strncat } from "./proc.ts";
-import { netInit } from "./socket/syscalls.ts";
-import { device } from "../shell/config.ts";
-import { sysconf } from "../shell/procfs.ts";
-import { wallMillis } from "../guest-clock.ts";
-import { processEnv } from "../shell/environment.ts";
-import { timersInit } from "./timers.ts";
+import { stdioLibc } from "./stdio.ts";
+import { PTHREAD_LIBC, bindThread, endThread } from "./pthread.ts";
+import { KERNEL_SYSCALLS, rawSyscall } from "../syscall.ts";
+import { asWrappers, fail, fillRandom, kernelResult, logLine, wrapped } from "../kernel.ts";
+import { mmapWith } from "../vm.ts";
+import { zlibLibc } from "./zlib.ts";
+import { libmLibc } from "./libm.ts";
+import { localeLibc, mbLen, wlen, wstr, WCTEST, WCTYPES } from "./locale.ts";
+import { auxv, niceOf, setNice } from "../proc.ts";
+import { procLibc, strncpy, strncat } from "./proc.ts";
+import { SIGNAL_LIBC } from "./signal.ts";
+import { netLibc } from "./net.ts";
+import { device } from "../../shell/config.ts";
+import { sysconf } from "../../shell/procfs.ts";
+import { wallMillis } from "../../guest-clock.ts";
+import { processEnv } from "../../shell/environment.ts";
 /** the C locale's month and weekday names (strftime, asctime) */
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -174,9 +176,22 @@ const next48 = (): void => {
   r48lo = t % 0x1000000;
 };
 
+/** bionic's functions that hand their pointers straight to the kernel, so a bad one fails with
+ *  EFAULT: its syscall stubs and the functions that only tail-call them (from the reference
+ *  libc.so's code), and the few whose C body passes the pointer through untouched (open, creat,
+ *  chmod, readlink, statfs, connect). Only those with a host body are listed. */
+const WRAPPERS = ("access bind capget chdir chmod chown connect creat epoll_ctl epoll_pwait epoll_wait faccessat fchmodat fchown " +
+  "fdatasync flock fstat fstat64 fstatat fstatat64 fstatfs fsync ftruncate ftruncate64 futimens getpeername getrlimit getsockname " +
+  "getsockopt inotify_add_watch inotify_rm_watch link listen lstat lstat64 madvise mkdir mkdirat mkfifo mlock mmap mmap64 mprotect " +
+  "mremap msync munlock munmap nanosleep open openat prctl pread pread64 prlimit64 pwrite pwrite64 read readlink readlinkat readv " +
+  "recv recvfrom rename renameat rmdir sched_getparam sched_setaffinity sched_setscheduler sendfile setgroups setrlimit setsockopt " +
+  "stat stat64 statfs symlink sysinfo timerfd_gettime timerfd_settime times truncate uname unlink unlinkat utimensat write writev").split(" ");
+
 /** an ARM32 process's libc: libc.so, liblog.so, libm.so and libz.so, which expose the kernel's
- *  calls as well */
+ *  calls as well, and each thread's libc data */
 export function libcInit(): void {
+  markKernelEntries([...Object.keys(KERNEL_SYSCALLS), ...WRAPPERS, "syscall"]);
+  setThreadHooks({ start: bindThread, end: endThread });
   // _ctype_ (257 bytes, index c+1)
   const ct = mem.hostAlloc(384);
   for (let c = 0; c < 256; c++) mem.u8[ct + 1 + c] = c < 128 ? ctypeBits(c) : 0;
@@ -265,7 +280,8 @@ export function libcInit(): void {
     localeconv: () => localeConv,
     mmap64: wrapped(mmapWith((a) => Number(a.l()))),
     // the raw syscalls a runtime issues past libc: futex is the one that must block
-    syscall: syscallEntry,
+    // syscall(2), -1 with errno set on failure
+    syscall: (cpu, a) => kernelResult(cpu, rawSyscall(cpu, a.i(), a)),
     cacheflush: (_c, a) => { const s = a.p(), e = a.p(); invalidateRange(s, e - s, "cacheflush"); return 0; },
     __aeabi_read_tp: (cpu) => cpu.tlsBase,
 
@@ -458,21 +474,16 @@ export function libcInit(): void {
     const d = a.p(), n = a.u(), value = a.i();
     mem.memset(d, value, n);
   };
-  hostLib("libc.so", { ...asWrappers(KERNEL_SYSCALLS), ...M });
+  const libm = libmLibc();
+  hostLib("libc.so", { ...asWrappers(KERNEL_SYSCALLS), ...M, ...stdioLibc(), ...PTHREAD_LIBC, ...libm, ...localeLibc(), ...SIGNAL_LIBC, ...procLibc(), ...netLibc() });
+  hostLib("libm.so", libm);
+  hostLib("libz.so", zlibLibc());
   hostLib("liblog.so", { __android_log_write: M.__android_log_write, __android_log_print: M.__android_log_print, __android_log_vprint: M.__android_log_vprint, __android_log_assert: M.__android_log_assert });
   const tmBuf = mem.hostAlloc(TM.size), ascBuf = mem.hostAlloc(26);
   const inetBuf = mem.hostAlloc(20);
   const cLocale = mem.hostStr("C");
   const localeConv = mem.hostAlloc(16 * PTR);
   stp(localeConv, mem.hostStr(".")); stp(localeConv + PTR, mem.hostStr("")); stp(localeConv + 2 * PTR, mem.hostStr(""));
-  stdioInit();
-  pthreadInit();
-  timersInit();
-  zlibInit();
-  libmInit();
-  localeInit();
-  procInit();
-  netInit();
 }
 
 function strstrAt(h: number, n: number, ci: boolean): number {

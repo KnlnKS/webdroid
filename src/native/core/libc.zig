@@ -61,7 +61,7 @@ pub const Fn = enum(u8) {
     clock_gettime,
 };
 pub const Result = enum(u32) { done, fault, host };
-/// The rwlock words src/native/pthread.ts keeps: state (reader count or RW_WRITER), writer tid, waiters.
+/// The rwlock words src/native/libc32/pthread.ts keeps: state (reader count or RW_WRITER), writer tid, waiters.
 /// Anything that must wait, or wake a waiter, goes to the host.
 const RW_WRITER: u32 = 0x8000_0000;
 const RW_TID = 4;

@@ -2,7 +2,7 @@ import { expect, test } from "vite-plus/test";
 import { JThread } from "../jvm/natives/jentry.ts";
 import { Cpu, setA64 } from "./cpu.ts";
 import { defineHost, lookupHost } from "./host.ts";
-import { libcInit } from "./libc.ts";
+import { libcInit } from "./libc32/libc.ts";
 import { kernelInit, rawSyscall } from "./syscall.ts";
 import { mem } from "./mem.ts";
 import { E } from "./abi.ts";

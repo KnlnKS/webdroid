@@ -6,7 +6,7 @@ import { mem } from "../src/native/mem.ts";
 import { mainThread, curThread } from "../src/jvm/natives/jentry.ts";
 import { RET_SENTINEL, PAGE_SIZE, STACK_SIZE } from "../src/native/abi.ts";
 import { lookupHost, hostFn, type ArgReader, hostLib, vaList } from "../src/native/host.ts";
-import { libcInit } from "../src/native/libc.ts";
+import { libcInit } from "../src/native/libc32/libc.ts";
 import { kernelInit } from "../src/native/syscall.ts";
 import { eglInit } from "../src/native/egl.ts";
 import { EglContext } from "../src/android/egl.ts";

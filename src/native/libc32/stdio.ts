@@ -2,20 +2,20 @@
 // memory (bionic's __sFILE) so the getc/putc macros and __srget refills work; then dirent
 // streams, scandir, fts and the file calls only the libc wrappers have.
 
-import { mem, wrote, anchor } from "./mem.ts";
-import { hostLib, hostData, vaList, type HostFn, PTR, stp, ldp, ldLong, stLong, ARG0, ptr, guestSort, complete } from "./host.ts";
-import { E, AT_FDCWD, O_ACCMODE, O_APPEND, O_CLOEXEC, O_CREAT, O_DIRECTORY, O_EXCL, O_TRUNC, S_IFDIR, S_IFMT, S_IFREG } from "./abi.ts";
-import { utf8 as codec } from "../jvm/abi.ts";
-import type { Cpu } from "./cpu.ts";
-import { asWrappers, fail, kernelResult, logLine, readTs, DIRENT64, fillStat, inoOf, KLAYOUT } from "./kernel.ts";
+import { mem, wrote, anchor } from "../mem.ts";
+import { hostData, vaList, type HostFn, PTR, stp, ldp, ldLong, stLong, ARG0, ptr, guestSort, complete } from "../host.ts";
+import { E, AT_FDCWD, O_ACCMODE, O_APPEND, O_CLOEXEC, O_CREAT, O_DIRECTORY, O_EXCL, O_TRUNC, S_IFDIR, S_IFMT, S_IFREG } from "../abi.ts";
+import { utf8 as codec } from "../../jvm/abi.ts";
+import type { Cpu } from "../cpu.ts";
+import { asWrappers, fail, kernelResult, logLine, readTs, DIRENT64, fillStat, inoOf, KLAYOUT } from "../kernel.ts";
 import { format, scan, scanSink } from "./printf.ts";
-import { vfs, storageEstimate } from "../shell/vfs.ts";
-import { filePaths } from "../shell/file-path.ts";
+import { vfs, storageEstimate } from "../../shell/vfs.ts";
+import { filePaths } from "../../shell/file-path.ts";
 import { FS_SYSCALLS, fallocate, fdWrite, statProcess, faccessatPath, renameProcess, mkdirProcess, removeProcess, mknodProcess, changeProcess,
-  modifiedTime, makePipe, getdents64 } from "./fs.ts";
-import { type FileStat, openFd, closeFd, dup2Fd, seekFd, readFd, preadFd, pwriteFd, truncateFd, allocateFd, changeFdAttributes } from "./fd.ts";
-import { processOpenFd } from "./process-fd.ts";
-import { POLL_SYSCALLS, epollCreate } from "./poll.ts";
+  modifiedTime, makePipe, getdents64 } from "../fs.ts";
+import { type FileStat, openFd, closeFd, dup2Fd, seekFd, readFd, preadFd, pwriteFd, truncateFd, allocateFd, changeFdAttributes } from "../fd.ts";
+import { processOpenFd } from "../process-fd.ts";
+import { POLL_SYSCALLS, epollCreate } from "../poll.ts";
 const utf8 = (s: string) => codec.enc.encode(s);
 
 /** bionic's ARM32 __sFILE: the fields guest macros read */
@@ -211,7 +211,8 @@ function closeFts(handle: number): number {
   return 0;
 }
 
-export function stdioInit(): void {
+/** the ARM32 libc's stdio and file functions, with the streams they name */
+export function stdioLibc(): Record<string, HostFn> {
   // __sF[3]: stdin/stdout/stderr FILE structs, contiguous
   const sF = mem.hostAlloc(FILE.size * 3);
   mem.memset(sF, 0, FILE.size * 3);
@@ -455,5 +456,5 @@ export function stdioInit(): void {
   for (const [alias, name] of [["fseeko", "fseek"], ["ftello", "ftell"], ["getc", "fgetc"], ["__srget", "fgetc"], ["putc", "fputc"], ["__swbuf", "fputc"]]) M[alias] = M[name];
   scratch = mem.hostAlloc(16);
   const isStd = (fp: number) => fp >= sF && fp < sF + 3 * FILE.size;
-  hostLib("libc.so", { ...asWrappers(K), ...M });
+  return { ...asWrappers(K), ...M };
 }

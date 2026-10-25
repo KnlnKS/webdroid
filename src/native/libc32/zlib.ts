@@ -6,9 +6,9 @@ import * as zInflate from "pako/lib/zlib/inflate.js";
 import * as zDeflate from "pako/lib/zlib/deflate.js";
 import ZStream from "pako/lib/zlib/zstream.js";
 import MESSAGES from "pako/lib/zlib/messages.js";
-import { mem, AddrMap, wrote } from "./mem.ts";
-import { hostLib, type HostFn, stp, ldp } from "./host.ts";
-import { crc32, adler32 } from "../zip.ts";
+import { mem, AddrMap, wrote } from "../mem.ts";
+import { type HostFn, stp, ldp } from "../host.ts";
+import { crc32, adler32 } from "../../zip.ts";
 
 // z_stream fields
 const Z = { IN: 0, AVIN: 4, TIN: 8, OUT: 12, AVOUT: 16, TOUT: 20, MSG: 24, STATE: 28, DATA_TYPE: 44, ADLER: 48 };
@@ -75,7 +75,7 @@ function setDictionary(strm: number, s: ZStream | undefined, dictionary: number,
   return code;
 }
 
-export function zlibInit(): void {
+export function zlibLibc(): Record<string, HostFn> {
   messages.clear();
   const M: Record<string, HostFn> = {
     deflateInit_: (_c, a) => { const strm = a.p(), level = a.i(); a.str(); a.i(); return open(strm, deflaters, (s) => zDeflate.deflateInit2(s, level, 8, 15, 8, 0)); },
@@ -111,6 +111,6 @@ export function zlibInit(): void {
       return Z_OK;
     },
   };
-  hostLib("libz.so", M);
+  return M;
   const zver = mem.hostStr("1.2.8");
 }

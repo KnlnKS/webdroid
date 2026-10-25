@@ -1,15 +1,16 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { expect, test } from "vite-plus/test";
-import { JThread } from "../jvm/natives/jentry.ts";
-import { Cpu, cpus, setA64 } from "./cpu.ts";
-import { core, CORE_LIBC } from "./core.ts";
-import { Args, hostFn, lookupHost } from "./host.ts";
-import { mem } from "./mem.ts";
-import { E } from "./abi.ts";
-import { pthreadInit, startThread, threadAttr } from "./pthread.ts";
+import { JThread } from "../../jvm/natives/jentry.ts";
+import { Cpu, cpus, setA64 } from "../cpu.ts";
+import { core, CORE_LIBC } from "../core.ts";
+import { Args, hostFn, lookupHost } from "../host.ts";
+import { mem } from "../mem.ts";
+import { E } from "../abi.ts";
+import { startThread, threadAttr } from "./pthread.ts";
+import { libcInit } from "./libc.ts";
 
 test("pthread attributes and cleanup handlers preserve bionic behavior", async () => {
-  setA64(false); pthreadInit();
+  setA64(false); libcInit();
   const cpu = new Cpu(new JThread(), "pthread-test");
   const attr = mem.malloc(64), entry = mem.malloc(24), value = mem.malloc(4), out = mem.malloc(8);
   const routine = mem.reserve(4096, 4096);
@@ -39,7 +40,7 @@ test("pthread attributes and cleanup handlers preserve bionic behavior", async (
 });
 
 test("joinable pthread handles remain distinct after their routines exit", async () => {
-  setA64(false); pthreadInit();
+  setA64(false); libcInit();
   const parent = new Cpu(new JThread(), "join-test");
   const routine = mem.reserve(4096, 4096), result = mem.malloc(8);
   mem.u32.set([0xe3a00007, 0xe12fff1e], routine >>> 2);
@@ -59,7 +60,7 @@ test("joinable pthread handles remain distinct after their routines exit", async
 });
 
 test("rwlock words are shared by the core's uncontended calls and the host's waiters", async () => {
-  setA64(false); pthreadInit();
+  setA64(false); libcInit();
   const lock = mem.malloc(64), reader = new Cpu(new JThread(), "reader"), writer = new Cpu(new JThread(), "writer");
   mem.memset(lock, 0, 64);
   const served = (cpu: Cpu, name: string) => { cpu.w[0] = lock; cpu.w[1] = 0; return core.libc_call(cpu.base, CORE_LIBC[name]); };
@@ -87,7 +88,7 @@ test("rwlock words are shared by the core's uncontended calls and the host's wai
 });
 
 test("timed mutex and rwlock waits end at their deadlines", async () => {
-  setA64(false); pthreadInit();
+  setA64(false); libcInit();
   const owner = new Cpu(new JThread(), "owner"), waiter = new Cpu(new JThread(), "waiter");
   const mutex = mem.calloc(1, 4), rwlock = mem.calloc(1, 64), epoch = mem.calloc(1, 8);
   const call = (cpu: Cpu, name: string, ...args: number[]) => cpu.call(lookupHost(name, "libc.so")!, args);

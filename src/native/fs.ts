@@ -344,7 +344,7 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
   mknodat: (_c, a) => { const path = atPath(a.i(), a.str()); return typeof path === "string" ? mknodProcess(path, a.i()) : path; },
   ftruncate: (_c, a) => truncateFd(a.i(), offArg(a)),
   fallocate: (_c, a) => { const fd = a.i(), mode = a.i(), off = Number(a.l()); return fallocate(fd, mode, off, Number(a.l())); },
-  // the raw call has no flags, libc's (stdio.ts) has
+  // the raw call has no flags, libc's (libc32/stdio.ts) has
   faccessat: (_c, a) => faccessatPath(a.i(), a.str(), a.i(), 0),
   getdents64: (_c, a) => getdents64(a.i(), a.p(), a.u()),
   truncate: (_c, a) => {

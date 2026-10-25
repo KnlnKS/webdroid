@@ -1,11 +1,11 @@
 import { expect, test } from "vite-plus/test";
-import { JThread } from "../jvm/natives/jentry.ts";
-import { Cpu, setA64 } from "./cpu.ts";
-import { lookupHost } from "./host.ts";
-import { libmInit } from "./libm.ts";
+import { JThread } from "../../jvm/natives/jentry.ts";
+import { Cpu, setA64 } from "../cpu.ts";
+import { lookupHost } from "../host.ts";
+import { libcInit } from "./libc.ts";
 
 test("nextafter crosses zero, signed zero and infinity at double precision", async () => {
-  setA64(false); libmInit();
+  setA64(false); libcInit();
   const cpu = new Cpu(new JThread(), "nextafter-test"), fn = lookupHost("nextafter", "libm.so")!;
   const next = async (x: number, y: number) => { await cpu.call(fn, [{ d: x }, { d: y }]); return cpu.retD(); };
   try {
