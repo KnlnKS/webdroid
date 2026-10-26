@@ -1,12 +1,12 @@
 // C structs in guest memory, laid out by the C rules for the process's pointer width: a uint64_t is
 // 8-aligned under both AAPCS and AAPCS64, a pointer or size_t is the pointer width, and a struct aligns
-// to its widest member.
+// to its widest member, a nested struct's included.
 
 import { mem } from "./mem.ts";
 import { PTR, ldp, stp } from "./host.ts";
 
 type Scalar = "u32" | "i32" | "f32" | "u64" | "ptr" | "u8";
-interface Field { name: string; type: Scalar; count: number; off: number }
+interface Field { name: string; type: Scalar | "struct"; count: number; off: number }
 const width = (t: Scalar) => t === "u8" ? 1 : t === "u64" ? 8 : t === "ptr" ? PTR : 4;
 /** a u64 read as a number: handles and sizes stay below 2^53, and all ones (VK_WHOLE_SIZE) reads as 2^64 */
 export const WHOLE = 2 ** 64;
@@ -17,37 +17,44 @@ export function stU64(a: number, v: number): void { mem.st32(a, v % 2 ** 32 | 0)
 type Name<F extends string> = F extends `${infer A}\n${infer B}` ? Name<A> | Name<B> : F extends `${infer N}:${string}` ? N : never;
 type Fields<S extends string, Acc extends string = never> = S extends `${infer F} ${infer R}` ? Fields<R, Acc | Name<F>> : Acc | Name<S>;
 
-export interface Struct<K extends string> {
-  size(): number;
+interface Layout { size(): number; align(): number; read(p: number): object; write(p: number, values: never): void }
+type Nested = Record<string, Layout>;
+type Values<K extends string, N extends Nested> = Record<Exclude<K, keyof N>, number> & { [M in keyof N]: ReturnType<N[M]["read"]> };
+type Inputs<K extends string, N extends Nested> = Partial<Record<Exclude<K, keyof N>, number | number[] | string> & { [M in keyof N]: Parameters<N[M]["write"]>[1] }>;
+/** the fields `s.read` gives */
+export type Read<S extends Layout> = ReturnType<S["read"]>;
+
+export interface Struct<K extends string, N extends Nested> extends Layout {
   off(name: K): number;
-  read(p: number): Record<K, number>;
+  read(p: number): Values<K, N>;
   /** an array field's elements */
   array(p: number, name: K): number[];
-  write(p: number, values: Partial<Record<K, number | number[] | string>>): void;
+  write(p: number, values: Inputs<K, N>): void;
 }
-/** `spec` lists `name:type` or `name:type[n]` fields in order; `size` is size_t, a pointer's width, and a
- *  zero-length field aligns what follows as a nested struct of that type would be */
-export function struct<S extends string>(spec: S): Struct<string extends S ? string : Fields<S>> {
+/** `spec` lists `name:type` or `name:type[n]` fields in order; `size` is size_t, a pointer's width, and `struct`
+ *  the struct `nested` holds by the field's name */
+export function struct<S extends string, N extends Nested = Record<never, Layout>>(spec: S, nested?: N): Struct<string extends S ? string : Fields<S>, N> {
   type K = string extends S ? string : Fields<S>;
   const parsed = spec.trim().split(/\s+/).map((f) => {
     const m = /^(\w+):(\w+)(?:\[(\d+)\])?$/.exec(f);
-    if (!m) throw new Error(`bad field ${f}`);
-    return { name: m[1], type: (m[2] === "size" ? "ptr" : m[2]) as Scalar, count: m[3] ? Number(m[3]) : 1 };
+    if (!m || (m[2] === "struct" && !nested?.[m[1]])) throw new Error(`bad field ${f}`);
+    return { name: m[1], type: (m[2] === "size" ? "ptr" : m[2]) as Field["type"], count: m[3] ? Number(m[3]) : 1 };
   });
+  const inner = (name: string) => nested![name];
   // a layout per pointer width, since 32- and 64-bit processes share these modules
-  const layouts = new Map<number, { fields: Map<string, Field>; size: number }>();
+  const layouts = new Map<number, { fields: Map<string, Field>; size: number; align: number }>();
   const layout = () => {
     let l = layouts.get(PTR);
     if (!l) {
       let off = 0, align = 1;
       const fields = new Map<string, Field>();
       for (const f of parsed) {
-        const w = width(f.type);
-        off = (off + w - 1) & -w; align = Math.max(align, w);
+        const w = f.type === "struct" ? inner(f.name).size() : width(f.type), a = f.type === "struct" ? inner(f.name).align() : w;
+        off = (off + a - 1) & -a; align = Math.max(align, a);
         fields.set(f.name, { ...f, off });
         off += w * f.count;
       }
-      layouts.set(PTR, (l = { fields, size: (off + align - 1) & -align }));
+      layouts.set(PTR, (l = { fields, size: (off + align - 1) & -align, align }));
     }
     return l;
   };
@@ -77,24 +84,30 @@ export function struct<S extends string>(spec: S): Struct<string extends S ? str
   };
   return {
     size: () => layout().size,
+    align: () => layout().align,
     off: (name) => field(name).off,
     read(p) {
-      const out = {} as Record<K, number>;
-      for (const f of layout().fields.values()) if (f.count === 1) out[f.name as K] = load(f.type, p + f.off);
-      return out;
+      const out: Record<string, unknown> = {};
+      for (const f of layout().fields.values()) {
+        if (f.type === "struct") out[f.name] = inner(f.name).read(p + f.off);
+        else if (f.count === 1) out[f.name] = load(f.type, p + f.off);
+      }
+      return out as Values<K, N>;
     },
     array(p, name) {
-      const f = field(name), w = width(f.type);
-      return Array.from({ length: f.count }, (_, i) => load(f.type, p + f.off + i * w));
+      const f = field(name), t = f.type as Scalar, w = width(t);
+      return Array.from({ length: f.count }, (_, i) => load(t, p + f.off + i * w));
     },
     write(p, values) {
-      for (const [name, v] of Object.entries(values) as [string, number | number[] | string][]) {
-        const f = field(name), w = width(f.type);
+      for (const [name, v] of Object.entries(values) as [string, unknown][]) {
+        const f = field(name);
+        if (f.type === "struct") { inner(name).write(p + f.off, v as never); continue; }
+        const t = f.type, w = width(t);
         if (typeof v === "string") {
           const bytes = new TextEncoder().encode(v).subarray(0, f.count - 1);
           mem.write(p + f.off, bytes); mem.st8(p + f.off + bytes.length, 0);
-        } else if (Array.isArray(v)) v.forEach((x, i) => store(f.type, p + f.off + i * w, x));
-        else store(f.type, p + f.off, v);
+        } else if (Array.isArray(v)) v.forEach((x: number, i) => store(t, p + f.off + i * w, x));
+        else store(t, p + f.off, v as number);
       }
     },
   };

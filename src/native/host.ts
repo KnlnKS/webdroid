@@ -360,13 +360,13 @@ const servedSlots = new Map<string, number>();
 export const unresolved = new Set<string>();
 export const calledMissing = new Set<string>();
 const stubs = new Map<string, number>();
-export function missingStub(sym: string): number {
+export function missingStub(sym: string, ret = 0): number {
   let a = stubs.get(sym);
   if (a !== undefined) return a;
   unresolved.add(sym);
   a = defineHost("missing:" + sym, () => {
     if (!calledMissing.has(sym)) { calledMissing.add(sym); console.warn("[native missing]", sym); }
-    return 0;
+    return ret;
   });
   stubs.set(sym, a);
   return a;
