@@ -29,6 +29,8 @@ export const useAudioOut = (out: AudioOut): void => { actx = out; };
 export const outputSampleRate = (): number => actx?.sampleRate ?? 44100;
 let audioSession = 0;
 export const newAudioSessionId = (): number => ++audioSession;
+/** the frames of one 10 ms burst of the output: the primary output's period and AAudio's burst */
+export const burstFrames = (rate: number): number => Math.ceil(rate / 100);
 /** the frames AudioFlinger's minimum buffer holds, about 100 ms of output */
 export const minFrames = (rate: number): number => Math.max(1024, Math.ceil(rate / 10));
 /** bytes per sample of ENCODING_PCM_16BIT, _8BIT and _FLOAT, the encodings Web Audio can play */

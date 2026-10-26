@@ -1,4 +1,4 @@
-import { PcmOutput, outputSampleRate, newAudioSessionId } from "../android/audio-output.ts";
+import { PcmOutput, outputSampleRate, newAudioSessionId, burstFrames } from "../android/audio-output.ts";
 import { JThread } from "../jvm/natives/jentry.ts";
 import { Cpu, bindCpu } from "./cpu.ts";
 import { processExited } from "../process-exit.ts";
@@ -33,7 +33,7 @@ class Stream {
     this.handle = handle; this.config = config;
     const track = this.track = new PcmOutput({ rate: config.SampleRate || outputSampleRate(), channels: config.ChannelCount || 2,
       bytesPerSample: config.Format === 1 ? 2 : 4, sessionId: config.SessionId === 0 ? newAudioSessionId() : config.SessionId });
-    this.frames = config.FramesPerDataCallback || Math.ceil(track.rate / 100);
+    this.frames = config.FramesPerDataCallback || burstFrames(track.rate);
     this.capacity = Math.max(config.BufferCapacityInFrames, this.frames * 4);
     this.size = this.capacity;
     this.buffer = mem.malloc(this.frames * track.frameBytes());
@@ -116,7 +116,7 @@ export function aaudioInit(): void {
   const getters: Record<string, (stream: Stream) => number | bigint> = {
     SampleRate: s => s.track.rate, ChannelCount: s => s.track.channels, Format: s => s.track.bytesPerSample === 2 ? 1 : 2,
     Direction: () => 0, SharingMode: () => 1, PerformanceMode: () => 10, DeviceId: () => 1, SessionId: s => s.track.sessionId,
-    FramesPerDataCallback: s => s.frames, FramesPerBurst: s => Math.ceil(s.track.rate / 100),
+    FramesPerDataCallback: s => s.frames, FramesPerBurst: s => burstFrames(s.track.rate),
     BufferCapacityInFrames: s => s.capacity, BufferSizeInFrames: s => s.size, XRunCount: s => s.track.underruns,
     State: s => s.state, FramesWritten: s => BigInt(s.track.written), FramesRead: s => BigInt(Math.floor(s.track.head())),
   };

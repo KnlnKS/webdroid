@@ -9,7 +9,7 @@ import { jarray } from "../jvm/abi.ts";
 import { newObj, scall, vcall } from "../jvm/natives/jentry.ts";
 import { newArrayList } from "../jvm/natives/jcoll.ts";
 import { callingIdentity, hostService, onCallerDeath, oneway, type Caller } from "./binder.ts";
-import { newAudioSessionId, outputSampleRate } from "./audio-output.ts";
+import { burstFrames, newAudioSessionId, outputSampleRate } from "./audio-output.ts";
 
 /** [min, max, index] by stream type, STREAM_VOICE_CALL..STREAM_ASSISTANT */
 const VOLUMES: [number, number, number][] = [[1, 5, 3], [0, 7, 5], [0, 7, 5], [0, 15, 5], [1, 7, 6], [0, 7, 5], [0, 15, 7],
@@ -197,9 +197,8 @@ const PRODUCT_STRATEGIES: [string, number, [number, number, [number, number, num
 ];
 const AAB = "Landroid/media/AudioAttributes$Builder;";
 // AudioSystem: the audio framework's channel and sample rate limits, as the reference AVD reports
-// them, and the Web Audio output. Its buffer is not a fixed number of frames, so the primary output
-// reports no frame count. No device ports or patches are modelled, nothing is connected (no wired
-// headset or A2DP), and nothing plays direct or offloaded.
+// them, and the Web Audio output, whose primary output period is one burst. No device ports or patches
+// are modelled, nothing is connected (no wired headset or A2DP), and nothing plays direct or offloaded.
 const listNone = (_list: unknown, generation: Int32Array) => { generation[0] = 1; return 0; };
 rt.registerJnis("android/media/AudioSystem", {
   "native_getMaxChannelCount()I": () => 12,
@@ -207,7 +206,7 @@ rt.registerJnis("android/media/AudioSystem", {
   "native_getMinSampleRate()I": () => 4000,
   "newAudioSessionId()I": newAudioSessionId,
   "getPrimaryOutputSamplingRate()I": outputSampleRate,
-  "getPrimaryOutputFrameCount()I": () => 0,
+  "getPrimaryOutputFrameCount()I": () => burstFrames(outputSampleRate()),
   "listAudioPorts(Ljava/util/ArrayList;[I)I": listNone,
   "listAudioPatches(Ljava/util/ArrayList;[I)I": listNone,
   "getDeviceConnectionState(ILjava/lang/String;)I": () => 0,
