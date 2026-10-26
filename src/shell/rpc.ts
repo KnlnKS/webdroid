@@ -109,10 +109,12 @@ export type ProxyOptions<C> = {
   onClose?: (error: CallFailure) => void;
   /** what a call's arguments give away */
   transfer?: NoInfer<ByArgs<C, Transferable[]>>;
+  /** by domain, what each call's answer passes through on its way to the caller */
+  around?: Record<string, <T>(answer: Promise<T>) => Promise<T>>;
 };
 /** The proxy of an endpoint with the methods `names` lists, or with each domain of methods a tree lists. */
 export function callProxy<C extends object>(port: MessagePort, names: readonly (keyof C & string)[] | MethodTree,
-  { notifications = [], makeError = callError, onClose = () => {}, transfer = {} }: ProxyOptions<C> = {}): { endpoint: C; close(): void } {
+  { notifications = [], makeError = callError, onClose = () => {}, transfer = {}, around = {} }: ProxyOptions<C> = {}): { endpoint: C; close(): void } {
   let closed = false, nextId = 1;
   const pending = new Map<number, { resolve(value: unknown): void; reject(error: unknown): void; method: number }>();
   const finish = (error = closedFailure) => {
@@ -147,7 +149,7 @@ export function callProxy<C extends object>(port: MessagePort, names: readonly (
     });
   };
   const notify = new Set<string>(notifications);
-  const proxy = (method: string, at: number) => !notify.has(method) ? (...args: unknown[]) => call(method, at, args) : (...args: unknown[]) => {
+  const proxy = (method: string, at: number, answer = (p: Promise<unknown>) => p) => !notify.has(method) ? (...args: unknown[]) => answer(call(method, at, args)) : (...args: unknown[]) => {
     if (closed) throw makeError(closedFailure);
     port.postMessage({ kind: "notify", id: 0, method, args } satisfies Message, given(method, args));
   };
@@ -156,7 +158,7 @@ export function callProxy<C extends object>(port: MessagePort, names: readonly (
   let at = 0;
   for (const domain of Object.keys(tree)) {
     const methods: Record<string, unknown> = domain ? endpoint[domain] = {} : endpoint;
-    for (const name of tree[domain]) methods[name] = proxy(domain ? `${domain}.${name}` : name, at++);
+    for (const name of tree[domain]) methods[name] = proxy(domain ? `${domain}.${name}` : name, at++, around[domain]);
   }
   return { close, endpoint: endpoint as C };
 }

@@ -31,15 +31,15 @@ import { connectSurface } from "../android/surface-transport.ts";
 let calls: ReturnType<typeof callProxy<BrokerCalls>> | undefined, releaseFiles = () => {};
 function attach(port: MessagePort, worker: boolean): BrokerCalls {
   if (calls) { closePort(port); throw new Error("Process command port already attached"); }
-  calls = callProxy<BrokerCalls>(port, brokerMethods, { notifications: ["processExited", "storageWrite"], makeError: javaFailure, transfer: brokerArgTransfers });
+  // a Worker's file calls are requests of the page's kernel, which the calling thread waits on briefly (yield.ts)
+  calls = callProxy<BrokerCalls>(port, brokerMethods, { notifications: ["processExited", "storageWrite"], makeError: javaFailure, transfer: brokerArgTransfers,
+    around: worker ? { files: awaitingPrompt, descriptors: awaitingPrompt } : {} });
   connectBroker(calls.endpoint, worker);
   return calls.endpoint;
 }
 /** a Worker's command port, behind which system_server's realm holds the stores */
 export function attachProcessBrokerPort(port: MessagePort): BrokerCalls {
   const broker = attach(port, true);
-  for (const domain of [broker.files, broker.descriptors] as Record<string, (...args: unknown[]) => Promise<unknown>>[])
-    for (const [name, call] of Object.entries(domain)) domain[name] = (...args) => awaitingPrompt(call(...args));
   releaseFiles = vfs.useOwner({ prepare: broker.files.filePrepare });
   return broker;
 }
