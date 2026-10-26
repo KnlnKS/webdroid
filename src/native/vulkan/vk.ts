@@ -22,6 +22,9 @@ export const S = {
 export const AHB_HANDLE = 0x400, SYNC_FD = 0x10;
 /** VK_ATTACHMENT_UNUSED, and VK_REMAINING_MIP_LEVELS / VK_REMAINING_ARRAY_LAYERS */
 export const UNUSED = 0xffffffff, REMAINING = 0xffffffff;
+/** maxUniformBufferRange, WebGPU's guaranteed maxUniformBufferBindingSize: a shader's uniform block is bound whole (pipeline.ts),
+ *  so a uniform buffer has this much room past its end */
+export const UNIFORM_RANGE = 65536;
 /** VkCompareOp */
 export const COMPARE: GPUCompareFunction[] = ["never", "less", "equal", "less-equal", "greater", "not-equal", "greater-equal", "always"];
 

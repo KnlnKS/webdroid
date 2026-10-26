@@ -9,7 +9,7 @@ import { mem } from "../mem.ts";
 import { PTR, stp, type HostFn } from "../host.ts";
 import { struct, list, u64s, stU64, WHOLE, type Read } from "../struct.ts";
 import { textureFormat, vertexFormat } from "./formats.ts";
-import { R, UNUSED, COMPARE, objects, nd } from "./vk.ts";
+import { R, UNUSED, COMPARE, UNIFORM_RANGE, objects, nd } from "./vk.ts";
 import { Buffer, View, Device } from "./device.ts";
 import { translate, PUSH_BINDING, type Stage, type Translation, type Resource } from "./spirv/index.ts";
 
@@ -108,7 +108,10 @@ export function bindGroup(dev: Device, pipeline: GPURenderPipeline | GPUComputeP
     if (!d) throw new Error(`vulkan: set ${index} has no binding ${r.binding}`);
     if (d.kind === "buffer") {
       const dyn = bound.set.layout.dynamic.indexOf(r.binding), offset = d.offset + (dyn >= 0 ? bound.offsets[dyn] ?? 0 : 0);
-      entries.push({ binding: 2 * r.binding, resource: { buffer: d.buffer.gpu, offset, size: d.range === WHOLE ? d.buffer.size - d.offset : d.range } });
+      // a uniform block is bound whole, as WebGPU requires, though Vulkan's range may cover only what the shader reads of it
+      const type = bound.set.layout.bindings.get(r.binding)!.type, uniform = type === DESCRIPTOR.UNIFORM || type === DESCRIPTOR.UNIFORM_DYNAMIC;
+      const size = uniform ? Math.min(UNIFORM_RANGE, d.buffer.gpu.size - offset) : d.range === WHOLE ? d.buffer.size - d.offset : d.range;
+      entries.push({ binding: 2 * r.binding, resource: { buffer: d.buffer.gpu, offset, size } });
     } else {
       if (r.kind !== "sampler") entries.push({ binding: 2 * r.binding, resource: d.view!.gpu });
       if (r.kind === "sampler") entries.push({ binding: 2 * r.binding, resource: d.sampler! });

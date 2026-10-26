@@ -8,7 +8,7 @@ import { mem } from "../mem.ts";
 import { PTR, ldp, stp, type HostFn } from "../host.ts";
 import { bufferAt, acquire, release as releaseBuffer, vulkanFormat, type HardwareBuffer } from "../hardwarebuffer.ts";
 import { struct, ptrs, stU64 } from "../struct.ts";
-import { R, S, AHB_HANDLE, REMAINING, COMPARE, objects, dispatchable, nd, chain } from "./vk.ts";
+import { R, S, AHB_HANDLE, REMAINING, COMPARE, UNIFORM_RANGE, objects, dispatchable, nd, chain } from "./vk.ts";
 import { F, formatFeatures, textureFormat, vkFormatOf, type TextureFormat } from "./formats.ts";
 import { DEVICE_EXTENSIONS, MEMORY_TYPES, Physical, deviceAdapter } from "./instance.ts";
 import type { PushChunk } from "./pipeline.ts";
@@ -220,7 +220,7 @@ export const DEVICE: Record<string, HostFn> = {
   vkCreateBuffer: (_c, a) => {
     const dev = objects.get(a.p(), Device), info = BufferInfo.read(a.p()); a.p(); const out = a.p();
     if (info.size > dev.physical.limits.maxBufferSize) return R.OUT_OF_DEVICE_MEMORY;
-    const gpu = dev.gpu.createBuffer({ size: align(info.size, 4), usage: bufferUsage(info.usage) });
+    const gpu = dev.gpu.createBuffer({ size: align(info.size, 4) + (info.usage & 0x10 ? UNIFORM_RANGE : 0), usage: bufferUsage(info.usage) });
     stU64(out, objects.add(new Buffer(gpu, info.size, info.usage)));
     return R.SUCCESS;
   },

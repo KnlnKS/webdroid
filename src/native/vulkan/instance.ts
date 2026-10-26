@@ -5,7 +5,7 @@
 import { mem } from "../mem.ts";
 import { PTR, ldp, stp, type HostFn } from "../host.ts";
 import { struct, ptrs } from "../struct.ts";
-import { R, S, AHB_HANDLE, SYNC_FD, objects, dispatchable, chain, enumerate } from "./vk.ts";
+import { R, S, AHB_HANDLE, SYNC_FD, UNIFORM_RANGE, objects, dispatchable, chain, enumerate } from "./vk.ts";
 import { formatFeatures, multisamples, textureFormat } from "./formats.ts";
 
 const API_VERSION = (1 << 22) | (1 << 12);                                // 1.1.0
@@ -145,7 +145,7 @@ function writeProperties(p: Physical, at: number): void {
     limits: {
       maxImageDimension1D: L.maxTextureDimension1D, maxImageDimension2D: d2, maxImageDimension3D: L.maxTextureDimension3D,
       maxImageDimensionCube: d2, maxImageArrayLayers: L.maxTextureArrayLayers, maxTexelBufferElements: 65536,
-      maxUniformBufferRange: L.maxUniformBufferBindingSize, maxStorageBufferRange: Math.min(L.maxStorageBufferBindingSize, 0xffffffff),
+      maxUniformBufferRange: UNIFORM_RANGE, maxStorageBufferRange: Math.min(L.maxStorageBufferBindingSize, 0xffffffff),
       maxPushConstantsSize: 128, maxMemoryAllocationCount: 4096, maxSamplerAllocationCount: 4000, bufferImageGranularity: 1,
       maxBoundDescriptorSets: L.maxBindGroups, maxPerStageDescriptorSamplers: L.maxSamplersPerShaderStage,
       maxPerStageDescriptorUniformBuffers: L.maxUniformBuffersPerShaderStage, maxPerStageDescriptorStorageBuffers: L.maxStorageBuffersPerShaderStage,
