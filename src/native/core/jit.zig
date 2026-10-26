@@ -89,8 +89,7 @@ pub const F_FMA64 = 11;
 const F_IT32 = 12;
 const F_TX = 13;
 pub const F_ESTIMATE32 = 14;
-const F_STORE32 = 15;
-const N_IMPORTS = 16;
+const N_IMPORTS = 15;
 const FP_NAMES = [_][]const u8{ "fmax", "fmin", "fmaxnm", "fminnm" };
 fn fpThunk(comptime F: type, comptime k: u2) *const fn (F, F) callconv(.c) F {
     return &struct {
@@ -700,38 +699,18 @@ pub fn Emit(comptime wide: bool) type {
             e.faultExit();
             e.endif();
         }
-        /// the page flags of a store's first and last bytes at L_A + off, ORed; the local it leaves the address in
-        fn storeFlags(e: *Self, off: u32, size: u32) u32 {
+        /// a store's page flags at L_A + off, its first and last bytes ORed: any flag goes to on_store
+        pub fn storeCheck(e: *Self, off: u32, size: u32) void {
             const b = e.b;
             const a: u32 = if (off != 0) L_NEXT else L_A;
             if (off != 0) b.emit(.{ get(L_A), c32(@bitCast(off)), O.i32_add, set(L_NEXT) });
             b.emit(.{ get(a), c32(abi.PAGE_SHIFT), O.i32_shr_u, mo(O.i32_load8_u, FLAGS_BASE) });
             if (size > 1) b.emit(.{ get(a), c32(@intCast(size - 1)), O.i32_add, c32(abi.PAGE_SHIFT), O.i32_shr_u, mo(O.i32_load8_u, FLAGS_BASE), O.i32_or });
-            return a;
-        }
-        pub fn storeCheck(e: *Self, off: u32, size: u32) void {
-            const b = e.b;
-            const a = e.storeFlags(off, size);
             e.ifv();
             b.emit(.{ get(L_CPU), get(a), c32(@intCast(size)), call(F_STORE) });
             e.ifv();
             e.faultExit();
             e.endif();
-            e.endif();
-        }
-        /// storeCheck for a compiled ARM32 store of L_R, whose slow path also stores into the
-        /// window, past the inline store the caller emits next; endif closes the block
-        pub fn storeValue(e: *Self, off: u32, size: u32) void {
-            const b = e.b;
-            b.blockStart(O.block, wasm.VOID);
-            e.nest += 1;
-            const a = e.storeFlags(off, size);
-            e.ifv();
-            b.emit(.{ get(L_CPU), get(a), c32(@intCast(size)), get(L_R), call(F_STORE32), tee(L_RET), c32(1), O.i32_eq });
-            e.ifv();
-            e.faultExit();
-            e.endif();
-            b.emit(.{ get(L_RET), wasm.brIf(1) });
             e.endif();
         }
         pub fn cond(e: *Self, cc: u8) void {
@@ -1474,7 +1453,7 @@ fn emitModule(b: *Buf, n: u32) void {
     b.bytes(&[_]u8{ 0, 'a', 's', 'm', 1, 0, 0, 0, 1 });
     const type_len = b.reserve();
     const type_start = b.len;
-    b.bytes(&[_]u8{ 6, 0x60, 2, wasm.I32, wasm.I32, 1, wasm.I32, 0x60, 3, wasm.I32, wasm.I32, wasm.I32, 1, wasm.I32, 0x60, 2, wasm.F32, wasm.F32, 1, wasm.F32, 0x60, 2, wasm.F64, wasm.F64, 1, wasm.F64, 0x60, 3, wasm.F64, wasm.F64, wasm.F64, 1, wasm.F64, 0x60, 4, wasm.I32, wasm.I32, wasm.I32, wasm.I32, 1, wasm.I32 });
+    b.bytes(&[_]u8{ 5, 0x60, 2, wasm.I32, wasm.I32, 1, wasm.I32, 0x60, 3, wasm.I32, wasm.I32, wasm.I32, 1, wasm.I32, 0x60, 2, wasm.F32, wasm.F32, 1, wasm.F32, 0x60, 2, wasm.F64, wasm.F64, 1, wasm.F64, 0x60, 3, wasm.F64, wasm.F64, wasm.F64, 1, wasm.F64 });
     b.patch(type_len, b.len - type_start);
     b.byte(2);
     const imp_len = b.reserve();
@@ -1499,7 +1478,6 @@ fn emitModule(b: *Buf, n: u32) void {
     importFn(b, "it32", 1);
     importFn(b, "tx", 0);
     importFn(b, "estimate32", 0);
-    importFn(b, "store32", 5);
     b.patch(imp_len, b.len - imp_start);
     b.byte(3);
     b.u(1 + n);

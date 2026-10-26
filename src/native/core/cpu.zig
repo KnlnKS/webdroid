@@ -272,18 +272,6 @@ fn windowStore(comptime T: type, c: *Cpu, a: u32, v: T) bool {
     mem.windowStore(T, a, v);
     return true;
 }
-/// a compiled ARM32 store's slow path, which has the value: 0 to store it, 1 to fault, 2 when the
-/// window took it
-export fn on_store32(cp: u32, a: u32, n: u32, v: u32) u32 {
-    if (a < mem.window) return on_store(cp, a, n);
-    const c: *Cpu = @ptrFromInt(cp);
-    const stored = switch (n) {
-        1 => windowStore(u8, c, a, @truncate(v)),
-        2 => windowStore(u16, c, a, @truncate(v)),
-        else => windowStore(u32, c, a, v),
-    };
-    return if (stored) 2 else 1;
-}
 export fn on_store(cp: u32, a: u32, n: u32) u32 {
     const c: *Cpu = @ptrFromInt(cp);
     const last = a +% (n - 1);
