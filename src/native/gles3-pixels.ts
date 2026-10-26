@@ -19,11 +19,9 @@ function pixelArray(type: number): Ctor<ArrayBufferView> {
   return type === 0x1406 ? Float32Array : type === 0x1404 ? Int32Array : type === 0x1402 ? Int16Array : type === 0x1400 ? Int8Array
     : type === 0x1401 ? Uint8Array : (type === 0x1403 || type === 0x140b || type === 0x8d61 || type === 0x8033 || type === 0x8034 || type === 0x8363) ? Uint16Array : Uint32Array;
 }
-export function pixels(type: number, p: number): ArrayBufferView {
-  const K = pixelArray(type);
-  const n = Math.floor((mem.u8.length - p) / K.BYTES_PER_ELEMENT);
-  return p % K.BYTES_PER_ELEMENT ? new K(mem.u8.slice(p, p + Math.min(n, 1 << 26) * K.BYTES_PER_ELEMENT).buffer) : new K(mem.buf, p, n);
-}
+/** the data of a call whose size is not computable (an unknown format or type, a negative or empty extent): WebGL
+ *  refuses or reads nothing before it would read past the view's type, which still picks its error */
+const pixels = (type: number, p: number): ArrayBufferView => view(pixelArray(type), p, 0);
 function pixelByteSize(format: number, type: number): number {
   const channels = format === 0x1908 || format === 0x8d99 ? 4 : format === 0x1907 || format === 0x8d98 ? 3
     : format === 0x190a || format === 0x8227 || format === 0x8228 ? 2
