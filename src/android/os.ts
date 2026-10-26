@@ -24,7 +24,7 @@ import { localOpen, bytesFd, regionFd, ASHMEM_IOCTL } from "../native/fs.ts";
 import { ashmemContent } from "../native/shm.ts";
 import { whenLastClosed, fdSource, ioctlIntFd, readFd } from "../native/fd.ts";
 import { inotifyAddWatch, inotifyInit, inotifyRmWatch } from "../native/inotify.ts";
-import { uptimeMillis, wallMillis } from "../guest-clock.ts";
+import { uptimeMillis, uptimeNanos, wallMillis } from "../guest-clock.ts";
 
 // APerformanceHint as the reference AVD's power HAL answers it (dumpsys performance_hint: HAL
 // support, a 1 ms preferred rate). A hint only advises the scheduler, so a session keeps its
@@ -51,8 +51,8 @@ const nanos = (ms: number) => BigInt(Math.floor(ms * 1e6));
 rt.registerJnis("android/os/SystemClock", {
   "uptimeMillis()J": () => BigInt(Math.floor(uptimeMillis())),
   "elapsedRealtime()J": () => BigInt(Math.floor(uptimeMillis())),
-  "elapsedRealtimeNanos()J": () => nanos(uptimeMillis()),
-  "uptimeNanos()J": () => nanos(uptimeMillis()),
+  "elapsedRealtimeNanos()J": uptimeNanos,
+  "uptimeNanos()J": uptimeNanos,
   "currentThreadTimeMillis()J": () => BigInt(Math.floor(performance.now())),
   "currentThreadTimeMicro()J": () => BigInt(Math.floor(performance.now() * 1e3)),
   "currentTimeMicro()J": () => BigInt(Math.floor(wallMillis() * 1e3)),

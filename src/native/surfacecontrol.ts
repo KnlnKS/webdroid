@@ -14,7 +14,7 @@ import { acquire, bufferAt, bufferFrame, release, type HardwareBuffer } from "./
 import { bufferHeight, bufferWidth, presentSurface, type GlSurface } from "../android/glsurface.ts";
 import { javaLayer, showFrame, Layer } from "../android/surfaceflinger.ts";
 import { vsync } from "../android/vsync.ts";
-import { uptimeMillis } from "../guest-clock.ts";
+import { uptimeNanos } from "../guest-clock.ts";
 import { callbackThread } from "./thread.ts";
 import type { JObj } from "../jvm/runtime.ts";
 
@@ -158,7 +158,7 @@ function apply(t: Transaction): void {
   const roots = new Set<Surface>();
   for (const s of named) roots.add(s.root);
   for (const root of roots) present(root);
-  const s: Stats = { latched: BigInt(Math.round(uptimeMillis() * 1e6)), acquired: new Map([...named].map((n) => [n, n.acquired])) };
+  const s: Stats = { latched: uptimeNanos(), acquired: new Map([...named].map((n) => [n, n.acquired])) };
   run(commit, s);
   if (complete.length) void vsync().then(() => run(complete, s));
 }
@@ -216,7 +216,7 @@ export function surfaceControlInit(): void {
       const b = bufferAt(a.p()) ?? null, fence = a.i();
       if (fence >= 0) t.fences.push(fence);
       if (b) { acquire(b); t.buffers.push(b); }
-      return () => { release(s.buffer ?? undefined); s.buffer = b; s.acquired = BigInt(Math.round(uptimeMillis() * 1e6)); };
+      return () => { release(s.buffer ?? undefined); s.buffer = b; s.acquired = uptimeNanos(); };
     }),
     // a source rect with no area shows the whole buffer
     ASurfaceTransaction_setGeometry: on((s, a) => {

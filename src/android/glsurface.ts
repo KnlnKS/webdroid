@@ -3,7 +3,7 @@
 import { rt, JObj, peerField, setDeclared } from "../jvm/runtime.ts";
 import { vcall, curThread, scall, after, iof } from "../jvm/natives/jentry.ts";
 import { deref, handle, ownedHandle, release } from "./handles.ts";
-import { uptimeMillis } from "../guest-clock.ts";
+import { uptimeNanos } from "../guest-clock.ts";
 import { gl, tables, activate, currentContext } from "../native/gl-context.ts";
 import { bindTexture, texImageSource } from "../native/gles3.ts";
 import { perf } from "../perf.ts";
@@ -27,6 +27,16 @@ export interface GlSurface {
   /** a BLAST queue's producer side (surfaceflinger.ts glSurfaceOf): a frame goes to the queue, which
    *  releases it once the layer latches the next */
   post?: (frame: ImageBitmap | VideoFrame) => void;
+}
+/** a frame's size: a decoder's visible area, or an image's */
+export const frameSize = (f: TexImageSource): [number, number] =>
+  "displayWidth" in f ? [f.displayWidth, f.displayHeight] : [(f as ImageBitmap).width, (f as ImageBitmap).height];
+/** the timestamp a consumer reads for a frame just queued to `s`: a decoder's presentation time, else
+ *  eglPresentationTimeANDROID's, which applies to this frame only, else now */
+export function frameTimestamp(s: GlSurface, frame: ImageBitmap | VideoFrame | null): bigint {
+  const t = frame && "timestamp" in frame && frame.timestamp !== null ? BigInt(frame.timestamp) * 1000n : s.presentationTimeNanos ?? uptimeNanos();
+  s.presentationTimeNanos = undefined;
+  return t;
 }
 export const bufferWidth = (s: GlSurface): number => s.userWidth || s.width;
 export const bufferHeight = (s: GlSurface): number => s.userHeight || s.height;
@@ -76,10 +86,7 @@ export class NativeSurfaceTexture {
   constructor(texName: number, detached: boolean, weak: object | null) { this.texName = texName; this.weak = weak; this.attached = !detached; }
   /** JNISurfaceTextureContext::onFrameAvailable: postEventFromNative(weakThiz) */
   frameAvailable(): void {
-    const frame = this.surface.present;
-    this.queued = typeof VideoFrame !== "undefined" && frame instanceof VideoFrame ? BigInt(frame.timestamp) * 1000n
-      : this.surface.presentationTimeNanos ?? BigInt(Math.floor(uptimeMillis() * 1e6));
-    this.surface.presentationTimeNanos = undefined;
+    this.queued = frameTimestamp(this.surface, this.surface.present);
     if (!this.weak) return;
     detached(() => scall(SURFACE_TEXTURE, "postEventFromNative", "(Ljava/lang/ref/WeakReference;)V", this.weak));
   }

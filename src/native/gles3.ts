@@ -18,6 +18,7 @@ import {
 } from "./gles3-state.ts";
 import { i32, u32, f32, u8, pixelStore, readGuestPixels, texData, PACK, UNPACK } from "./gles3-pixels.ts";
 import { bufferTexture, imageBuffer, ownsTexture } from "./hardwarebuffer.ts";
+import { frameSize } from "../android/glsurface.ts";
 import { recOf, rec, recAt, bindRec, shadowed, withTarget, writeBuffers, writeBack, contents, realize, syncVertexBuffer, syncFeedback, COPY_READ, COPY_WRITE } from "./gles3-buffers.ts";
 import { vertexAttribPointer, clientArray, drawClientArrays, drawClientElements } from "./gles3-client-arrays.ts";
 import {
@@ -630,16 +631,14 @@ export function bindTexture(name: number, handle: number): void {
   if (rec && tracking!.kind === "unbound") rec.tracking = { kind: "bound", target, storage: { immutable: false, images: new Map() } };
   if (unit.get(target) !== texture) { unit.set(target, texture); state.revision++; }
 }
-const extent = (src: TexImageSource): [number, number] =>
-  "displayWidth" in src ? [src.displayWidth, src.displayHeight] : [(src as ImageBitmap).width, (src as ImageBitmap).height];
 /** glTexImage2D from a host image (a SurfaceTexture's frame, a Bitmap's pixels), recorded as one from guest memory is */
 export function texImageSource(t: number, l: number, internal: number, format: number, type: number, src: TexImageSource): void {
-  const [w, h] = extent(src), images = imageAccepted(t, l, internal, w, h, 0, format, type, 0);
+  const [w, h] = frameSize(src), images = imageAccepted(t, l, internal, w, h, 0, format, type, 0);
   if (images) recordImage(images, t, l, { width: w, height: h, internal, format, type }); else untrust(textureOf(t));
   g().texImage2D(t, l, internal, format, type, src);
 }
 export function texSubImageSource(t: number, l: number, x: number, y: number, format: number, type: number, src: TexImageSource): void {
-  const [w, h] = extent(src);
+  const [w, h] = frameSize(src);
   if (!subImageAccepted(t, l, x, y, w, h, format, type, 0)) unsure();
   g().texSubImage2D(t, l, x, y, format, type, src);
 }

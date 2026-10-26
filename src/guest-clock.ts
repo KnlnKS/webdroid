@@ -196,6 +196,8 @@ function use(source: ClockSource): void {
 const wallAtStart = clock ? Date.now() - clock.nowMs : 0;
 use(clock ? { now: () => clock.nowMs, uptime: () => clock.nowMs, wall: () => wallAtStart + clock.nowMs,
   schedule: (callback, delayMs, system) => clock.schedule(callback, delayMs, system ? -1 : 0), cancel: (timer) => clock.cancel(Number(timer)) } : hostClock);
+/** CLOCK_MONOTONIC in nanoseconds (SystemClock.uptimeNanos, System.nanoTime) */
+export const uptimeNanos = (): bigint => BigInt(Math.floor(uptimeMillis() * 1e6));
 export const guestSleep = (ms: number): Promise<void> => new Promise((resolve) => setGuestTimeout(resolve, ms));
 
 /** The broker transfers data.port with a process bootstrap; process death calls close. */

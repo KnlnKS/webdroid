@@ -12,10 +12,10 @@ import { nativeParcel, readInt, readLocalObject, readLong, writeInt, writeLocalO
 import { canvasOf } from "./canvas.ts";
 import { cssColor } from "./graphics.ts";
 import { perf } from "../perf.ts";
-import { uptimeMillis } from "../guest-clock.ts";
+import { uptimeNanos } from "../guest-clock.ts";
 import { frameDrawn } from "./vsync.ts";
 import { note, Ev } from "../timeline.ts";
-import { bufferHeight, bufferWidth, presentSurface, type GlSurface } from "./glsurface.ts";
+import { bufferHeight, bufferWidth, frameSize, presentSurface, type GlSurface } from "./glsurface.ts";
 import { drawnOn, deviceRect, intersect, placeFunctors, type Rect } from "./webfunctor.ts";
 import { detached } from "../jvm/natives/jthrowable.ts";
 import { broker } from "../shell/broker-access.ts";
@@ -163,7 +163,7 @@ const placed = new Map<number, Rect>();
  *  this layer's buffer drew show where the buffer composes */
 function placeWebContent(m: DOMMatrix, layer: Layer, screen: Rect): void {
   const buffer = layer.buffer, dest = layer.dest;
-  const [bw, bh] = !buffer ? [0, 0] : "displayWidth" in buffer ? [buffer.displayWidth, buffer.displayHeight] : [buffer.width, buffer.height];
+  const [bw, bh] = buffer ? frameSize(buffer) : [0, 0];
   const bounds = intersect(screen, layer.color ? screen : dest ? deviceRect(m, dest[0], dest[1], dest[2], dest[3]) : deviceRect(m, 0, 0, bw, bh));
   for (const [id, r] of placed) if (r[0] < bounds[2] && bounds[0] < r[2] && r[1] < bounds[3] && bounds[1] < r[3]) placed.delete(id);
   const functors = buffer && drawnOn(buffer);
@@ -306,7 +306,7 @@ rt.registerJnis("android/view/SurfaceControl", {
   // composition is synchronous, so the present fence has signaled by the time the stats arrive
   "nativeAddTransactionCompletedListener(JLjava/util/function/Consumer;)V": (t: bigint, consumer: JObj) => {
     tx(t).ops.push(() => queueMicrotask(() => detached(() => asSystem(() => {
-      const now = BigInt(Math.round(uptimeMillis() * 1e6));
+      const now = uptimeNanos();
       return after(newObj("android/view/SurfaceControl$TransactionStats", "(JJ)V", now, handle({ signaled: now, refs: 1 })),
         (stats) => vcall(consumer, "accept", "(Ljava/lang/Object;)V", stats));
     }))));

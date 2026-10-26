@@ -9,9 +9,8 @@ import { nativeWindowFor, releaseWindow } from "./libandroid.ts";
 import { closeFd } from "./fd.ts";
 import { allocate, queueFrame, release, type HardwareBuffer } from "./hardwarebuffer.ts";
 import { callbackThread } from "./thread.ts";
-import { uptimeMillis } from "../guest-clock.ts";
 import { after } from "../jvm/natives/jentry.ts";
-import type { GlSurface } from "../android/glsurface.ts";
+import { frameSize, frameTimestamp, type GlSurface } from "../android/glsurface.ts";
 
 type Frame = VideoFrame | ImageBitmap;
 const OK = 0, INVALID_PARAMETER = -10004, UNSUPPORTED = -10002, NO_BUFFER_AVAILABLE = -30001, MAX_IMAGES_ACQUIRED = -30002;
@@ -21,8 +20,6 @@ const SLOTS = 64;
  *  YUV_420_888; the camera's (JPEG, RAW, DEPTH, HEIC) have no producer */
 const FORMATS = new Set([1, 2, 3, 4, 0x16, 0x22, 0x23]);
 const PRIVATE = 0x22, CPU_READ = 0xfn;
-/** a frame's size, as its buffer takes it */
-const extent = (f: Frame): [number, number] => "displayWidth" in f ? [f.displayWidth, f.displayHeight] : [f.width, f.height];
 
 interface Image { reader: Reader; buffer: HardwareBuffer; timestamp: bigint }
 class Reader {
@@ -43,16 +40,13 @@ class Reader {
   /** the producer's frame into a free buffer; past maxImages waiting, the oldest is dropped, as a producer that
    *  never blocks on a free buffer leaves it */
   private queue(frame: Frame): void {
-    const [width, height] = extent(frame);
+    const [width, height] = frameSize(frame);
     let buffer = this.free.pop();
     if (buffer && (buffer.width !== width || buffer.height !== height)) { release(buffer); buffer = undefined; }
     buffer ??= allocate(width, height, this.format, this.usage) ?? undefined;
     if (!buffer) { frame.close(); return; }
     queueFrame(buffer, frame);
-    const timestamp = "timestamp" in frame && frame.timestamp !== null ? BigInt(frame.timestamp) * 1000n
-      : this.surface.presentationTimeNanos ?? BigInt(Math.floor(uptimeMillis() * 1e6));
-    this.surface.presentationTimeNanos = undefined;
-    this.queued.push({ reader: this, buffer, timestamp });
+    this.queued.push({ reader: this, buffer, timestamp: frameTimestamp(this.surface, frame) });
     if (this.queued.length > this.maxImages) this.recycle(this.queued.shift()!.buffer);
     const listener = this.listener;
     if (listener) callbacks(async (cpu) => { if (!this.deleted) await cpu.call(listener[1], [ptr(listener[0]), ptr(this.handle)], "AImageReader image listener"); });

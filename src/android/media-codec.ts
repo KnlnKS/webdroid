@@ -8,7 +8,7 @@ import { type JBuffer, allocateDirectNow, bufferBytes, capacity as bufferCapacit
 import { NativeFormat, TYPE_INTEGER, TYPE_LONG, TYPE_STRING, annexB, csdBytes, copiedFormatFromJava, formatToJava } from "./media-format.ts";
 import { surfaceTarget, presentSurface, type GlSurface } from "./glsurface.ts";
 import { nativePeer, nativeThread, postNativeEvent } from "./media-native.ts";
-import { uptimeMillis } from "../guest-clock.ts";
+import { uptimeMillis, uptimeNanos } from "../guest-clock.ts";
 
 /** a profile and level the codec lists, as MediaCodecInfo.CodecProfileLevel's */
 type Level = { profile: number; level: number };
@@ -339,7 +339,7 @@ class Run {
         if (render && this.live() && surface) {
           presentSurface(surface, output.frame);
           if (this.codec.frameEvents) {
-            const media = output.info.time, nano = BigInt(Math.floor(uptimeMillis() * 1e6));
+            const media = output.info.time, nano = uptimeNanos();
             this.post(EVENT_FRAME_RENDERED, 0, 0, () => formatToJava(new NativeFormat().set("0-media-time-us", TYPE_LONG, media).set("0-system-nano", TYPE_LONG, nano)));
           }
         } else output.frame.close();
