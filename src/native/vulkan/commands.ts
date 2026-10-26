@@ -11,6 +11,7 @@ import { R, UNUSED, objects, dispatchable, nd } from "./vk.ts";
 import { BU, TU, Buffer, Device, Image } from "./device.ts";
 import { bindGroup, BindGroupCache, PUSH_SIZE, PUSH_SLOT, DescriptorSet, GraphicsPipeline, type Bound, type ComputePipeline, type Framebuffer, type PushSlot, type RenderPass } from "./pipeline.ts";
 import { take } from "./ahb.ts";
+import { blit, clearAttachments, copyBytes } from "./internal.ts";
 import type { Resource } from "./spirv/index.ts";
 
 /** an operation of a command buffer, carried out in a submit's replay */
@@ -58,6 +59,8 @@ export class Replay {
   readonly released = new Set<Image>();
   readonly dev: Device;
   constructor(dev: Device) { this.dev = dev; this.enc = dev.gpu.createCommandEncoder(); }
+  /** forgets what is set on the pass, for the next draw to set all it needs */
+  forget(): void { this.passState = freshPass(); }
   /** ends the compute pass, if one is open, before an encoder-level command */
   outside(): GPUCommandEncoder { if (this.compute) { this.compute.end(); this.compute = null; } return this.enc; }
   /** finishes the encoder so a queue operation can come between it and what follows */
@@ -69,6 +72,20 @@ export class Replay {
     this.cut(); this.writePush(); this.dev.gpu.queue.submit(this.done.splice(0));
     take(this.dev, img);
   }
+  /** a slot of the device's push buffers holding `bytes` (PUSH_SLOT at most) for what this submit runs */
+  slot(bytes: Uint8Array): PushSlot {
+    const n = this.pushed++, offset = n % PER_CHUNK * PUSH_SLOT;
+    const chunk = this.dev.push[Math.floor(n / PER_CHUNK)] ??= {
+      buffer: this.dev.gpu.createBuffer({ size: PER_CHUNK * PUSH_SLOT, usage: BU.STORAGE | BU.COPY_DST }), data: new Uint8Array(PER_CHUNK * PUSH_SLOT), groups: new BindGroupCache(),
+    };
+    chunk.data.set(bytes, offset);
+    return { chunk, offset };
+  }
+  /** `words` as a binding of read-only storage, for the driver's own pipelines (internal.ts) */
+  data(words: Uint32Array): GPUBufferBinding {
+    const { chunk, offset } = this.slot(new Uint8Array(words.buffer, words.byteOffset, words.byteLength));
+    return { buffer: chunk.buffer, offset, size: words.byteLength };
+  }
   /** writes the push constants' slots, before a queue submission of what uses them */
   writePush(): void {
     for (let i = 0; i * PER_CHUNK < this.pushed; i++) {
@@ -79,15 +96,7 @@ export class Replay {
 }
 const PER_CHUNK = 256;
 /** the slot of the push constants as the commands so far set them, filled once after each change */
-function pushSlot(r: Replay): PushSlot {
-  if (r.pushSlot) return r.pushSlot;
-  const n = r.pushed++, offset = n % PER_CHUNK * PUSH_SLOT;
-  const chunk = r.dev.push[Math.floor(n / PER_CHUNK)] ??= {
-    buffer: r.dev.gpu.createBuffer({ size: PER_CHUNK * PUSH_SLOT, usage: BU.STORAGE | BU.COPY_DST }), data: new Uint8Array(PER_CHUNK * PUSH_SLOT), groups: new BindGroupCache(),
-  };
-  chunk.data.set(r.push, offset);
-  return r.pushSlot = { chunk, offset };
-}
+const pushSlot = (r: Replay): PushSlot => r.pushSlot ??= r.slot(r.push);
 /** sets on the pass the bind groups `resources` need: of the descriptor sets bound, and of the push constants */
 function bindGroups(r: Replay, pass: GPURenderPassEncoder | GPUComputePassEncoder, gpu: GPURenderPipeline | GPUComputePipeline, resources: Resource[], bound: (Bound | null)[]): void {
   const s = r.passState;
@@ -179,6 +188,10 @@ const Range = struct("aspectMask:u32 baseMipLevel:u32 levelCount:u32 baseArrayLa
 const ImageBarrier = struct(`sType:u32 pNext:ptr srcAccessMask:u32 dstAccessMask:u32 oldLayout:u32 newLayout:u32 srcQueueFamilyIndex:u32 dstQueueFamilyIndex:u32
   image:u64 aspectMask:u32 baseMipLevel:u32 levelCount:u32 baseArrayLayer:u32 layerCount:u32`);
 const BeginInfo = struct(`sType:u32 pNext:ptr renderPass:u64 framebuffer:u64 x:i32 y:i32 width:u32 height:u32 clearValueCount:u32 pClearValues:ptr`);
+const ClearAttachment = struct("aspectMask:u32 colorAttachment:u32 value:u32[4]");
+const ClearRect = struct("x:i32 y:i32 width:u32 height:u32 baseArrayLayer:u32 layerCount:u32");
+const Subresource = struct("aspectMask:u32 mip:u32 layer:u32 layers:u32");
+const ImageBlit = struct("src:struct srcOffsets:i32[6] dst:struct dstOffsets:i32[6]", { src: Subresource, dst: Subresource });
 const ViewportS = struct("x:f32 y:f32 width:f32 height:f32 minDepth:f32 maxDepth:f32");
 const AllocateInfo = struct("sType:u32 pNext:ptr commandPool:u64 level:u32 commandBufferCount:u32");
 
@@ -366,7 +379,7 @@ export const COMMANDS: Record<string, HostFn> = {
   vkCmdCopyBuffer: (_c, a) => {
     const h = a.p(), src = objects.get(nd(a), Buffer), dst = objects.get(nd(a), Buffer), n = a.u(), regions = list(a.p(), n, BufferCopy.size(), (at) => BufferCopy.read(at)), cb = cbOf(h);
     cb.use(src); cb.use(dst, true);
-    record(h, (r) => { const enc = r.outside(); for (const c of regions) enc.copyBufferToBuffer(src.gpu, c.srcOffset, dst.gpu, c.dstOffset, c.size); });
+    record(h, (r) => { for (const c of regions) copyBytes(r, src.gpu, c.srcOffset, dst.gpu, c.dstOffset, c.size); });
   },
   vkCmdCopyBufferToImage: (_c, a) => {
     const h = a.p(), src = objects.get(nd(a), Buffer), img = objects.get(nd(a), Image); a.u(); const n = a.u(), regions = list(a.p(), n, BufferImageCopy.size(), (at) => BufferImageCopy.read(at));
@@ -405,6 +418,20 @@ export const COMMANDS: Record<string, HostFn> = {
       const fill = new Uint32Array(size / 4).fill(data);
       enc.copyBufferToBuffer(staged(r.dev, new Uint8Array(fill.buffer)), 0, dst.gpu, offset, size);
     });
+  },
+  vkCmdClearAttachments: (_c, a) => {
+    const h = a.p(), n = a.u(), p = a.p(), m = a.u(), q = a.p();
+    const clears = list(p, n, ClearAttachment.size(), (at) => ({ ...ClearAttachment.read(at), words: new Uint32Array(ClearAttachment.array(at, "value")) }));
+    const rects = list(q, m, ClearRect.size(), (at) => ClearRect.read(at));
+    record(h, (r) => clearAttachments(r, clears, rects));
+  },
+  vkCmdBlitImage: (_c, a) => {
+    const h = a.p(), src = objects.get(nd(a), Image); a.u(); const dst = objects.get(nd(a), Image); a.u(); const n = a.u(), p = a.p(), linear = a.u() === 1;
+    const regions = list(p, n, ImageBlit.size(), (at) => {
+      const b = ImageBlit.read(at), side = (s: Read<typeof Subresource>, [x0, y0, , x1, y1]: number[]) => ({ ...s, x0, y0, x1, y1 });
+      return [side(b.src, ImageBlit.array(at, "srcOffsets")), side(b.dst, ImageBlit.array(at, "dstOffsets"))];
+    });
+    record(h, (r) => { for (const [s, d] of regions) blit(r, src, s, dst, d, linear); });
   },
   vkCmdClearColorImage: (_c, a) => {
     const h = a.p(), img = objects.get(nd(a), Image); a.u(); const color = words(a.p(), 4), n = a.u(), ranges = list(a.p(), n, Range.size(), (at) => Range.read(at));

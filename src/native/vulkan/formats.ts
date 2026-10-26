@@ -6,7 +6,7 @@ import { toHalf } from "../../android/bitmap.ts";
 /** VkFormatFeatureFlagBits */
 export const F = {
   SAMPLED: 0x1, STORAGE: 0x2, STORAGE_ATOMIC: 0x4, VERTEX: 0x40, COLOR: 0x80, BLEND: 0x100, DEPTH: 0x200,
-  LINEAR: 0x1000, TRANSFER_SRC: 0x4000, TRANSFER_DST: 0x8000,
+  BLIT_SRC: 0x400, BLIT_DST: 0x800, LINEAR: 0x1000, TRANSFER_SRC: 0x4000, TRANSFER_DST: 0x8000,
 } as const;
 
 export interface TextureFormat {
@@ -125,6 +125,8 @@ export function formatFeatures(vk: number, features: ReadonlySet<string>): { opt
   if (caps.includes("f") || (float32 && features.has("float32-filterable"))) optimal |= F.LINEAR;
   const renderable = has("r") || (f.gpu === "rg11b10ufloat" && features.has("rg11b10ufloat-renderable"));
   if (renderable) optimal |= F.COLOR;
+  // blits sample the source and render the destination (internal.ts), which integer formats' channels cannot
+  if (!f.gpu.endsWith("int")) optimal |= F.BLIT_SRC | (renderable ? F.BLIT_DST : 0);
   if (renderable && (has("b") || (float32 && features.has("float32-blendable")) || f.gpu === "rg11b10ufloat")) optimal |= F.BLEND;
   if (has("s") || (f.gpu === "bgra8unorm" && features.has("bgra8unorm-storage"))) optimal |= F.STORAGE;
   if (caps.includes("a")) optimal |= F.STORAGE_ATOMIC;

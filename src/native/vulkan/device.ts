@@ -120,9 +120,10 @@ const ALIGN = 256;
 const align = (n: number, to: number) => Math.ceil(n / to) * to;
 const HOST_VISIBLE = 2;
 
-// VkBufferUsageFlags → GPUBufferUsage: transfer src/dst, uniform, storage, index, vertex, indirect
-const BUFFER_USAGE: [number, number][] = [[0x1, 0x4], [0x2, 0x8], [0x10, 0x40], [0x20, 0x80], [0x40, 0x10], [0x80, 0x20], [0x100, 0x100]];
-const bufferUsage = (vk: number) => BUFFER_USAGE.reduce((u, [bit, gpu]) => vk & bit ? u | gpu : u, BU.COPY_SRC | BU.COPY_DST);
+// VkBufferUsageFlags → GPUBufferUsage: uniform, index, vertex, indirect; every buffer is a storage buffer, as a copy to it at
+// any byte offset writes through a shader (internal.ts)
+const BUFFER_USAGE: [number, number][] = [[0x10, 0x40], [0x40, 0x10], [0x80, 0x20], [0x100, 0x100]];
+const bufferUsage = (vk: number) => BUFFER_USAGE.reduce((u, [bit, gpu]) => vk & bit ? u | gpu : u, BU.COPY_SRC | BU.COPY_DST | BU.STORAGE);
 /** `renderable`: the format can be an attachment, so a transfer destination is cleared by a render pass */
 function imageUsage(vk: number, samples: number, renderable: boolean): number {
   let u = TU.COPY_SRC | TU.COPY_DST;

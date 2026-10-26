@@ -11,10 +11,10 @@ import { COMMANDS } from "./commands.ts";
 import { SYNC } from "./submit.ts";
 import { SWAPCHAIN } from "./swapchain.ts";
 
-/** the Vulkan 1.1 commands the modules above leave out: queries, texel buffer views, blits, attachment clears, device
+/** the Vulkan 1.1 commands the modules above leave out: queries, texel buffer views, device
  *  groups (VK_KHR_swapchain's among them) and descriptor update templates */
 const UNIMPLEMENTED = `vkCreateQueryPool vkDestroyQueryPool vkGetQueryPoolResults vkCmdBeginQuery vkCmdEndQuery vkCmdResetQueryPool
-  vkCmdWriteTimestamp vkCmdCopyQueryPoolResults vkCreateBufferView vkDestroyBufferView vkCmdBlitImage vkCmdClearAttachments
+  vkCmdWriteTimestamp vkCmdCopyQueryPoolResults vkCreateBufferView vkDestroyBufferView
   vkGetDeviceGroupPeerMemoryFeatures vkCmdDispatchBase vkCreateDescriptorUpdateTemplate vkDestroyDescriptorUpdateTemplate
   vkUpdateDescriptorSetWithTemplate vkGetDeviceGroupPresentCapabilitiesKHR vkGetDeviceGroupSurfacePresentModesKHR
   vkGetPhysicalDevicePresentRectanglesKHR vkAcquireNextImage2KHR`.trim().split(/\s+/);
