@@ -44,6 +44,9 @@ export class Layer {
   /** the latched buffer, and the rect it scales into (BLASTBufferQueue's destination frame) */
   buffer: Frame | null = null;
   dest: Rect | null = null;
+  /** the buffer's crop and its transform's flips and quarter turn (ASurfaceTransaction_setGeometry) */
+  source: Rect | null = null;
+  transform = 0;
   /** setRelativeLayer: the layer this one is Z-ordered among, and those Z-ordered among this one */
   relativeOf: Layer | null = null;
   readonly relatives: Layer[] = [];
@@ -73,6 +76,11 @@ export class Layer {
 /** a buffer: a canvas the queue reuses, or a frame its producer hands over and the layer releases */
 type Frame = OffscreenCanvas | ImageBitmap | VideoFrame;
 const releaseFrame = (f: Frame | null) => { if (f && !(f instanceof OffscreenCanvas)) f.close(); };
+/** `buffer` latched on `layer`, releasing the frame it held */
+export function latchBuffer(layer: Layer, buffer: Frame | null): void {
+  if (layer.buffer !== buffer) releaseFrame(layer.buffer);
+  layer.buffer = buffer;
+}
 const roots = new Set<Layer>();
 
 // ── composition
@@ -101,7 +109,7 @@ function composite(): void {
   else { ctx.fillStyle = "#000"; ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height); }
   placed.clear();
   content = false;
-  for (const layer of [...roots].filter((l) => l.layerStack === 0 && !l.relativeOf).sort(byZ)) drawTree(ctx, layer);
+  for (const layer of [...roots].filter((l) => l.layerStack === 0 && !l.relativeOf).sort(byZ)) drawTree(ctx, layer, true);
   ctx.restore();
   placeFunctors(placed);
   perf.drawMs += performance.now() - t0;
@@ -110,19 +118,28 @@ function composite(): void {
 }
 const byZ = (a: Layer, b: Layer) => a.z - b.z;
 /** Layer::traverseInZOrder: the children and the layers relative to this one, by Z, those below
- *  zero under the layer's own content */
-function drawTree(ctx: OffscreenCanvasRenderingContext2D, layer: Layer): void {
+ *  zero under the layer's own content; `display` for the display's composition, which places web content */
+function drawTree(ctx: OffscreenCanvasRenderingContext2D, layer: Layer, display: boolean): void {
   if (layer.removed) return;
   const zs = layer.relatives.length ? [...layer.children.filter((c) => !c.relativeOf), ...layer.relatives].sort(byZ)
     : layer.children.length > 1 ? layer.children.slice().sort(byZ) : layer.children;
   let i = 0;
-  for (; i < zs.length && zs[i].z < 0; i++) if (zs[i].relativeOf === null || zs[i].relativeOf === layer) drawTree(ctx, zs[i]);
-  if (layer.buffer || layer.color) drawContent(ctx, layer);
-  for (; i < zs.length; i++) if (zs[i].relativeOf === null || zs[i].relativeOf === layer) drawTree(ctx, zs[i]);
+  for (; i < zs.length && zs[i].z < 0; i++) if (zs[i].relativeOf === null || zs[i].relativeOf === layer) drawTree(ctx, zs[i], display);
+  if (layer.buffer || layer.color) drawContent(ctx, layer, display);
+  for (; i < zs.length; i++) if (zs[i].relativeOf === null || zs[i].relativeOf === layer) drawTree(ctx, zs[i], display);
+}
+let offscreen: OffscreenCanvasRenderingContext2D | null = null;
+/** a tree off the display (one an ASurfaceControl hangs from a window) composed into a frame of width x height */
+export function composeTree(root: Layer, width: number, height: number): ImageBitmap {
+  const ctx = offscreen ??= new OffscreenCanvas(1, 1).getContext("2d")!;
+  if (ctx.canvas.width !== width || ctx.canvas.height !== height) { ctx.canvas.width = width; ctx.canvas.height = height; }
+  ctx.clearRect(0, 0, width, height);
+  drawTree(ctx, root, false);
+  return ctx.canvas.transferToImageBitmap();
 }
 /** a layer's buffer or color under its parents' position, matrix, alpha and crop, which apply
  *  wherever relative Z placed it */
-function drawContent(ctx: OffscreenCanvasRenderingContext2D, layer: Layer): void {
+function drawContent(ctx: OffscreenCanvasRenderingContext2D, layer: Layer, display: boolean): void {
   const chain: Layer[] = [];
   for (let l: Layer | null = layer; l; l = l.parent) {
     if (l.hidden || l.alpha <= 0 || l.removed) return;
@@ -137,10 +154,10 @@ function drawContent(ctx: OffscreenCanvasRenderingContext2D, layer: Layer): void
     ctx.globalAlpha *= l.alpha;
     if (crop) {
       ctx.beginPath(); ctx.roundRect(crop[0], crop[1], crop[2] - crop[0], crop[3] - crop[1], l.cornerRadius); ctx.clip();
-      screen = intersect(screen, deviceRect(ctx.getTransform(), crop[0], crop[1], crop[2], crop[3]));
+      if (display) screen = intersect(screen, deviceRect(ctx.getTransform(), crop[0], crop[1], crop[2], crop[3]));
     }
   }
-  placeWebContent(ctx.getTransform(), layer, screen);
+  if (display) placeWebContent(ctx.getTransform(), layer, screen);
   if (layer.color) {
     const [r, g, b] = layer.color;
     ctx.fillStyle = cssColor(0xff000000 | Math.round(r * 255) << 16 | Math.round(g * 255) << 8 | Math.round(b * 255));
@@ -148,11 +165,25 @@ function drawContent(ctx: OffscreenCanvasRenderingContext2D, layer: Layer): void
     ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
   } else {
     const buffer = layer.buffer!, dest = layer.dest;
-    content = true;
-    if (dest) ctx.drawImage(buffer, dest[0], dest[1], dest[2] - dest[0], dest[3] - dest[1]);
+    if (display) content = true;
+    if (layer.source || layer.transform) drawTransformed(ctx, layer, buffer);
+    else if (dest) ctx.drawImage(buffer, dest[0], dest[1], dest[2] - dest[0], dest[3] - dest[1]);
     else ctx.drawImage(buffer, 0, 0);
   }
   ctx.restore();
+}
+// NATIVE_WINDOW_TRANSFORM_FLIP_H, _FLIP_V and _ROT_90
+const FLIP_H = 1, FLIP_V = 2, ROT_90 = 4;
+/** the buffer's source rect into its destination, by default the source's size at the origin, after the
+ *  transform's flips and then its quarter turn clockwise, in the unit square the destination scales */
+function drawTransformed(ctx: OffscreenCanvasRenderingContext2D, layer: Layer, buffer: Frame): void {
+  const [bw, bh] = frameSize(buffer), [l, t, r, b] = layer.source ?? [0, 0, bw, bh], w = Math.min(r, bw) - l, h = Math.min(b, bh) - t;
+  const turned = layer.transform & ROT_90, [dl, dt, dr, db] = layer.dest ?? [0, 0, turned ? h : w, turned ? w : h];
+  ctx.translate(dl, dt); ctx.scale(dr - dl, db - dt);
+  if (turned) ctx.transform(0, 1, -1, 0, 1, 0);
+  if (layer.transform & FLIP_H) ctx.transform(-1, 0, 0, 1, 1, 0);
+  if (layer.transform & FLIP_V) ctx.transform(1, 0, 0, -1, 0, 1);
+  if (w > 0 && h > 0) ctx.drawImage(buffer, l, t, w, h, 0, 0, 1, 1);
 }
 
 /** whether this composition drew a buffer, not only window colors */
@@ -181,13 +212,13 @@ interface Control { layer: Layer }
 const control = (h: bigint) => deref<Control>(h);
 const layerOf = (h: bigint) => control(h).layer;
 type Op = () => void;
-interface Transaction { ops: Op[] }
+export interface Transaction { ops: Op[] }
 const tx = (h: bigint) => deref<Transaction>(h);
 const op = (fn: (layer: Layer, ...a: never[]) => void) => (t: bigint, sc: bigint, ...a: never[]) => {
   const layer = layerOf(sc);
   tx(t).ops.push(() => fn(layer, ...a));
 };
-function applyOps(t: Transaction): void {
+export function applyOps(t: Transaction): void {
   const ops = t.ops.splice(0);
   for (const fn of ops) fn();
   if (ops.length) scheduleComposite();
@@ -195,12 +226,6 @@ function applyOps(t: Transaction): void {
 const controlField = peerField<bigint>("android/view/SurfaceControl", "mNativeObject");
 /** the layer of a Java SurfaceControl, which ASurfaceControl_fromJava hangs a native tree from */
 export const javaLayer = (sc: JObj | null): Layer | null => { const h = sc ? controlField(sc) : 0n; return h ? layerOf(h) : null; };
-/** a native tree's composed frame (surfacecontrol.ts) as the layer's buffer */
-export function showFrame(layer: Layer, frame: ImageBitmap | VideoFrame): void {
-  releaseFrame(layer.buffer);
-  layer.buffer = frame;
-  scheduleComposite();
-}
 /** a Java SurfaceControl over `layer` */
 export const javaSurfaceControl = (layer: Layer, callsite: string): JObj | Promise<JObj> => after(newObj("android/view/SurfaceControl"),
   (sc) => after(vcall(sc, "assignNativeObject", "(JLjava/lang/String;)V", handle({ layer } satisfies Control), callsite), () => sc));
@@ -210,6 +235,12 @@ export function displayLayer(name: string, z: number): Layer {
   layer.layerStack = 0; layer.z = z;
   roots.add(layer);
   return layer;
+}
+/** a client's reparent: a layer reparented to null is offscreen, not a display root, and goes once its controls are released */
+export function reparentLayer(layer: Layer, to: Layer | null): void {
+  layer.reparent(to);
+  roots.delete(layer);
+  if (!to) layer.dropOutsideRelatives();
 }
 export function removeLayer(layer: Layer): void {
   layer.removed = true;
@@ -281,12 +312,7 @@ rt.registerJnis("android/view/SurfaceControl", {
   "nativeSetLayerStack(JJI)V": op((l, stack: number) => { l.layerStack = stack; }),
   "nativeReparent(JJJ)V": (t: bigint, sc: bigint, parent: bigint) => {
     const layer = layerOf(sc), to = parent ? layerOf(parent) : null;
-    // a layer reparented to null is offscreen, not a display root, and goes once its controls are released
-    tx(t).ops.push(() => {
-      layer.reparent(to);
-      roots.delete(layer);
-      if (!to) layer.dropOutsideRelatives();
-    });
+    tx(t).ops.push(() => reparentLayer(layer, to));
   },
   // properties the display composes without: the browser canvas has one color space, no HDR,
   // no frame-rate voting, no blur or shadows on layers, and input routing is the window manager's
@@ -354,10 +380,7 @@ export function queueBuffer(s: Surface, buffer: Frame | null = s.queue?.canvas ?
   queuedAt ??= performance.now();
   const latch: Transaction = { ops: q.pending.flatMap((t) => t.ops.splice(0)) };
   q.pending.length = 0;
-  latch.ops.push(() => {
-    if (layer.buffer !== buffer) releaseFrame(layer.buffer);
-    layer.buffer = buffer;
-  });
+  latch.ops.push(() => latchBuffer(layer, buffer));
   const sync = q.sync;
   if (sync) {
     if (q.acquireSingle) q.sync = null;
