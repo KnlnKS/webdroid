@@ -106,8 +106,6 @@ export function isA64(): boolean { return A64; }
 /** the register file at the first native fault, as the faulting block found it (debug) */
 export const lastFault: { regs: { cpu: string; r: number[]; h: number[]; bt: string[]; frames: string[] } | null; msg: string } = { regs: null, msg: "" };
 export const watchPcs = new Set<number>(((globalThis as { __wdWatch?: number[] }).__wdWatch ?? []).map((p) => p >>> 0));
-/** a parked system call's result, which its thread's registers take when it resumes */
-class SyscallResult { readonly ret: HostRet; constructor(ret: HostRet) { this.ret = ret; } }
 /** a run loop taking its thread for a turn it resumes in, and handing it back where it parks */
 interface LoopTurn { own(): void; release(): void }
 
@@ -624,7 +622,7 @@ export class Cpu {
           turn.own();
           if (this.finished) return;
           this.deferredSignalDepths.delete(myDepth);
-          if (!this.raised) { if (v instanceof SyscallResult) this.syscallReturn(v.ret); else hostReturn(this, v as HostRet); continue; }
+          if (!this.raised) { if (typeof v === "function") v(); else hostReturn(this, v as HostRet); continue; }
           ex = SliceExit.Signal;
         }
         if (ex === SliceExit.Signal) {
@@ -711,7 +709,7 @@ export class Cpu {
     // the core has already stepped past the svc: a parked syscall resumes by writing x0 alone, once
     // any signal handler delivered meanwhile has given the register file back
     if (ret instanceof Promise) {
-      this.pending = ret.then((r) => new SyscallResult(r), (e) => new SyscallResult(this.copyFault(e)));
+      this.pending = ret.catch((e) => this.copyFault(e)).then((r) => () => this.syscallReturn(r));
       return;
     }
     this.syscallReturn(ret);
