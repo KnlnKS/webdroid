@@ -18,7 +18,7 @@ const run = (cmd: string, args: string[], input?: Uint8Array) => execFileSync(cm
 // assemble every instruction: one word each, in order
 const asm = INSTRUCTIONS.join("\n") + "\n";
 writeFileSync(`${dir}/insns.s`, asm);
-run("clang", ["-target", "aarch64-linux-gnu", "-march=armv8.5-a+dotprod", "-x", "assembler", "-c", `${dir}/insns.s`, "-o", `${dir}/insns.o`]);
+run("clang", ["-target", "aarch64-linux-gnu", "-march=armv8.5-a+dotprod+aes+sha2", "-x", "assembler", "-c", `${dir}/insns.s`, "-o", `${dir}/insns.o`]);
 const dis = run("llvm-objdump", ["-d", `${dir}/insns.o`]).toString();
 const words = [...dis.matchAll(/^\s*[0-9a-f]+:\s+([0-9a-f]{8})\s/gm)].map((m) => parseInt(m[1], 16) >>> 0);
 if (words.length !== INSTRUCTIONS.length) throw new Error(`assembled ${words.length} words for ${INSTRUCTIONS.length} instructions`);

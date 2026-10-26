@@ -234,6 +234,9 @@ fcmge d0, d1, #0.0|fcmgt d0, d1, #0.0|fcvtns w2, d1|fcvtps w2, d1|fcvtpu w2, d1|
 fcvtmu x2, d1|fcvtas x2, d1|fmadd d0, d1, d2, d3|fnmadd d0, d1, d2, d3|fccmpe d0, d1, #3, eq|fcsel d0, d1, d2, eq|fccmpe d0, d1, #3, vs|fcsel d0, d1, d2, vs|fccmpe d0, d1, #3, hi|fcsel d0, d1, d2, hi
 fccmpe d0, d1, #3, le|fcsel d0, d1, d2, le|fcmpe d0, #0.0|fmaxp d0, v1.2d|fminp s0, v1.2s|fmaxnmp d0, v1.2d|fminnmp s0, v1.2s|fcvtzs w2, d1, #31|fcvtzu w2, s1, #32|fcvtzs x2, d1, #64|ucvtf s0, x2, #64
 scvtf d0, w2, #32|crc32b w2, w3, w4|crc32h w2, w3, w4|crc32w w2, w3, w4|crc32cb w2, w3, w4|crc32ch w2, w3, w4|crc32cw w2, w3, w4|crc32x w2, w3, x4|crc32cx w2, w3, x4
+aese v0.16b, v1.16b|aesd v0.16b, v1.16b|aesmc v0.16b, v1.16b|aesimc v0.16b, v1.16b|pmull v0.1q, v1.1d, v2.1d|pmull2 v0.1q, v1.2d, v2.2d
+sha1c q0, s1, v2.4s|sha1p q0, s1, v2.4s|sha1m q0, s1, v2.4s|sha1su0 v0.4s, v1.4s, v2.4s|sha1h s0, s1|sha1su1 v0.4s, v1.4s
+sha256h q0, q1, v2.4s|sha256h2 q0, q1, v2.4s|sha256su0 v0.4s, v1.4s|sha256su1 v0.4s, v1.4s, v2.4s
 `.split(/[\n|]/).map((s) => s.trim()).filter(Boolean);
 
 /** xorshift32 over a case-specific seed: the same stream on both sides */

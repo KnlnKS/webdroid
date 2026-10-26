@@ -401,7 +401,145 @@ pub fn exec(c: *Cpu, w: u32) Status {
     }
     if (vector(c, w)) |st| return st;
     if ((w & 0x50000000) == 0x10000000) return scalarFp(c, w);
+    if (is(w, 0xff3e0c00, 0x4e280800)) return aes(c, w);
+    if (is(w, 0xff208c00, 0x5e000000) or is(w, 0xff3e0c00, 0x5e280800)) return sha(c, w);
     return fault(c, w);
+}
+
+fn gmul(a: u8, b: u8) u8 {
+    var r: u8 = 0;
+    var x = a;
+    var y = b;
+    while (y != 0) : (y >>= 1) {
+        if (y & 1 != 0) r ^= x;
+        x = (x << 1) ^ (if (x & 0x80 != 0) @as(u8, 0x1b) else 0);
+    }
+    return r;
+}
+const sbox: [2][256]u8 = blk: {
+    @setEvalBranchQuota(1_000_000);
+    var t: [2][256]u8 = undefined;
+    for (0..256) |i| {
+        var inv: u8 = 0;
+        for (1..256) |j| if (gmul(@intCast(i), @intCast(j)) == 1) {
+            inv = @intCast(j);
+        };
+        const s = inv ^ std.math.rotl(u8, inv, 1) ^ std.math.rotl(u8, inv, 2) ^ std.math.rotl(u8, inv, 3) ^ std.math.rotl(u8, inv, 4) ^ 0x63;
+        t[0][i] = s;
+        t[1][s] = @intCast(i);
+    }
+    break :blk t;
+};
+/// the products MixColumns and InvMixColumns take, by multiplier
+const gf: [15][256]u8 = blk: {
+    @setEvalBranchQuota(100_000);
+    var t: [15][256]u8 = undefined;
+    for (0..15) |k| for (0..256) |i| {
+        t[k][i] = gmul(@intCast(k), @intCast(i));
+    };
+    break :blk t;
+};
+/// AESE, AESD (AddRoundKey, [Inv]ShiftRows, [Inv]SubBytes), AESMC, AESIMC ([Inv]MixColumns)
+fn aes(c: *Cpu, w: u32) Status {
+    const rd: u8 = @intCast(w & 31);
+    const rn: u8 = @intCast(bits(w, 5, 5));
+    const op = bits(w, 12, 5);
+    if (op < 4 or op > 7) return fault(c, w);
+    const n = c.v[rn];
+    var out: V align(16) = undefined;
+    if (op < 6) {
+        const d = op == 5;
+        for (0..16) |i| {
+            const r = i & 3;
+            const col = (if (d) (i / 4 + 4 - r) else (i / 4 + r)) & 3;
+            const j = r + 4 * col;
+            out[i] = sbox[@intFromBool(d)][c.v[rd][j] ^ n[j]];
+        }
+    } else {
+        const k: [4]u8 = if (op == 6) .{ 2, 3, 1, 1 } else .{ 14, 11, 13, 9 };
+        for (0..4) |col| for (0..4) |r| {
+            var v: u8 = 0;
+            for (0..4) |e| v ^= gf[k[e]][n[4 * col + ((r + e) & 3)]];
+            out[4 * col + r] = v;
+        };
+    }
+    c.v[rd] = out;
+    return .next;
+}
+/// SHA1C/P/M/SU0, SHA256H/H2/SU1 (three registers), SHA1H/SU1, SHA256SU0 (two)
+fn sha(c: *Cpu, w: u32) Status {
+    const rd: u8 = @intCast(w & 31);
+    const rn: u8 = @intCast(bits(w, 5, 5));
+    const rm: u8 = @intCast(bits(w, 16, 5));
+    const rotl = std.math.rotl;
+    const rotr = std.math.rotr;
+    const d = L(u32, &c.v[rd]).*;
+    const n = L(u32, &c.v[rn]).*;
+    const m = L(u32, &c.v[rm]).*;
+    var out: [4]u32 = undefined;
+    if (w & 0x00200000 != 0) switch (bits(w, 12, 5)) {
+        0 => {
+            writeScalar(c, rd, u32, rotl(u32, n[0], 30));
+            return .next;
+        },
+        1 => {
+            const t = [4]u32{ d[0] ^ n[1], d[1] ^ n[2], d[2] ^ n[3], d[3] };
+            for (0..4) |i| out[i] = rotl(u32, t[i], 1);
+            out[3] ^= rotl(u32, t[0], 2);
+        },
+        2 => {
+            const t = [4]u32{ d[1], d[2], d[3], n[0] };
+            for (0..4) |i| out[i] = d[i] +% (rotr(u32, t[i], 7) ^ rotr(u32, t[i], 18) ^ (t[i] >> 3));
+        },
+        else => return fault(c, w),
+    } else switch (bits(w, 12, 3)) {
+        0, 1, 2 => |f| {
+            var x = d;
+            var y = n[0];
+            for (0..4) |e| {
+                const t = switch (f) {
+                    0 => ((x[2] ^ x[3]) & x[1]) ^ x[3],
+                    1 => x[1] ^ x[2] ^ x[3],
+                    else => (x[1] & x[2]) | ((x[1] | x[2]) & x[3]),
+                };
+                y +%= rotl(u32, x[0], 5) +% t +% m[e];
+                x[1] = rotl(u32, x[1], 30);
+                const r = [4]u32{ y, x[0], x[1], x[2] };
+                y = x[3];
+                x = r;
+            }
+            out = x;
+        },
+        3 => for (0..4) |i| {
+            out[i] = (if (i < 2) d[i + 2] else n[i - 2]) ^ d[i] ^ m[i];
+        },
+        4, 5 => |f| {
+            var x = if (f == 4) d else n;
+            var y = if (f == 4) n else d;
+            for (0..4) |e| {
+                const ch = ((y[1] ^ y[2]) & y[0]) ^ y[2];
+                const maj = (x[0] & x[1]) | ((x[0] | x[1]) & x[2]);
+                const t1 = y[3] +% (rotr(u32, y[0], 6) ^ rotr(u32, y[0], 11) ^ rotr(u32, y[0], 25)) +% ch +% m[e];
+                x[3] +%= t1;
+                y[3] = t1 +% (rotr(u32, x[0], 2) ^ rotr(u32, x[0], 13) ^ rotr(u32, x[0], 22)) +% maj;
+                const rx = [4]u32{ y[3], x[0], x[1], x[2] };
+                const ry = [4]u32{ x[3], y[0], y[1], y[2] };
+                x = rx;
+                y = ry;
+            }
+            out = if (f == 4) x else y;
+        },
+        6 => {
+            const t0 = [4]u32{ n[1], n[2], n[3], m[0] };
+            for (0..4) |e| {
+                const t = if (e < 2) m[e + 2] else out[e - 2];
+                out[e] = (rotr(u32, t, 17) ^ rotr(u32, t, 19) ^ (t >> 10)) +% d[e] +% t0[e];
+            }
+        },
+        else => return fault(c, w),
+    }
+    L(u32, &c.v[rd]).* = out;
+    return .next;
 }
 
 pub fn tableLookup(table: []const u8, indices: []const u8, out: []u8, extend: bool) void {
@@ -1065,8 +1203,18 @@ fn dot(x: Ctx, m: u8, idx: usize) Status {
 }
 
 fn threeDifferent(x: Ctx) Status {
-    if (x.size == 3) return fault(x.c, x.w);
+    if (x.size == 3) return if (!x.U and bits(x.w, 12, 4) == 14) pmull64(x) else fault(x.c, x.w);
     return bySize(threeDifferentT, x, x.size, !x.U);
+}
+/// PMULL{2} .1Q: the 128-bit carry-less product of one doubleword of each source
+fn pmull64(x: Ctx) Status {
+    const h: usize = @intFromBool(bits(x.w, 30, 1) != 0);
+    const a: u128 = get(u64, x.c, x.rn, h);
+    const b = get(u64, x.c, x.rm, h);
+    var r: u128 = 0;
+    for (0..64) |i| r ^= (a << @intCast(i)) & (@as(u128, 0) -% ((b >> @intCast(i)) & 1));
+    L(u128, &x.c.v[x.rd])[0] = r;
+    return .next;
 }
 fn threeDifferentT(comptime T: type, x: Ctx) Status {
     const c = x.c;

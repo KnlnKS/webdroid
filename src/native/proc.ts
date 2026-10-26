@@ -40,11 +40,13 @@ const setLimit = (resource: number, soft: bigint, hard: bigint) => {
 let atRandom = 0;
 /** The auxiliary vector a process starts with: AT_PAGESZ, AT_HWCAP/AT_HWCAP2, AT_SECURE and
  *  AT_RANDOM's 16 bytes (the stack guard and setjmp cookie seed). An A64 process's AT_HWCAP has
- *  HWCAP_CRC32 alone, which the reference build's libc is compiled to assume; the other optional
- *  features stay unadvertised, steering libraries away from paths the emitter lacks. */
+ *  FP and ASIMD, which every A64 core has; CRC32, which the reference build's libc is compiled to
+ *  assume; and AES, PMULL, SHA1 and SHA2, which spare TLS libraries their software ciphers (OpenSSL
+ *  reads them only beside ASIMD). The other optional features stay unadvertised, steering
+ *  libraries away from paths the emitter lacks. */
 export function auxv(): [number, number][] {
   if (!atRandom) { atRandom = mem.hostAlloc(16); fillRandom(atRandom, 16); }
-  return [[6, 4096], [16, isA64() ? 1 << 7 : 0], [26, 0], [23, 0], [25, atRandom]];
+  return [[6, 4096], [16, isA64() ? 0xfb : 0], [26, 0], [23, 0], [25, atRandom]];
 }
 /** struct sysinfo: uptime, loads[3], totalram, freeram, sharedram, bufferram, totalswap, freeswap
  *  at the long stride, then procs (u16), totalhigh, freehigh, mem_unit (u32); a 32-bit build

@@ -234,14 +234,10 @@ pub inline fn raise(c: *Cpu, code: Fault, w: u32) Status {
     return .fault;
 }
 /// Encodings of the optional extensions getauxval(AT_HWCAP) leaves out. OpenSSL's armcap probes
-/// AES, PMULL, SHA1/SHA256/SHA512, SHA3 and SM4 by executing one under a SIGILL handler. ARM32
-/// NEON words arrive here in their A32 form, Thumb's included.
+/// SHA512, SHA3 and SM4 (and on ARM32 AES, PMULL and SHA1/SHA256) by executing one under a SIGILL
+/// handler. ARM32 NEON words arrive here in their A32 form, Thumb's included.
 fn optionalExtension(aarch64: bool, w: u32) bool {
-    if (aarch64) return is(w, 0xff3e0c00, 0x4e280800) // AES
-    or is(w, 0xff208c00, 0x5e000000) // SHA1, SHA256 three-register
-    or is(w, 0xff3e0c00, 0x5e280800) // SHA1, SHA256 two-register
-    or is(w, 0xff000000, 0xce000000) // SHA512, SHA3, SM3, SM4
-    or is(w, 0xbfe0fc00, 0x0ee0e000) // PMULL{2} .1Q
+    if (aarch64) return is(w, 0xff000000, 0xce000000) // SHA512, SHA3, SM3, SM4
     or is(w, 0xffff0000, 0xdac10000) // PAuth
     or is(w, 0x1e000000, 0x04000000); // SVE
     return is(w, 0xffb30f10, 0xf3b00300) // AESE, AESD, AESMC, AESIMC
