@@ -46,35 +46,39 @@ export function createShell(actions: { launch: (name: string, file?: File) => vo
   const samples = document.querySelector<HTMLDetailsElement>("#samples")!;
   const settings = document.querySelector<HTMLElement>("#screencfg")!;
   const notice = document.querySelector<HTMLElement>("#notice")!;
+  const loader = document.querySelector<HTMLElement>("#local-loader")!;
+  const sessionCard = document.querySelector<HTMLElement>("#session")!;
+  const packageName = document.querySelector<HTMLElement>("#package-name")!;
   const status = document.querySelector<HTMLElement>("#status")!;
+  const hint = document.querySelector<HTMLElement>("#recovery-hint")!;
+  const details = document.querySelector<HTMLDetailsElement>("#error-details")!;
+  const errorMessage = document.querySelector<HTMLElement>("#error-message")!;
+  const stageText = document.querySelector<HTMLElement>("#stage-text")!;
   const retry = document.querySelector<HTMLButtonElement>("#retry")!;
   const reload = document.querySelector<HTMLButtonElement>("#reload")!;
   const progress = document.querySelector<HTMLElement>("#progress")!, fill = progress.firstElementChild as HTMLElement;
   let session: SessionState | null = null;
+  /** an app has run or can't be retried: another needs a fresh session */
+  const started = () => session?.kind === "running" || session?.kind === "exited" || (session?.kind === "failed" && !session.retry);
 
   /** The bar shows the steps done, and eases on toward the next step's start over about three times the step's usual length: a
    *  compositor transition, which moves while the page's thread is busy. */
   function showStage(stage: Stage) {
     const { text, at, ms } = STAGES[stage];
-    status.textContent = text;
+    stageText.textContent = text;
     progress.setAttribute("aria-valuenow", String(Math.round(at * 100)));
     fill.style.transition = `transform ${ms * 3}ms ease-out`;
     fill.style.transform = `scaleX(${stageEnd(stage)})`;
   }
 
   function updateAvailability() {
-    const busy = session?.kind === "loading";
-    const started = session?.kind === "running" || session?.kind === "exited" || (session?.kind === "failed" && !session.retry);
-    choose.disabled = picker.disabled = busy || started;
-    launcher.inert = busy || started;
-    samples.hidden = started || !launcher.childElementCount;
-    settings.hidden = busy || started;
+    const busy = session?.kind === "loading", done = started(), blocked = busy || done;
+    choose.disabled = picker.disabled = launcher.inert = blocked;
+    settings.hidden = blocked;
+    samples.hidden = done || !launcher.childElementCount;
     back.disabled = session?.kind !== "running";
     home.disabled = busy;
-    const loader = document.querySelector<HTMLElement>("#local-loader")!;
-    loader.hidden = started;
-    loader.setAttribute("aria-busy", String(busy));
-    document.querySelector<HTMLElement>(".privacy-note")!.hidden = started;
+    loader.hidden = done;
   }
 
   const announce = (message: string) => { notice.textContent = message; notice.hidden = !message; };
@@ -93,7 +97,7 @@ export function createShell(actions: { launch: (name: string, file?: File) => vo
 
   function openFiles(files: FileList) {
     if (session?.kind === "loading") return;
-    if (session?.kind === "running" || session?.kind === "exited" || (session?.kind === "failed" && !session.retry)) {
+    if (started()) {
       announce("Return home to open another app in a fresh session.");
       return;
     }
@@ -142,31 +146,25 @@ export function createShell(actions: { launch: (name: string, file?: File) => vo
       }
       root.dataset.state = next.kind;
       updateAvailability();
-      document.querySelector<HTMLElement>("#session")!.hidden = next.kind === "running";
-      document.querySelector<HTMLElement>("#package-name")!.textContent = next.kind === "running" || next.kind === "exited" ? next.label : next.file;
-      const failed = next.kind === "failed", ended = failed || next.kind === "exited";
-      document.querySelector<HTMLElement>("#recovery")!.hidden = !ended;
-      const hint = document.querySelector<HTMLElement>("#recovery-hint")!;
-      hint.hidden = !ended;
-      const details = document.querySelector<HTMLDetailsElement>("#error-details")!;
-      details.hidden = !failed;
-      details.open = false;
-      retry.hidden = !ended || !next.retry;
-      retry.textContent = next.kind === "exited" ? "Open again" : "Try again";
-      progress.hidden = next.kind !== "loading";
-      if (next.kind === "loading") return;
-      status.textContent = next.kind === "running" ? "Running"
-        : next.kind === "exited" ? (next.crashDialog ? `${next.label} keeps stopping` : next.crashed ? "The app stopped" : "The app closed") : "Couldn’t open this app";
-      if (next.kind === "exited") hint.textContent = next.retry ? "Its process ended. Open it again to start a new one." : "Its process ended. Reload to start a fresh session, then choose your package again.";
-      if (failed) {
-        hint.textContent = !next.retry ? "Reload to start a fresh session, then choose your package again." : "Try again, or choose another package. Check that the file is complete.";
-        document.querySelector<HTMLElement>("#error-message")!.textContent = errorText(next.error);
-      }
+      const ended = next.kind === "failed" || next.kind === "exited";
+      sessionCard.hidden = !ended;
       if (next.kind === "running") {
         canvas.setAttribute("aria-label", `${next.label} — Android app screen`);
         resizeDisplay();
         window.scrollTo(0, 0);
       }
+      if (!ended) return;
+      const failed = next.kind === "failed";
+      details.hidden = !failed;
+      details.open = false;
+      retry.hidden = !next.retry;
+      retry.textContent = failed ? "Try again" : "Open again";
+      [status.textContent, hint.textContent] = failed
+        ? ["Couldn’t open this app", next.retry ? "Try again, or choose another package. Check that the file is complete." : "Reload to start a fresh session, then choose your package again."]
+        : [next.crashDialog ? `${next.label} keeps stopping` : next.crashed ? "The app stopped" : "The app closed",
+          next.retry ? "Its process ended. Open it again to start a new one." : "Its process ended. Reload to start a fresh session, then choose your package again."];
+      packageName.textContent = failed ? next.file : next.label;
+      if (failed) errorMessage.textContent = errorText(next.error);
     },
     addPackage(file: string) {
       const button = document.createElement("button");

@@ -36,7 +36,6 @@ small { font-size: 12px; color: var(--muted); }
 #local-loader strong { font-weight: 550; }
 #drop-hint { color: var(--muted); font-size: 14px; }
 .primary { color: #10232e; background: var(--accent); border-color: transparent; min-width: 160px; margin-top: 4px; }
-.privacy-note { font-size: 12px; line-height: 1.6; color: var(--muted); margin: 12px 4px 24px; }
 body.dragging #local-loader { border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: 4px; background: #1d2b35; }
 details { border-top: 1px solid var(--line); }
 summary { display: flex; align-items: center; gap: 8px; list-style: none; min-height: 52px; padding: 12px 0; font-size: 14px; font-weight: 550; }
@@ -63,19 +62,16 @@ input { display: block; width: 100%; margin-top: 6px; padding: 8px; font-family:
 #nav { width: 100%; display: flex; justify-content: space-around; padding-top: 6px; }
 .navb { display: grid; place-items: center; width: 72px; padding: 8px; border: 0; background: transparent; color: #b5bec9; }
 #session { padding: 18px; margin-bottom: 20px; border: 1px solid var(--line); border-radius: 12px; background: #1b1e23; overflow-wrap: anywhere; }
-.session-heading { display: flex; align-items: center; gap: 9px; }
 #package-name { min-width: 0; font-size: 14px; }
-#state-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
-#status, #recovery-hint { margin-top: 8px; font-size: 13px; color: var(--muted); }
-#progress { height: 4px; margin-top: 12px; border-radius: 2px; background: var(--line); overflow: hidden; }
+#status, #recovery-hint, #stage-text { margin-top: 8px; font-size: 13px; color: var(--muted); }
+#opening { align-self: stretch; margin-top: 4px; }
+#root:not([data-state="loading"]) #opening { display: none; }
+#progress { height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
 #progress > span { display: block; height: 100%; background: var(--accent); transform-origin: left; }
 @starting-style { #progress > span { transform: scaleX(0); } }
 #recovery { margin-top: 14px; }
 #recovery button { font-size: 13px; }
 #notice { color: #f2bdb7; border-left: 2px solid #e3968e; padding: 0 0 0 12px; margin-bottom: 20px; font-size: 14px; overflow-wrap: anywhere; }
-#root[data-state="failed"] #state-dot, #root[data-state="exited"] #state-dot { background: #f2a59b; }
-#root[data-state="loading"] #state-dot { background: #e8ce94; }
-#root[data-state="loading"] #local-loader { opacity: .65; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 ui-monospace, monospace; color: var(--muted); margin: 0; }
 #error-details { margin-top: 16px; }
 #runtime-error, #native { font-size: 13px; color: #e8ce94; overflow-wrap: anywhere; }
