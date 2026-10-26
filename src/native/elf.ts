@@ -52,10 +52,13 @@ export interface Module {
   locals: Map<string, number>;
   /** where the image lives on the device, when it is not the app's own */
   path?: string;
-  /** an image the linker maps from inside an apk (an uncompressed entry, at `path`'s "apk!/entry"): its bytes' offset there */
-  apkOffset?: number;
+  /** the file the image's pages map when it is not `path`: an archive holding it uncompressed, and the entry's offset there */
+  mapped?: MappedFile;
 }
 
+export interface MappedFile { path: string; offset: number }
+/** where an image is on the device: the path the linker names it by, and the file its pages map from when that is another */
+export interface ImageFile { path: string; mapped?: MappedFile }
 /** PT_TLS as bionic's TlsSegment holds it: each thread's block starts as a copy of the loaded,
  *  relocated template at `init` (`.tdata` may hold pointers), zero-filled to `size` */
 export interface TlsSegment { init: number; initSize: number; size: number; align: number }

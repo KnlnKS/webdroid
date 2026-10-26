@@ -29,7 +29,7 @@ import { deleteVersioned, enforceDeletePackages } from "./appdata.ts";
 import { installerService } from "./packageinstaller.ts";
 import { checkPermission } from "./permissions.ts";
 import { libraryAbi } from "../jvm/natives/jlang.ts";
-import { centralDir, inflateTree, localStart, treeEntrySize } from "../zip.ts";
+import { archivePath, centralDirOfSource, inflateTree, localDataOffset, treeEntrySize, type ZEntry } from "../zip.ts";
 import type { FileSource } from "../shell/lazyfile.ts";
 import { ABIS_64 } from "../shell/properties.ts";
 import { linkerHooks } from "../native/dl.ts";
@@ -70,15 +70,19 @@ function extractNativeLibraries(record: PackageRecord): typeof linkerHooks.appLi
   const dir = nativeLibraryDir(record, abi), prefix = `lib/${abi}/`;
   if (extracted) for (const name of rt.classpathNames()) if (name.startsWith(prefix) && name.endsWith(".so") && !name.includes("/", prefix.length))
     vfs.mount(dir + name.slice(prefix.length - 1), classpathFile(name));
-  return (entryAbi, name) => {
-    if (extracted && entryAbi === abi) return { path: `${dir}/${name}` };
+  const apks = [record.path, ...ownSplits(record).map((split) => apkPath(split.name))], dirs = new Map<string, Promise<Map<string, ZEntry>>>();
+  return (entryAbi, name) => extracted && entryAbi === abi ? { path: `${dir}/${name}` } : (async () => {
     const entry = `lib/${entryAbi}/${name}`;
-    for (const apk of [record.path, ...ownSplits(record).map((split) => apkPath(split.name))]) {
-      const bytes = vfs.read(apk), e = bytes && centralDir(bytes).get(entry);
-      if (e) return { path: `${apk}!/${entry}`, apkOffset: e.method === 0 ? localStart(bytes, e) : undefined };
+    for (const apk of apks) {
+      const source = vfs.source(apk);
+      if (!source) continue;
+      let entries = dirs.get(apk);
+      if (!entries) dirs.set(apk, entries = centralDirOfSource(source));
+      const e = (await entries).get(entry);
+      if (e) return { path: archivePath(apk, entry), mapped: e.method === 0 ? { path: apk, offset: await localDataOffset(source, e) } : undefined };
     }
-    return { path: `${record.path}!/${entry}` };
-  };
+    return { path: archivePath(record.path, entry) };
+  })();
 }
 /** a class path entry as a file, sized without inflating or fetching it; reading it inflates natively */
 function classpathFile(name: string): FileSource {

@@ -2,7 +2,7 @@
 // stubs), dlopen/dlsym over virtual host libs and APK-shipped libraries, exidx lookup for the
 // guest's own unwinder.
 
-import { mapElf, symbolize, nearestSymbol, type Module } from "./elf.ts";
+import { mapElf, symbolize, nearestSymbol, type ImageFile, type Module } from "./elf.ts";
 import { mem } from "./mem.ts";
 import { defineHost, probeHost, hostLib, lookupHost, hostLibNames, missingStub, slotName, isTrampPc, PTR, stp, cstr, type HostFn } from "./host.ts";
 import { KLAYOUT } from "./kernel.ts";
@@ -13,6 +13,7 @@ import { TLS_BLOCKS, TLS_MODULES } from "./core.ts";
 import { rt, type Gen } from "../jvm/runtime.ts";
 import { curThread } from "../jvm/natives/jentry.ts";
 import { vfs } from "../shell/vfs.ts";
+import { archiveEntry } from "../zip.ts";
 
 export const modules: Module[] = [];
 const byName = new Map<string, Module>();
@@ -38,7 +39,7 @@ export const interposed = new Map<string, number>();
  *  where the installer left the app's lib/<abi>/<name> */
 export const linkerHooks: {
   placeTls: ((mod: Module) => void) | null; hwcap: bigint; deviceLib: (name: string) => string | null;
-  appLib: (abi: string, name: string) => { path: string; apkOffset?: number } | undefined;
+  appLib: (abi: string, name: string) => ImageFile | Promise<ImageFile> | undefined;
   /** a module is linked and about to be initialized */
   linked: (mod: Module, cpu: Cpu) => Promise<void> | void;
   /** a module's image is about to be unmapped */
@@ -47,16 +48,19 @@ export const linkerHooks: {
 
 function basename(p: string): string { return p.slice(p.lastIndexOf("/") + 1); }
 
-/** where lib<name>.so comes from and the path the linker names it by: the booted apk's lib/<abi>/, for
- *  any ABI the tier runs, else a device library at its path in the VFS */
-function libSource(name: string): { path: string | undefined; apkOffset?: number; read: () => Promise<Uint8Array | null> } | null {
+/** where lib<name>.so comes from and where it is on the device: the booted apk's lib/<abi>/, for any
+ *  ABI the tier runs, else a device library at its path in the VFS */
+function libSource(name: string): { file: () => ImageFile | Promise<ImageFile> | undefined; read: () => Promise<Uint8Array | null> } | null {
   for (const a of rt.nativeAbis) {
     const entry = `lib/${a}/${name}`;
-    if (rt.hasClasspath(entry)) return { ...linkerHooks.appLib(a, name) ?? { path: undefined }, read: async () => rt.readClasspath(entry) };
+    if (rt.hasClasspath(entry)) return { file: () => linkerHooks.appLib(a, name), read: async () => rt.readClasspath(entry) };
   }
   const device = linkerHooks.deviceLib(name);
-  return device ? { path: device, read: async () => (await vfs.readFile(device)) ?? null } : null;
+  return device ? { file: () => ({ path: device }), read: async () => (await vfs.readFile(device)) ?? null } : null;
 }
+/** whether a library opened at the path `file` is there: a device library, or a file (an archive entry's archive) that exists, as
+ *  the app's own libraries are found by name alone */
+const isAt = (file: string): boolean => !!linkerHooks.deviceLib(basename(file)) || vfs.exists(archiveEntry(file)?.archive ?? file);
 
 /** reads started before the loadModule that takes them, by name */
 const prefetched = new Map<string, Promise<Uint8Array | null>>();
@@ -84,8 +88,10 @@ export async function loadModule(file: string, bytes?: Uint8Array, link = false,
     const b: Uint8Array | null = bytes ?? (source ? yield early ?? source.read() : null);
     if (!b) throw new Error(`dlopen failed: library "${name}" not found`);
     const { mod, relocate } = mapElf(name, b);
-    mod.path = file.startsWith("/") ? file : source?.path;
-    if (mod.path === source?.path) mod.apkOffset = source?.apkOffset;
+    // opened where the library is, by its name or its path, it maps from its file; at another path it is that path's
+    const at: ImageFile | undefined = yield source?.file();
+    const image = !file.startsWith("/") || file === at?.path ? at : { path: file };
+    mod.path = image?.path; mod.mapped = image?.mapped;
     // a process is one ABI, which its first image decided (loader.ts)
     if (mod.w64 !== isA64()) throw new Error(`${name}: ${mod.w64 ? "64" : "32"}-bit image in a ${isA64() ? "64" : "32"}-bit process`);
     modules.push(mod);
@@ -261,9 +267,7 @@ export const libdl: Record<string, HostFn> = {
     const path = a.p(), flags = a.i(), file = path ? mem.cstr(path) : "", name = basename(file);
     if (!name) return 1; // the main program
     if (hostLibNames().includes(name)) return handleOf({ lib: name });
-    // the app's library at a path is opened there (an apk's entry, "base.apk!/lib/<abi>/x.so", from its apk), so a path it is not at fails
-    const bang = file.indexOf("!/");
-    if (name !== file && !linkerHooks.deviceLib(name) && !vfs.exists(bang < 0 ? file : file.slice(0, bang))) { dlerrorMsg = `dlopen failed: library "${file}" not found`; return 0; }
+    if (name !== file && !isAt(file)) { dlerrorMsg = `dlopen failed: library "${file}" not found`; return 0; }
     const have = byName.get(name);
     const opened = (mod: Module) => { if (flags & RTLD_NODELETE) mod.nodelete = true; return handleOf({ mod }); };
     if (have) { have.refs++; return opened(have); }

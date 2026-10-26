@@ -25,11 +25,10 @@ import { ABIS_32, ABIS_64 } from "../shell/properties.ts";
 
 const hex = (n: number) => n.toString(16).padStart(8, "0");
 const perms = (flags: number) => `${flags & 4 ? "r" : "-"}${flags & 2 ? "w" : "-"}${flags & 1 ? "x" : "-"}p`;
-/** each segment's file-backed pages, then its zero-filled tail as bionic's linker names it; an image
- *  mapped from inside an apk shows the apk */
+/** each segment's file-backed pages, then its zero-filled tail as bionic's linker names it */
 function segmentLines(m: Module): string[] {
-  const path = modulePath(m), file = m.apkOffset === undefined ? path : path.slice(0, path.indexOf("!/"));
-  return m.segments.flatMap((s) => [...s.fileEnd > s.start ? [`${hex(s.start)}-${hex(s.fileEnd)} ${perms(s.flags)} ${hex(s.offset + (m.apkOffset ?? 0))} 00:00 0  ${file}`] : [],
+  const file = m.mapped?.path ?? modulePath(m), offset = m.mapped?.offset ?? 0;
+  return m.segments.flatMap((s) => [...s.fileEnd > s.start ? [`${hex(s.start)}-${hex(s.fileEnd)} ${perms(s.flags)} ${hex(s.offset + offset)} 00:00 0  ${file}`] : [],
     ...s.end > s.fileEnd ? [`${hex(s.fileEnd)}-${hex(s.end)} ${perms(s.flags)} 00000000 00:00 0  [anon:.bss]`] : []]);
 }
 /** /proc/self/maps: each image's segments, then each thread's stack, the main thread's named as the kernel names it */
