@@ -482,11 +482,7 @@ export function gles3Init(): void {
       rec.tracking = { kind: "bound", target: 0x0de1, storage: { immutable: true, format: buffer.internalFormat, width: buffer.width, height: buffer.height, levels: buffer.levels } };
       T().textures[name] = texture; T().ids.set(texture, name);
       dropTexture(state, old);
-      gl.bindTexture(0x0de1, texture);
-      let unit = state.bindings.get(state.activeUnit);
-      if (!unit) state.bindings.set(state.activeUnit, unit = new Map());
-      unit.set(0x0de1, texture);
-      state.revision++;
+      bindTexture(0x0de1, name);
     },
     glCopyTexSubImage3D: (_c, a) => g().copyTexSubImage3D(a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i()),
     glGenerateMipmap: (_c, a) => { const t = a.i(); for (const face of t === 0x8513 ? [0x8515, 0x8516, 0x8517, 0x8518, 0x8519, 0x851a] : [t]) forgetImages(face, (level) => level > 0); g().generateMipmap(t); },
