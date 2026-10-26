@@ -42,23 +42,26 @@ const RGB565: Codec = {
     return out;
   },
 };
-/** a format's bytes per pixel, the texture storage and upload format and type it has in GL, and the
- *  conversion of a format whose texture a CPU lock reads back as RGBA bytes */
-interface Format { bpp: number; internal: number; format: number; type: number; codec?: Codec }
+/** a format's bytes per pixel, the texture storage and upload format and type it has in GL, the
+ *  conversion of a format whose texture a CPU lock reads back as RGBA bytes, and its VkFormat, or
+ *  `external` for a Vulkan external format */
+interface Format { bpp: number; internal: number; format: number; type: number; codec?: Codec; vk?: number; external?: true }
 const FORMATS = new Map<number, Format>([
-  [1, { bpp: 4, internal: 0x8058, format: 0x1908, type: GL_UNSIGNED_BYTE, codec: bytewise(4, 4) }],  // R8G8B8A8_UNORM: RGBA8
-  [2, { bpp: 4, internal: 0x8051, format: GL_RGB, type: GL_UNSIGNED_BYTE, codec: bytewise(4, 3) }],  // R8G8B8X8_UNORM: RGB8, the X byte dropped on upload
+  [1, { bpp: 4, internal: 0x8058, format: 0x1908, type: GL_UNSIGNED_BYTE, codec: bytewise(4, 4), vk: 37 }],  // R8G8B8A8_UNORM: RGBA8
+  [2, { bpp: 4, internal: 0x8051, format: GL_RGB, type: GL_UNSIGNED_BYTE, codec: bytewise(4, 3), vk: 37 }],  // R8G8B8X8_UNORM: RGB8, the X byte dropped on upload
   [3, { bpp: 3, internal: 0x8051, format: GL_RGB, type: GL_UNSIGNED_BYTE, codec: bytewise(3, 3) }],  // R8G8B8_UNORM
   [4, { bpp: 2, internal: 0x8d62, format: GL_RGB, type: 0x8363, codec: RGB565 }],                    // R5G6B5_UNORM
-  [0x16, { bpp: 8, internal: 0x881a, format: 0x1908, type: 0x140b }],                                // R16G16B16A16_FLOAT: RGBA16F
-  [0x2b, { bpp: 4, internal: 0x8059, format: 0x1908, type: 0x8368 }],                                // R10G10B10A2_UNORM: RGB10_A2
+  [0x16, { bpp: 8, internal: 0x881a, format: 0x1908, type: 0x140b, vk: 97 }],                                // R16G16B16A16_FLOAT: RGBA16F
+  [0x2b, { bpp: 4, internal: 0x8059, format: 0x1908, type: 0x8368, vk: 64 }],                                // R10G10B10A2_UNORM: RGB10_A2
   [0x38, { bpp: 1, internal: 0x8229, format: 0x1903, type: GL_UNSIGNED_BYTE, codec: bytewise(1, 1) }], // R8_UNORM
   // IMPLEMENTATION_DEFINED and Y8Cb8Cr8_420: a decoder's frames, which GL samples as RGB as an external texture does
-  [0x22, { bpp: 4, internal: 0x8058, format: 0x1908, type: GL_UNSIGNED_BYTE }],
-  [0x23, { bpp: 4, internal: 0x8058, format: 0x1908, type: GL_UNSIGNED_BYTE }],
+  [0x22, { bpp: 4, internal: 0x8058, format: 0x1908, type: GL_UNSIGNED_BYTE, external: true }],
+  [0x23, { bpp: 4, internal: 0x8058, format: 0x1908, type: GL_UNSIGNED_BYTE, external: true }],
   [BLOB, { bpp: 1, internal: 0, format: 0, type: 0 }],
 ]);
 const codecOf = (format: number): Codec | undefined => FORMATS.get(format)?.codec;
+/** the VkFormat of AHardwareBuffer format `format`, or whether Vulkan takes it as an external format */
+export const vulkanFormat = (format: number): Pick<Format, "vk" | "external"> | undefined => FORMATS.get(format);
 
 // GraphicBuffer: vtable, RefBase::mRefs, then ANativeWindowBuffer: android_native_base_t (magic, version,
 // reserved[4], incRef, decRef), width, height, stride, format, usage_deprecated, layerCount, reserved[1],

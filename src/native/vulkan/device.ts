@@ -5,30 +5,40 @@
 // the buffer when it changes hands with the foreign queue family (submit.ts).
 
 import { mem } from "../mem.ts";
-import { PTR, ldp, stp, type ArgReader, type HostFn } from "../host.ts";
-import { bufferAt, acquire, release as releaseBuffer, type HardwareBuffer } from "../hardwarebuffer.ts";
+import { PTR, ldp, stp, type HostFn } from "../host.ts";
+import { bufferAt, acquire, release as releaseBuffer, vulkanFormat, type HardwareBuffer } from "../hardwarebuffer.ts";
 import { struct, ptrs, stU64 } from "../struct.ts";
-import { chain } from "./vk.ts";
+import { R, S, AHB_HANDLE, REMAINING, COMPARE, objects, dispatchable, nd, chain } from "./vk.ts";
 import { F, formatFeatures, textureFormat, vkFormatOf, type TextureFormat } from "./formats.ts";
-import { dispatchable, handle, object, maybe, release } from "./handles.ts";
-import { DEVICE_EXTENSIONS, MEMORY_TYPES, R, AHB_HANDLE, physicalOf, deviceAdapter, type Physical } from "./instance.ts";
+import { DEVICE_EXTENSIONS, MEMORY_TYPES, Physical, deviceAdapter } from "./instance.ts";
 import type { PushChunk } from "./pipeline.ts";
 
 /** GPUBufferUsage and GPUTextureUsage */
 export const BU = { MAP_READ: 0x1, COPY_SRC: 0x4, COPY_DST: 0x8, STORAGE: 0x80 } as const;
 export const TU = { COPY_SRC: 0x1, COPY_DST: 0x2, TEXTURE_BINDING: 0x4, STORAGE_BINDING: 0x8, RENDER_ATTACHMENT: 0x10 } as const;
-/** a non-dispatchable handle argument */
-export const nd = (a: ArgReader): number => Number(a.ul());
 
-export interface Device { physical: Physical; gpu: GPUDevice; queue: number; lost: boolean; push: PushChunk[] }
-export const deviceOf = (h: number): Device => object<Device>(h);
+export class Device {
+  lost = false;
+  /** the buffers of push constants (pipeline.ts) */
+  readonly push: PushChunk[] = [];
+  readonly physical: Physical;
+  readonly gpu: GPUDevice;
+  /** the handle of its one queue */
+  readonly queue: number;
+  constructor(physical: Physical, gpu: GPUDevice) { this.physical = physical; this.gpu = gpu; this.queue = dispatchable(new Queue(this)); }
+}
+export class Queue {
+  readonly dev: Device;
+  constructor(dev: Device) { this.dev = dev; }
+}
 
-export interface Memory {
-  size: number;
-  type: number;
+export class Memory {
   /** the guest bytes of host-visible memory, 0 for device-local memory */
-  host: number;
-  ahb: HardwareBuffer | null;
+  host = 0;
+  ahb: HardwareBuffer | null = null;
+  readonly size: number;
+  readonly type: number;
+  constructor(size: number, type: number) { this.size = size; this.type = type; }
 }
 export class Buffer {
   memory: Memory | null = null;
@@ -40,17 +50,38 @@ export class Buffer {
   /** the guest bytes holding the buffer's contents, 0 when its memory is device-local */
   get host(): number { return this.memory?.host ? this.memory.host + this.offset : 0; }
 }
+type Extent = Required<GPUExtent3DDict>;
 export class Image {
   gpu: GPUTexture | null = null;
   ahb: HardwareBuffer | null = null;
-  readonly desc: GPUTextureDescriptor;
+  readonly desc: GPUTextureDescriptor & { size: Extent };
   readonly format: TextureFormat;
   readonly vk: number;
   readonly external: boolean;
-  constructor(desc: GPUTextureDescriptor, format: TextureFormat, vk: number, external: boolean) {
-    this.desc = desc; this.format = format; this.vk = vk; this.external = external;
+  /** whether the format can be an attachment */
+  readonly renderable: boolean;
+  readonly is3d: boolean;
+  readonly levels: number;
+  readonly layers: number;
+  constructor(desc: GPUTextureDescriptor & { size: Extent }, format: TextureFormat, vk: number, external: boolean, renderable: boolean) {
+    this.desc = desc; this.format = format; this.vk = vk; this.external = external; this.renderable = renderable;
+    this.is3d = desc.dimension === "3d"; this.levels = desc.mipLevelCount ?? 1; this.layers = this.is3d ? 1 : desc.size.depthOrArrayLayers;
   }
   get texture(): GPUTexture { if (!this.gpu) throw new Error("vulkan: image without memory"); return this.gpu; }
+  /** level `l`'s extent, a layer's */
+  extent(l: number): Extent {
+    const { width, height, depthOrArrayLayers } = this.desc.size;
+    return { width: Math.max(1, width >> l), height: Math.max(1, height >> l), depthOrArrayLayers: this.is3d ? Math.max(1, depthOrArrayLayers >> l) : 1 };
+  }
+  /** the aspect VkImageAspectFlags `mask` names */
+  aspect(mask: number): GPUTextureAspect { return mask === 2 && this.format.stencil ? "depth-only" : mask === 4 && this.format.depth ? "stencil-only" : "all"; }
+  /** the levels and layers of a VkImageSubresourceRange, the remaining ones counted */
+  range(r: { baseMipLevel: number; levelCount: number; baseArrayLayer: number; layerCount: number }): { baseMipLevel: number; mipLevelCount: number; baseArrayLayer: number; arrayLayerCount: number } {
+    return {
+      baseMipLevel: r.baseMipLevel, mipLevelCount: r.levelCount === REMAINING ? this.levels - r.baseMipLevel : r.levelCount,
+      baseArrayLayer: r.baseArrayLayer, arrayLayerCount: r.layerCount === REMAINING ? this.layers - r.baseArrayLayer : r.layerCount,
+    };
+  }
 }
 export class View {
   readonly gpu: GPUTextureView;
@@ -64,13 +95,15 @@ const AllocateInfo = struct("sType:u32 pNext:ptr allocationSize:u64 memoryTypeIn
 const ImportAhb = struct("sType:u32 pNext:ptr buffer:ptr");
 const BufferInfo = struct("sType:u32 pNext:ptr flags:u32 size:u64 usage:u32 sharingMode:u32 queueFamilyIndexCount:u32 pQueueFamilyIndices:ptr");
 const Requirements = struct("size:u64 alignment:u64 memoryTypeBits:u32");
-const Requirements2 = struct("sType:u32 pNext:ptr requirements:u64[0]");
+const Requirements2 = struct("sType:u32 pNext:ptr requirements:struct", { requirements: Requirements });
 const Dedicated = struct("sType:u32 pNext:ptr prefers:u32 requires:u32");
 const BindInfo = struct("sType:u32 pNext:ptr object:u64 memory:u64 memoryOffset:u64");
-const RequirementsInfo2 = struct("sType:u32 pNext:ptr object:u64");
+/** a struct naming one object: VkBuffer/ImageMemoryRequirementsInfo2, VkMemoryGetAndroidHardwareBufferInfoANDROID */
+const ObjectInfo = struct("sType:u32 pNext:ptr object:u64");
 const ImageInfo = struct(`sType:u32 pNext:ptr flags:u32 imageType:u32 format:u32 width:u32 height:u32 depth:u32 mipLevels:u32 arrayLayers:u32
   samples:u32 tiling:u32 usage:u32 sharingMode:u32 queueFamilyIndexCount:u32 pQueueFamilyIndices:ptr initialLayout:u32`);
 const ExternalImage = struct("sType:u32 pNext:ptr handleTypes:u32");
+const ExternalFormat = struct("sType:u32 pNext:ptr externalFormat:u64");
 const ViewInfo = struct(`sType:u32 pNext:ptr flags:u32 image:u64 viewType:u32 format:u32 r:u32 g:u32 b:u32 a:u32
   aspectMask:u32 baseMipLevel:u32 levelCount:u32 baseArrayLayer:u32 layerCount:u32`);
 const SamplerInfo = struct(`sType:u32 pNext:ptr flags:u32 magFilter:u32 minFilter:u32 mipmapMode:u32 addressModeU:u32 addressModeV:u32
@@ -79,10 +112,6 @@ const SamplerInfo = struct(`sType:u32 pNext:ptr flags:u32 magFilter:u32 minFilte
 const AhbProperties = struct("sType:u32 pNext:ptr allocationSize:u64 memoryTypeBits:u32");
 const AhbFormat = struct(`sType:u32 pNext:ptr format:u32 externalFormat:u64 formatFeatures:u32 r:u32 g:u32 b:u32 a:u32
   suggestedYcbcrModel:u32 suggestedYcbcrRange:u32 suggestedXChromaOffset:u32 suggestedYChromaOffset:u32`);
-const ST = {
-  IMPORT_AHB: 1000129003, AHB_FORMAT_PROPERTIES: 1000129002, DEDICATED_REQUIREMENTS: 1000127000, EXTERNAL_IMAGE: 1000072001,
-  EXPORT_MEMORY: 1000072002, VIEW_USAGE: 1000117002, EXTERNAL_FORMAT: 1000129005,
-} as const;
 /** VK_FORMAT_R8G8B8A8_UNORM: the pixels of the AHardwareBuffers that are an external format, a decoder's frames */
 const EXTERNAL_PIXELS = 37;
 
@@ -108,11 +137,11 @@ const srgbPair = (gpu: string): GPUTextureFormat | null => gpu.endsWith("-srgb")
 
 /** the image's bytes, as its requirements report them: every level of every layer, tightly packed */
 function imageBytes(img: Image): number {
-  const f = img.format, { width, height, depthOrArrayLayers } = img.desc.size as GPUExtent3DDict;
+  const f = img.format;
   let total = 0;
-  for (let l = 0; l < (img.desc.mipLevelCount ?? 1); l++) {
-    const w = Math.max(1, width >> l), h = Math.max(1, (height ?? 1) >> l), d = img.desc.dimension === "3d" ? Math.max(1, (depthOrArrayLayers ?? 1) >> l) : depthOrArrayLayers ?? 1;
-    total += Math.ceil(w / f.bw) * Math.ceil(h / f.bh) * f.bytes * d;
+  for (let l = 0; l < img.levels; l++) {
+    const e = img.extent(l);
+    total += Math.ceil(e.width / f.bw) * Math.ceil(e.height / f.bh) * f.bytes * e.depthOrArrayLayers * img.layers;
   }
   return align(total * (img.desc.sampleCount ?? 1), ALIGN);
 }
@@ -131,53 +160,52 @@ const allTypes = (1 << MEMORY_TYPES.length) - 1;
 
 export const DEVICE: Record<string, HostFn> = {
   vkCreateDevice: async (_c, a) => {
-    const p = physicalOf(a.p()), info = DeviceInfo.read(a.p()); a.p(); const out = a.p();
+    const p = objects.get(a.p(), Physical), info = DeviceInfo.read(a.p()); a.p(); const out = a.p();
     const known = new Set(DEVICE_EXTENSIONS.map(([n]) => n));
     if (ptrs(info.extensionNames, info.extensions).some((n) => !known.has(mem.cstr(n)))) return R.EXTENSION_NOT_PRESENT;
     // every capability the adapter has: Vulkan enables features a device then never needs to ask WebGPU for
     const requiredLimits: Record<string, number> = {};
-    for (const k in p.limits) { const v = (p.limits as unknown as Record<string, unknown>)[k]; if (typeof v === "number") requiredLimits[k] = v; }
+    for (const k in p.limits) { const v = p.limits[k as keyof GPUSupportedLimits]; if (typeof v === "number") requiredLimits[k] = v; }
     const adapter = await deviceAdapter(p);
     if (!adapter) return R.INITIALIZATION_FAILED;
     const gpu = await adapter.requestDevice({ requiredFeatures: [...p.features] as GPUFeatureName[], requiredLimits }).catch((e: Error) => e);
     if (gpu instanceof Error) { console.warn("[vulkan] requestDevice:", gpu.message); return R.INITIALIZATION_FAILED; }
-    const dev: Device = { physical: p, gpu, queue: 0, lost: false, push: [] };
-    dev.queue = dispatchable({ device: dev });
+    const dev = new Device(p, gpu);
     gpu.onuncapturederror = (e) => console.warn("[vulkan] WebGPU error:", e.error.message);
     void gpu.lost.then((l) => { dev.lost = true; if (l.reason !== "destroyed") console.warn("[vulkan] device lost:", l.message); });
     stp(out, dispatchable(dev));
     return R.SUCCESS;
   },
-  vkDestroyDevice: (_c, a) => { const h = a.p(); if (!h) return; const dev = deviceOf(h); dev.gpu.destroy(); release(dev.queue); release(h); },
-  vkGetDeviceQueue: (_c, a) => { const dev = deviceOf(a.p()); a.u(); a.u(); stp(a.p(), dev.queue); },
-  vkGetDeviceQueue2: (_c, a) => { const dev = deviceOf(a.p()); a.p(); stp(a.p(), dev.queue); },
-  vkDeviceWaitIdle: async (_c, a) => { const dev = deviceOf(a.p()); await dev.gpu.queue.onSubmittedWorkDone(); return dev.lost ? R.DEVICE_LOST : R.SUCCESS; },
+  vkDestroyDevice: (_c, a) => { const h = a.p(); if (!h) return; const dev = objects.get(h, Device); dev.gpu.destroy(); objects.delete(dev.queue); objects.delete(h); },
+  vkGetDeviceQueue: (_c, a) => { const dev = objects.get(a.p(), Device); a.u(); a.u(); stp(a.p(), dev.queue); },
+  vkGetDeviceQueue2: (_c, a) => { const dev = objects.get(a.p(), Device); a.p(); stp(a.p(), dev.queue); },
+  vkDeviceWaitIdle: async (_c, a) => { const dev = objects.get(a.p(), Device); await dev.gpu.queue.onSubmittedWorkDone(); return dev.lost ? R.DEVICE_LOST : R.SUCCESS; },
 
   vkAllocateMemory: (_c, a) => {
     a.p(); const info = AllocateInfo.read(a.p()); a.p(); const out = a.p();
-    const m: Memory = { size: info.allocationSize, type: info.memoryTypeIndex, host: 0, ahb: null }, links = chain(info.pNext);
-    const ahb = links.get(ST.IMPORT_AHB);
+    const m = new Memory(info.allocationSize, info.memoryTypeIndex), links = chain(info.pNext);
+    const ahb = links.get(S.IMPORT_AHB);
     if (ahb) {
       const b = bufferAt(ImportAhb.read(ahb).buffer);
       if (!b) return R.INVALID_EXTERNAL_HANDLE;
       acquire(b); m.ahb = b;
-    } else if (links.has(ST.EXPORT_MEMORY)) return R.INVALID_EXTERNAL_HANDLE;           // no AHardwareBuffer is made here
+    } else if (links.has(S.EXPORT_MEMORY)) return R.INVALID_EXTERNAL_HANDLE;           // no AHardwareBuffer is made here
     if (MEMORY_TYPES[m.type] & HOST_VISIBLE) {
       if (m.size > 2 ** 31 || !(m.host = mem.memalign(64, m.size))) return R.OUT_OF_HOST_MEMORY;
       mem.memset(m.host, 0, m.size);
     }
-    stU64(out, handle(m));
+    stU64(out, objects.add(m));
     return R.SUCCESS;
   },
   vkFreeMemory: (_c, a) => {
-    a.p(); const h = nd(a), m = maybe<Memory>(h);
+    a.p(); const h = nd(a), m = objects.find(h, Memory);
     if (!m) return;
     if (m.host) mem.free(m.host);
     if (m.ahb) releaseBuffer(m.ahb);
-    release(h);
+    objects.delete(h);
   },
   vkMapMemory: (_c, a) => {
-    a.p(); const m = object<Memory>(nd(a)), offset = Number(a.ul()); a.ul(); a.u(); const out = a.p();
+    a.p(); const m = objects.get(nd(a), Memory), offset = Number(a.ul()); a.ul(); a.u(); const out = a.p();
     if (!m.host) return R.MEMORY_MAP_FAILED;
     stp(out, m.host + offset);
     return R.SUCCESS;
@@ -186,67 +214,67 @@ export const DEVICE: Record<string, HostFn> = {
   // the memory is coherent: a submit reads it as it stands then
   vkFlushMappedMemoryRanges: () => R.SUCCESS,
   vkInvalidateMappedMemoryRanges: () => R.SUCCESS,
-  vkGetDeviceMemoryCommitment: (_c, a) => { a.p(); const m = object<Memory>(nd(a)); stU64(a.p(), m.size); },
+  vkGetDeviceMemoryCommitment: (_c, a) => { a.p(); const m = objects.get(nd(a), Memory); stU64(a.p(), m.size); },
 
   vkCreateBuffer: (_c, a) => {
-    const dev = deviceOf(a.p()), info = BufferInfo.read(a.p()); a.p(); const out = a.p();
+    const dev = objects.get(a.p(), Device), info = BufferInfo.read(a.p()); a.p(); const out = a.p();
     if (info.size > dev.physical.limits.maxBufferSize) return R.OUT_OF_DEVICE_MEMORY;
     const gpu = dev.gpu.createBuffer({ size: align(info.size, 4), usage: bufferUsage(info.usage) });
-    stU64(out, handle(new Buffer(gpu, info.size, info.usage)));
+    stU64(out, objects.add(new Buffer(gpu, info.size, info.usage)));
     return R.SUCCESS;
   },
-  vkDestroyBuffer: (_c, a) => { a.p(); const h = nd(a), b = maybe<Buffer>(h); b?.gpu.destroy(); release(h); },
-  vkGetBufferMemoryRequirements: (_c, a) => { a.p(); const b = object<Buffer>(nd(a)); writeRequirements(a.p(), align(b.size, ALIGN), allTypes); },
+  vkDestroyBuffer: (_c, a) => { a.p(); const h = nd(a); objects.find(h, Buffer)?.gpu.destroy(); objects.delete(h); },
+  vkGetBufferMemoryRequirements: (_c, a) => { a.p(); const b = objects.get(nd(a), Buffer); writeRequirements(a.p(), align(b.size, ALIGN), allTypes); },
   vkGetBufferMemoryRequirements2: (_c, a) => {
-    a.p(); const b = object<Buffer>(RequirementsInfo2.read(a.p()).object), out = a.p();
+    a.p(); const b = objects.get(ObjectInfo.read(a.p()).object, Buffer), out = a.p();
     writeRequirements(out + Requirements2.off("requirements"), align(b.size, ALIGN), allTypes);
-    const d = chain(ldp(out + PTR)).get(ST.DEDICATED_REQUIREMENTS);
+    const d = chain(ldp(out + PTR)).get(S.DEDICATED_REQUIREMENTS);
     if (d) Dedicated.write(d, { prefers: 0, requires: 0 });
   },
-  vkBindBufferMemory: (_c, a) => { a.p(); const b = object<Buffer>(nd(a)); b.memory = object<Memory>(nd(a)); b.offset = Number(a.ul()); return R.SUCCESS; },
+  vkBindBufferMemory: (_c, a) => { a.p(); const b = objects.get(nd(a), Buffer); b.memory = objects.get(nd(a), Memory); b.offset = Number(a.ul()); return R.SUCCESS; },
   vkBindBufferMemory2: (_c, a) => {
     a.p(); const n = a.u(), infos = a.p();
     for (let i = 0; i < n; i++) {
-      const info = BindInfo.read(infos + i * BindInfo.size()), b = object<Buffer>(info.object);
-      b.memory = object<Memory>(info.memory); b.offset = info.memoryOffset;
+      const info = BindInfo.read(infos + i * BindInfo.size()), b = objects.get(info.object, Buffer);
+      b.memory = objects.get(info.memory, Memory); b.offset = info.memoryOffset;
     }
     return R.SUCCESS;
   },
 
   vkCreateImage: (_c, a) => {
-    const dev = deviceOf(a.p()), info = ImageInfo.read(a.p()); a.p(); const out = a.p();
-    const ef = chain(info.pNext).get(ST.EXTERNAL_FORMAT), externalFormat = ef ? Number(mem.ld64(ef + 2 * PTR)) : 0;
-    if (externalFormat && (info.format || !EXTERNAL_FORMATS.has(externalFormat))) return R.FORMAT_NOT_SUPPORTED;
+    const dev = objects.get(a.p(), Device), info = ImageInfo.read(a.p()); a.p(); const out = a.p();
+    const ef = chain(info.pNext).get(S.EXTERNAL_FORMAT), externalFormat = ef ? ExternalFormat.read(ef).externalFormat : 0;
+    if (externalFormat && (info.format || !vulkanFormat(externalFormat)?.external)) return R.FORMAT_NOT_SUPPORTED;
     if (externalFormat) info.format = EXTERNAL_PIXELS;
     const f = textureFormat(info.format);
     if (!f || info.tiling !== 0) return R.FORMAT_NOT_SUPPORTED;
-    const ext = chain(info.pNext).get(ST.EXTERNAL_IMAGE), external = !!ext && !!(ExternalImage.read(ext).handleTypes & AHB_HANDLE);
+    const ext = chain(info.pNext).get(S.EXTERNAL_IMAGE), external = !!ext && !!(ExternalImage.read(ext).handleTypes & AHB_HANDLE);
     const samples = info.samples, mutable = info.flags & 0x8, pair = mutable ? srgbPair(f.gpu) : null;
-    const desc: GPUTextureDescriptor = {
+    const renderable = !!(formatFeatures(info.format, dev.physical.features).optimal & (F.COLOR | F.DEPTH));
+    const img = new Image({
       dimension: IMAGE_DIMENSION[info.imageType], format: f.gpu, mipLevelCount: info.mipLevels, sampleCount: samples,
       size: { width: info.width, height: info.height, depthOrArrayLayers: info.imageType === 2 ? info.depth : info.arrayLayers },
-      usage: imageUsage(info.usage, samples, !!(formatFeatures(info.format, dev.physical.features).optimal & (F.COLOR | F.DEPTH))), viewFormats: pair ? [pair] : [],
-    };
-    const img = new Image(desc, f, info.format, external);
-    if (!external) img.gpu = dev.gpu.createTexture(desc);
-    stU64(out, handle(img));
+      usage: imageUsage(info.usage, samples, renderable), viewFormats: pair ? [pair] : [],
+    }, f, info.format, external, renderable);
+    if (!external) img.gpu = dev.gpu.createTexture(img.desc);
+    stU64(out, objects.add(img));
     return R.SUCCESS;
   },
-  vkDestroyImage: (_c, a) => { a.p(); const h = nd(a), img = maybe<Image>(h); img?.gpu?.destroy(); release(h); },
-  vkGetImageMemoryRequirements: (_c, a) => { a.p(); const img = object<Image>(nd(a)); writeRequirements(a.p(), imageBytes(img), 1); },
+  vkDestroyImage: (_c, a) => { a.p(); const h = nd(a); objects.find(h, Image)?.gpu?.destroy(); objects.delete(h); },
+  vkGetImageMemoryRequirements: (_c, a) => { a.p(); const img = objects.get(nd(a), Image); writeRequirements(a.p(), imageBytes(img), 1); },
   vkGetImageMemoryRequirements2: (_c, a) => {
-    a.p(); const img = object<Image>(RequirementsInfo2.read(a.p()).object), out = a.p();
+    a.p(); const img = objects.get(ObjectInfo.read(a.p()).object, Image), out = a.p();
     writeRequirements(out + Requirements2.off("requirements"), imageBytes(img), 1);
-    const d = chain(ldp(out + PTR)).get(ST.DEDICATED_REQUIREMENTS);
+    const d = chain(ldp(out + PTR)).get(S.DEDICATED_REQUIREMENTS);
     if (d) Dedicated.write(d, { prefers: img.external ? 1 : 0, requires: img.external ? 1 : 0 });
   },
   vkGetImageSparseMemoryRequirements: (_c, a) => { a.p(); nd(a); mem.st32(a.p(), 0); },
   vkGetImageSparseMemoryRequirements2: (_c, a) => { a.p(); a.p(); mem.st32(a.p(), 0); },
-  vkBindImageMemory: (_c, a) => { const dev = deviceOf(a.p()), img = object<Image>(nd(a)), m = object<Memory>(nd(a)); a.ul(); return bind(dev, img, m); },
+  vkBindImageMemory: (_c, a) => { const dev = objects.get(a.p(), Device), img = objects.get(nd(a), Image), m = objects.get(nd(a), Memory); a.ul(); return bind(dev, img, m); },
   vkBindImageMemory2: (_c, a) => {
-    const dev = deviceOf(a.p()), n = a.u(), infos = a.p();
+    const dev = objects.get(a.p(), Device), n = a.u(), infos = a.p();
     for (let i = 0; i < n; i++) {
-      const info = BindInfo.read(infos + i * BindInfo.size()), r = bind(dev, object<Image>(info.object), object<Memory>(info.memory));
+      const info = BindInfo.read(infos + i * BindInfo.size()), r = bind(dev, objects.get(info.object, Image), objects.get(info.memory, Memory));
       if (r) return r;
     }
     return R.SUCCESS;
@@ -255,33 +283,26 @@ export const DEVICE: Record<string, HostFn> = {
   vkGetImageSubresourceLayout: (_c, a) => { a.p(); nd(a); a.p(); mem.memset(a.p(), 0, 40); },
 
   vkCreateImageView: (_c, a) => {
-    const dev = deviceOf(a.p()), info = ViewInfo.read(a.p()); a.p(); const out = a.p(), img = object<Image>(info.image);
+    const dev = objects.get(a.p(), Device), info = ViewInfo.read(a.p()); a.p(); const out = a.p(), img = objects.get(info.image, Image);
     // an image of an external format has views of no format of their own
     const f = info.format ? textureFormat(info.format) : img.format;
     if (!f) return R.FORMAT_NOT_SUPPORTED;
-    const aspect: GPUTextureAspect = info.aspectMask === 2 && img.format.stencil ? "depth-only" : info.aspectMask === 4 && img.format.depth ? "stencil-only" : "all";
-    const levels = img.desc.mipLevelCount ?? 1, layers = img.desc.dimension === "3d" ? 1 : (img.desc.size as GPUExtent3DDict).depthOrArrayLayers ?? 1;
-    const desc: GPUTextureViewDescriptor = {
-      format: f.gpu, dimension: VIEW_DIMENSION[info.viewType], aspect,
-      baseMipLevel: info.baseMipLevel, mipLevelCount: info.levelCount === 0xffffffff ? levels - info.baseMipLevel : info.levelCount,
-      baseArrayLayer: info.baseArrayLayer, arrayLayerCount: info.layerCount === 0xffffffff ? layers - info.baseArrayLayer : info.layerCount,
-    };
+    const desc: GPUTextureViewDescriptor = { format: f.gpu, dimension: VIEW_DIMENSION[info.viewType], aspect: img.aspect(info.aspectMask), ...img.range(info) };
     const swizzle = [info.r, info.g, info.b, info.a].map((c, i) => "rgba01"[c === 0 ? i : c === 1 ? 4 : c === 2 ? 5 : c - 3]).join("");
     if (swizzle !== "rgba") {
       if (!dev.physical.features.has("texture-component-swizzle")) return R.FEATURE_NOT_PRESENT;
       (desc as GPUTextureViewDescriptor & { swizzle?: string }).swizzle = swizzle;
     }
-    stU64(out, handle(new View(img, desc)));
+    stU64(out, objects.add(new View(img, desc)));
     return R.SUCCESS;
   },
-  vkDestroyImageView: (_c, a) => { a.p(); release(nd(a)); },
+  vkDestroyImageView: (_c, a) => { a.p(); objects.delete(nd(a)); },
 
   vkCreateSampler: (_c, a) => {
-    const dev = deviceOf(a.p()), s = SamplerInfo.read(a.p()); a.p(); const out = a.p();
+    const dev = objects.get(a.p(), Device), s = SamplerInfo.read(a.p()); a.p(); const out = a.p();
     const filter = (v: number): GPUFilterMode => v ? "linear" : "nearest";
     // clamp-to-border has no WebGPU counterpart; its edge texels stand in for the border colour
     const address = (v: number): GPUAddressMode => v === 0 ? "repeat" : v === 1 ? "mirror-repeat" : "clamp-to-edge";
-    const COMPARE: GPUCompareFunction[] = ["never", "less", "equal", "less-equal", "greater", "not-equal", "greater-equal", "always"];
     const linear = s.magFilter && s.minFilter && s.mipmapMode;
     const desc: GPUSamplerDescriptor = {
       magFilter: filter(s.magFilter), minFilter: filter(s.minFilter), mipmapFilter: s.mipmapMode ? "linear" : "nearest",
@@ -290,21 +311,21 @@ export const DEVICE: Record<string, HostFn> = {
       maxAnisotropy: s.anisotropyEnable && linear ? Math.max(1, Math.min(16, Math.floor(s.maxAnisotropy))) : 1,
     };
     if (s.compareEnable) desc.compare = COMPARE[s.compareOp];
-    stU64(out, handle(dev.gpu.createSampler(desc)));
+    stU64(out, objects.add(dev.gpu.createSampler(desc)));
     return R.SUCCESS;
   },
-  vkDestroySampler: (_c, a) => { a.p(); release(nd(a)); },
+  vkDestroySampler: (_c, a) => { a.p(); objects.delete(nd(a)); },
   // the only formats that take a conversion are the external ones, whose pixels need none (RGB_IDENTITY)
-  vkCreateSamplerYcbcrConversion: (_c, a) => { a.p(); a.p(); a.p(); stU64(a.p(), handle({})); return R.SUCCESS; },
-  vkDestroySamplerYcbcrConversion: (_c, a) => { a.p(); release(nd(a)); },
+  vkCreateSamplerYcbcrConversion: (_c, a) => { a.p(); a.p(); a.p(); stU64(a.p(), objects.add({})); return R.SUCCESS; },
+  vkDestroySamplerYcbcrConversion: (_c, a) => { a.p(); objects.delete(nd(a)); },
 
   vkGetAndroidHardwareBufferPropertiesANDROID: (_c, a) => {
     a.p(); const b = bufferAt(a.p()), out = a.p();
     if (!b) return R.INVALID_EXTERNAL_HANDLE;
-    const vk = AHB_FORMATS.get(b.format), external = EXTERNAL_FORMATS.has(b.format) ? b.format : 0;
+    const format = vulkanFormat(b.format), vk = format?.vk, external = format?.external ? b.format : 0;
     if (!vk && !external) return R.INVALID_EXTERNAL_HANDLE;
     AhbProperties.write(out, { allocationSize: align(b.bytes, ALIGN), memoryTypeBits: 1 });
-    const f = chain(ldp(out + PTR)).get(ST.AHB_FORMAT_PROPERTIES);
+    const f = chain(ldp(out + PTR)).get(S.AHB_FORMAT_PROPERTIES);
     // a known format with the identity swizzle; an external one sampled through a conversion that is the identity, of
     // full-range RGB (SAMPLED_IMAGE, linear filtering, of the conversion too, and cosited chroma)
     const features = vk ? 0x1 | 0x80 | 0x100 | 0x1000 | 0x4000 | 0x8000 : 0x1 | 0x1000 | 0x40000 | 0x800000;
@@ -312,13 +333,9 @@ export const DEVICE: Record<string, HostFn> = {
     return R.SUCCESS;
   },
   vkGetMemoryAndroidHardwareBufferANDROID: (_c, a) => {
-    a.p(); const info = a.p(), out = a.p(), m = object<Memory>(Number(mem.ld64(info + RequirementsInfo2.off("object"))));
+    a.p(); const info = a.p(), out = a.p(), m = objects.get(ObjectInfo.read(info).object, Memory);
     if (!m.ahb) return R.INVALID_EXTERNAL_HANDLE;
     acquire(m.ahb); stp(out, m.ahb.at);
     return R.SUCCESS;
   },
 };
-/** AHardwareBuffer formats as VkFormats, those WebGPU has: RGBA8, RGBX8, RGBA16F, RGB10A2 */
-const AHB_FORMATS = new Map([[1, 37], [2, 37], [0x16, 97], [0x2b, 64]]);
-/** IMPLEMENTATION_DEFINED and Y8Cb8Cr8_420, external formats named by their AHardwareBuffer format, whose pixels are RGBA (hardwarebuffer.ts) */
-const EXTERNAL_FORMATS = new Set([0x22, 0x23]);
