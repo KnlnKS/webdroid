@@ -1,7 +1,6 @@
 // Images an AHardwareBuffer backs: they give the buffer their pixels when released to the foreign
 // queue family, and take its pixels when acquired from it with their contents kept.
 
-import { queueFrame, bufferFrame } from "../hardwarebuffer.ts";
 import { TU, type Device, type Image } from "./device.ts";
 
 /** the canvas that turns textures into frames for the AHardwareBuffers they fill, by format */
@@ -19,10 +18,9 @@ export function publish(dev: Device, img: Image): void {
   const enc = dev.gpu.createCommandEncoder();
   enc.copyTextureToTexture({ texture: img.texture }, { texture: ctx.getCurrentTexture() }, { width: b.width, height: b.height });
   dev.gpu.queue.submit([enc.finish()]);
-  queueFrame(b, canvas.transferToImageBitmap());
+  b.queueFrame(canvas.transferToImageBitmap());
 }
 export function take(dev: Device, img: Image): void {
-  const b = img.ahb!, queued = b.frame, frame = queued ?? bufferFrame(b);
-  if (frame) dev.gpu.queue.copyExternalImageToTexture({ source: frame }, { texture: img.texture, premultipliedAlpha: true }, { width: b.width, height: b.height });
-  if (frame !== queued) frame?.close();
+  const b = img.ahb!;
+  b.withFrame((source) => dev.gpu.queue.copyExternalImageToTexture({ source }, { texture: img.texture, premultipliedAlpha: true }, { width: b.width, height: b.height }));
 }

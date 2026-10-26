@@ -80,8 +80,6 @@ export class HardwareBuffer {
   get internalFormat(): number { return FORMATS.get(this.format)!.internal; }
   /** the pixels' guest address while CPU-locked, else 0 */
   get mapped(): number { return this.locked ? this.bits : 0; }
-  /** vulkan/submit.ts reads a queued frame here until it takes snapshot(), which never hands one out */
-  get frame(): null { return null; }
   /** the GL holding the pixels, while its context lives */
   private get liveGl(): GL | null { const gl = this.gl; return gl && !gl.isContextLost() ? gl : null; }
   private ensureBits(): boolean {
@@ -97,6 +95,12 @@ export class HardwareBuffer {
   }
   /** lets go of a queued frame no GL took, as a decoder reuses its frames once closed */
   dropFrame(): void { this.queued?.close(); this.queued = null; }
+  /** `use` of the pixels now as a frame it must not keep: a queued frame itself, else a snapshot */
+  withFrame(use: (frame: Frame) => void): void {
+    if (this.queued) return use(this.queued);
+    const frame = this.snapshot();
+    if (frame) { use(frame); frame.close(); }
+  }
   /** the pixels now, as a frame its caller closes: a queued frame's copy, a blit of the texture onto the drawing buffer
    *  of its GL's canvas, whose rows run bottom up, or the guest pixels converted */
   snapshot(): Frame | null {
@@ -250,9 +254,6 @@ const refFns = () => refs ??= [
 ];
 export function acquire(b: HardwareBuffer): void { b.refs++; }
 export function release(b: HardwareBuffer | undefined): void { if (b && --b.refs === 0) b.free(); }
-// vulkan/submit.ts's calls until it takes them as methods
-export const queueFrame = (b: HardwareBuffer, frame: Frame): void => b.queueFrame(frame);
-export const bufferFrame = (b: HardwareBuffer): Frame | null => b.snapshot();
 
 /** runs `fn` with the pixel-store parameters at their defaults and no buffer bound to `target`, as a host upload or readback reads them */
 function defaultStore<T>(gl: GL, target: number, names: number[], fn: () => T): T {
