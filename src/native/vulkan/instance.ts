@@ -12,13 +12,13 @@ const API_VERSION = (1 << 22) | (1 << 12);                                // 1.1
 const DRIVER_VERSION = (1 << 22);
 const INSTANCE_EXTENSIONS: [string, number][] = [
   ["VK_KHR_get_physical_device_properties2", 2], ["VK_KHR_external_memory_capabilities", 1],
-  ["VK_KHR_external_semaphore_capabilities", 1], ["VK_KHR_external_fence_capabilities", 1],
+  ["VK_KHR_external_semaphore_capabilities", 1], ["VK_KHR_external_fence_capabilities", 1], ["VK_KHR_surface", 25], ["VK_KHR_android_surface", 6],
 ];
 export const DEVICE_EXTENSIONS: [string, number][] = [
   ["VK_KHR_driver_properties", 1], ["VK_KHR_external_memory", 1], ["VK_KHR_external_semaphore", 1], ["VK_KHR_external_semaphore_fd", 1],
   ["VK_KHR_sampler_ycbcr_conversion", 14], ["VK_KHR_dedicated_allocation", 3], ["VK_KHR_get_memory_requirements2", 1],
   ["VK_KHR_maintenance1", 2], ["VK_KHR_bind_memory2", 1], ["VK_KHR_storage_buffer_storage_class", 1],
-  ["VK_EXT_queue_family_foreign", 1], ["VK_ANDROID_external_memory_android_hardware_buffer", 5],
+  ["VK_EXT_queue_family_foreign", 1], ["VK_ANDROID_external_memory_android_hardware_buffer", 5], ["VK_KHR_swapchain", 70],
 ];
 
 const Extension = struct("extensionName:u8[256] specVersion:u32");

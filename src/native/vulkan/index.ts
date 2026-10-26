@@ -9,13 +9,15 @@ import { DEVICE } from "./device.ts";
 import { PIPELINE } from "./pipeline.ts";
 import { COMMANDS } from "./commands.ts";
 import { SYNC } from "./submit.ts";
+import { SWAPCHAIN } from "./swapchain.ts";
 
 /** the Vulkan 1.1 commands the modules above leave out: queries, texel buffer views, blits, attachment clears, device
- *  groups and descriptor update templates */
+ *  groups (VK_KHR_swapchain's among them) and descriptor update templates */
 const UNIMPLEMENTED = `vkCreateQueryPool vkDestroyQueryPool vkGetQueryPoolResults vkCmdBeginQuery vkCmdEndQuery vkCmdResetQueryPool
   vkCmdWriteTimestamp vkCmdCopyQueryPoolResults vkCreateBufferView vkDestroyBufferView vkCmdBlitImage vkCmdClearAttachments
   vkGetDeviceGroupPeerMemoryFeatures vkCmdDispatchBase vkCreateDescriptorUpdateTemplate vkDestroyDescriptorUpdateTemplate
-  vkUpdateDescriptorSetWithTemplate`.trim().split(/\s+/);
+  vkUpdateDescriptorSetWithTemplate vkGetDeviceGroupPresentCapabilitiesKHR vkGetDeviceGroupSurfacePresentModesKHR
+  vkGetPhysicalDevicePresentRectanglesKHR vkAcquireNextImage2KHR`.trim().split(/\s+/);
 /** the extension names of commands Vulkan 1.1 promoted, which an application may load by either name */
 const PROMOTED = `vkGetPhysicalDeviceFeatures2 vkGetPhysicalDeviceProperties2 vkGetPhysicalDeviceFormatProperties2
   vkGetPhysicalDeviceImageFormatProperties2 vkGetPhysicalDeviceQueueFamilyProperties2 vkGetPhysicalDeviceMemoryProperties2
@@ -27,7 +29,7 @@ const PROMOTED = `vkGetPhysicalDeviceFeatures2 vkGetPhysicalDeviceProperties2 vk
 const LIB = "libvulkan.so";
 const procAddr: HostFn = (_c, a) => { a.p(); return lookupHost(a.str(), LIB) ?? 0; };
 export function vulkanInit(): void {
-  hostLib(LIB, { ...INSTANCE, ...DEVICE, ...PIPELINE, ...COMMANDS, ...SYNC, vkGetInstanceProcAddr: procAddr, vkGetDeviceProcAddr: procAddr }, { closed: true });
+  hostLib(LIB, { ...INSTANCE, ...DEVICE, ...PIPELINE, ...COMMANDS, ...SYNC, ...SWAPCHAIN, vkGetInstanceProcAddr: procAddr, vkGetDeviceProcAddr: procAddr }, { closed: true });
   for (const name of UNIMPLEMENTED) hostData(LIB, name, missingStub(`${LIB}!${name}`, R.FEATURE_NOT_PRESENT));
   for (const name of PROMOTED) hostData(LIB, name + "KHR", lookupHost(name, LIB)!);
 }

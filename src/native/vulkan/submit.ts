@@ -13,7 +13,7 @@ import { Replay, cbOf, type CommandBuffer } from "./commands.ts";
 import { publish } from "./ahb.ts";
 
 /** a fence or semaphore: the work that signals it, once a submit has given it some */
-class Signal {
+export class Signal {
   work: Promise<void> | null = null;
   signaled: boolean;
   constructor(signaled: boolean) { this.signaled = signaled; }
