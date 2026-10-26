@@ -86,6 +86,8 @@ async function entrySource(source: FileSource, entry: ZEntry): Promise<FileSourc
   if (entry.method === 0) return new SliceFile(source, offset, entry.size);
   return new BytesFile(inflateEntry(await readFully(source, offset, entry.csize), entry));
 }
+/** an entry's bytes, reading only that entry of the archive */
+export const entryBytesOf = async (source: FileSource, entry: ZEntry): Promise<Uint8Array> => readFully(await entrySource(source, entry));
 export class ZipEntryFile implements FileSource {
   private readonly archive: FileSource; private readonly entry: ZEntry;
   readonly size: number;

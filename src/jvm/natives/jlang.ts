@@ -7,7 +7,8 @@ import { HEAP_LIMIT } from "../abi.ts";
 import { jarray } from "../abi.ts";
 import { uptimeMillis, wallMillis } from "../../guest-clock.ts";
 import { vfs } from "../../shell/vfs.ts";
-import { zipTree } from "../../zip.ts";
+import { centralDirOfSource } from "../../zip.ts";
+import { entryBytesOf } from "../../shell/install.ts";
 import { processFileBytes } from "../../native/process-fd.ts";
 import { processEnv } from "../../shell/environment.ts";
 import { curThread, iof, vcall, type JThread } from "./jentry.ts";
@@ -41,7 +42,9 @@ function* libraryFile(path: string): Gen<Uint8Array | null> {
   const archive = path.slice(0, bang), entry = path.slice(bang + 2);
   const { packedArchives } = yield* awaited(import("../../shell/packedarchive.ts"));
   const packed = packedArchives.get(archive);
-  return packed ? yield packed.entry(entry) : vfs.exists(archive) ? zipTree(yield vfs.readFile(archive))[entry] ?? null : null;
+  if (packed) return yield packed.entry(entry);
+  const source = vfs.source(archive), found = source && (yield centralDirOfSource(source)).get(entry);
+  return found ? yield entryBytesOf(source, found) : null;
 }
 /** a library in the native library path of a dex class loader (BaseDexClassLoader.getLdLibraryPath), which the linker namespace ART makes for the
  *  loader searches: directories, and archive directories ("base.apk!/lib/arm64-v8a") */

@@ -8,11 +8,11 @@ import { FetchStore, decodeJson } from "./aotstore.ts";
 import { rt } from "../../jvm/runtime.ts";
 import { java, useJavaHost, type JavaHost } from "../../jvm/javahost.ts";
 import type { TierBackend, TierPorts } from "../../jvm/tier.ts";
-import { dexesIn, dexesOfZip, type DexFile } from "../../jvm/dex.ts";
+import { dexesOfZip, type DexFile } from "../../jvm/dex.ts";
 import { vfs } from "../../shell/vfs.ts";
 import { appArchives, packedArchives } from "../../shell/packedarchive.ts";
 import { Program } from "../compiler/program.ts";
-import { fetchPlatformJars, jarDexes } from "../../android/framework.ts";
+import { fetchPlatformJars, jarDexes, sourceDexes } from "../../android/framework.ts";
 import { PLATFORM_JARS } from "../../jvm/provenance.ts";
 import { dotName } from "../../jvm/abi.ts";
 import { parkTimeout, unparkTimeout, turnElapsed, wakeSoon, yieldToLoop, yieldStats, sinceInput, answeringFor } from "../../jvm/yield.ts";
@@ -253,20 +253,16 @@ const objectsIn = (world: () => World): Pick<JavaHost, "throwable" | "make" | "c
 });
 
 /** the dex files of the archive at `path`, for the DexFile natives of class loaders: the app's own are the ones the World holds already, any other archive is read from the file system
- *  after its bytes have arrived */
+ *  reading only its directory and dex entries */
 export function openDexes(path: string, app: DexFile[], opened: Map<string, DexFile[] | undefined | Promise<DexFile[] | undefined>>): DexFile[] | undefined | Promise<DexFile[] | undefined> {
   path = vfs.norm(path);
   if (!opened.has(path)) {
     const own = appArchives.has(path) && app.length > 0;
     const packed = own ? undefined : packedArchives.get(path);
-    const bytes = own || packed ? null : vfs.readFile(path);
-    const decode = (bytes: Uint8Array | null) => {
-      if (bytes === null) return own ? app : undefined;
-      try { return bytes.length > 4 && bytes[0] === 0x50 && bytes[1] === 0x4b ? jarDexes(bytes, path) : dexesIn(bytes, path); }
-      catch (e) { throw rt.mkThrowable("java/io/IOException", `Failed to open dex files from ${path} because: ${e instanceof Error ? e.message : e}`); }
-    };
+    const source = own || packed ? null : vfs.source(path);
     const dexes = packed ? packed.prepare(true).then(() => dexesOfZip(packed.zip, path))
-      : bytes instanceof Promise ? bytes.then(decode) : decode(bytes);
+      : !source ? (own ? app : undefined)
+      : sourceDexes(source, path).catch((e: unknown) => { throw rt.mkThrowable("java/io/IOException", `Failed to open dex files from ${path} because: ${e instanceof Error ? e.message : e}`); });
     opened.set(path, dexes instanceof Promise ? dexes.catch(error => { opened.delete(path); throw error; }) : dexes);
   }
   return opened.get(path);

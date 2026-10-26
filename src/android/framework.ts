@@ -8,14 +8,15 @@
 
 import { Arsc } from "./arsc.ts";
 import { DEVICE_OVERLAYS } from "./device-overlays.ts";
-import { centralDir, entryBytes } from "../zip.ts";
+import { centralDir, centralDirOfSource, entryBytes } from "../zip.ts";
 import { rt } from "../jvm/runtime.ts";
 import { dexesIn, dexEntryNames, isDexEntry, type DexFile } from "../jvm/dex.ts";
 import { PLATFORM_JARS } from "../jvm/provenance.ts";
 import { loadDex } from "../jvm/tier.ts";
 import { BOOT_JAR_PATHS } from "../jvm/bootclasspath.ts";
 import { vfs } from "../shell/vfs.ts";
-import { BytesFile, type FileSource } from "../shell/lazyfile.ts";
+import { BytesFile, readFully, type FileSource } from "../shell/lazyfile.ts";
+import { entryBytesOf } from "../shell/install.ts";
 import { parseAXML } from "./axml.ts";
 import { registerPackage } from "./installpackage.ts";
 import { apkCertificates } from "./packagearchive.ts";
@@ -27,6 +28,14 @@ let mounted: Promise<void> | null = null;
 export function jarDexes(jar: Uint8Array, label: string): DexFile[] {
   const dir = centralDir(jar);
   return dexEntryNames(dir.keys()).flatMap((name) => dexesIn(entryBytes(jar, dir.get(name)!), `${label}:${name}`));
+}
+/** an archive's dex files, read from its directory and dex entries alone, or a dex file's own */
+export async function sourceDexes(source: FileSource, label: string): Promise<DexFile[]> {
+  const head = await readFully(source, 0, 4);
+  if (head.length < 4 || head[0] !== 0x50 || head[1] !== 0x4b) return dexesIn(await readFully(source), label);
+  const dir = await centralDirOfSource(source);
+  const dexes = await Promise.all(dexEntryNames(dir.keys()).map(async (name) => dexesIn(await entryBytesOf(source, dir.get(name)!), `${label}:${name}`)));
+  return dexes.flat();
 }
 
 /** the `i`th boot class path jar: at its device path, with its classes indexed behind the app's
