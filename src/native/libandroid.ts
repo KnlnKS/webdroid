@@ -21,6 +21,7 @@ import { assetDir, assetEntry } from "../android/assetmanager.ts";
 import { handle, deref as handleObject } from "../android/handles.ts";
 import { HINT_RATE_NANOS, hintSessions, openHintSession, ashmemCreate, ashmemSize, ashmemSetProt } from "../android/os.ts";
 import { kernelResult } from "./kernel.ts";
+import { CODECS } from "./pixel-codecs.ts";
 
 // ── ANativeWindow: window.h's struct per surface, as a library built against <system/window.h> calls its function pointers
 // (Filament's perform(NATIVE_WINDOW_GET_NEXT_FRAME_ID)). The window has no buffers to dequeue: its frames come from EGL or lock/unlockAndPost.
@@ -141,18 +142,8 @@ async function postWindow(_cpu: Cpu, args: ArgReader): Promise<number> {
     return 0;
   }
   if (buffer.pixels.length !== width * height * 4) buffer.pixels = new Uint8ClampedArray(width * height * 4);
-  const pixels = buffer.pixels;
-  if (buffer.format === 4) {
-    for (let i = 0; i < width * height; i++) {
-      const rgb = mem.ld16u(buffer.bits + i * 2), p = i * 4;
-      pixels[p] = (rgb >>> 11) * 255 / 31; pixels[p + 1] = ((rgb >>> 5) & 63) * 255 / 63;
-      pixels[p + 2] = (rgb & 31) * 255 / 31; pixels[p + 3] = 255;
-    }
-  } else {
-    pixels.set(mem.bytes(buffer.bits, pixels.length));
-    if (buffer.format === 2) for (let i = 3; i < pixels.length; i += 4) pixels[i] = 255;
-  }
-  try { presentSurface(buffer.surface, await createImageBitmap(new ImageData(pixels, width, height))); }
+  CODECS.get(buffer.format)!.unpack(mem.bytes(buffer.bits, buffer.size), buffer.pixels, width * height);
+  try { presentSurface(buffer.surface, await createImageBitmap(new ImageData(buffer.pixels, width, height))); }
   finally { buffer.locked = false; }
   return 0;
 }

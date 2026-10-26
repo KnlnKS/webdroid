@@ -7,7 +7,8 @@
 
 import { mem } from "./mem.ts";
 import { hostLib, defineHost, stp, PTR, type HostFn } from "./host.ts";
-import { pixelParam } from "./gles3-pixels.ts";
+import { pixelArray, pixelParam, view } from "./gles3-pixels.ts";
+import { CODECS, type Codec } from "./pixel-codecs.ts";
 import { closeFd } from "./fd.ts";
 
 type GL = WebGL2RenderingContext;
@@ -15,51 +16,24 @@ const BAD_VALUE = -22, NO_MEMORY = -12, INVALID_OPERATION = -38;
 const CPU_READ = 0xf, CPU_WRITE = 0xf0, GPU_SAMPLED = 1 << 8, GPU_COLOR = 1 << 9, PROTECTED = 1 << 14,
   GPU_DATA_BUFFER = 1 << 24, GPU_CUBE_MAP = 1 << 25, GPU_MIPMAP = 1 << 26, FRONT_BUFFER = 1n << 32n;
 const BLOB = 0x21, GL_RGB = 0x1907, GL_UNSIGNED_BYTE = 0x1401;
-/** n pixels of a format a CPU lock reads, from guest bytes into RGBA ones and back */
-interface Codec { unpack(src: Uint8Array, rgba: Uint8ClampedArray, n: number): void; pack(rgba: Uint8Array, n: number): Uint8Array }
-/** pixels of `bpp` bytes, the first `channels` of them R, G, B and A in order and the rest an opaque X */
-function bytewise(bpp: number, channels: number): Codec {
-  if (bpp === 4 && channels === 4) return { unpack: (src, rgba, n) => rgba.set(src.subarray(0, n * 4)), pack: (rgba) => rgba };
-  return {
-    unpack(src, rgba, n) { for (let i = 0; i < n; i++) { for (let c = 0; c < channels; c++) rgba[i * 4 + c] = src[i * bpp + c]; rgba[i * 4 + 3] = 255; } },
-    pack(rgba, n) {
-      const out = new Uint8Array(n * bpp);
-      for (let i = 0; i < n; i++) { for (let c = 0; c < bpp; c++) out[i * bpp + c] = c < channels ? rgba[i * 4 + c] : 255; }
-      return out;
-    },
-  };
-}
-const RGB565: Codec = {
-  unpack(src, rgba, n) {
-    for (let i = 0, o = 0; i < n; i++, o += 4) {
-      const v = src[i * 2] | src[i * 2 + 1] << 8;
-      rgba[o] = (v >> 11) * 255 / 31; rgba[o + 1] = (v >> 5 & 63) * 255 / 63; rgba[o + 2] = (v & 31) * 255 / 31; rgba[o + 3] = 255;
-    }
-  },
-  pack(rgba, n) {
-    const out = new Uint8Array(n * 2);
-    for (let i = 0, o = 0; i < n; i++, o += 4) { const v = (rgba[o] >> 3) << 11 | (rgba[o + 1] >> 2) << 5 | rgba[o + 2] >> 3; out[i * 2] = v; out[i * 2 + 1] = v >> 8; }
-    return out;
-  },
-};
-/** a format's bytes per pixel, the texture storage and upload format and type it has in GL, the
- *  conversion of a format whose texture a CPU lock reads back as RGBA bytes, and its VkFormat, or
- *  `external` for a Vulkan external format */
-interface Format { bpp: number; internal: number; format: number; type: number; codec?: Codec; vk?: number; external?: true }
+/** a format's bytes per pixel, the texture storage and upload format and type it has in GL, and its VkFormat,
+ *  or `external` for a Vulkan external format */
+interface Format { bpp: number; internal: number; format: number; type: number; vk?: number; external?: true }
 const FORMATS = new Map<number, Format>([
-  [1, { bpp: 4, internal: 0x8058, format: 0x1908, type: GL_UNSIGNED_BYTE, codec: bytewise(4, 4), vk: 37 }],  // R8G8B8A8_UNORM: RGBA8
-  [2, { bpp: 4, internal: 0x8051, format: GL_RGB, type: GL_UNSIGNED_BYTE, codec: bytewise(4, 3), vk: 37 }],  // R8G8B8X8_UNORM: RGB8, the X byte dropped on upload
-  [3, { bpp: 3, internal: 0x8051, format: GL_RGB, type: GL_UNSIGNED_BYTE, codec: bytewise(3, 3) }],  // R8G8B8_UNORM
-  [4, { bpp: 2, internal: 0x8d62, format: GL_RGB, type: 0x8363, codec: RGB565 }],                    // R5G6B5_UNORM
-  [0x16, { bpp: 8, internal: 0x881a, format: 0x1908, type: 0x140b, vk: 97 }],                                // R16G16B16A16_FLOAT: RGBA16F
-  [0x2b, { bpp: 4, internal: 0x8059, format: 0x1908, type: 0x8368, vk: 64 }],                                // R10G10B10A2_UNORM: RGB10_A2
-  [0x38, { bpp: 1, internal: 0x8229, format: 0x1903, type: GL_UNSIGNED_BYTE, codec: bytewise(1, 1) }], // R8_UNORM
+  [1, { bpp: 4, internal: 0x8058, format: 0x1908, type: GL_UNSIGNED_BYTE, vk: 37 }],   // R8G8B8A8_UNORM: RGBA8
+  [2, { bpp: 4, internal: 0x8051, format: GL_RGB, type: GL_UNSIGNED_BYTE, vk: 37 }],   // R8G8B8X8_UNORM: RGB8, the X byte dropped on upload
+  [3, { bpp: 3, internal: 0x8051, format: GL_RGB, type: GL_UNSIGNED_BYTE }],   // R8G8B8_UNORM
+  [4, { bpp: 2, internal: 0x8d62, format: GL_RGB, type: 0x8363 }],             // R5G6B5_UNORM
+  [0x16, { bpp: 8, internal: 0x881a, format: 0x1908, type: 0x140b, vk: 97 }],          // R16G16B16A16_FLOAT: RGBA16F
+  [0x2b, { bpp: 4, internal: 0x8059, format: 0x1908, type: 0x8368, vk: 64 }],          // R10G10B10A2_UNORM: RGB10_A2
+  [0x38, { bpp: 1, internal: 0x8229, format: 0x1903, type: GL_UNSIGNED_BYTE }], // R8_UNORM
   // IMPLEMENTATION_DEFINED and Y8Cb8Cr8_420: a decoder's frames, which GL samples as RGB as an external texture does
   [0x22, { bpp: 4, internal: 0x8058, format: 0x1908, type: GL_UNSIGNED_BYTE, external: true }],
   [0x23, { bpp: 4, internal: 0x8058, format: 0x1908, type: GL_UNSIGNED_BYTE, external: true }],
   [BLOB, { bpp: 1, internal: 0, format: 0, type: 0 }],
 ]);
-const codecOf = (format: number): Codec | undefined => FORMATS.get(format)?.codec;
+/** the conversion of a format whose texture a CPU lock reads back as RGBA bytes */
+const codecOf = (format: number): Codec | undefined => CODECS.get(format);
 /** the VkFormat of AHardwareBuffer format `format`, or whether Vulkan takes it as an external format */
 export const vulkanFormat = (format: number): Pick<Format, "vk" | "external"> | undefined => FORMATS.get(format);
 
@@ -103,7 +77,7 @@ function supported(width: number, height: number, layers: number, format: number
   const f = FORMATS.get(format), u = Number(usage & 0xffffffffn), gpu = u & (GPU_SAMPLED | GPU_COLOR | GPU_MIPMAP);
   if (!f || width < 1 || height < 1 || layers !== 1 || width * height * f.bpp > 0x7fffffff) return false;
   if (u & (PROTECTED | GPU_CUBE_MAP | GPU_DATA_BUFFER) || usage & FRONT_BUFFER) return false;
-  if (format === BLOB ? height !== 1 || gpu : u & CPU_READ && !f.codec) return false;
+  if (format === BLOB ? height !== 1 || gpu : u & CPU_READ && !codecOf(format)) return false;
   return true;
 }
 export function allocate(width: number, height: number, format: number, usage: bigint): HardwareBuffer | null {
@@ -154,14 +128,15 @@ function ensureBits(b: HardwareBuffer): boolean {
 }
 /** the guest pixels as the texture's upload format reads them */
 function uploadData(b: HardwareBuffer): ArrayBufferView {
-  const bytes = mem.bytes(b.bits, b.bytes), f = FORMATS.get(b.format)!;
+  const f = FORMATS.get(b.format)!;
   if (f.format === GL_RGB && f.type === GL_UNSIGNED_BYTE && f.bpp === 4) {
+    const bytes = mem.bytes(b.bits, b.bytes);
     const rgb = new Uint8Array(b.width * b.height * 3);
     for (let i = 0, o = 0; o < rgb.length; i += 4) { rgb[o++] = bytes[i]; rgb[o++] = bytes[i + 1]; rgb[o++] = bytes[i + 2]; }
     return rgb;
   }
-  const K = f.type === 0x8363 || f.type === 0x140b ? Uint16Array : f.type === 0x8368 ? Uint32Array : Uint8Array;
-  return bytes.byteOffset % K.BYTES_PER_ELEMENT ? new K(bytes.slice().buffer) : new K(bytes.buffer as ArrayBuffer, bytes.byteOffset, bytes.byteLength / K.BYTES_PER_ELEMENT);
+  const K = pixelArray(f.type);
+  return view(K, b.bits, b.bytes / K.BYTES_PER_ELEMENT);
 }
 /** the texture given the guest pixels, or the queued frame, which it then holds */
 function upload(b: HardwareBuffer): void {

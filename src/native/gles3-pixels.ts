@@ -15,7 +15,7 @@ export const i32 = (p: number, n: number) => view(Int32Array, p, n);
 export const u32 = (p: number, n: number) => view(Uint32Array, p, n);
 export const f32 = (p: number, n: number) => view(Float32Array, p, n);
 export const u8 = (p: number, n: number) => mem.bytes(p, n);
-function pixelArray(type: number): Ctor<ArrayBufferView> {
+export function pixelArray(type: number): Ctor<ArrayBufferView> {
   return type === 0x1406 ? Float32Array : type === 0x1404 ? Int32Array : type === 0x1402 ? Int16Array : type === 0x1400 ? Int8Array
     : type === 0x1401 ? Uint8Array : (type === 0x1403 || type === 0x140b || type === 0x8d61 || type === 0x8033 || type === 0x8034 || type === 0x8363) ? Uint16Array : Uint32Array;
 }

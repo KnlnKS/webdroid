@@ -20,6 +20,7 @@ import { u8 } from "../jvm/abi.ts";
 import type { NativePaint } from "./paint.ts";
 import { nativeParcel, createByteArray, outOfLine, readInt, writeByteArray, writeInt } from "./parcel.ts";
 import { invert } from "./matrix.ts";
+import { expand5, expand6, pack565 } from "../native/pixel-codecs.ts";
 
 export const ALPHA_8 = 1, RGB_565 = 3, ARGB_4444 = 4, ARGB_8888 = 5, RGBA_F16 = 6, HARDWARE = 7, RGBA_1010102 = 8;
 const BPP = [0, 1, 0, 2, 2, 4, 8, 4, 4];
@@ -189,7 +190,7 @@ function storePixel(b: NativeBitmap, r: number, g: number, bl: number, a: number
   if (premul && b.config !== RGB_565) { r = premul8(r, a); g = premul8(g, a); bl = premul8(bl, a); }
   switch (b.config) {
     case ALPHA_8: m.setUint8(o, a); return;
-    case RGB_565: m.setUint16(o, quant(r, 31) << 11 | quant(g, 63) << 5 | quant(bl, 31), true); return;
+    case RGB_565: m.setUint16(o, pack565(r, g, bl), true); return;
     case ARGB_4444: m.setUint16(o, quant(r, 15) << 12 | quant(g, 15) << 8 | quant(bl, 15) << 4 | quant(a, 15), true); return;
     case RGBA_1010102: m.setUint32(o, (quant(r, 1023) | quant(g, 1023) << 10 | quant(bl, 1023) << 20 | quant(a, 3) << 30) >>> 0, true); return;
     default: m.setUint32(o, (r | g << 8 | bl << 16 | a << 24) >>> 0, true);
@@ -200,8 +201,7 @@ function loadPixel(b: NativeBitmap, m: DataView, o: number, out: RGBA | Uint8Arr
   let r = 0, g = 0, bl = 0, a = 255;
   switch (b.config) {
     case ALPHA_8: a = m.getUint8(o); break;
-    // SkPacked16ToR32 and friends replicate the high bits
-    case RGB_565: { const v = m.getUint16(o, true), r5 = v >>> 11, g6 = v >>> 5 & 63, b5 = v & 31; r = r5 << 3 | r5 >> 2; g = g6 << 2 | g6 >> 4; bl = b5 << 3 | b5 >> 2; break; }
+    case RGB_565: { const v = m.getUint16(o, true); r = expand5(v >>> 11); g = expand6(v >>> 5 & 63); bl = expand5(v & 31); break; }
     case ARGB_4444: { const v = m.getUint16(o, true); r = (v >>> 12) * 17; g = (v >>> 8 & 15) * 17; bl = (v >>> 4 & 15) * 17; a = (v & 15) * 17; break; }
     case RGBA_F16: {
       const c = [0, 2, 4, 6].map((k) => fromHalf(m.getUint16(o + k, true)));
