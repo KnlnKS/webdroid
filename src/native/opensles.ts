@@ -41,6 +41,7 @@ class Player extends SlObject {
   volume = 0; muted = false;
   thread: Cpu | null = null;
   chain: Promise<unknown> = Promise.resolve();
+  destroyed = false;
   constructor(id: number, track: PcmOutput, capacity: number) {
     super(id, ["OBJECT", "PLAY", "BUFFERQUEUE", "ANDROIDSIMPLEBUFFERQUEUE", "VOLUME", "ANDROIDCONFIGURATION", "EFFECTSEND", "PLAYBACKRATE"]);
     this.track = track; this.capacity = capacity;
@@ -64,10 +65,12 @@ class Player extends SlObject {
       const c = new Cpu(t, t.jname); c.lastFrameAt = Infinity; bindCpu(t, c);
       return c;
     })();
-    this.chain = this.chain.then(() => cpu.call(cb, [bq, this.context], "OpenSL ES buffer queue callback")).catch(toThread(cpu.jthread));
+    this.chain = this.chain.then(() => this.destroyed ? 0 : cpu.call(cb, [bq, this.context], "OpenSL ES buffer queue callback")).catch(toThread(cpu.jthread));
   }
   applyVolume(): void { this.track.setVolume(this.muted ? 0 : Math.min(1, 10 ** (this.volume / 2000))); }
+  /** stays valid for a callback already running, as AOSP's; queued callbacks are dropped */
   async destroy(): Promise<void> {
+    this.destroyed = true; this.playState = PLAYSTATE_STOPPED;
     this.track.release();
     if (this.thread) { await this.chain; await this.thread.endThread(); this.thread.dispose(); }
   }
@@ -113,7 +116,7 @@ const METHODS: Record<Iid, HostFn[]> = {
       return SUCCESS;
     },
     ok, () => {},                                                                           // RegisterCallback, AbortAsyncOperation
-    (_c, a) => { const o = self(a); objects.delete(o.id); if (o instanceof Player) return o.destroy().then(() => undefined); },  // Destroy
+    (_c, a) => { const o = self(a); if (!(o instanceof Player)) objects.delete(o.id); else return o.destroy().then(() => { objects.delete(o.id); }); },  // Destroy
     ok, unsupported, ok,                                                                    // Set/GetPriority, SetLossOfControlInterfaces
   ],
   ENGINE: [
