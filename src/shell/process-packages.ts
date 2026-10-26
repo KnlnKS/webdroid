@@ -36,8 +36,8 @@ async function openArchive({ source, certificates }: PackageSnapshot): Promise<{
   const file = new RemoteFile(source);
   return { archive: await packageArchiveSource(file, certificates), base: file };
 }
-const register = (snapshot: PackageSnapshot, archive: PackageArchive, source: Install["base"]) =>
-  registerPackage(archive, { path: installedPath(snapshot.pkg), source, uid: snapshot.uid, system: snapshot.system,
+const register = (snapshot: PackageSnapshot, archive: PackageArchive, source: Install["base"], install?: Install) =>
+  registerPackage(archive, { path: installedPath(snapshot.pkg), source, install, uid: snapshot.uid, system: snapshot.system,
     grants: snapshot.grants, signatures: snapshot.signatures?.map((s) => u8(s)) ?? null });
 /** a package installed after this process started */
 export async function registerSnapshot(snapshot: PackageSnapshot): Promise<void> {
@@ -62,11 +62,8 @@ export async function loadProcessPackages(data: ProcessBootstrap): Promise<Insta
       base = { zip, base: bytes };
     }
     boot = await openInstallApks(snapshot.splits.map((split) => new RemoteFile(split)), base);
-    // the record's apk is the one ApkAssets loads at sourceDir: the splits join it
-    for (const split of boot.splits) if (split.resources) archive.apk.table?.add(split.resources);
-    for (const [name, source] of boot.lazyEntries) archive.apk.lazyEntries.set(name, source);
-    return { snapshot, archive, base: base.base };
+    return { snapshot, archive, base: base.base, install: boot };
   }));
-  for (const { snapshot, archive, base } of opened) register(snapshot, archive, base);
+  for (const { snapshot, archive, base, install } of opened) register(snapshot, archive, base, install);
   return boot;
 }

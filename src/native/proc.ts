@@ -7,7 +7,7 @@ import { type HostFn, PTR, ldWord, stWord, stLong, ARG0 } from "./host.ts";
 import { E, PAGE_SIZE } from "./abi.ts";
 import { type Cpu, cpuByOsTid, isA64, nameThread } from "./cpu.ts";
 import { exitGroup } from "./crash.ts";
-import { fillRandom, KLAYOUT } from "./kernel.ts";
+import { clockTime, fillRandom, writeTs, KLAYOUT } from "./kernel.ts";
 import { device } from "../shell/config.ts";
 import { procIdentity, uname } from "../shell/procfs.ts";
 import { guestNow } from "../guest-clock.ts";
@@ -106,6 +106,7 @@ function processVmReadv(cpu: Cpu, pid: number, local: number, nLocal: number, re
   return moved;
 }
 
+const RUSAGE_CHILDREN = -1, RUSAGE_THREAD = 1, CLOCK_PROCESS_CPUTIME_ID = 2, CLOCK_THREAD_CPUTIME_ID = 3;
 export const PROC_SYSCALLS: Record<string, HostFn> = {
   getpid: (cpu) => cpu.pid, gettid: (cpu) => cpu.osTid,
   getcpu: (_c, a) => { const at = a.p(), node = a.p(); if (at) mem.st32(at, 0); if (node) mem.st32(node, 0); return 0; },
@@ -157,6 +158,15 @@ export const PROC_SYSCALLS: Record<string, HostFn> = {
   setrlimit: (_c, a) => {
     const resource = a.i(), next = a.p();
     return setLimit(resource, ldWord(next), ldWord(next + PTR));
+  },
+  // struct rusage: ru_utime and ru_stime (timevals), then 14 longs. A process's or thread's CPU-time clock,
+  // all of it user time; no child has run
+  getrusage: (_c, a) => {
+    const who = a.i(), usage = a.p();
+    if (who < RUSAGE_CHILDREN || who > RUSAGE_THREAD) return -E.INVAL;
+    mem.memset(usage, 0, 2 * KLAYOUT.TS_SIZE + 14 * PTR);
+    if (who !== RUSAGE_CHILDREN) writeTs(usage, clockTime(who === RUSAGE_THREAD ? CLOCK_THREAD_CPUTIME_ID : CLOCK_PROCESS_CPUTIME_ID), 1e3);
+    return 0;
   },
   prlimit64: (cpu, a) => {
     const pid = a.i(), resource = a.i(), next = a.p(), old = a.p();

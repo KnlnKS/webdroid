@@ -63,6 +63,8 @@ public class JniProbe {
     public static native void poke(long handle);
     public static int viaHandle() { int[] a = { 1, 2, 3 }; poke(handleOf(a)); return a[1]; }
     public static native int measure(String s, byte[] b, Object[] o);
+    /** a native that answers AllocObject(c) */
+    public static native Object allocate(Class<?> c);
 }
 
 /** A class whose initializer waits, so that a JNI callback that initializes it waits too. */
@@ -77,6 +79,17 @@ class JniSlowInit {
         Object lock = new Object();
         synchronized (lock) { try { lock.wait(ms); } catch (InterruptedException e) { throw new IllegalStateException("interrupted"); } }
     }
+}
+
+/** A class whose initializer makes an instance of itself through JNI. */
+class JniSelfAlloc {
+    static final Object self = JniProbe.allocate(JniSelfAlloc.class);
+}
+
+/** A class whose initializer throws. */
+class JniBadInit {
+    static { if (JniBadInit.class != null) throw new IllegalStateException("bad init"); }
+    static int value() { return 1; }
 }
 
 /** A callback that answers at once, waits, or throws, as `mode` says. */

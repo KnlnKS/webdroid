@@ -1,4 +1,4 @@
-import { E, S_IFDIR, S_IFIFO, S_IFREG } from "../native/abi.ts";
+import { E, S_IFCHR, S_IFDIR, S_IFIFO, S_IFREG } from "../native/abi.ts";
 import { vfs, type FileAttributes, type VfsFile } from "./vfs.ts";
 import { procIdentity, procText } from "./procfs.ts";
 import type { FdStat, FileStat } from "../native/fd.ts";
@@ -72,10 +72,14 @@ function localStat(path: string, type: number, size: number, mtime: number, file
   const { mode, uid, gid } = file?.attributes ?? vfs.attributes(path, type === S_IFDIR);
   return { mode: type | mode, size: type === S_IFDIR ? 4096 : size, mtime, uid, gid };
 }
-export const isRandomDevice = (path: string): boolean => path === "/dev/urandom" || path === "/dev/random";
-/** stat(2) of normalized `p`: a directory, a file (procfs included) or a random device */
+/** the character devices every process can open */
+const CHAR_DEVICES = ["/dev/null", "/dev/urandom", "/dev/random"] as const;
+export type CharDevice = typeof CHAR_DEVICES[number];
+export const isCharDevice = (path: string): path is CharDevice => (CHAR_DEVICES as readonly string[]).includes(path);
+/** stat(2) of normalized `p`: a directory, a file (procfs included) or a character device */
 function pathStat(p: string): PathReply<FileStat | null> {
-  const s = isRandomDevice(p) ? "" : procText(p);
+  if (isCharDevice(p)) return { errno: 0, value: localStat(p, S_IFCHR, 0, Date.now()) };
+  const s = procText(p);
   if (s !== null) return { errno: 0, value: localStat(p, S_IFREG, utf8.enc.encode(s).length, Date.now()) };
   const directory = vfs.isDir(p), file = directory ? null : vfs.stat(p);
   return directory || file ? { errno: 0, value: localStat(p, pathType(p), file?.size ?? 0, vfs.mtime(p), null) } : { errno: E.NOENT, value: null };
@@ -83,7 +87,7 @@ function pathStat(p: string): PathReply<FileStat | null> {
 function accessPath(path: string, mode: number): number {
   if (mode & ~7) return -E.INVAL;
   const p = vfs.norm(path);
-  return vfs.exists(p) || vfs.isDir(p) || procText(p) !== null || isRandomDevice(p) ? 0 : -E.NOENT;
+  return vfs.exists(p) || vfs.isDir(p) || procText(p) !== null || isCharDevice(p) ? 0 : -E.NOENT;
 }
 /** rename(2) over the vfs: a file keeps its lazy source, a directory carries its entries along */
 export function renamePath(fromPath: string, toPath: string): number {

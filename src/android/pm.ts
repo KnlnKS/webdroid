@@ -32,6 +32,7 @@ import { libraryAbi } from "../jvm/natives/jlang.ts";
 import { inflateTree, treeEntrySize } from "../zip.ts";
 import type { FileSource } from "../shell/lazyfile.ts";
 import { ABIS_64 } from "../shell/properties.ts";
+import { linkerHooks } from "../native/dl.ts";
 
 const PKG = "android/content/pm/";
 const COMPONENT = PKG + "ComponentInfo", APP = PKG + "ApplicationInfo", ACTIVITY = PKG + "ActivityInfo";
@@ -46,7 +47,7 @@ let currentPackage: PackageRecord | null = null;
 /** the installed package this process booted, with its native libraries where the installer leaves them */
 export function setManifest(root: XmlNode): void {
   currentPackage = packages.get(attrStr(root, "package") ?? "") ?? null;
-  if (currentPackage) extractNativeLibraries(currentPackage);
+  if (currentPackage) linkerHooks.appLib = extractNativeLibraries(currentPackage);
 }
 /** the splits installed beside the booted package's base; this process holds no other package's */
 const ownSplits = (record: PackageRecord): readonly string[] => record === currentPackage && appHost ? appHost.splits : [];
@@ -55,18 +56,19 @@ const ownSplits = (record: PackageRecord): readonly string[] => record === curre
 const INSTRUCTION_SETS: Record<string, string> = { "arm64-v8a": "arm64", "armeabi-v7a": "arm", armeabi: "arm", x86_64: "x86_64", x86: "x86" };
 /** primaryCpuAbi: the ABI of the package's libraries a process here loads, null when it ships none */
 const primaryAbi = (record: PackageRecord): string | null =>
-  libraryAbi(record === currentPackage ? rt.classpathNames() : Object.keys(record.apk.zip));
+  libraryAbi(record === currentPackage ? rt.classpathNames() : [...Object.keys(record.apk.zip), ...record.apk.lazyEntries.keys()]);
 const nativeLibraryRoot = (record: PackageRecord): string => `${record.path.slice(0, record.path.lastIndexOf("/"))}/lib`;
 /** <codePath>/lib/<instruction set>, the device's own when the package ships no libraries */
 const nativeLibraryDir = (record: PackageRecord, abi: string | null): string => `${nativeLibraryRoot(record)}/${INSTRUCTION_SETS[abi ?? ABIS_64[0]]}`;
 /** The installer's copy of the booted package's primary-ABI libraries into its nativeLibraryDir,
- *  which ClassLoader.findLibrary searches; extractNativeLibs="false" leaves them in the apk. */
-function extractNativeLibraries(record: PackageRecord): void {
-  const abi = primaryAbi(record);
-  if (!abi || !record.flag(record.application, "extractNativeLibs", true)) return;
+ *  which ClassLoader.findLibrary searches; extractNativeLibs="false" leaves them in the apk. The
+ *  path the linker names lib/<abi>/<name> by: its extracted copy, else the apk entry it maps. */
+function extractNativeLibraries(record: PackageRecord): (abi: string, name: string) => string {
+  const abi = primaryAbi(record), extracted = !!abi && record.flag(record.application, "extractNativeLibs", true);
   const dir = nativeLibraryDir(record, abi), prefix = `lib/${abi}/`;
-  for (const name of rt.classpathNames()) if (name.startsWith(prefix) && name.endsWith(".so") && !name.includes("/", prefix.length))
+  if (extracted) for (const name of rt.classpathNames()) if (name.startsWith(prefix) && name.endsWith(".so") && !name.includes("/", prefix.length))
     vfs.mount(dir + name.slice(prefix.length - 1), classpathFile(name));
+  return (entryAbi, name) => extracted && entryAbi === abi ? `${dir}/${name}` : `${record.path}!/lib/${entryAbi}/${name}`;
 }
 /** a class path entry as a file, sized without inflating or fetching it; reading it inflates natively */
 function classpathFile(name: string): FileSource {

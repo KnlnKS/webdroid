@@ -33,6 +33,7 @@ export function libraryAbi(names: Iterable<string>): string | null {
   return dirs.size ? pickAbi((a) => dirs.has(a)) : null;
 }
 const E_MACHINE: Record<number, string> = { 0xb7: "arm64-v8a", 0x28: "armeabi-v7a", 0x3e: "x86_64", 0x03: "x86" };
+const elfAbi = (bytes: Uint8Array): string => E_MACHINE[bytes[18] | (bytes[19] << 8)] ?? "unknown";
 /** a library file, or an archive's entry ("base.apk!/lib/arm64-v8a/libx.so") the linker maps from the archive */
 function* libraryFile(path: string): Gen<Uint8Array | null> {
   const bang = path.indexOf("!/");
@@ -44,12 +45,12 @@ function* libraryFile(path: string): Gen<Uint8Array | null> {
 }
 /** a library in the native library path of a dex class loader (BaseDexClassLoader.getLdLibraryPath), which the linker namespace ART makes for the
  *  loader searches: directories, and archive directories ("base.apk!/lib/arm64-v8a") */
-function* fromLibraryPath(loader: unknown, lib: string): Gen<Uint8Array | null> {
-  let path: string | null;
-  try { path = yield vcall(loader, "getLdLibraryPath", "()Ljava/lang/String;"); } catch { return null; }
-  for (const dir of path?.split(":") ?? []) {
-    const bytes = yield* libraryFile(`${dir}/${lib}`);
-    if (bytes) return bytes;
+function* fromLibraryPath(loader: unknown, lib: string): Gen<{ path: string; bytes: Uint8Array } | null> {
+  let dirs: string | null;
+  try { dirs = yield vcall(loader, "getLdLibraryPath", "()Ljava/lang/String;"); } catch { return null; }
+  for (const dir of dirs?.split(":") ?? []) {
+    const path = `${dir}/${lib}`, bytes = yield* libraryFile(path);
+    if (bytes) return { path, bytes };
   }
   return null;
 }
@@ -63,20 +64,19 @@ function nativeLoad(file: string, loader: unknown, caller: unknown = null): stri
   const thread = curThread;
   // driven: each step continues on the asking thread and chain (a <clinit>'s, when it loads its library)
   const pending = Promise.resolve(rt.drive(function* (): Gen<string | null> {
-    let abi: string | null, bytes: Uint8Array | null;
+    // the path the linker names the library by: where it was found, else (from the class path) its name
+    let abi: string | null, bytes: Uint8Array | null, path = file;
     if (file.startsWith("/")) {
       bytes = yield* libraryFile(file);
-      abi = bytes && (E_MACHINE[bytes[18] | (bytes[19] << 8)] ?? "unknown");
+      abi = bytes && elfAbi(bytes);
     } else {
       abi = pickAbi((a) => rt.hasClasspath(`lib/${a}/${lib}`));
       bytes = abi ? yield rt.readClasspath(`lib/${abi}/${lib}`) : null;
-      if (!bytes && loader) {
-        bytes = yield* fromLibraryPath(loader, lib);
-        abi = bytes && (E_MACHINE[bytes[18] | (bytes[19] << 8)] ?? "unknown");
-      }
+      const found = !bytes && loader ? yield* fromLibraryPath(loader, lib) : null;
+      if (found) { ({ path, bytes } = found); abi = elfAbi(bytes); }
     }
     if (abi && bytes && rt.loadNativeLib) {
-      try { yield rt.loadNativeLib(lib, bytes, abi, caller); return null; }
+      try { yield rt.loadNativeLib(path, bytes, abi, caller); return null; }
       catch (e) {
         rt.noteNativeRequired(lib, abi);
         if (iof(e, "java/lang/UnsatisfiedLinkError")) return (e as JThrowable).msg;

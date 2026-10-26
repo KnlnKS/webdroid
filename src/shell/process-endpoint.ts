@@ -29,7 +29,8 @@ import { procIdentity } from "./procfs.ts";
 let calls: ReturnType<typeof callProxy<BrokerCalls>> | undefined, releaseFiles = () => {};
 function attach(port: MessagePort, worker: boolean): BrokerCalls {
   if (calls) { closePort(port); throw new Error("Process command port already attached"); }
-  calls = callProxy<BrokerCalls>(port, brokerMethods, { notifications: ["processExited", "storageWrite"], makeError: javaFailure });
+  calls = callProxy<BrokerCalls>(port, brokerMethods, { notifications: ["processExited", "storageWrite"], makeError: javaFailure,
+    transfer: { installPackage: (apks) => apks.map((apk) => apk.buffer) } });
   connectBroker(calls.endpoint, worker);
   return calls.endpoint;
 }

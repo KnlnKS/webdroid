@@ -20,7 +20,7 @@ export interface Install {
 }
 type OpenedApk = { source: FileSource; split: string | null; hasManifest: boolean } & (
   { kind: "resident"; bytes: Uint8Array; zip: Record<string, Uint8Array> }
-  | { kind: "lazy"; bytes: null; zip: null; entries: Map<string, ZEntry> }
+  | { kind: "lazy"; bytes: null; zip: null; entries: Map<string, ZEntry>; resources: Uint8Array | null }
 );
 
 /** the apks merged over their base: the one among `opened`, or `base` when its tree is already open */
@@ -46,7 +46,7 @@ export function mergeInstall(opened: OpenedApk[], base?: Pick<Install, "zip" | "
       if (Object.hasOwn(merged, path) || lazyEntries.has(path)) continue;
       lazyEntries.set(path, new ZipEntryFile(o.source, entry));
     }
-    if (o.split) splits.push({ name: o.split, source: o.source, bytes: o.bytes, resources: o.kind === "resident" ? o.zip["resources.arsc"] ?? null : null });
+    if (o.split) splits.push({ name: o.split, source: o.source, bytes: o.bytes, resources: o.kind === "resident" ? o.zip["resources.arsc"] ?? null : o.resources });
     console.log("[webdroid] split", o.split ?? "(unnamed)", o.kind === "resident" ? Object.keys(o.zip).length : "lazy", "entries");
   }
   return { zip: merged, lazyEntries, base: base.base, splits };
@@ -85,16 +85,20 @@ export class ZipEntryFile implements FileSource {
     return (await this.resolved).read(offset, length);
   }
 }
-async function openedApk(source: FileSource, entries: Map<string, ZEntry>): Promise<OpenedApk> {
+/** `lazy`: every entry stays in the apk, read when opened, its resource table aside */
+async function openedApk(source: FileSource, entries: Map<string, ZEntry>, lazy: boolean): Promise<OpenedApk> {
   const manifestEntry = entries.get("AndroidManifest.xml");
   const manifestSource = manifestEntry ? await entrySource(source, manifestEntry) : null;
   const manifest = manifestSource ? await readFully(manifestSource) : null;
   const xml = manifest ? parseAXML(manifest) : null;
   const split = xml ? attrStr(xml, "split") : null;
   const assetPack = xml?.children.some((node) => node.name === "module" && attrStr(node, "type") === "asset-pack") ?? false;
-  const resident = !assetPack || !split || [...entries.keys()].some((name) =>
-    isDexEntry(name) || name === "resources.arsc" || name.startsWith("lib/"));
-  if (!resident) return { kind: "lazy", source, bytes: null, zip: null, entries, split, hasManifest: !!manifest };
+  const resident = !lazy && (!assetPack || !split || [...entries.keys()].some((name) =>
+    isDexEntry(name) || name === "resources.arsc" || name.startsWith("lib/")));
+  if (!resident) {
+    const table = entries.get("resources.arsc"), resources = table ? await readFully(await entrySource(source, table)) : null;
+    return { kind: "lazy", source, bytes: null, zip: null, entries, resources, split, hasManifest: !!manifest };
+  }
   const bytes = await readFully(source);
   return { kind: "resident", source: new BytesFile(bytes), bytes, zip: zipTree(bytes), split, hasManifest: !!manifest };
 }
@@ -109,9 +113,13 @@ async function openInstallSource(source: FileSource): Promise<Install> {
 
 /** an install from its apks: the base among them, or given already open (a packed archive, a
  *  parsed apk) so that it is not read again */
-export async function openInstallApks(apks: FileSource[], base?: Pick<Install, "zip" | "base">): Promise<Install> {
+export const openInstallApks = async (apks: FileSource[], base?: Pick<Install, "zip" | "base">): Promise<Install> => mergeInstall(await openApks(apks, false), base);
+/** an installed package's splits over its open base, as a package manager that runs none of their code holds
+ *  them: every entry read when it is opened, and a split's dex left in its own apk */
+export const openInstalledSplits = async (apks: FileSource[], base: Pick<Install, "zip" | "base">): Promise<Install> => mergeInstall(await openApks(apks, true), base);
+async function openApks(apks: FileSource[], lazy: boolean): Promise<OpenedApk[]> {
   const dirs = await Promise.all(apks.map(centralDirOfSource));
-  return mergeInstall(await Promise.all(apks.map((apk, i) => openedApk(apk, dirs[i]))), base);
+  return Promise.all(apks.map((apk, i) => openedApk(apk, dirs[i], lazy)));
 }
 
 export async function openInstallRemote(url: string): Promise<Install> {

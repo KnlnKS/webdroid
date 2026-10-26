@@ -34,7 +34,7 @@ const NUMBERS64: Record<number, string> = {
   119: "sched_setscheduler", 120: "sched_getscheduler", 121: "sched_getparam", 122: "sched_setaffinity", 123: "sched_getaffinity",
   124: "sched_yield", 129: "kill", 130: "tkill", 131: "tgkill", 132: "sigaltstack", 133: "sigsuspend", 134: "rt_sigaction",
   135: "rt_sigprocmask", 137: "rt_sigtimedwait", 140: "setpriority", 141: "getpriority", 155: "getpgid", 160: "uname", 163: "getrlimit",
-  164: "setrlimit", 166: "umask", 167: "prctl", 168: "getcpu", 169: "gettimeofday", 172: "getpid", 173: "getppid", 174: "getuid",
+  164: "setrlimit", 165: "getrusage", 166: "umask", 167: "prctl", 168: "getcpu", 169: "gettimeofday", 172: "getpid", 173: "getppid", 174: "getuid",
   175: "geteuid", 176: "getgid", 177: "getegid", 178: "gettid", 179: "sysinfo", 198: "socket", 199: "socketpair", 200: "bind",
   201: "listen", 202: "accept", 203: "connect", 204: "getsockname", 205: "getpeername", 206: "sendto", 207: "recvfrom", 208: "setsockopt",
   209: "getsockopt", 210: "shutdown", 211: "sendmsg", 212: "recvmsg", 215: "munmap", 216: "mremap", 220: "clone", 222: "mmap",
@@ -44,7 +44,7 @@ const NUMBERS64: Record<number, string> = {
   278: "getrandom",
 };
 const NUMBERS32: Record<number, string> = {
-  3: "read", 4: "write", 6: "close", 20: "getpid", 37: "kill", 78: "gettimeofday", 91: "munmap", 116: "sysinfo", 125: "mprotect",
+  3: "read", 4: "write", 6: "close", 20: "getpid", 37: "kill", 77: "getrusage", 78: "gettimeofday", 91: "munmap", 116: "sysinfo", 125: "mprotect",
   132: "getpgid", 145: "readv", 146: "writev", 158: "sched_yield", 162: "nanosleep", 174: "rt_sigaction", 175: "rt_sigprocmask",
   177: "rt_sigtimedwait", 217: "getdents64", 221: "fcntl", 224: "gettid", 238: "tkill", 240: "futex", 241: "sched_setaffinity",
   242: "sched_getaffinity", 263: "clock_gettime", 268: "tgkill", 316: "inotify_init", 317: "inotify_add_watch", 318: "inotify_rm_watch",

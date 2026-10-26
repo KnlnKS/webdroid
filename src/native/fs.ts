@@ -10,7 +10,7 @@ import { E, AT_FDCWD, O_ACCMODE, O_APPEND, O_CLOEXEC, O_CREAT, O_DIRECTORY, O_EX
 import type { Cpu } from "./cpu.ts";
 import { DIRENT64, fillStat, fullStat, logLine, offArg, putDirent, randomBytes, readTs, KLAYOUT, type Stat } from "./kernel.ts";
 import { vfs, EMPTY, storageEstimate, type VfsFile } from "../shell/vfs.ts";
-import { filePaths, changeOpenFile, isRandomDevice, openFileStat, type AttributeChange } from "../shell/file-path.ts";
+import { filePaths, changeOpenFile, isCharDevice, openFileStat, type AttributeChange, type CharDevice } from "../shell/file-path.ts";
 import { procMemory, procText, procWritable, procWrite } from "../shell/procfs.ts";
 import { readAt, writable, type FileSource } from "../shell/lazyfile.ts";
 import { utf8 } from "../jvm/abi.ts";
@@ -132,19 +132,23 @@ const STDIO: FileOps<{ log: number; line: string }> = {
   seek: seekPosition,
   available: () => 0,
 };
-const RANDOM: FileOps = {
+/** /dev/null reads nothing and /dev/urandom random bytes; writes to either are taken and dropped */
+const charDevice = (read: (target: Uint8Array) => number): FileOps => ({
   ...ANON,
   mode: S_IFCHR | 0o666,
   positional: true,
-  read(_f, target, at, n) { randomBytes(target.subarray(at, at + n)); return n; },
+  read: (_f, target, at, n) => read(target.subarray(at, at + n)),
+  write: (_f, bytes) => bytes.length,
   seek: (f) => f.pos,                                                             // noop_llseek
   available: () => -E.INVAL,
-};
+});
+const RANDOM = charDevice((target) => { randomBytes(target); return target.length; });
+const DEVICE_OPS: Record<CharDevice, FileOps> = { "/dev/null": charDevice(() => 0), "/dev/urandom": RANDOM, "/dev/random": RANDOM };
 
 /** an open of a file this realm holds */
 export function localOpen(name: string, flags: number): number {
   const path = vfs.norm(name), access = flags & O_ACCMODE, status = flags & (O_ACCMODE | O_APPEND | O_NONBLOCK), cloexec = !!(flags & O_CLOEXEC);
-  if (isRandomDevice(path)) return access ? -E.ACCES : installFile(newFile(RANDOM, path, status, undefined), cloexec);
+  if (isCharDevice(path)) return installFile(newFile(DEVICE_OPS[path], path, status, undefined), cloexec);
   const s = procText(path);
   if (s !== null) {
     if (access && !procWritable(path)) return -E.ACCES;

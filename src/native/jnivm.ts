@@ -38,9 +38,9 @@ export interface JniVm {
   set(f: JniField, o: unknown, v: unknown): void;
   /** calls the method on `self` (null for a static one), virtually unless `nonvirtual`; the result, or a Promise while the callee waits. A Java exception is thrown. */
   invoke(c: JniClass, name: string, sig: string, isStatic: boolean, self: unknown, args: unknown[], nonvirtual: boolean): unknown;
-  /** a new instance of `c` its constructor `sig` has run on; a Promise while the constructor waits */
+  /** a new instance of `c`, a class `init` readied, its constructor `sig` run on it; a Promise while the constructor waits */
   construct(c: JniClass, sig: string, args: unknown[]): unknown;
-  /** an instance of `c` no constructor has run on; the class is initialized first */
+  /** an instance of `c`, a class `init` readied, no constructor run on it */
   allocate(c: JniClass): unknown;
   /** the Method or Constructor object for a method of a class */
   reflect(c: JniClass, name: string, desc: string, isStatic: boolean): unknown;

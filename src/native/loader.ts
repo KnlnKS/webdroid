@@ -67,7 +67,8 @@ export async function linkNativeLib(name: string, bytes: Uint8Array): Promise<Mo
   return loadModule(name, bytes, true);
 }
 
-/** `caller` is the java.lang.Class whose code loads the library: JNI_OnLoad finds classes through its loader, as ART's loader override has it */
+/** `name` is the library's path, or its name when it came from the class path. `caller` is the java.lang.Class whose code loads the
+ *  library: JNI_OnLoad finds classes through its loader, as ART's loader override has it */
 export async function loadNativeLib(name: string, bytes: Uint8Array, abi: string, caller: unknown = null): Promise<void> {
   if (!NATIVE_ABIS.includes(abi)) {
     throw rt.mkThrowable("java/lang/UnsatisfiedLinkError", `dlopen failed: library "${name}" is ${abi} machine code`);

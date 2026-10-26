@@ -5,6 +5,7 @@ import { SHARED_LIBRARIES } from "../jvm/bootclasspath.ts";
 import { device } from "../shell/config.ts";
 import type { PackageState } from "../shell/packagedata.ts";
 import { persisted } from "../shell/device-storage.ts";
+import type { FileSource } from "../shell/lazyfile.ts";
 
 export type ComponentKind = "activity" | "service" | "receiver" | "provider";
 /** PackageManager's flags, which IPackageManager takes as a long */
@@ -63,11 +64,13 @@ export class PackageRecord {
   readonly system: boolean;
   readonly grants: ReadonlySet<string>;
   readonly compatibilityCertificates: Uint8Array[] | null;
+  /** the split apks installed beside the base */
+  readonly splits: readonly FileSource[];
 
   constructor(root: XmlNode, apk: Apk, path: string,
-    uid: number, certificates: () => Promise<Uint8Array[]>, { system = false, grants = [], signatures = null }: Provisioned = {}) {
+    uid: number, certificates: () => Promise<Uint8Array[]>, { system = false, grants = [], signatures = null, splits = [] }: Provisioned & { splits?: readonly FileSource[] } = {}) {
     this.root = root; this.apk = apk; this.path = path; this.uid = uid; this.certificates = certificates;
-    this.system = system; this.grants = new Set(grants); this.compatibilityCertificates = signatures;
+    this.system = system; this.grants = new Set(grants); this.compatibilityCertificates = signatures; this.splits = splits;
     this.pkg = attrStr(root, "package") ?? "";
     this.application = root.children.find((n) => n.name === "application") ?? null;
     for (const node of this.application?.children ?? []) {

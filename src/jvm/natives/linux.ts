@@ -17,7 +17,7 @@ import { E, ERRSTR, POLLIN, POLLERR, strerror } from "../../native/abi.ts";
 import { mmap, munmap } from "../../native/vm.ts";
 import { processOpenFd } from "../../native/process-fd.ts";
 import { readlinkAt, statAt, statFd, storageStat } from "../../native/fs.ts";
-import { openFd, dupFd, dup2Fd, dropFile, readFd, preadFd, writeFd, pwriteFd, seekFd, truncateFd, syncFd, fcntlFd, ioctlIntFd, fdsanOwnerTag } from "../../native/fd.ts";
+import { openFd, dupFd, dup2Fd, dropFile, readFd, preadFd, writeFd, pwriteFd, seekFd, truncateFd, allocateFd, syncFd, fcntlFd, ioctlIntFd, fdsanOwnerTag } from "../../native/fd.ts";
 import { fdsanClose, fdsanExchangeOwnerTag, fdsanTagType, fdsanTagValue } from "../../native/fdsan.ts";
 import { pipeFds } from "../../native/pipe.ts";
 import type { Stat } from "../../native/kernel.ts";
@@ -69,6 +69,8 @@ const files: Record<string, (...args: never[]) => unknown> = {
     [`pwriteBytes(${FD}Ljava/lang/Object;IIJ)I`]: ranged(waits((d: JObj | null, buffer: IoBuffer, offset: number, count: number, position: bigint) =>
       writeBytes(buffer, offset, count, (bytes) => after(pwriteFd(fdInt(d), bytes, Number(position)), n => ioResult("pwrite", n)))), [1, 2, 3]),
     [`ftruncate(${FD}J)V`]: (d: JObj | null, length: bigint) => after(truncateFd(fdInt(d), Number(length)), n => sys("ftruncate", n)),
+    [`posix_fallocate(${FD}JJ)V`]: (d: JObj | null, offset: bigint, length: bigint) =>
+      after(allocateFd(fdInt(d), Number(offset), Number(length)), n => sys("posix_fallocate", n)),
     [`fsync(${FD})V`]: (d: JObj | null) => after(syncFd(fdInt(d)), n => sys("fsync", n)),
     [`fdatasync(${FD})V`]: (d: JObj | null) => after(syncFd(fdInt(d)), n => sys("fdatasync", n)),
     [`ioctlInt(${FD}I)I`]: (d: JObj | null, request: number) => after(ioctlIntFd(fdInt(d), request), n => ioResult("ioctl", n)),
@@ -144,8 +146,9 @@ const files: Record<string, (...args: never[]) => unknown> = {
       (({ domainname: _, ...fields }) => fields)(uname(is64BitProcess()))),
     "sysconf(I)J": (name: number) => BigInt(sysconf(name)),
     "strerror(I)Ljava/lang/String;": strerror,
-    "stat(Ljava/lang/String;)Landroid/system/StructStat;": (path: string) =>
-      existing("stat", path, (st) => statOf(st)),
+    "stat(Ljava/lang/String;)Landroid/system/StructStat;": (path: string) => existing("stat", path, statOf),
+    // the VFS has no symbolic links, so no path names one
+    "lstat(Ljava/lang/String;)Landroid/system/StructStat;": (path: string) => existing("lstat", path, statOf),
     "chmod(Ljava/lang/String;I)V": (path: string, mode: number) => {
       if (path === null) rt.npe();
       return after(filePaths(path).fileSetAttributes(path,{mode}), result => { sys("chmod",result); });

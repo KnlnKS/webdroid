@@ -144,7 +144,7 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
         throw rt.mkThrowable("java/lang/SecurityException", `uid ${caller.uid} does not hold ${permission}`);
       return broker.changePackageData(pkg, change, broadcasts, prompt);
     },
-    installPackage: (bytes, expected) => broker.installPackage(pid, bytes, expected),
+    installPackage: (apks, expected) => broker.installPackage(pid, apks, expected),
     storageWrite: (key, value) => {
       if (storageWrite(caller, key, value)) for (const other of broker.processes())
         if (other !== caller && !other.dead && storageAccess(key, other)) unawaited(broker.request(other, endpoint => endpoint.storageChanged(key, value)));

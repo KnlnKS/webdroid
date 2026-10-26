@@ -34,6 +34,8 @@ const javaResult = (m: MethodInfo, rk: Kind | "V", r: unknown): unknown => rk ==
 
 /** a new instance of class `cls`, initialized but not constructed */
 export const newInstance = (w: World, cls: string): object => w.helpers.hostFn("e:new:" + cls, [], "L", (cx, c) => { cx.emitEnsure(c, cls); cx.emitNew(c, cls); })() as object;
+/** a new instance of class `cls` its caller initialized: a host call has no stack to wait on, even for its own thread's initializer */
+export const allocInstance = (w: World, cls: string): object => w.helpers.hostFn("e:alloc:" + cls, [], "L", (cx, c) => cx.emitNew(c, cls))() as object;
 
 /** the Java object a facade stands for */
 export const refOf = (v: unknown): object | undefined => typeof v === "object" && v !== null ? (v as { [REF]?: object })[REF] : undefined;

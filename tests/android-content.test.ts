@@ -102,7 +102,7 @@ describe("install-merge", () => {
     const resident = zipSync({ "assets/unique.txt": encode("resident"), "assets/last.txt": encode("last") });
     const install = mergeInstall([
       { kind: "resident", source: new BytesFile(base), bytes: base, zip: zipTree(base), split: null, hasManifest: true },
-      { kind: "lazy", source: new BytesFile(lazy), bytes: null, zip: null, entries: centralDir(lazy), split: "asset_pack", hasManifest: true },
+      { kind: "lazy", source: new BytesFile(lazy), bytes: null, zip: null, entries: centralDir(lazy), resources: null, split: "asset_pack", hasManifest: true },
       { kind: "resident", source: new BytesFile(resident), bytes: resident, zip: zipTree(resident), split: "feature", hasManifest: true },
     ]);
 

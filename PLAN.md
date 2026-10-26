@@ -54,7 +54,8 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
   vector map and layers, searches, and shows places, driving routes, active navigation, Street View and Immersive
   View. The `apks/new` XAPKs run on the Wasm tier (2026-10-16): Snapseed edits and exports, Yelp's onboarding, home,
   search, map and business page work, Walmart's flows and cart work, McDonald's reaches home, menu and the store
-  locator, and Tubi plays non-DRM titles.
+  locator, and Tubi plays non-DRM titles. APKPure (2026-10-25) searches, downloads and installs Pokémon TCG Pocket's
+  split XAPK; the installed game's launch is unexamined.
 - **Deployment:** one Workers Builds build deploys the page to Pages and the backend, which is also the isolated
   WebView renderer's origin, to a Worker from `main`, and paired previews from other branches. Not yet deployed
   from this layout. See [deployment.md](docs/deployment.md).

@@ -8,7 +8,7 @@ import { encodeIntent, intentCodec } from "../android/intentipc.ts";
 import type { IntentCodec } from "./pendingintents.ts";
 import { packages, type PackageRecord } from "../android/packages.ts";
 import { installPackage } from "./packages.ts";
-import { unregisterPackage } from "../android/installpackage.ts";
+import { installFailed, unregisterPackage, INSTALL_SUCCEEDED, type InstallResult } from "../android/installpackage.ts";
 import { releaseRights, SYSTEM_CALLER, INTERFACE_TRANSACTION, exportParcel, type ParcelData, type Transaction, type TransactionReply, type BinderHandle } from "../android/binder.ts";
 import { NativeParcel, writeString } from "../android/parcel.ts";
 import { newIntent } from "../android/intent.ts";
@@ -17,7 +17,6 @@ import { NOT_CRASHED, REASON_USER_REQUESTED, copyExitRecord, type ExitRecord, ty
 import type { PackageDataChange } from "./packagedata.ts";
 import { ServiceRecords, type ServiceRequest, type ServiceStarts } from "./servicerecords.ts";
 import { ActivityStack } from "./activitystack.ts";
-import type { FileSource } from "./lazyfile.ts";
 import { vfs } from "./vfs.ts";
 import { device, naturalLandscape } from "./config.ts";
 import { exported, componentPermission, componentProcess, resolveProvider } from "../android/pm.ts";
@@ -196,19 +195,13 @@ export class ProcessBroker {
     const shown = entry.ready.then(() => this.activities.bringToFront(entry.pid));
     return { pid: entry.pid, shown };
   }
-  private packageSplits = new Map<string, readonly FileSource[]>();
-  setPackageSplits(pkg: string, sources: readonly FileSource[]): void {
-    if (!packages.has(pkg)) throw new Error("Package not installed: " + pkg);
-    this.packageSplits.set(pkg, [...sources]);
-  }
   /** each of `records` as a Worker registers it, its archive and splits served over ports `ports` collects */
   private async snapshots(records: PackageRecord[], ports: (() => void)[]): Promise<PackageSnapshot[]> {
     const registry = records.map((record) => {
       const packed = packedArchives.get(record.path);
       const source = packed ? { index: packed.index, base: packed.base } : null, file = packed ? null : vfs.source(record.path);
       if (!source && !file) throw new Error("Package bytes unavailable: " + record.pkg);
-      const splits = this.packageSplits.get(record.pkg) ?? [];
-      return { certificates: record.certificates(), pkg: record.pkg, source, file, splits, uid: record.uid, system: record.system, grants: [...record.grants], signatures: record.compatibilityCertificates };
+      return { certificates: record.certificates(), pkg: record.pkg, source, file, splits: record.splits, uid: record.uid, system: record.system, grants: [...record.grants], signatures: record.compatibilityCertificates };
     });
     const certificates = await Promise.all(registry.map(record => record.certificates));
     const publish = (source: NonNullable<ReturnType<typeof vfs.source>>) => {
@@ -305,14 +298,14 @@ export class ProcessBroker {
   }
   /** a package process `pid` installs joins this package manager, then every app process's, whose
    *  archive ports close with it */
-  async installPackage(pid: number, bytes: Uint8Array, expected: string | null): Promise<string> {
-    const record = await installPackage(bytes, expected, this.entry(pid).pkg);
+  async installPackage(pid: number, apks: Uint8Array[], expected: string | null): Promise<InstallResult> {
+    let record: PackageRecord;
+    try { record = await installPackage(apks, expected, this.entry(pid).pkg); } catch (error) { return installFailed(error); }
     await this.each((e) => e.pid !== procIdentity.pid, async (endpoint, entry) => endpoint.packageAdded((await this.snapshots([record], entry.bootstrap))[0]));
-    return record.pkg;
+    return { code: INSTALL_SUCCEEDED, message: null, pkg: record.pkg };
   }
   /** a removed package leaves every process's package manager, this one's too */
   async packageRemoved(pkg: string): Promise<void> {
-    this.packageSplits.delete(pkg);
     unregisterPackage(pkg);
     await this.each(() => true, (endpoint) => endpoint.packageRemoved(pkg));
   }

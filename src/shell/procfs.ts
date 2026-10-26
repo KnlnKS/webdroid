@@ -1,6 +1,7 @@
 import { device } from "./config.ts";
 import { java } from "../jvm/javahost.ts";
 import { DEVICE_PROPERTIES, UNAME } from "./device-properties.ts";
+import { bootTime, uptimeMillis } from "../guest-clock.ts";
 
 /** the process's identity: name is what the activity manager knows it by, argv0 its command line, which
  *  Process.setArgV0 changes */
@@ -43,6 +44,12 @@ function statLine(id: number): string {
   return `${id} (${taskComm(id)}) R 1 ${procIdentity.pid} 0 0 -1 4194560 0 0 0 0 ${ticks} 0 0 0 20 0 1 0 0 ${bytes} ${Math.ceil(bytes / 4096)} ` +
     `18446744073709551615 0 0 ${procMemory.startStack()} 0 0 0 0 4612 0 0 0 17 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n`;
 }
+/** the kernel's random boot UUID, the same in every process of this boot: drawn from the boot's start */
+const bootId = (): string => {
+  let h = Math.floor(bootTime * 1000) | 0, hex = "";
+  for (let i = 0; i < 4; i++) { h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d) + 0x9e3779b9 | 0; hex += (h >>> 0).toString(16).padStart(8, "0"); }
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20)}\n`;
+};
 const cpuList = () => device.cpu.cores === 1 ? "0\n" : `0-${device.cpu.cores - 1}\n`;
 
 /** the process's live threads by tid, what /proc/self/task lists, and their native names, as the Wasm tier knows them (src/wasm/host/entry.ts); the main thread alone before */
@@ -81,6 +88,8 @@ export function procText(path: string): string | null {
     return text + `Hardware\t: ${DEVICE_PROPERTIES["ro.hardware"]}\nRevision\t: 0000\nSerial\t\t: 0000000000000000\n`;
   }
   if (path === "/sys/devices/system/cpu/present" || path === "/sys/devices/system/cpu/possible" || path === "/sys/devices/system/cpu/online") return cpuList();
+  if (path === "/proc/sys/kernel/random/boot_id") return bootId();
+  if (path === "/proc/uptime") { const s = (uptimeMillis() / 1000).toFixed(2); return `${s} ${s}\n`; }
   if (path === "/proc/meminfo") return `MemTotal:        ${device.cpu.memKb} kB\nMemFree:         ${device.cpu.memKb >> 1} kB\nBuffers:               0 kB\nCached:                0 kB\n`;
   // /proc/self, /proc/thread-self and /proc/<own pid>, each optionally narrowed to task/<tid>
   const own = TASK.exec(path);

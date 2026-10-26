@@ -30,23 +30,28 @@ let tlsDescResolver = 0;
 /** names the host serves in place of any image's own definition */
 export const interposed = new Map<string, number>();
 /** the linker's process-specific parts: static TLS placement for a module mapped while it is set
- *  (bionic's initial set), AT_HWCAP for IFUNC resolvers, and the device libraries dlopen may name */
+ *  (bionic's initial set), AT_HWCAP for IFUNC resolvers, the device libraries dlopen may name and
+ *  where the installer left the app's lib/<abi>/<name> */
 export const linkerHooks: {
   placeTls: ((mod: Module) => void) | null; hwcap: bigint; deviceLib: (name: string) => string | null;
+  appLib: (abi: string, name: string) => string | undefined;
   /** a module is linked and about to be initialized */
   linked: (mod: Module, cpu: Cpu) => Promise<void> | void;
   /** a module's image is about to be unmapped */
   unloading: (mod: Module) => void;
-} = { placeTls: null, hwcap: 0n, deviceLib: () => null, linked: () => {}, unloading: () => {} };
+} = { placeTls: null, hwcap: 0n, deviceLib: () => null, appLib: () => undefined, linked: () => {}, unloading: () => {} };
 
 function basename(p: string): string { return p.slice(p.lastIndexOf("/") + 1); }
 
-/** where lib<name>.so comes from: the booted apk's lib/<abi>/, for any ABI the tier runs, else a
- *  device library at its path in the VFS */
-function libSource(name: string): { device?: string; read: () => Promise<Uint8Array | null> } | null {
-  for (const a of rt.nativeAbis) { const path = `lib/${a}/${name}`; if (rt.hasClasspath(path)) return { read: async () => rt.readClasspath(path) }; }
+/** where lib<name>.so comes from and the path the linker names it by: the booted apk's lib/<abi>/, for
+ *  any ABI the tier runs, else a device library at its path in the VFS */
+function libSource(name: string): { path: string | undefined; read: () => Promise<Uint8Array | null> } | null {
+  for (const a of rt.nativeAbis) {
+    const entry = `lib/${a}/${name}`;
+    if (rt.hasClasspath(entry)) return { path: linkerHooks.appLib(a, name), read: async () => rt.readClasspath(entry) };
+  }
   const device = linkerHooks.deviceLib(name);
-  return device ? { device, read: async () => (await vfs.readFile(device)) ?? null } : null;
+  return device ? { path: device, read: async () => (await vfs.readFile(device)) ?? null } : null;
 }
 
 /** reads started before the loadModule that takes them, by name */
@@ -59,22 +64,23 @@ export function prefetchModules(paths: string[]): void {
   }
 }
 
-/** `link` loads and relocates without executing anything — no init array, no JNI_OnLoad. It is
- *  what an image whose machine code the tier cannot run yet can still be proved to do. */
-export async function loadModule(name: string, bytes?: Uint8Array, link = false, cpu: Cpu = cpuFor(curThread)): Promise<Module> {
-  name = basename(name);
+/** `file` is a library's name, or the absolute path it was opened at. `link` loads and relocates without
+ *  executing anything — no init array, no JNI_OnLoad. It is what an image whose machine code the tier
+ *  cannot run yet can still be proved to do. */
+export async function loadModule(file: string, bytes?: Uint8Array, link = false, cpu: Cpu = cpuFor(curThread)): Promise<Module> {
+  const name = basename(file);
   const have = byName.get(name);
   if (have) { have.refs++; return have; }
   const p = inflight.get(name);
   if (p) return p;
   // driven: initializers run as the call chain that loads the image (a <clinit>'s, when it loads its library)
   const q = Promise.resolve(rt.drive(function* (): Gen<Module> {
-    const source = bytes ? null : libSource(name), early = prefetched.get(name);
+    const source = libSource(name), early = prefetched.get(name);
     prefetched.delete(name);
     const b: Uint8Array | null = bytes ?? (source ? yield early ?? source.read() : null);
     if (!b) throw new Error(`dlopen failed: library "${name}" not found`);
     const { mod, relocate } = mapElf(name, b);
-    mod.path = source?.device;
+    mod.path = file.startsWith("/") ? file : source?.path;
     // a process is one ABI, which its first image decided (loader.ts)
     if (mod.w64 !== isA64()) throw new Error(`${name}: ${mod.w64 ? "64" : "32"}-bit image in a ${isA64() ? "64" : "32"}-bit process`);
     modules.push(mod);
@@ -200,7 +206,7 @@ export function tombstoneFrame(pc: number): TombstoneFrame {
   const m = moduleOf(pc), s = m && nearestSymbol(m, pc);
   // a host body stands for the library function of its name
   if (!m) return { pc, relPc: pc, file: "", fn: isTrampPc(pc) ? slotName(trampSlot(pc)) : "", fnOffset: 0 };
-  return { pc, relPc: pc - m.base, file: m.path ?? m.name, fn: s?.name ?? "", fnOffset: s ? pc - s.addr : 0 };
+  return { pc, relPc: pc - m.base, file: modulePath(m), fn: s?.name ?? "", fnOffset: s ? pc - s.addr : 0 };
 }
 function handleOf(h: Handle): number {
   const i = handles.findIndex((x) => x && h && (("mod" in x && "mod" in h && x.mod === h.mod) || ("lib" in x && "lib" in h && x.lib === h.lib)));
@@ -225,7 +231,7 @@ const findExidx: HostFn = (_cpu, a) => {
  *  caller-address argument is unread) */
 export const libdl: Record<string, HostFn> = {
   dlopen: async (cpu, a) => {
-    const path = a.p(), flags = a.i(), name = path ? basename(mem.cstr(path)) : "";
+    const path = a.p(), flags = a.i(), file = path ? mem.cstr(path) : "", name = basename(file);
     if (!name) return 1; // the main program
     if (hostLibNames().includes(name)) return handleOf({ lib: name });
     const have = byName.get(name);
@@ -233,7 +239,7 @@ export const libdl: Record<string, HostFn> = {
     if (have) { have.refs++; return opened(have); }
     if (flags & RTLD_NOLOAD) { dlerrorMsg = `dlopen failed: library "${name}" wasn't loaded and RTLD_NOLOAD prevented it`; return 0; }
     if (!libSource(name)) { dlerrorMsg = `dlopen failed: library "${name}" not found`; return 0; }
-    try { return opened(await loadModule(name, undefined, false, cpu)); }
+    try { return opened(await loadModule(file, undefined, false, cpu)); }
     catch (e) { dlerrorMsg = String((e as Error).message ?? e); return 0; }
   },
   dlsym: (_cpu, a) => {
@@ -299,8 +305,8 @@ export const libdl: Record<string, HostFn> = {
   dl_unwind_find_exidx: findExidx,
 };
 
-/** where an image lives: its device path, else the app's library directory for its ABI */
-export const modulePath = (m: Module): string => m.path ?? `/data/app/lib/${m.w64 ? "arm64-v8a" : "armeabi-v7a"}/${m.name}`;
+/** where an image lives: the path it was opened at, else its name */
+export const modulePath = (m: Module): string => m.path ?? m.name;
 
 export function resolveGlobalOrNull(sym: string, needed: readonly string[] = []): number | undefined {
   for (const m of modules) { const a = m.exports.get(sym); if (a !== undefined) return a; }

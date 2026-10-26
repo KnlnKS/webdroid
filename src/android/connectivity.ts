@@ -83,11 +83,13 @@ hostService("connectivity", "webdroid/ConnectivityService", "android/net/IConnec
   "getAllNetworks()[Landroid/net/Network;": driven(function* () { return jarray(netUp() ? [yield theNetwork()] : [], "Landroid/net/Network;"); }),
   "getActiveNetworkInfo()Landroid/net/NetworkInfo;": networkInfo,
   "getActiveNetworkInfoForUid(IZ)Landroid/net/NetworkInfo;": networkInfo,
+  "getAllNetworkInfo()[Landroid/net/NetworkInfo;": driven(function* () { return jarray([yield networkInfo()], "Landroid/net/NetworkInfo;"); }),
   // the one network's own type answers; this device has no other
   "getNetworkInfo(I)Landroid/net/NetworkInfo;": (type: number) => type === TYPE_WIFI ? networkInfo() : null,
   "getNetworkInfoForUid(Landroid/net/Network;IZ)Landroid/net/NetworkInfo;": ifOurs(networkInfo),
   "getNetworkCapabilities(Landroid/net/Network;Ljava/lang/String;Ljava/lang/String;)Landroid/net/NetworkCapabilities;": ifOurs(capabilities),
   "getLinkProperties(Landroid/net/Network;)Landroid/net/LinkProperties;": ifOurs(linkProperties),
+  "getActiveLinkProperties()Landroid/net/LinkProperties;": () => netUp() ? linkProperties() : null,
   "isActiveNetworkMetered()Z": () => 0,
   "isDefaultNetworkActive()Z": () => +netUp(),
   // RESTRICT_BACKGROUND_STATUS_DISABLED: data saver is off

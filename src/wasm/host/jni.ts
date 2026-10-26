@@ -2,7 +2,7 @@
 // and arrays are reached through generated Wasm functions (Bridge.call, read, write, and the runtime functions of link/guest.ts), never through a facade.
 import { rt } from "../../jvm/runtime.ts";
 import { PRIMS } from "../../jvm/abi.ts";
-import { newInstance, refOf, type Bridge } from "./bridge.ts";
+import { allocInstance, newInstance, refOf, type Bridge } from "./bridge.ts";
 import { idOfClass } from "../link/classes.ts";
 
 import { ACC, javaName, type FieldInfo, type MethodInfo, typeName } from "../compiler/program.ts";
@@ -130,10 +130,10 @@ export function wasmJni(w: World): JniVm {
       // GetMethodID finds a superclass's constructor too (ART's FindClassMethod); NewObject runs it on a new `c`
       const ctor = prog.resolve(c.name, "<init>", view(c, sig));
       if (!ctor) return noSuchMethod("<init>", sig);
-      const o = newInstance(w, c.name), done = nest((s) => bridge.callOn(s, ctor, o, args));
+      const o = allocInstance(w, c.name), done = nest((s) => bridge.callOn(s, ctor, o, args));
       return done instanceof Promise ? done.then(() => o) : o;
     },
-    allocate: (c) => newInstance(w, c.name),
+    allocate: (c) => allocInstance(w, c.name),
     reflect(c, name, desc) {
       const own = view(c, desc), params = own.slice(1, own.indexOf(")")).match(/\[*(?:L[^;]+;|.)/g) ?? [], types = bridge.newArray("[Ljava/lang/Class;", params.length);
       params.forEach((p, i) => bridge.setElement(types, i, mirror(cls(typeName(p)))));

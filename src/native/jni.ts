@@ -120,6 +120,10 @@ function pend(cpu: Cpu, e: unknown): void {
 }
 /** the exception a failed call leaves pending */
 const failed = (cpu: Cpu, e: unknown): void => pend(cpu, java.jni.caught(e));
+/** `body`'s answer once `c` is initialized, as ART's EnsureInitialized before an ID or an instance; 0 with any failure pending */
+const initialized = (cpu: Cpu, c: JniClass, body: () => Gen<number>): number | Promise<number> => rt.drive(function* (): Gen<number> {
+  try { yield java.jni.init(c); return yield* body(); } catch (e) { failed(cpu, e); return 0; }
+}());
 
 /** a JNI type's Java values as guest code holds them: read from an argument (a float arrives as a double
  *  among variadic ones) or a jvalue, returned to guest code or passed to it, and read from its result.
@@ -309,27 +313,23 @@ export function jniInit(): void {
   def("IsSameObject", (cpu, a) => { a.p(); return object(a.p(), cpu) === object(a.p(), cpu) ? 1 : 0; });
   def("NewLocalRef", (cpu, a) => { a.p(); return toRef(object(a.p(), cpu), cpu); });
   def("EnsureLocalCapacity", () => 0);
-  def("AllocObject", async (cpu, a) => { a.p(); const c = classOf(a.p(), cpu); return c ? after(java.jni.init(c), () => toRef(java.jni.allocate(c), cpu)) : 0; });
-  const newObject = (read: (m: MethodRec, a: ArgReader, cpu: Cpu) => unknown[]) => async (cpu: Cpu, a: ArgReader) => {
+  def("AllocObject", (cpu, a) => { a.p(); const c = classOf(a.p(), cpu); return c ? initialized(cpu, c, function* () { return toRef(java.jni.allocate(c), cpu); }) : 0; });
+  const newObject = (read: (m: MethodRec, a: ArgReader, cpu: Cpu) => unknown[]) => (cpu: Cpu, a: ArgReader) => {
     a.p(); const c = classOf(a.p(), cpu); const m = methodOf(a.p());
     if (!c || !m) return 0;
     const args = read(m, a, cpu);
-    return rt.drive(function* (): Gen<number> {
-      try {
-        yield java.jni.init(c);
-        return toRef(yield java.jni.construct(c, m.desc, args), cpu);
-      } catch (e) { failed(cpu, e); return 0; }
-    }());
+    return initialized(cpu, c, function* () { return toRef(yield java.jni.construct(c, m.desc, args), cpu); });
   };
   for (const [form, read] of Object.entries(FORMS)) def(`NewObject${form}`, newObject(read));
   def("GetObjectClass", (cpu, a) => { a.p(); const o = object(a.p(), cpu); return o === null ? 0 : toRef(java.jni.objectClass(o), cpu); });
   def("IsInstanceOf", (cpu, a) => { a.p(); const o = object(a.p(), cpu); const c = classOf(a.p(), cpu); return o === null ? 1 : c ? +java.jni.isInstance(o, c) : 0; });
-  const getMethodID = (isStatic: boolean) => async (cpu: Cpu, a: ArgReader) => {
+  const getMethodID = (isStatic: boolean) => (cpu: Cpu, a: ArgReader) => {
     a.p(); const c = classOf(a.p(), cpu); const name = a.str(), sig = a.str();
     if (!c) { pend(cpu, java.jni.throwable("java/lang/NoClassDefFoundError", "null class")); return 0; }
-    const p = java.jni.init(c); if (p) await p;
-    if (!java.jni.hasMethod(c, name, sig, isStatic)) { pend(cpu, java.jni.throwable("java/lang/NoSuchMethodError", `${c.name}.${name}${sig}`)); jniMissing.add(`${isStatic ? "static " : ""}${c.name}.${name}${sig}`); return 0; }
-    return methodId(c, name, sig, isStatic);
+    return initialized(cpu, c, function* () {
+      if (java.jni.hasMethod(c, name, sig, isStatic)) return methodId(c, name, sig, isStatic);
+      pend(cpu, java.jni.throwable("java/lang/NoSuchMethodError", `${c.name}.${name}${sig}`)); jniMissing.add(`${isStatic ? "static " : ""}${c.name}.${name}${sig}`); return 0;
+    });
   };
   def("GetMethodID", getMethodID(false));
   def("GetStaticMethodID", getMethodID(true));
@@ -345,13 +345,14 @@ export function jniInit(): void {
       return invoke(cpu, m, self, args, kind === "Nonvirtual");
     });
   }
-  const getFieldID = (isStatic: boolean) => async (cpu: Cpu, a: ArgReader) => {
+  const getFieldID = (isStatic: boolean) => (cpu: Cpu, a: ArgReader) => {
     a.p(); const c = classOf(a.p(), cpu); const name = a.str(), sig = a.str();
     if (!c) { pend(cpu, java.jni.throwable("java/lang/NoClassDefFoundError", "null class")); return 0; }
-    const p = java.jni.init(c); if (p) await p;
-    const f = java.jni.field(c, name, sig, isStatic);
-    if (!f) { pend(cpu, java.jni.throwable("java/lang/NoSuchFieldError", `${c.name}.${name}`)); jniMissing.add(`${isStatic ? "static field" : "field"} ${c.name}.${name}`); return 0; }
-    return fieldId(f);
+    return initialized(cpu, c, function* () {
+      const f = java.jni.field(c, name, sig, isStatic);
+      if (f) return fieldId(f);
+      pend(cpu, java.jni.throwable("java/lang/NoSuchFieldError", `${c.name}.${name}`)); jniMissing.add(`${isStatic ? "static field" : "field"} ${c.name}.${name}`); return 0;
+    });
   };
   def("GetFieldID", getFieldID(false));
   def("GetStaticFieldID", getFieldID(true));

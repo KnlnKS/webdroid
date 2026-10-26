@@ -129,6 +129,13 @@ for (const a64 of abis) test(`${abi(a64)} FindClass, GetMethodID and the Call fa
   expect(await j.cls("no/such/Klass")).toBe(0);
   expect(await j.pending()).toBe("java.lang.NoClassDefFoundError");
   await j.clear();
+  // a class whose initializer throws: its IDs answer 0 with the failure pending, the first initialization's or, once the class is erroneous, NoClassDefFoundError
+  const bad = await j.cls("JniBadInit");
+  for (const failure of [/^java\.lang\.(ExceptionInInitializerError|NoClassDefFoundError)$/, /^java\.lang\.NoClassDefFoundError$/]) {
+    expect(await j.staticMethod(bad, "value", "()I")).toBe(0);
+    expect(await j.pending()).toMatch(failure);
+    await j.clear();
+  }
   expect(await j.call(S.ExceptionCheck)).toBe(0);
 }));
 
@@ -441,6 +448,16 @@ test("a native's own JNI calls reach Java, and an exception it leaves pending is
     const o = await newObj("JniProbe");
     expect(await vcall(o, "calls", "(I)I", 4)).toBe(9);
     expect(await thrown(() => vcall(o, "calls", "(I)I", -1))).toBe("java/lang/IllegalStateException: native says no");
+  } finally { rt.jniResolver = previous; cpuFor(thread).dispose(); setCurThread(mainThread); }
+});
+
+test("a class's initializer allocates its own instances through JNI", async () => {
+  const previous = rt.jniResolver, thread = new JThread();
+  setA64(true); jniInit();
+  try {
+    natives({ allocate: (cpu, a) => { const j = new Env(cpu, a.p()); a.p(); return j.call(S.AllocObject, a.p()); } });
+    setCurThread(thread);
+    expect(classNameOf(await staticField("JniSelfAlloc", "self"))).toBe("JniSelfAlloc");
   } finally { rt.jniResolver = previous; cpuFor(thread).dispose(); setCurThread(mainThread); }
 });
 

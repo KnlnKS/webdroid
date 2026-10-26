@@ -11,6 +11,7 @@ import type { SQLiteRequest, SQLiteReply } from "../android/sqlite.ts";
 import type { Sender } from "../android/server/broadcastqueue.ts";
 import type { ExitRecord, KillNote } from "../android/server/appexitinfo.ts";
 import type { ComponentRef } from "../android/intent.ts";
+import type { InstallResult } from "../android/installpackage.ts";
 import type { Caller, ParcelData, Transaction, TransactionReply, BinderHandle } from "../android/binder.ts";
 import type { CookieCalls } from "./cookie-access.ts";
 import type { DescriptorCalls } from "./file-descriptors.ts";
@@ -66,8 +67,8 @@ export type BrokerCalls = CookieCalls & {
   storageWrite: (key: string, value: string | null) => void;
   /** a package's own clear, one the caller holds the permission for, or one the user agrees to */
   packageDataChange: (pkg: string, change: PackageDataChange, broadcasts: { data: ParcelData; targets: Receiver[] }[], prompt?: string) => Promise<boolean>;
-  /** a committed base APK: the installed package's name once every process knows it */
-  installPackage: (bytes: Uint8Array, expected: string | null) => Promise<string>;
+  /** a committed session's APKs, a base and its splits, given away: the install's outcome once every process knows the package */
+  installPackage: (apks: Uint8Array[], expected: string | null) => Promise<InstallResult>;
   displayOrientation: (landscape: boolean) => Promise<void>;
   sqlite: (request: SQLiteRequest) => Promise<SQLiteReply>;
   transact: (request: Transaction) => Promise<TransactionReply>;

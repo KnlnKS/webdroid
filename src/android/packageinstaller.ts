@@ -1,6 +1,6 @@
 // IPackageInstaller and IPackageInstallerSession, under AOSP's PackageInstaller and its Session:
 // a session stages each written file under /data/app/vmdl<id>.tmp, as PackageInstallerSession
-// does, and its commit has system_server install a single base APK.
+// does, and its commit has system_server install the base APK and its splits.
 import { awaited, JObj, rt, noops, setDeclared, getDeclared, driven, type Gen } from "../jvm/runtime.ts";
 import { scall, vcall, after, newObj } from "../jvm/natives/jentry.ts";
 import { logUncaught, detached } from "../jvm/natives/jthrowable.ts";
@@ -16,9 +16,10 @@ import { checkUidPermission } from "./permissions.ts";
 import { deleteObserver, deleteVersioned, mayDeletePackages } from "./appdata.ts";
 import { notHeld } from "./permissions.ts";
 import { putExtra, type JIntent } from "./intent.ts";
+import { installFailed, INSTALL_SUCCEEDED, type InstallResult } from "./installpackage.ts";
 
 const PI = "android/content/pm/PackageInstaller", S = "Ljava/lang/String;";
-const STATUS_SUCCESS = 0, STATUS_FAILURE_INVALID = 4, MODE_FULL_INSTALL = 1;
+const INSTALL_FAILED_PRE_APPROVAL_NOT_AVAILABLE = -129, MODE_FULL_INSTALL = 1;
 const MODE_WRITE_ONLY = 0x20000000, MODE_CREATE = 0x08000000, MODE_TRUNCATE = 0x04000000;
 interface Session {
   id: number; mode: number; installFlags: number; packageName: string | null; installer: string | null; installerUid: number;
@@ -44,31 +45,38 @@ function finish(s: Session, success: boolean): void {
   notify("onSessionFinished", "(IZ)V", s.id, success ? 1 : 0);
 }
 
-/** PackageInstallerSession.commit: install the staged APK, then report to the status receiver */
+/** PackageInstallerSession.sendOnPackageInstalled: the outcome of the session, or of its preapproval request, to `sender` */
+function* report$(s: Session, sender: JObj, { code, message, pkg, preapproval = false }: InstallResult & { preapproval?: boolean }): Gen<void> {
+  const PM = "android/content/pm/PackageManager", result: JIntent = yield newObj("android/content/Intent", "()V");
+  const extra = (name: string, value: unknown, desc: string) => putExtra(result, "android.content.pm.extra." + name, value, desc);
+  yield extra("PACKAGE_NAME", pkg, S);
+  yield extra("SESSION_ID", s.id, "I");
+  yield extra("STATUS", yield scall(PM, "installStatusToPublicStatus", "(I)I", code), "I");
+  yield extra("STATUS_MESSAGE", yield scall(PM, "installStatusToString", `(I${S})${S}`, code, message), S);
+  yield extra("LEGACY_STATUS", code, "I");
+  yield extra("PRE_APPROVAL", +preapproval, "Z");
+  yield sendIntent(sender, result);
+}
+
+/** system_server's install of the session's files, which leave its stage with the commit */
+async function install(s: Session): Promise<InstallResult> {
+  if (s.mode !== MODE_FULL_INSTALL) throw new Error("Inherited-split installs are unsupported");
+  const files = s.names.map((name) => stageDir(s.id) + "/" + name);
+  const apks = await Promise.all(files.map((file) => vfs.readFile(file) ?? Promise.reject(new Error("Session file was not written"))));
+  for (const file of files) vfs.delete(file);
+  // a staged file's spare capacity stays behind
+  return broker().installPackage(apks.map((bytes) => bytes.byteLength === bytes.buffer.byteLength ? bytes : bytes.slice()), s.packageName);
+}
+/** PackageInstallerSession.commit: install the staged APKs, then report to the status receiver */
 function* commit$(s: Session, sender: JObj): Gen<void> {
-  const result: JIntent = yield newObj("android/content/Intent", "()V");
-  yield putExtra(result, "android.content.pm.extra.SESSION_ID", s.id, "I");
-  let installed: string | null = null, failure = "";
-  try {
-    if (s.mode !== MODE_FULL_INSTALL || s.names.length !== 1) throw new Error("Install requires one base APK");
-    const bytes = vfs.read(stageDir(s.id) + "/" + s.names[0]);
-    if (!bytes) throw new Error("Session file was not written");
-    installed = yield* awaited(broker().installPackage(bytes, s.packageName));
-  } catch (error) {
-    failure = error instanceof Error ? error.message : (error as { msg?: string } | null)?.msg ?? String(error);
-  }
-  if (installed !== null) {
-    const uri = yield scall("android/net/Uri", "fromParts", `(${S}${S}${S})Landroid/net/Uri;`, "package", installed, null);
+  const result = yield* awaited(install(s).catch(installFailed));
+  if (result.code === INSTALL_SUCCEEDED) {
+    const uri = yield scall("android/net/Uri", "fromParts", `(${S}${S}${S})Landroid/net/Uri;`, "package", result.pkg, null);
     const added: JIntent = yield newObj("android/content/Intent", `(${S}Landroid/net/Uri;)V`, "android.intent.action.PACKAGE_ADDED", uri);
     detached(() => broadcastIntent(added, [], false), logUncaught);
-    yield putExtra(result, "android.content.pm.extra.PACKAGE_NAME", installed, S);
-    yield putExtra(result, "android.content.pm.extra.STATUS", STATUS_SUCCESS, "I");
-  } else {
-    yield putExtra(result, "android.content.pm.extra.STATUS", STATUS_FAILURE_INVALID, "I");
-    yield putExtra(result, "android.content.pm.extra.STATUS_MESSAGE", failure, S);
   }
-  finish(s, installed !== null);
-  yield sendIntent(sender, result);
+  finish(s, result.code === INSTALL_SUCCEEDED);
+  yield* report$(s, sender, result);
 }
 
 class JSessionService extends JObj { session: Session | null = null; }
@@ -100,6 +108,13 @@ rt.register({ name: "webdroid/PackageInstallerSession", ctor: JSessionService, s
     if (!sender) throw rt.mkThrowable("java/lang/NullPointerException", "statusReceiver can't be null");
     s.sealed = true;
     detached(() => rt.drive(commit$(s, sender)), logUncaught);
+  },
+  // this device offers no install preapproval (config_isPreApprovalRequestAvailable false): the request fails, and the install asks at commit
+  [`requestUserPreapproval(L${PI}$PreapprovalDetails;Landroid/content/IntentSender;)V`]: function (this: JSessionService, details: JObj | null, sender: JObj | null) {
+    const s = unsealed(this);
+    if (!details || !sender) throw rt.mkThrowable("java/lang/IllegalArgumentException", "preapprovalDetails and statusReceiver cannot be null");
+    detached(() => rt.drive(report$(s, sender, { code: INSTALL_FAILED_PRE_APPROVAL_NOT_AVAILABLE, message: "Request user pre-approval is currently not available.",
+      pkg: s.packageName, preapproval: true })), logUncaught);
   },
   "abandon()V": function (this: JSessionService) { const s = this.session; if (s && sessions.has(s.id)) finish(own(this), false); },
   "getInstallFlags()I": function (this: JSessionService) { return own(this).installFlags; },
