@@ -23,8 +23,16 @@ import { bootBionic } from "./bionic.ts";
 import { ABIS_32, ABIS_64 } from "../shell/properties.ts";
 
 const hex = (n: number) => n.toString(16).padStart(8, "0");
-/** /proc/self/maps: each image, then each thread's stack, the main thread's named as the kernel names it */
-procMemory.maps = () => [...modules.map((m) => `${hex(m.base)}-${hex(m.end)} r-xp 00000000 00:00 0  ${modulePath(m)}`),
+const perms = (flags: number) => `${flags & 4 ? "r" : "-"}${flags & 2 ? "w" : "-"}${flags & 1 ? "x" : "-"}p`;
+/** each segment's file-backed pages, then its zero-filled tail as bionic's linker names it; an image
+ *  mapped from inside an apk shows the apk */
+function segmentLines(m: Module): string[] {
+  const path = modulePath(m), file = m.apkOffset === undefined ? path : path.slice(0, path.indexOf("!/"));
+  return m.segments.flatMap((s) => [...s.fileEnd > s.start ? [`${hex(s.start)}-${hex(s.fileEnd)} ${perms(s.flags)} ${hex(s.offset + (m.apkOffset ?? 0))} 00:00 0  ${file}`] : [],
+    ...s.end > s.fileEnd ? [`${hex(s.fileEnd)}-${hex(s.end)} ${perms(s.flags)} 00000000 00:00 0  [anon:.bss]`] : []]);
+}
+/** /proc/self/maps: each image's segments, then each thread's stack, the main thread's named as the kernel names it */
+procMemory.maps = () => [...modules.flatMap(segmentLines),
   ...[...cpus].filter((c) => c.stackBase).map((c) => `${hex(c.stackBase)}-${hex(c.stackTop)} rw-p 00000000 00:00 0  ${c.jthread === mainThread ? "[stack]" : `[anon:stack_and_tls:${c.osTid}]`}`)].join("\n") + "\n";
 procMemory.startStack = () => { const main = cpuOf(mainThread); return main?.stackTop ? main.stackTop - 64 : 0; };
 

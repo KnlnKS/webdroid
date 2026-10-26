@@ -29,7 +29,7 @@ import { deleteVersioned, enforceDeletePackages } from "./appdata.ts";
 import { installerService } from "./packageinstaller.ts";
 import { checkPermission } from "./permissions.ts";
 import { libraryAbi } from "../jvm/natives/jlang.ts";
-import { inflateTree, treeEntrySize } from "../zip.ts";
+import { centralDir, inflateTree, localStart, treeEntrySize } from "../zip.ts";
 import type { FileSource } from "../shell/lazyfile.ts";
 import { ABIS_64 } from "../shell/properties.ts";
 import { linkerHooks } from "../native/dl.ts";
@@ -63,13 +63,22 @@ const nativeLibraryRoot = (record: PackageRecord): string => `${record.path.slic
 const nativeLibraryDir = (record: PackageRecord, abi: string | null): string => `${nativeLibraryRoot(record)}/${INSTRUCTION_SETS[abi ?? ABIS_64[0]]}`;
 /** The installer's copy of the booted package's primary-ABI libraries into its nativeLibraryDir,
  *  which ClassLoader.findLibrary searches; extractNativeLibs="false" leaves them in the apk. The
- *  path the linker names lib/<abi>/<name> by: its extracted copy, else the apk entry it maps. */
-function extractNativeLibraries(record: PackageRecord): (abi: string, name: string) => string {
+ *  path the linker names lib/<abi>/<name> by: its extracted copy, else the entry of the apk holding
+ *  it, mapped from there when stored uncompressed. */
+function extractNativeLibraries(record: PackageRecord): typeof linkerHooks.appLib {
   const abi = primaryAbi(record), extracted = !!abi && record.flag(record.application, "extractNativeLibs", true);
   const dir = nativeLibraryDir(record, abi), prefix = `lib/${abi}/`;
   if (extracted) for (const name of rt.classpathNames()) if (name.startsWith(prefix) && name.endsWith(".so") && !name.includes("/", prefix.length))
     vfs.mount(dir + name.slice(prefix.length - 1), classpathFile(name));
-  return (entryAbi, name) => extracted && entryAbi === abi ? `${dir}/${name}` : `${record.path}!/lib/${entryAbi}/${name}`;
+  return (entryAbi, name) => {
+    if (extracted && entryAbi === abi) return { path: `${dir}/${name}` };
+    const entry = `lib/${entryAbi}/${name}`;
+    for (const apk of [record.path, ...ownSplits(record).map((split) => apkPath(split.name))]) {
+      const bytes = vfs.read(apk), e = bytes && centralDir(bytes).get(entry);
+      if (e) return { path: `${apk}!/${entry}`, apkOffset: e.method === 0 ? localStart(bytes, e) : undefined };
+    }
+    return { path: `${record.path}!/${entry}` };
+  };
 }
 /** a class path entry as a file, sized without inflating or fetching it; reading it inflates natively */
 function classpathFile(name: string): FileSource {

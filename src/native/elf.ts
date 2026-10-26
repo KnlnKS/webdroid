@@ -34,6 +34,9 @@ export interface Module {
   inited: boolean;
   /** the loaded program headers, for dl_iterate_phdr */
   phdr: number;
+  /** each PT_LOAD's pages as the kernel maps them (/proc/self/maps): the file-backed span, its file offset,
+   *  the zero-filled tail past it, and PF_* flags */
+  segments: { start: number; fileEnd: number; end: number; offset: number; flags: number }[];
   phnum: number;
   tls: TlsSegment | null;
   /** the dynamic TLS module id the linker gave the image (DTPMOD), 0 without a TLS segment */
@@ -49,6 +52,8 @@ export interface Module {
   locals: Map<string, number>;
   /** where the image lives on the device, when it is not the app's own */
   path?: string;
+  /** an image the linker maps from inside an apk (an uncompressed entry, at `path`'s "apk!/entry"): its bytes' offset there */
+  apkOffset?: number;
 }
 
 /** PT_TLS as bionic's TlsSegment holds it: each thread's block starts as a copy of the loaded,
@@ -63,7 +68,7 @@ const PT_LOAD = 1, PT_DYNAMIC = 2, PT_PHDR = 6, PT_TLS = 7, PT_ARM_EXIDX = 0x700
 
 interface Fmt {
   machine: number; ptr: 4 | 8;
-  phEnt: number; phOff: number; phVaddr: number; phFilesz: number; phMemsz: number; phAlign: number;
+  phEnt: number; phFlags: number; phOff: number; phVaddr: number; phFilesz: number; phMemsz: number; phAlign: number;
   dynEnt: number;
   symEnt: number; symValue: number; symInfo: number; symShndx: number;
   relEnt: number; rela: boolean;
@@ -72,7 +77,7 @@ interface Fmt {
 }
 const ELF32: Fmt = {
   machine: 0x28, ptr: 4,
-  phEnt: 32, phOff: 4, phVaddr: 8, phFilesz: 16, phMemsz: 20, phAlign: 28,
+  phEnt: 32, phFlags: 24, phOff: 4, phVaddr: 8, phFilesz: 16, phMemsz: 20, phAlign: 28,
   dynEnt: 8,
   symEnt: 16, symValue: 4, symInfo: 12, symShndx: 14,
   relEnt: 8, rela: false,
@@ -82,7 +87,7 @@ const ELF32: Fmt = {
 };
 const ELF64: Fmt = {
   machine: 0xb7, ptr: 8,
-  phEnt: 56, phOff: 8, phVaddr: 16, phFilesz: 32, phMemsz: 40, phAlign: 48,
+  phEnt: 56, phFlags: 4, phOff: 8, phVaddr: 16, phFilesz: 32, phMemsz: 40, phAlign: 48,
   dynEnt: 16,
   symEnt: 24, symValue: 8, symInfo: 4, symShndx: 6,
   relEnt: 24, rela: true,
@@ -188,13 +193,13 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
   const phentsize = dv.getUint16(cls === 2 ? 54 : 42, true), phnum = dv.getUint16(cls === 2 ? 56 : 44, true);
   let lo = 0xffffffff, hi = 0, dynOff = 0, dynSz = 0, exidxAddr = 0, exidxSz = 0, phdrAddr = -1;
   let tls: Module["tls"] = null;
-  const loads: { off: number; vaddr: number; filesz: number; memsz: number }[] = [];
+  const loads: { off: number; vaddr: number; filesz: number; memsz: number; flags: number }[] = [];
   for (let i = 0; i < phnum; i++) {
     const p = phoff + i * (phentsize || f.phEnt);
     const type = dv.getUint32(p, true), off = dv.getUint32(p + f.phOff, true), vaddr = dv.getUint32(p + f.phVaddr, true);
     const filesz = dv.getUint32(p + f.phFilesz, true), memsz = dv.getUint32(p + f.phMemsz, true);
     if (type === PT_LOAD) {
-      loads.push({ off, vaddr, filesz, memsz });
+      loads.push({ off, vaddr, filesz, memsz, flags: dv.getUint32(p + f.phFlags, true) });
       lo = Math.min(lo, (vaddr & -PAGE_SIZE) >>> 0);
       hi = Math.max(hi, ((vaddr + memsz + PAGE_SIZE - 1) & -PAGE_SIZE) >>> 0);
     } else if (type === PT_DYNAMIC) { dynOff = vaddr; dynSz = memsz; }
@@ -220,10 +225,13 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
   if (phdrAddr < 0 || !loads.some((l) => phdrAddr >= l.vaddr && phdrAddr + tableSize <= l.vaddr + l.filesz)) throw new Error(`${name}: can't find loaded phdr`);
   const phdr = base + phdrAddr;
   if (tls) tls.init += base;
+  const pageUp = (n: number) => ((n + PAGE_SIZE - 1) & -PAGE_SIZE) >>> 0;
+  const segments = loads.map((l) => ({ start: base + ((l.vaddr & -PAGE_SIZE) >>> 0), fileEnd: base + pageUp(l.vaddr + l.filesz),
+    end: base + pageUp(l.vaddr + l.memsz), offset: (l.off & -PAGE_SIZE) >>> 0, flags: l.flags }));
   const mod: Module = {
     name, base, end: base + hi, start: base + lo, w64: cls === 2, exports: new Map(), initArray: [], init: 0, finiArray: [], fini: 0, nodelete: false, needed: [],
     exidx: { addr: base + exidxAddr, count: exidxSz >> 3 }, symbols: { addr: new Uint32Array(0), names: [] },
-    refs: 1, inited: false, phdr, phnum, tls, tlsId: 0, tlsExports: new Map(), tlsDescriptors: [], tpOffset: null, ifuncs: new Map(), locals: new Map(),
+    refs: 1, inited: false, phdr, phnum, segments, tls, tlsId: 0, tlsExports: new Map(), tlsDescriptors: [], tpOffset: null, ifuncs: new Map(), locals: new Map(),
   };
   if (!dynOff) return { mod, relocate: () => {} };
 
