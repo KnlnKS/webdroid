@@ -196,7 +196,7 @@ const controlField = peerField<bigint>("android/view/SurfaceControl", "mNativeOb
 /** the layer of a Java SurfaceControl, which ASurfaceControl_fromJava hangs a native tree from */
 export const javaLayer = (sc: JObj | null): Layer | null => { const h = sc ? controlField(sc) : 0n; return h ? layerOf(h) : null; };
 /** a native tree's composed frame (surfacecontrol.ts) as the layer's buffer */
-export function showFrame(layer: Layer, frame: ImageBitmap): void {
+export function showFrame(layer: Layer, frame: ImageBitmap | VideoFrame): void {
   releaseFrame(layer.buffer);
   layer.buffer = frame;
   scheduleComposite();

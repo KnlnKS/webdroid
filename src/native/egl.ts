@@ -9,7 +9,8 @@ import { gles1Procs, gles1Init } from "./gles1.ts";
 import { gles3Procs, gles3Init, clientWait } from "./gles3.ts";
 import { activate } from "./gl-context.ts";
 import { noteNativeFrame } from "./cpu.ts";
-import { clientBuffer, createImage, destroyImage, nativeClientBuffer, bufferAt } from "./hardwarebuffer.ts";
+import { acquire, clientBuffer, nativeClientBuffer, bufferAt, release, type HardwareBuffer } from "./hardwarebuffer.ts";
+import { Handles } from "./handles.ts";
 import { closeFd } from "./fd.ts";
 import { fence, fenceOf, syncFileFd, type Fence } from "./syncfile.ts";
 
@@ -84,6 +85,9 @@ function waitSync(t: object, display: number, h: number, flags: number): number 
   gl.waitSync(s.sync, 0, gl.TIMEOUT_IGNORED);
   return 1;
 }
+/** EGL_KHR_image_base's images of buffers (EGL_ANDROID_image_native_buffer), each holding a reference to its buffer */
+const images = new Handles<HardwareBuffer>("EGLImage");
+export const imageBuffer = (h: number): HardwareBuffer | undefined => images.find(h);
 /** EGL_KHR_image_base's image of EGL_ANDROID_image_native_buffer's client buffer, an ANativeWindowBuffer, taken without a context;
  *  EGL_IMAGE_PRESERVED_KHR is the one attribute, and a buffer's pixels are always preserved */
 function createImageOf(t: object, display: number, context: number, target: number, buffer: number, want: egl.Attribs): number {
@@ -93,7 +97,8 @@ function createImageOf(t: object, display: number, context: number, target: numb
   if (context) return egl.fail(t, egl.BAD_CONTEXT, 0);
   const b = clientBuffer(buffer);
   if (!b || [...want.keys()].some((k) => k !== 0x30d2)) return egl.fail(t, egl.BAD_PARAMETER, 0);
-  return createImage(b);
+  acquire(b);
+  return images.add(b);
 }
 const own = (procs: Record<string, HostFn>, name: string): HostFn | undefined => (Object.hasOwn(procs, name) ? procs[name] : undefined);
 const dispatch = new Map<string, HostFn>();
@@ -192,7 +197,10 @@ export function eglInit(): void {
       const t = cpu.jthread;
       egl.begin(t);
       if (!egl.ready(t, a.i())) return 0;
-      return +destroyImage(a.i()) || egl.fail(t, egl.BAD_PARAMETER, 0);
+      const b = images.delete(a.i());
+      if (!b) return egl.fail(t, egl.BAD_PARAMETER, 0);
+      release(b);
+      return 1;
     },
     eglGetNativeClientBufferANDROID: (cpu, a) => {
       egl.begin(cpu.jthread);

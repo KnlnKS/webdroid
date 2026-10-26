@@ -17,7 +17,7 @@ import {
   prepareDraw, setSamplerUnits, glForTextureFormat, shaderRecs, programRecs, samplerSlots, uniformHandles, pbo, type GL, type ContextState,
 } from "./gles3-state.ts";
 import { i32, u32, f32, u8, pixelStore, readGuestPixels, texData, PACK, UNPACK } from "./gles3-pixels.ts";
-import { bufferTexture, imageBuffer, ownsTexture } from "./hardwarebuffer.ts";
+import { imageBuffer } from "./egl.ts";
 import { frameSize } from "../android/glsurface.ts";
 import { recOf, rec, recAt, bindRec, shadowed, withTarget, writeBuffers, writeBack, contents, realize, syncVertexBuffer, syncFeedback, COPY_READ, COPY_WRITE } from "./gles3-buffers.ts";
 import { vertexAttribPointer, clientArray, drawClientArrays, drawClientElements } from "./gles3-client-arrays.ts";
@@ -472,7 +472,7 @@ export function gles3Init(): void {
       const old = boundTexture(state, state.activeUnit, 0x0de1), name = old ? T().ids.get(old) : undefined;
       if (!old || !name) { raise(0x502); return; }
       const ints = TEXTURE_INTS.map((pn) => gl.getTexParameter(0x0de1, pn) as number), floats = TEXTURE_FLOATS.map((pn) => gl.getTexParameter(0x0de1, pn) as number);
-      const texture = bufferTexture(buffer, gl);
+      const texture = buffer.texture(gl);
       if (!texture) { gl.bindTexture(0x0de1, old); raise(0x505); return; }
       if (texture === old) return;
       TEXTURE_INTS.forEach((pn, i) => gl.texParameteri(0x0de1, pn, ints[i]));
@@ -606,7 +606,7 @@ export function gles3Init(): void {
 const TEXTURE_INTS = [0x2801, 0x2800, 0x2802, 0x2803, 0x8072, 0x884c, 0x884d, 0x813c, 0x813d], TEXTURE_FLOATS = [0x813a, 0x813b];
 /** a texture no name stands for any more: deleted, or, a buffer's, which lives on with the buffer, unbound from the context's units */
 function dropTexture(state: ContextState, texture: WebGLTexture): void {
-  const gl = g(), active = TEXTURE0 + state.activeUnit, owned = ownsTexture(texture);
+  const gl = g(), active = TEXTURE0 + state.activeUnit, owned = !!texRecs.get(texture)?.owner;
   for (const [unit, targets] of state.bindings) for (const [target, bound] of targets) {
     if (bound !== texture) continue;
     if (owned) { gl.activeTexture(TEXTURE0 + unit); gl.bindTexture(target, null); }

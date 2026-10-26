@@ -7,7 +7,7 @@ import { mem } from "./mem.ts";
 import { hostLib, ldp, stp, ptr, PTR, type HostFn } from "./host.ts";
 import { nativeWindowFor, releaseWindow } from "./libandroid.ts";
 import { closeFd } from "./fd.ts";
-import { allocate, queueFrame, release, type HardwareBuffer } from "./hardwarebuffer.ts";
+import { allocate, release, type HardwareBuffer } from "./hardwarebuffer.ts";
 import { callbackThread } from "./thread.ts";
 import { after } from "../jvm/natives/jentry.ts";
 import { frameSize, frameTimestamp, type GlSurface } from "../android/glsurface.ts";
@@ -45,7 +45,7 @@ class Reader {
     if (buffer && (buffer.width !== width || buffer.height !== height)) { release(buffer); buffer = undefined; }
     buffer ??= allocate(width, height, this.format, this.usage) ?? undefined;
     if (!buffer) { frame.close(); return; }
-    queueFrame(buffer, frame);
+    buffer.queueFrame(frame);
     this.queued.push({ reader: this, buffer, timestamp: frameTimestamp(this.surface, frame) });
     if (this.queued.length > this.maxImages) this.recycle(this.queued.shift()!.buffer);
     const listener = this.listener;
@@ -67,7 +67,7 @@ class Reader {
   }
   /** a buffer free for the next frame, letting go of one it still holds: a decoder reuses its frames once closed */
   recycle(buffer: HardwareBuffer): void {
-    buffer.frame?.close(); buffer.frame = null;
+    buffer.dropFrame();
     this.free.push(buffer);
   }
   delete(): void {

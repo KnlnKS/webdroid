@@ -10,7 +10,7 @@ import { hostLib, stp, ptr, PTR, type HostFn, type ArgReader } from "./host.ts";
 import { deref } from "./jni.ts";
 import { windowOf } from "./libandroid.ts";
 import { closeFd } from "./fd.ts";
-import { acquire, bufferAt, bufferFrame, release, type HardwareBuffer } from "./hardwarebuffer.ts";
+import { acquire, bufferAt, release, type HardwareBuffer } from "./hardwarebuffer.ts";
 import { bufferHeight, bufferWidth, presentSurface, type GlSurface } from "../android/glsurface.ts";
 import { javaLayer, showFrame, Layer } from "../android/surfaceflinger.ts";
 import { vsync } from "../android/vsync.ts";
@@ -79,15 +79,14 @@ function plain(path: Surface[], width: number, height: number): boolean {
 }
 let canvas: OffscreenCanvasRenderingContext2D | null = null;
 /** the tree's frame: its one buffer as it is, or its buffers placed on a canvas of the target's size */
-function compose(root: Surface, width: number, height: number): ImageBitmap | null {
+function compose(root: Surface, width: number, height: number): VideoFrame | ImageBitmap | null {
   const paths = layers(root);
-  if (paths.length === 1 && plain(paths[0], width, height) && !paths[0][paths[0].length - 1].buffer!.frame) return bufferFrame(paths[0][paths[0].length - 1].buffer!);
+  if (paths.length === 1 && plain(paths[0], width, height)) return paths[0][paths[0].length - 1].buffer!.snapshot();
   const ctx = canvas ??= new OffscreenCanvas(1, 1).getContext("2d")!;
   if (ctx.canvas.width !== width || ctx.canvas.height !== height) { ctx.canvas.width = width; ctx.canvas.height = height; }
   ctx.clearRect(0, 0, width, height);
   for (const path of paths) {
-    // a decoder's frame no GL has taken is drawn as it is, and stays the buffer's
-    const s = path[path.length - 1], buffer = s.buffer!, frame = buffer.frame ?? bufferFrame(buffer);
+    const s = path[path.length - 1], buffer = s.buffer!, frame = buffer.snapshot();
     if (!frame) continue;
     ctx.save();
     let alpha = 1;
@@ -106,7 +105,7 @@ function compose(root: Surface, width: number, height: number): ImageBitmap | nu
     if (s.transform & FLIP_V) ctx.transform(1, 0, 0, -1, 0, 1);
     if (w > 0 && h > 0) ctx.drawImage(frame, l, t, w, h, 0, 0, 1, 1);
     ctx.restore();
-    if (frame !== buffer.frame) frame.close();
+    frame.close();
   }
   return ctx.canvas.transferToImageBitmap();
 }

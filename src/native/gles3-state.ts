@@ -34,7 +34,8 @@ export type Storage = { immutable: true; format: number; width: number; height: 
  *  or its target and storage */
 type Tracking = { kind: "unknown" } | { kind: "unbound" } | Bound;
 export type Bound = { kind: "bound"; target: number; storage: Storage };
-export interface TexRec { channels: [number, number, number, number]; code: number; deleted: boolean; tracking: Tracking }
+/** `owner`: the AHardwareBuffer whose storage the texture is, which deleting a name standing for it leaves alive */
+export interface TexRec { channels: [number, number, number, number]; code: number; deleted: boolean; tracking: Tracking; owner: object | null }
 export const UNKNOWN: Tracking = { kind: "unknown" }, UNBOUND: Tracking = { kind: "unbound" };
 export const imageKey = (target: number, level: number): number => target * 32 + level;
 export const texRecs = new WeakMap<WebGLTexture, TexRec>();
@@ -97,7 +98,7 @@ export function contextState(): ContextState {
 
 export function textureRec(texture: WebGLTexture): TexRec {
   let rec = texRecs.get(texture);
-  if (!rec) { rec = { channels: [0, 1, 2, 3], code: IDENTITY_SWIZZLE, deleted: false, tracking: UNKNOWN }; texRecs.set(texture, rec); }
+  if (!rec) { rec = { channels: [0, 1, 2, 3], code: IDENTITY_SWIZZLE, deleted: false, tracking: UNKNOWN, owner: null }; texRecs.set(texture, rec); }
   return rec;
 }
 /** GL_TEXTURE_EXTERNAL_OES names TEXTURE_2D: SurfaceTexture fills its texture as 2D storage */
