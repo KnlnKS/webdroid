@@ -127,7 +127,10 @@ export function emitInst(c: Ctx, i: Inst): void {
     case O.Phi: return;
     case O.Load: {
       const rt = t.type(ty), mr = c.mats.get(w[2]);
-      if (rt.k === "image" || rt.k === "sampler" || rt.k === "sampled") { c.refs.set(id, ref(c, w[2])); c.vals.set(id, ref(c, w[2])); return; }
+      if (rt.k === "image" || rt.k === "sampler" || rt.k === "sampled") {
+        // a combined image sampler is its texture and the sampler declared beside it, as OpSampledImage pairs them
+        const r = ref(c, w[2]); c.refs.set(id, r); c.vals.set(id, rt.k === "sampled" ? `${r}, ${r}_s` : r); return;
+      }
       return define(c, id, mr ? matValue(t, mr) : ref(c, w[2]));
     }
     case O.Store: {
@@ -305,10 +308,7 @@ function imageOperands(c: Ctx, w: Uint32Array, at: number): ImageOperands {
   return out;
 }
 function sample(c: Ctx, i: Inst): string {
-  const w = i.w, op = i.op, img = imageOf(c, w[2]), si = value(c, w[2]);
-  const [tex] = si.split(", ");
-  const samplerName = si.includes(", ") ? si.slice(tex.length + 2) : si;
-  const pair = `${tex}, ${samplerName}`;
+  const w = i.w, op = i.op, img = imageOf(c, w[2]), pair = value(c, w[2]);
   const { coords, layer } = split(c, w[3], img.arrayed), L = layer ? `, ${layer}` : "";
   const dref = op === O.ImageSampleDrefImplicitLod || op === O.ImageSampleDrefExplicitLod || op === O.ImageDrefGather;
   const opsAt = dref || op === O.ImageGather ? 5 : 4, ops = imageOperands(c, w, opsAt), off = ops.offset ? `, ${ops.offset}` : "";

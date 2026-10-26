@@ -196,8 +196,6 @@ export class Translator extends Module {
       if (t.k !== "struct") return;
       t.members.forEach(emit);
       const lines = t.members.map((m, i) => {
-        const b = this.memberDec(id, i, D.BuiltIn);
-        if (b) return null;
         const mat = this.matLayout(id, i);
         if (mat?.wrap) qs.push(mat.q);
         const ty = mat?.text ?? (this.atomicMembers.get(id)?.has(i) ? `atomic<${this.wgsl(m)}>` : this.wgsl(m));
@@ -207,7 +205,7 @@ export class Translator extends Module {
         if (off !== undefined && next !== undefined && next - off !== natural.size) attrs += `@size(${next - off}) `;
         if (off !== undefined && off % natural.align !== 0) throw new Error(`SPIR-V: member offset ${off} under its alignment`);
         return `  ${attrs}m${i}: ${ty},`;
-      }).filter((l) => l !== null);
+      });
       if (!lines.length) lines.push("  m_unused: u32,");
       ss.push(`struct S${id} {\n${lines.join("\n")}\n}`);
     };
