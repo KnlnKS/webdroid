@@ -313,7 +313,8 @@ export const COMMANDS: Record<string, HostFn> = {
   },
   vkCmdBindDescriptorSets: (_c, a) => {
     const h = a.p(), point = a.u(); nd(a); const first = a.u(), n = a.u(), pSets = a.p(), nOffsets = a.u(), pOffsets = a.p();
-    const sets = u64s(pSets, n).map((s) => objects.get(s, DescriptorSet)), offsets = words(pOffsets, nOffsets).map((o) => o >>> 0);
+    const sets = u64s(pSets, n).map((s) => objects.get(s, DescriptorSet)), offsets = words(pOffsets, nOffsets).map((o) => o >>> 0), cb = cbOf(h);
+    for (const set of sets) for (const [b, write] of set.host) cb.use(b, write);
     record(h, (r) => {
       const bound = point === 1 ? r.computeSets : r.graphicsSets;
       let o = 0;

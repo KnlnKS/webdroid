@@ -16,6 +16,7 @@ import { translate, PUSH_BINDING, type Stage, type Translation, type Resource } 
 export const DESCRIPTOR = { SAMPLER: 0, COMBINED: 1, SAMPLED_IMAGE: 2, STORAGE_IMAGE: 3, UNIFORM_TEXEL: 4, STORAGE_TEXEL: 5, UNIFORM: 6, STORAGE: 7, UNIFORM_DYNAMIC: 8, STORAGE_DYNAMIC: 9, INPUT_ATTACHMENT: 10 } as const;
 const isBuffer = (type: number) => type >= DESCRIPTOR.UNIFORM && type <= DESCRIPTOR.STORAGE_DYNAMIC;
 const isTexel = (type: number) => type === DESCRIPTOR.UNIFORM_TEXEL || type === DESCRIPTOR.STORAGE_TEXEL;
+const isStorage = (type: number) => type === DESCRIPTOR.STORAGE || type === DESCRIPTOR.STORAGE_DYNAMIC || type === DESCRIPTOR.STORAGE_TEXEL;
 const isImage = (type: number) => type <= DESCRIPTOR.STORAGE_IMAGE || type === DESCRIPTOR.INPUT_ATTACHMENT;
 
 export interface SetLayoutBinding { type: number; count: number; samplers: GPUSampler[] }
@@ -48,11 +49,22 @@ export class DescriptorSet {
   readonly groups = new BindGroupCache();
   readonly slots = new Map<number, Descriptor[]>();
   readonly layout: SetLayout;
+  private hostBuffers: [Buffer, boolean][] | null = null;
   constructor(layout: SetLayout) {
     this.layout = layout;
     for (const [n, b] of layout.bindings) this.slots.set(n, Array.from({ length: b.count }, () => ({ kind: "image", view: null, sampler: b.samplers[0] ?? null })));
   }
-  changed(): void { this.groups.clear(); }
+  /** the host-visible buffers its descriptors give shaders, each with whether a shader may write it */
+  get host(): [Buffer, boolean][] {
+    return this.hostBuffers ??= [...this.slots].flatMap(([n, slots]) => {
+      const write = isStorage(this.layout.bindings.get(n)!.type);
+      return slots.flatMap((d): [Buffer, boolean][] => {
+        const b = d.kind === "buffer" ? d.buffer : d.kind === "texel" ? d.view.buffer : null;
+        return b?.host ? [[b, write]] : [];
+      });
+    });
+  }
+  changed(): void { this.groups.clear(); this.hostBuffers = null; }
 }
 /** a descriptor set bound, and the dynamic offsets it was bound with */
 export interface Bound { set: DescriptorSet; offsets: number[] }
