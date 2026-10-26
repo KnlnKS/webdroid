@@ -11,7 +11,7 @@ import { asWrappers, fail, kernelResult, logLine, readTs, DIRENT64, fillStat, in
 import { format, scan, scanSink } from "./printf.ts";
 import { vfs } from "../../shell/vfs.ts";
 import { filePaths } from "../../shell/file-path.ts";
-import { FS_SYSCALLS, fallocate, fdWrite, statAt, putStat, readlinkAt, storageStat, faccessatPath, mknodAt, modifiedTime, makePipe,
+import { FS_SYSCALLS, fallocate, fdWrite, statAt, putStat, readlinkInto, storageStat, faccessatPath, mknodAt, modifiedTime, makePipe,
   getdents64 } from "../fs.ts";
 import { openFd, closeFd, dup2Fd, seekFd, readFd, preadFd, pwriteFd, truncateFd, allocateFd, changeFdAttributes } from "../fd.ts";
 import { processOpenFd } from "../process-fd.ts";
@@ -236,7 +236,7 @@ export function stdioLibc(): Record<string, HostFn> {
     mkstemp: (_c, a) => fdTemp(a.p(), 0, false),
     mkostemp: (_c, a) => fdTemp(a.p(), a.i(), false),
     pread: (_c, a) => preadFd(a.i(), a.p(), a.u(), a.i()),
-    pwrite: (_c, a) => { const fd = a.i(), p = a.p(), n = a.u(); return pwriteFd(fd, mem.u8.subarray(p, p + n), a.i()); },
+    pwrite: (_c, a) => { const fd = a.i(), p = a.p(), n = a.u(); return pwriteFd(fd, mem.bytes(p, n), a.i()); },
     lseek64: (_c, a) => complete(seekFd(a.i(),Number(a.l()),a.i()),n => BigInt(n)),
     stat: (_c, a) => { const path = a.str(); return putStat(a.p(), statAt(path)); },
     access: (_c, a) => faccessatPath(AT_FDCWD, a.str(), a.i(), 0),
@@ -265,12 +265,14 @@ export function stdioLibc(): Record<string, HostFn> {
     },
     __pread64_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(), off = Number(a.l()); chk(n, a.u(), cpu); return preadFd(fd, p, n, off); },
     __pread_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(), off = a.i(); chk(n, a.u(), cpu); return preadFd(fd, p, n, off); },
+    __pwrite64_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(), off = Number(a.l()); chk(n, a.u(), cpu); return pwriteFd(fd, mem.bytes(p, n), off); },
+    __pwrite_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(), off = a.i(); chk(n, a.u(), cpu); return pwriteFd(fd, mem.bytes(p, n), off); },
     futimens: (_c, a) => changeFdAttributes(a.i(), modifiedTime(a.p())),
     statvfs: (_c, a) => { a.str(); return fillStatvfs(a.p()); },
     fstatvfs: (_c, a) => { a.i(); return fillStatvfs(a.p()); },
     statvfs64: (_c, a) => { a.str(); return fillStatvfs(a.p()); },
     fstatvfs64: (_c, a) => { a.i(); return fillStatvfs(a.p()); },
-    readlink: (_c, a) => readlinkAt(a.str()),
+    readlink: (_c, a) => readlinkInto(a.str(), a.p(), a.i()),
     symlink: () => -E.PERM, link: () => -E.PERM,
     // struct timeval[2], whose second is the modification time, and struct utimbuf { actime, modtime }
     utimes: (_c, a) => { const path = a.str(), times = a.p(); return filePaths(path).fileSetAttributes(path, { mtime: times ? readTs(times + KLAYOUT.TS_SIZE, 1e3) : Date.now() }); },

@@ -59,6 +59,20 @@ pub const Fn = enum(u8) {
     pthread_rwlock_trywrlock,
     pthread_rwlock_unlock,
     clock_gettime,
+    floorf,
+    ceilf,
+    roundf,
+    truncf,
+    floor,
+    ceil,
+    round,
+    trunc,
+    bzero,
+    __aeabi_memset,
+    strcpy,
+    strchr,
+    strrchr,
+    __tls_get_addr,
 };
 pub const Result = enum(u32) { done, fault, host };
 /// The rwlock words src/native/libc32/pthread.ts keeps: state (reader count or RW_WRITER), writer tid, waiters.
@@ -94,6 +108,10 @@ export fn libc_call(cp: u32, id: u32) u32 {
     return @intFromEnum(call(@ptrFromInt(cp), @intCast(id)));
 }
 pub const TLS_KEYS = 256;
+/// the TLS modules whose dynamic blocks a thread's table keeps after its keys, as dl.ts tlsAddress makes them
+pub const TLS_MODULES = 64;
+/// where in the table the module blocks start
+pub const TLS_BLOCKS = 8 * TLS_KEYS;
 pub const slot_fn: [*]u8 = @ptrFromInt(abi.KERN_SLOT_FN);
 comptime {
     assert(@sizeOf(@TypeOf(slot_fn[0])) * abi.TRAMP_SLOTS <= abi.KERN_DEAD - abi.KERN_SLOT_FN);
@@ -159,7 +177,9 @@ inline fn fret(c: *Cpu, comptime F: type, v: F) void {
 fn fmod(comptime F: type, a: F, b: F) F {
     return if (b == 0) std.math.nan(F) else @rem(a, b);
 }
-fn one(comptime F: type, c: *Cpu, id: Fn) void {
+/// the math functions, in single precision for the names ending in f
+fn math(c: *Cpu, comptime id: Fn) void {
+    const F = if (comptime std.mem.endsWith(u8, @tagName(id), "f")) f32 else f64;
     const x = farg(c, F, 0);
     fret(c, F, switch (id) {
         .sinf, .sin => @sin(x),
@@ -167,16 +187,15 @@ fn one(comptime F: type, c: *Cpu, id: Fn) void {
         .tanf, .tan => @tan(x),
         .expf, .exp => @exp(x),
         .logf, .log => @log(x),
-        else => @sqrt(x),
-    });
-}
-fn two(comptime F: type, c: *Cpu, id: Fn) void {
-    const x = farg(c, F, 0);
-    const y = farg(c, F, 1);
-    fret(c, F, switch (id) {
-        .powf, .pow => std.math.pow(F, x, y),
-        .atan2f, .atan2 => std.math.atan2(x, y),
-        else => fmod(F, x, y),
+        .sqrtf, .sqrt => @sqrt(x),
+        .floorf, .floor => @floor(x),
+        .ceilf, .ceil => @ceil(x),
+        .roundf, .round => @round(x),
+        .truncf, .trunc => @trunc(x),
+        .powf, .pow => std.math.pow(F, x, farg(c, F, 1)),
+        .atan2f, .atan2 => std.math.atan2(x, farg(c, F, 1)),
+        .fmodf, .fmod => fmod(F, x, farg(c, F, 1)),
+        else => @compileError(@tagName(id) ++ " has no case in call"),
     });
 }
 fn sincos(comptime F: type, c: *Cpu) Result {
@@ -224,19 +243,47 @@ fn checksum(c: *Cpu, id: Fn) Result {
     }
     const p = ptr(c, 1) orelse return .fault;
     const n: u32 = @truncate(arg(c, 2));
-    const input = mem.bytes(p)[0..n];
-    const initial: u32 = @truncate(arg(c, 0));
-    ret(c, if (id == .crc32) crc32(initial, input) else std.hash.Adler32.permute(initial, input));
+    var sum: u32 = @truncate(arg(c, 0));
+    if (p < mem.window) {
+        ret(c, if (id == .crc32) crc32(sum, mem.bytes(p)[0..n]) else std.hash.Adler32.permute(sum, mem.bytes(p)[0..n]));
+        return .done;
+    }
+    if (!reaches(c, p, n, false)) return .fault;
+    // the window's bytes come over a chunk at a time, which both sums continue across
+    var chunk: [4096]u8 = undefined;
+    var at: u32 = 0;
+    while (at < n) : (at += chunk.len) {
+        const k = @min(n - at, chunk.len);
+        mem.shm_copy(@intFromPtr(&chunk), p + at, k);
+        sum = if (id == .crc32) crc32(sum, chunk[0..k]) else std.hash.Adler32.permute(sum, chunk[0..k]);
+    }
+    ret(c, sum);
     return .done;
 }
-
-extern "env" fn guest_ms() f64;
+/// whether the n bytes at a are memory the call may read (or write): the core's own, or the window's pages this process maps
+fn reaches(c: *Cpu, a: u32, n: u32, write: bool) bool {
+    if (a < mem.window or mem.windowed(a, n, write)) return true;
+    c.fault_addr = a;
+    return false;
+}
+fn fill(c: *Cpu, n: u32, v: u8) Result {
+    if (n == 0) return .done;
+    if (!committed(c, 0, n)) return .fault;
+    const d = ptr(c, 0) orelse return .fault;
+    if (d >= mem.window) {
+        if (!reaches(c, d, n, true)) return .fault;
+        mem.shm_fill(d, v, n);
+    } else @memset(mem.bytes(d)[0..n], v);
+    wrote(d, n);
+    return .done;
+}
+extern "env" fn uptime_ms() f64;
 extern "env" fn wall_ms() f64;
 /// the clock abi.WALL_CLOCKS picks for the id
 pub fn clockGettime(c: *Cpu) Result {
     const id: u32 = @truncate(arg(c, 0));
     const ts = ptr(c, 1) orelse return .fault;
-    const ms = if (id < 32 and (abi.WALL_CLOCKS >> @as(u5, @intCast(id))) & 1 != 0) wall_ms() else guest_ms() + abi.MONOTONIC_BASE_MS;
+    const ms = if (id < 32 and (abi.WALL_CLOCKS >> @as(u5, @intCast(id))) & 1 != 0) wall_ms() else uptime_ms();
     const sec = @floor(ms / 1000);
     const nsec: u64 = @intFromFloat(@floor((ms - sec * 1000) * 1e6));
     const half: u32 = if (c.a64 != 0) 8 else 4;
@@ -246,12 +293,15 @@ pub fn clockGettime(c: *Cpu) Result {
 }
 pub fn call(c: *Cpu, id: u8) Result {
     const f: Fn = @enumFromInt(id);
+    // the scans read the core's memory directly; with an argument in an ARM32 process's window, the host's bodies serve them
+    const scanned: u32 = if (c.a64 != 0) 0 else switch (f) {
+        .memcmp, .strcmp, .strncmp, .strcpy => 2,
+        .memchr, .strlen, .strnlen, .strchr, .strrchr, .__tls_get_addr => 1,
+        else => 0,
+    };
+    for (0..scanned) |i| if (arg(c, @intCast(i)) >= mem.window) return .host;
     switch (f) {
         .none => unreachable,
-        .sinf, .cosf, .tanf, .expf, .logf, .sqrtf => one(f32, c, f),
-        .sin, .cos, .tan, .exp, .log, .sqrt => one(f64, c, f),
-        .powf, .atan2f, .fmodf => two(f32, c, f),
-        .pow, .atan2, .fmod => two(f64, c, f),
         .sincosf => return sincos(f32, c),
         .sincos => return sincos(f64, c),
         .crc32, .adler32 => return checksum(c, f),
@@ -291,18 +341,38 @@ pub fn call(c: *Cpu, id: u8) Result {
                 if (!committed(c, 0, n) or !committed(c, 1, n)) return .fault;
                 const d = ptr(c, 0) orelse return .fault;
                 const s = ptr(c, 1) orelse return .fault;
-                mem.move(d, s, n);
+                if (d >= mem.window or s >= mem.window) {
+                    if (!reaches(c, d, n, true) or !reaches(c, s, n, false)) return .fault;
+                    mem.shm_copy(d, s, n);
+                } else mem.move(d, s, n);
                 wrote(d, n);
             }
         },
-        .memset => {
-            const n: u32 = @truncate(arg(c, 2));
-            if (n != 0) {
-                if (!committed(c, 0, n)) return .fault;
-                const d = ptr(c, 0) orelse return .fault;
-                @memset(mem.bytes(d)[0..n], @truncate(arg(c, 1)));
-                wrote(d, n);
-            }
+        .memset => return fill(c, @truncate(arg(c, 2)), @truncate(arg(c, 1))),
+        .bzero => return fill(c, @truncate(arg(c, 1)), 0),
+        .__aeabi_memset => return fill(c, @truncate(arg(c, 1)), @truncate(arg(c, 2))),
+        .strcpy => {
+            const s = ptr(c, 1) orelse return .fault;
+            const n: u32 = @intCast(std.mem.findSentinel(u8, 0, @as([*:0]const u8, @ptrFromInt(s))) + 1);
+            if (!committed(c, 0, n)) return .fault;
+            const d = ptr(c, 0) orelse return .fault;
+            mem.move(d, s, n);
+            wrote(d, n);
+        },
+        .strchr, .strrchr => {
+            const p = ptr(c, 0) orelse return .fault;
+            const ch: u8 = @truncate(arg(c, 1));
+            const s = std.mem.span(@as([*:0]const u8, @ptrFromInt(p)));
+            const i = if (ch == 0) s.len else if (f == .strchr) std.mem.findScalar(u8, s, ch) else std.mem.findScalarLast(u8, s, ch);
+            ret(c, if (i) |k| mem.va(p + @as(u32, @intCast(k))) else 0);
+        },
+        .__tls_get_addr => {
+            const index = ptr(c, 0) orelse return .fault;
+            const module = mem.ld(u32, index);
+            if (c.tls_tab == 0 or module >= TLS_MODULES) return .host;
+            const block = mem.ld(u32, c.tls_tab + TLS_BLOCKS + 4 * module);
+            if (block == 0) return .host;
+            ret(c, block +% mem.ld(u32, index + 4));
         },
         .memcmp => {
             const n: u32 = @truncate(arg(c, 2));
@@ -413,6 +483,7 @@ pub fn call(c: *Cpu, id: u8) Result {
                 ret(c, 0);
             } else ret(c, 22);
         },
+        inline else => |g| math(c, g),
     }
     return .done;
 }

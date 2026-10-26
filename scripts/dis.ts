@@ -45,7 +45,8 @@ for (const dex of loadDexes(apk)) {
           const f = dex.field(code.insns[pc + 1]);
           extra = dex.type(f.cls) + "." + f.name + ":" + dex.type(f.type);
         }
-        console.log(`${pc}: ${name} ${words} ${extra}`);
+        const line = dex.lineAt(m.codeOff, pc);
+        console.log(`${pc}: ${name} ${words} ${extra}${line < 0 ? "" : ` :${line}`}`);
         pc += insnLen(code.insns, pc);
       }
     }

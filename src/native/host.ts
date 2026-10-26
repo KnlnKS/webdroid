@@ -16,7 +16,7 @@ export function complete<V, T>(value: V | Promise<V>, done: (value: V) => T | Pr
 export const NORET: unique symbol = Symbol("noret");
 /** the result is the first argument, still in x0 (memcpy and its kin): nothing to translate back */
 export const ARG0: unique symbol = Symbol("arg0");
-/** a name the core serves (CORE_LIBC): the host has no body, the tracer goes through libc_call */
+/** the body of a call the core serves whole (CORE_LIBC): the tracer goes through libc_call */
 export const SERVED: HostFn = (cpu) => cpu.fault("a core-served call reached the host");
 /** the result is already in its return registers (see retF/retD); only the return itself is left to do */
 const VRET: unique symbol = Symbol("vret");
@@ -347,8 +347,14 @@ export function lookupHost(sym: string, lib?: string): number | undefined {
     if (a === undefined) addrs.set(key, (a = defineHost(sym, v)));
     return a;
   }
-  return undefined;
+  // a call the core serves resolves in any open library, to the body one has for it or to none
+  if (!CORE_LIBC[sym]) return undefined;
+  if (lib !== undefined) return libs.has(lib) && !closedLibs.has(lib) ? lookupHost(sym) : undefined;
+  let a = servedSlots.get(sym);
+  if (a === undefined) servedSlots.set(sym, (a = defineHost(sym, SERVED)));
+  return a;
 }
+const servedSlots = new Map<string, number>();
 
 // ── stubs for imports nothing provides: bound at link time (unresolved), reported when CALLED
 export const unresolved = new Set<string>();

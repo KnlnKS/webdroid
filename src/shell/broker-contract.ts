@@ -14,7 +14,7 @@ import type { ComponentRef } from "../android/intent.ts";
 import type { InstallResult } from "../android/installpackage.ts";
 import type { Caller, ParcelData, Transaction, TransactionReply, BinderHandle } from "../android/binder.ts";
 import type { CookieCalls } from "./cookie-access.ts";
-import type { DescriptorCalls } from "./file-descriptors.ts";
+import type { DescriptorCalls, TakenRight } from "./file-descriptors.ts";
 import type { FilePathCalls } from "./file-path.ts";
 import type { HostUi } from "./host-ui.ts";
 import type { PackageDataChange } from "./packagedata.ts";
@@ -27,7 +27,7 @@ import { checkPermission } from "../android/permissions.ts";
 import { queryReceivers } from "../android/pm.ts";
 import { awaited, rt, type Gen, type JObj } from "../jvm/runtime.ts";
 import { hostUiMethods } from "./host-ui.ts";
-import { callError, callProxy, methodsOf, qualified, type CallFailure, type MethodTree, type ProxyOptions } from "./rpc.ts";
+import { callError, callProxy, methodsOf, qualified, type ByArgs, type ByResult, type CallFailure, type MethodTree, type Own, type ProxyOptions } from "./rpc.ts";
 
 /** an access interface's methods, called across a port */
 export type Calls<T> = { [K in keyof T]: T[K] extends (...args: infer A) => infer R ? (...args: A) => Promise<Awaited<R>> : never };
@@ -75,21 +75,22 @@ export type BrokerCalls = CookieCalls & {
   service: (pkg: string, process: string, request: ServiceRequest) => Promise<BinderHandle | null>;
   contentProvider: (pkg: string, process: string, authority: string) => Promise<BinderHandle | null>;
   broadcast: (data: ParcelData, manifest: Receiver[], permissions: string[], ordered: boolean, initial?: BroadcastData) => Promise<BroadcastData>;
+  /** a port onto a Surface process `owner` parceled under `token` (surfaceflinger.ts), or null */
+  surfaceConnect: (owner: number, token: number) => Promise<MessagePort | null>;
 };
-type Own<C> = { [K in keyof C as C[K] extends (...args: never[]) => unknown ? K : never]: C[K] };
 type Domains<C> = { [K in keyof C]: C[K] extends (...args: never[]) => unknown ? never : K }[keyof C] & string;
 /** in a fixed order: census decodes a timeline's call indexes by brokerCallNames */
 export const brokerMethods = {
   "": methodsOf<Own<BrokerCalls>>()(["serviceConnected", "systemService", "systemProvider", "notificationForeground", "exitRecords", "processExited",
     "displayOrientation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas",
-    "cookieRemove", "cookieFlush", "cookieNetwork", "cookieDocument", "cookieWatch", "storageWrite", "packageDataChange", "installPackage"]),
+    "cookieRemove", "cookieFlush", "cookieNetwork", "cookieDocument", "cookieWatch", "storageWrite", "packageDataChange", "installPackage", "surfaceConnect"]),
   process: methodsOf<ProcessLifeCalls>()(["processAlive", "processSignal", "processWatch", "processUnwatch"]),
   webStorage: methodsOf<WebStorageCalls>()(["webRenderer", "webStorage"]),
   starts: methodsOf<ServiceStarts>()(["created", "destroyed", "start", "deliver", "requested", "stop", "stopSelf", "done", "foreground"]),
   pending: methodsOf<PendingAccess>()(["create", "cancel", "send", "take", "peek"]),
   files: methodsOf<FilePathCalls>()(["filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "fileRename", "fileRemove", "fileCreate", "fileFifo", "fileSetAttributes"]),
   descriptors: methodsOf<DescriptorCalls>()(["ashmemCreate", "open", "read", "write", "seek", "truncate", "allocate", "fcntl", "stat", "sync", "close",
-    "stage", "unstage", "take", "ashmemProtect", "changeAttributes", "mappingAcquire", "mappingRead", "mappingWrite", "mappingRelease"]),
+    "stage", "unstage", "take", "park", "claim", "ioctl", "changeAttributes", "mappingAcquire", "mappingRead", "mappingWrite", "mappingRelease"]),
   permissions: methodsOf<PermissionAccess>()(["permissionCheck", "permissionGrant"]),
   settings: methodsOf<SettingsAccess>()(["get", "entries", "put", "ssaidKey"]),
   activity: methodsOf<ActivityCalls>()(["launch", "finish", "presentation"]),
@@ -97,6 +98,14 @@ export const brokerMethods = {
   uriGrants: methodsOf<UriGrantCalls>()(["check", "grant", "revoke"]),
 } satisfies MethodTree & { [D in Domains<BrokerCalls>]: readonly (keyof BrokerCalls[D])[] };
 export const brokerCallNames = qualified(brokerMethods);
+/** a socket end crossing realms gives its port away */
+const crossing = (right: number | TakenRight): Transferable[] => typeof right === "object" && "port" in right ? [right.port] : [];
+/** what a broker call's arguments give away */
+export const brokerArgTransfers: ByArgs<BrokerCalls, Transferable[]> = { "descriptors.stage": crossing, "descriptors.park": crossing,
+  installPackage: (apks) => apks.map((apk) => apk.buffer) };
+/** what a broker call's result gives away */
+export const brokerResultTransfers: ByResult<BrokerCalls, Transferable[]> = { "descriptors.take": crossing, "descriptors.claim": crossing,
+  surfaceConnect: port => port ? [port] : [] };
 
 export type ActivityRequest = { kind: "launch"; id: number; component: string; intent: ParcelData; caller: ComponentRef | null }
   | { kind: "visibility"; phase: "pause" | "stop" | "resume" | "visible" }
@@ -120,14 +129,16 @@ export type ProcessEndpoint = {
   packageAdded: (snapshot: PackageSnapshot) => Promise<void>;
   /** the kernel's SIGKILL: the process ends where it stands, with the reason the kill noted */
   kill: (signal: number, note?: KillNote) => void;
+  /** another process's port onto a Surface this process parceled under `token`: whether it is still here */
+  surfaceConnect: (token: number, port: MessagePort, reader: number) => Promise<boolean>;
 };
 const processMethods = methodsOf<ProcessEndpoint>()(["processDied", "activity", "transact", "service", "serviceConnected", "contentProvider", "broadcast",
-  "cookiesChanged", "storageChanged", "packageRemoved", "kill", "packageAdded"]);
+  "cookiesChanged", "storageChanged", "packageRemoved", "kill", "packageAdded", "surfaceConnect"]);
 /** a failure as this realm's exception: a Java exception is rebuilt in this VM */
 export const javaFailure = (error: CallFailure): unknown => error.javaClass ? rt.mkThrowable(error.javaClass, error.message) : callError(error);
 export const processProxy = (port: MessagePort, options: Pick<ProxyOptions<ProcessEndpoint>, "makeError" | "onClose"> = {}) =>
   callProxy<ProcessEndpoint>(port, processMethods, { notifications: ["kill"], makeError: javaFailure, ...options,
-    transfer: { packageAdded: ({ source, splits }) => [..."port" in source ? [source.port] : [], ...splits.map(split => split.port)] } });
+    transfer: { packageAdded: ({ source, splits }) => [..."port" in source ? [source.port] : [], ...splits.map(split => split.port)], surfaceConnect: (_token, port) => [port] } });
 
 export const permissionDenied = async (permission: string, pkg: string) =>
   await checkPermission(permission, pkg) !== 0;

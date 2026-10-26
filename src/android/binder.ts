@@ -126,7 +126,7 @@ function* exportObject(o: unknown, rights: DescriptorRights | undefined, strict:
   // Own the wire buffer: FileSource views may alias guest memory. This copy does not
   // implement shared FD backing; the current importer only writes back on last close.
   const bytes = new Uint8Array(contents);
-  const prot = ashmemProt(o.fd), region = prot === undefined ? {} : { prot };
+  const prot = yield* awaited(ashmemProt(o.fd)), region = prot === undefined ? {} : { prot };
   if (((yield* awaited(fcntlFd(o.fd, F_GETFL, 0))) & O_ACCMODE) === O_RDONLY) return { bytes, writer: null, ...region };
   linkClass("webdroid/FileWriter");
   const writer = new JFileWriter(); writer.fd = dupFd(o.fd);

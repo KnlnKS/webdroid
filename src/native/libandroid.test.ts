@@ -3,7 +3,9 @@ import "../natives.ts";
 import { NativeLooper } from "../android/mainloop.ts";
 import { JThread } from "../jvm/natives/jentry.ts";
 import { Cpu, setA64 } from "./cpu.ts";
-import { lookupHost } from "./host.ts";
+import { defineHost, lookupHost } from "./host.ts";
+import { pipeFds } from "./pipe.ts";
+import { closeFd, writeFd } from "./fd.ts";
 import { ndkInit, nativeWindowFor } from "./libandroid.ts";
 import { eglInit } from "./egl.ts";
 import { mem } from "./mem.ts";
@@ -27,6 +29,21 @@ test("Java and NDK code share one thread looper without preparing unrelated thre
     expect(await cpu.call(get)).toBe(handle);
     expect(await other.call(get)).toBe(0);
   } finally { cpu.dispose(); other.dispose(); setA64(false); }
+});
+
+test("a Java looper thread runs its ALooper's fd callbacks between its messages", async () => {
+  setA64(true); ndkInit();
+  const thread = new JThread(), cpu = new Cpu(thread, "handler-test"), looper = new NativeLooper(thread);
+  thread.looper = looper;
+  const [read, write] = pipeFds(0), seen: number[] = [];
+  const callback = defineHost("looper_fd_test", (_c, a) => { seen.push(a.i()); return 0; });
+  try {
+    const handle = await cpu.call(lookupHost("ALooper_forThread", "libandroid.so")!);
+    expect(await cpu.call(lookupHost("ALooper_addFd", "libandroid.so")!, [handle, read, 0, 1, callback, 0n])).toBe(1);
+    await writeFd(write, new Uint8Array([1]));
+    await looper.pollOnce(-1);
+    expect(seen).toEqual([read]);
+  } finally { await closeFd(read); await closeFd(write); cpu.dispose(); setA64(false); }
 });
 
 test("buffer geometry sizes EGL buffers while the window keeps its default size", async () => {

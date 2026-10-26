@@ -6,13 +6,14 @@ import { receiveForegroundNotification } from "../android/notification.ts";
 import { ownedBy, packages } from "../android/packages.ts";
 import { canonicalPermissionCommands, checkUidPermission, holdsPlatformPermission } from "../android/permissions.ts";
 import { REASON_EXIT_SELF, deathOf, exitRecords, recordRemoteExit } from "../android/server/appexitinfo.ts";
+import { hostsService } from "../android/server/process.ts";
 import { uriGrantCommands } from "../android/server/urigrants.ts";
 import { createAppData } from "../android/sharedprefs.ts";
 import { createSQLiteSession } from "../android/sqlite.ts";
 import { systemProviders } from "../android/systemproviders.ts";
 import { canonicalWebStorage } from "../android/webstorage.ts";
 import { rt } from "../jvm/runtime.ts";
-import { brokerMethods, permissionDenied, unawaited, type Answers, type BrokerCalls } from "./broker-contract.ts";
+import { brokerMethods, brokerResultTransfers, permissionDenied, unawaited, type Answers, type BrokerCalls } from "./broker-contract.ts";
 import { cookieCalls } from "./cookie-access.ts";
 import { storageAccess, storageWrite } from "./device-storage.ts";
 import { canonicalFilePaths, isMutablePath, packageOfPath, sameUidOrSystem } from "./file-path.ts";
@@ -48,8 +49,7 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
     return owner?.private && !sameUidOrSystem(caller.uid, packages.get(owner.pkg)?.uid) ? 13 : 0;
   };
   const starts = (cls: string) => {
-    const owner = packages.get(caller.pkg), node = owner?.components.service.get(cls);
-    if (!node || owner!.process(node) !== caller.process)
+    if (!hostsService(caller.pkg, cls, caller.process))
       throw rt.mkThrowable("java/lang/SecurityException", "Service start state belongs to another process");
     return broker.serviceStarts(pid);
   };
@@ -159,11 +159,12 @@ export function serveBrokerPort(broker: ProcessBroker, pid: number): { port: Mes
     service: (pkg, process, request) => broker.service(pid, pkg, process, request),
     contentProvider: (pkg, process, authority) => broker.contentProvider(pid, pkg, process, authority),
     broadcast: (data, manifest, permissions, ordered, initial) => broker.broadcast(pid, data, manifest, permissions, ordered, initial),
+    surfaceConnect: (owner, token) => broker.surfaceConnect(pid, owner, token),
   };
   const stop = serveCalls(port1, live(broker, pid, calls), () => { for (const cancel of watches.values()) cancel(); watches.clear(); callers.delete(stop); }, {
     // a reply its caller never receives gives back the descriptor rights it carried
     transact: reply => broker.discardDescriptors(pid, reply.data, false),
-  });
+  }, brokerResultTransfers);
   callers.add(stop);
   return { port: port2, close: stop };
 }

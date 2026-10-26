@@ -19,18 +19,18 @@ import { cookiesChanged } from "../android/cookies.ts";
 import { useFocusedUid } from "../android/clipboard.ts";
 import { storageChanged } from "./device-storage.ts";
 import { unregisterPackage } from "../android/installpackage.ts";
-import { asBroker, brokerMethods, javaFailure, type BroadcastData, type BrokerCalls, type ProcessEndpoint } from "./broker-contract.ts";
+import { asBroker, brokerArgTransfers, brokerMethods, javaFailure, type BroadcastData, type BrokerCalls, type ProcessEndpoint } from "./broker-contract.ts";
 import { connectBroker, processLife } from "./broker-access.ts";
 import type { ProcessBroker } from "./processes.ts";
 import { callProxy, closePort } from "./rpc.ts";
 import { procIdentity } from "./procfs.ts";
+import { connectSurface } from "../android/surfaceflinger.ts";
 
 
 let calls: ReturnType<typeof callProxy<BrokerCalls>> | undefined, releaseFiles = () => {};
 function attach(port: MessagePort, worker: boolean): BrokerCalls {
   if (calls) { closePort(port); throw new Error("Process command port already attached"); }
-  calls = callProxy<BrokerCalls>(port, brokerMethods, { notifications: ["processExited", "storageWrite"], makeError: javaFailure,
-    transfer: { installPackage: (apks) => apks.map((apk) => apk.buffer) } });
+  calls = callProxy<BrokerCalls>(port, brokerMethods, { notifications: ["processExited", "storageWrite"], makeError: javaFailure, transfer: brokerArgTransfers });
   connectBroker(calls.endpoint, worker);
   return calls.endpoint;
 }
@@ -98,5 +98,6 @@ export function createProcessEndpoint(): ProcessEndpoint {
       return null;
     }()),
     serviceConnected: (key, binder, dead) => asBroker(function* (): Gen<void> { remoteServiceConnected(key, yield* awaited(importBinder(binder)), dead); }()),
+    surfaceConnect: async (token, port, reader) => connectSurface(token, port, reader),
   };
 }

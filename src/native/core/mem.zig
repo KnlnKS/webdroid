@@ -13,7 +13,52 @@ pub inline fn bytes(a: u32) [*]u8 {
     return @ptrFromInt(a);
 }
 pub inline fn ld(comptime T: type, a: u32) T {
+    if (a >= window) return windowLoad(T, a);
     return ptr(T, a).*;
+}
+
+// The window (abi.WINDOW): the host serves its bytes, which another memory holds, at mapped
+// window addresses the core has checked.
+extern "env" fn shm_load(a: u32, n: u32) u32;
+extern "env" fn shm_store(a: u32, n: u32, v: u32) void;
+/// compare-and-swap of the n-byte value at window address a: the value it held
+pub extern "env" fn shm_cas(a: u32, n: u32, expected: u32, v: u32) u32;
+/// whether the 8 bytes at a held `expected` and now hold `v`
+pub extern "env" fn shm_cas64(a: u32, expected: u64, v: u64) u32;
+/// n bytes from s to d, guest addresses either of which may be in the window
+pub extern "env" fn shm_copy(d: u32, s: u32, n: u32) void;
+pub extern "env" fn shm_fill(d: u32, v: u32, n: u32) void;
+/// where this process's window starts: past every address in a 64-bit process, whose memory goes on there
+pub var window: u32 = 0xffff_ffff;
+/// whether this process maps the n bytes at window address a (for storing, when `write`)
+pub fn windowed(a: u32, n: u32, write: bool) bool {
+    if (a < window) return false;
+    const need: u8 = @intCast(abi.PAGE_MAPPED | (if (write) abi.PAGE_WRITABLE else 0));
+    const last = @as(u64, a) + @max(n, 1) - 1;
+    if (last > 0xffff_ffff) return false;
+    for (pageOf(a)..@as(usize, @intCast(last >> PAGE_SHIFT)) + 1) |pg| if (page_flags[pg] & need != need) return false;
+    return true;
+}
+fn windowLoad(comptime T: type, a: u32) T {
+    const n = @sizeOf(T);
+    if (n <= 4) return @bitCast(@as(std.meta.Int(.unsigned, n * 8), @truncate(shm_load(a, n))));
+    var v: T = undefined;
+    shm_copy(@intFromPtr(&v), a, n);
+    return v;
+}
+pub fn windowStore(comptime T: type, a: u32, v: T) void {
+    const n = @sizeOf(T);
+    if (n <= 4) return shm_store(a, n, @as(std.meta.Int(.unsigned, n * 8), @bitCast(v)));
+    var copy = v;
+    shm_copy(a, @intFromPtr(&copy), n);
+}
+/// mmap's placement of a mapping at [a, a + n) of the window, as PROT_READ or PROT_WRITE allow, or
+/// munmap's (prot 0); false outside the window
+export fn window_map(a: u32, n: u32, prot: u32) u32 {
+    if (a < window or n == 0 or @as(u64, a) + n > @as(u64, abi.WINDOW) + abi.WINDOW_SIZE) return 0;
+    const flags: u8 = 2 | @as(u8, if (prot & 3 != 0) abi.PAGE_MAPPED else 0) | @as(u8, if (prot & 2 != 0) abi.PAGE_WRITABLE else 0);
+    @memset(page_flags[pageOf(a)..pageOf(a + (n - 1)) + 1], flags);
+    return 1;
 }
 fn fill(a: u32, v: u8, n: u32) void {
     @memset(bytes(a)[0..n], v);
@@ -231,10 +276,13 @@ pub export fn map_pages(n_in: u32, rsv: u32, alignment: u32) u32 {
     var al = alignment / PAGE_SIZE;
     if (rsv != 0 and np >= 256) al = @max(al, @as(u32, 1) << @intCast(31 - @clz((np + 1) >> 1)));
     al = @max(al, 1);
-    const p = findRun(np, FREE, al, rsv != 0);
+    return claim(findRun(np, FREE, al, rsv != 0), n, rsv);
+}
+/// the n bytes of free pages at p become a mapping, reserved or committed and zero
+fn claim(p: u32, n: u32, rsv: u32) u32 {
     if (p == 0 or (rsv == 0 and !back(@as(u64, p) + n))) return 0;
     const a = pageOf(p);
-    const b = @min(a + np, pageOf(mem_size));
+    const b = @min(a + (n >> PAGE_SHIFT), pageOf(mem_size));
     cpu.invalidate_range(p, (b - a) * PAGE_SIZE);
     @memset(pages[a..b], if (rsv != 0) RESERVED else USED);
     if (rsv == 0) fill(p, 0, n);
@@ -249,6 +297,7 @@ pub export fn unmap_pages(addr: u32, n_in: u32) u32 {
         cpu.invalidate_range(addr, (b - a) * PAGE_SIZE);
         for (a..b) |i| if (pages[i] != POOL) {
             pages[i] = FREE;
+            page_flags[i] &= ~@as(u8, abi.PAGE_READONLY);
         };
     }
     return 1;
@@ -537,8 +586,15 @@ pub export fn va(phys: u32) u64 {
     return (@as(u64, h) << 32) | (L[h] + (phys - P[h]));
 }
 /// `low` asks for plane 0, the only space the core executes from, whenever the mapping fits there
-export fn map_va(n: u64, rsv: u32, low: u32) u64 {
+export fn map_va(n: u64, rsv: u32, low: u32, hint: u64) u64 {
     if (n == 0) return 0;
+    // As Linux does, a mapping goes at its hint where that address space is free; PartitionAlloc's 32-bit pools
+    // step their hints past the super pages they may not use.
+    if (hint >= abi.ARENA_BASE and hint & (PAGE_SIZE - 1) == 0 and hint <= mem_size and n <= mem_size - hint) {
+        const np: u32 = @intCast((n + PAGE_SIZE - 1) >> PAGE_SHIFT);
+        const a = pageOf(@intCast(hint));
+        if (std.mem.allEqual(u8, pages[a .. a + np], FREE)) return claim(@intCast(hint), np << PAGE_SHIFT, rsv);
+    }
     if (n > @as(u64, 0x1_0000_0000) - PLANE_LO) {
         if (!planes) return 0;
         const count: usize = @intCast((n + 0xffff_ffff) / 0x1_0000_0000);
@@ -641,6 +697,7 @@ export fn map_fixed(v: u64, n: u64) u32 {
                 for (pageOf(l)..@as(usize, @intCast((l + size + PAGE_SIZE - 1) >> PAGE_SHIFT))) |i| {
                     if (pages[i] == POOL) return 0;
                     if (pass == 1 and pages[i] == FREE) pages[i] = RESERVED;
+                    if (pass == 1) page_flags[i] &= ~@as(u8, abi.PAGE_READONLY);
                 }
             } else if (h >= PLANES or !planes) {
                 return 0;
@@ -688,6 +745,7 @@ export fn resident_va(v: u64) i32 {
     const h = hi(v);
     const l = lo(v);
     if (h == 0) {
+        if (l >= window) return if (page_flags[pageOf(l)] & abi.PAGE_MAPPED != 0) 1 else -1;
         if (l < abi.ARENA_BASE or l >= mem_size) return -1;
         const state = pages[pageOf(l)];
         return if (state == FREE or state == POOL) -1 else @intFromBool(state == USED or state == IMAGE);
@@ -730,6 +788,16 @@ export fn drop_va(v: u64, n: u64) u32 {
         fill(P[h] + off, 0, size);
     }
     return 1;
+}
+/// mprotect's PROT_WRITE over [v, v + n) of plane 0, where a guest store faults without it; a
+/// plane's pages keep no protection
+export fn protect_va(v: u64, n: u64, writable: u32) void {
+    if (hi(v) != 0) return;
+    const a = @max(pageOf(lo(v)), pageOf(abi.ARENA_BASE));
+    const b: u32 = @intCast(@min((@as(u64, lo(v)) + n + PAGE_SIZE - 1) >> PAGE_SHIFT, pageOf(mem_size)));
+    for (a..@max(a, b)) |i| {
+        if (writable != 0) page_flags[i] &= ~@as(u8, abi.PAGE_READONLY) else page_flags[i] |= abi.PAGE_READONLY;
+    }
 }
 export fn decommit_va(v: u64, n: u64) void {
     const h = hi(v);
@@ -828,6 +896,7 @@ export fn mem_init(size: u32) void {
     for (0..owner.len) |u| if (owner[u] >= 0) give(@intCast(u), 1);
     mem_size = size;
     planes = size > abi.MEM_SIZE_A32;
+    window = if (planes) 0xffff_ffff else abi.WINDOW;
     @memset(&R, 0);
     @memset(&S, 0);
     @memset(&W, 0);

@@ -8,6 +8,7 @@ import { type JBuffer, allocateDirectNow, bufferBytes, capacity as bufferCapacit
 import { NativeFormat, TYPE_INTEGER, TYPE_LONG, TYPE_STRING, annexB, csdBytes, copiedFormatFromJava, formatToJava } from "./media-format.ts";
 import { surfaceTarget, presentSurface, type GlSurface } from "./glsurface.ts";
 import { nativePeer, nativeThread, postNativeEvent } from "./media-native.ts";
+import { uptimeMillis } from "../guest-clock.ts";
 
 /** a profile and level the codec lists, as MediaCodecInfo.CodecProfileLevel's */
 type Level = { profile: number; level: number };
@@ -173,6 +174,9 @@ const CB_INPUT_AVAILABLE = 1, CB_OUTPUT_AVAILABLE = 2, CB_ERROR = 3, CB_OUTPUT_F
 const EVENT_CALLBACK = 1, EVENT_FRAME_RENDERED = 3;
 const info = (time: bigint, size = 0, flags = 0): Info => ({ offset: 0, size, time, flags });
 const illegalState = (message: string | null) => rt.mkThrowable("java/lang/IllegalStateException", message);
+/** the output buffers a codec decodes into, each held from its decode until its client releases it: as many as a
+ *  surface's buffer queue gives a device's decoder, so a client holding a renderer's queue still keeps it decoding */
+const OUTPUT_BUFFERS = 16;
 /** A started codec's session, from start() to the stop, flush or reset that closes it: its decoder,
  *  buffer indices and outputs. Its callbacks act, and its events reach Java, only while it is the codec's run. */
 class Run {
@@ -254,7 +258,7 @@ class Run {
     if (this.codec.async) this.post(EVENT_CALLBACK, CB_ERROR, 0, () => newObj("android/media/MediaCodec$CodecException", "(IILjava/lang/String;)V", 0, 0, message));
     this.wake();
   }
-  busy(): boolean { return this.inFlight + this.outputs.size + this.scheduled.size >= 8; }
+  busy(): boolean { return this.inFlight + this.outputs.size + this.scheduled.size >= OUTPUT_BUFFERS; }
   pump(): void {
     if (this.ending || this.error || this.busy()) return;
     if (this.codec.async) for (const index of this.available) if (!this.announced.has(index)) {
@@ -335,12 +339,13 @@ class Run {
         if (render && this.live() && surface) {
           presentSurface(surface, output.frame);
           if (this.codec.frameEvents) {
-            const media = output.info.time, nano = BigInt(Math.floor(performance.now() * 1e6));
+            const media = output.info.time, nano = BigInt(Math.floor(uptimeMillis() * 1e6));
             this.post(EVENT_FRAME_RENDERED, 0, 0, () => formatToJava(new NativeFormat().set("0-media-time-us", TYPE_LONG, media).set("0-system-nano", TYPE_LONG, nano)));
           }
         } else output.frame.close();
       };
-      const delay = timeNs === undefined ? 0 : Number(timeNs) / 1e6 - performance.now();
+      // timeNs is on System.nanoTime's clock
+      const delay = timeNs === undefined ? 0 : Number(timeNs) / 1e6 - uptimeMillis();
       if (render && delay > 0) { const timer = setTimeout(() => { this.scheduled.delete(timer); present(); this.pump(); }, delay); this.scheduled.set(timer, output.frame); } else present();
     }
     this.pump();

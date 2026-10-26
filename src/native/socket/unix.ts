@@ -1,10 +1,11 @@
 // AF_UNIX: names bound in this process (an abstract one leads with NUL), connections within it
 // (socketpair, a connect to a listener), and the system daemons a guest libc talks to at /dev/socket
 // names (daemons.ts). Any other name reaches a socket listening in this process, or is refused as a
-// socket file with no listener is. Every peer is this process, whose credentials SO_PEERCRED and
+// socket file with no listener is. A connected socket passed to another process keeps its connection
+// across realms (bridge.ts). Every peer is this process, whose credentials SO_PEERCRED and
 // SCM_CREDENTIALS carry; SCM_RIGHTS passes open files along with the bytes.
 
-import { E, POLLIN, POLLERR, POLLHUP, POLLOUT } from "../abi.ts";
+import { E, O_CLOEXEC, O_NONBLOCK, POLLIN, POLLERR, POLLHUP, POLLOUT } from "../abi.ts";
 import { openFd, holdFile, dropFile, type OpenFile } from "../fd.ts";
 import { procIdentity } from "../../shell/procfs.ts";
 import { AF_UNIX } from "../net-address.ts";
@@ -13,6 +14,7 @@ import {
   unixAddress, scmRights, readUcred, type SocketAddress, type Cmsg, type Ucred,
 } from "./abi.ts";
 import { Socket, Loopback, block, received, installSocket, naming, SO_LINGER, SO_PASSCRED, SO_RCVTIMEO, type Received, type Accepted } from "./core.ts";
+import { bridge, type CrossingSocket } from "./bridge.ts";
 import { DAEMONS, type Daemon } from "./daemons.ts";
 
 const SCM_MAX_FD = 253;
@@ -22,6 +24,17 @@ const processCredentials = (): Ucred => ({ pid: procIdentity.pid, uid: procIdent
 const names = new Map<string, UnixSocket>();
 /** the name a call gave, or EINVAL for another family's */
 const pathOf = (addr: SocketAddress | null): string | number => addr?.family === AF_UNIX ? addr.path : -E.INVAL;
+
+/** debug (adb forward): a connection to the stream socket listening at `path` in this process, its other end the host's */
+export function connectFromHost(path: string): Loopback | null {
+  const server = names.get(path);
+  if (!server?.backlog || server.type !== SOCK_STREAM) return null;
+  const accepted = new UnixSocket(SOCK_STREAM), [mine, theirs] = Loopback.pair();
+  accepted.conn = theirs;
+  server.backlog.push(accepted);
+  server.wake();
+  return mine;
+}
 
 class UnixSocket extends Socket {
   readonly family = AF_UNIX;
@@ -202,6 +215,14 @@ class UnixSocket extends Socket {
     return r;
   }
   available(): number { const rx = this.rx; return !rx ? 0 : this.messages ? rx.nextSize : rx.available(); }
+  /** A connected socket on its way to another process: this process's end of the connection goes across the port it
+   *  answers, and holds the socket while the other process does. */
+  override cross(): CrossingSocket | null {
+    if (!this.conn) return null;
+    const { port1, port2 } = new MessageChannel(), file = holdFile(this.file);
+    bridge(this.conn, port1, () => dropFile(file));
+    return { port: port2, type: this.type, flags: this.file.statusFlags & O_NONBLOCK };
+  }
   close(): void {
     if (this.bound !== undefined && names.get(this.bound) === this) names.delete(this.bound);
     this.conn?.close().forEach(dropFile);
@@ -224,6 +245,13 @@ export function unixSocketPair(type: number): [Socket, Socket] | number {
   if (!(a instanceof UnixSocket) || !(b instanceof UnixSocket)) return a as number;
   [a.conn, b.conn] = Loopback.pair(a.messages);
   return [a, b];
+}
+/** a descriptor, close-on-exec, on a socket another process passed, connected to its peer across the port */
+export function importSocket({ port, type, flags }: CrossingSocket): number {
+  const s = new UnixSocket(type), [mine, theirs] = Loopback.pair(s.messages);
+  s.conn = mine;
+  bridge(theirs, port, () => theirs.close().forEach(dropFile));
+  return installSocket(s, flags | O_CLOEXEC);
 }
 /** an SCM_RIGHTS message passing descriptors `fds` */
 export const rightsMessage = (fds: number[]): Cmsg[] | null =>

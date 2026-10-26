@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 import { setA64 } from "./cpu.ts";
-import { core, CORE_LIBC } from "./core.ts";
+import { BadAddress, core, CORE_LIBC } from "./core.ts";
 import { mem } from "./mem.ts";
 
 beforeAll(() => setA64(true));
@@ -191,4 +191,17 @@ test("mprotect accepts mapped ELF image pages", () => {
   expect(mem.unmapPages(image, 4096)).toBe(true);
   expect(mem.commitVa(BigInt(image + 4096), 4096)).toBe(true);
   expect(mem.commitVa(BigInt(image), 4096)).toBe(false);
+});
+
+test("a page mprotect leaves without PROT_WRITE refuses stores until made writable or unmapped", () => {
+  const p = mem.mapPages(4096);
+  mem.protectVa(BigInt(p), 4096, false);
+  expect(() => mem.st32(p, 1)).toThrow(BadAddress);
+  expect(mem.writeProtected(p)).toBe(true);
+  mem.protectVa(BigInt(p), 4096, true);
+  mem.st32(p, 7);
+  expect(mem.ld32(p)).toBe(7);
+  mem.protectVa(BigInt(p), 4096, false);
+  mem.unmapPages(p, 4096);
+  expect(mem.writeProtected(p)).toBe(false);
 });

@@ -8,6 +8,7 @@ import { guestNow } from "../../guest-clock.ts";
 import { ANON, dropFile, installFile, isKind, newFile, openFd, type FileOps, type OpenFile } from "../fd.ts";
 import { WaitQueue, msLeft, waitUntil } from "../poll.ts";
 import { SOL_SOCKET, SOCK_STREAM, SOCK_NONBLOCK, SHUT_RD, SHUT_RDWR, MSG_DONTWAIT, type SocketAddress, type Ucred, type Cmsg } from "./abi.ts";
+import type { CrossingSocket } from "./bridge.ts";
 
 export const SO_REUSEADDR = 2, SO_TYPE = 3, SO_ERROR = 4, SO_BROADCAST = 6, SO_SNDBUF = 7, SO_RCVBUF = 8, SO_LINGER = 13, SO_PASSCRED = 16;
 export const SO_PEERCRED = 17, SO_RCVTIMEO = 20, SO_SNDTIMEO = 21, SO_BINDTODEVICE = 25, SO_ACCEPTCONN = 30, SO_PROTOCOL = 38, SO_DOMAIN = 39;
@@ -190,6 +191,8 @@ export abstract class Socket {
   abstract close(): void;
   /** SO_PEERCRED */
   peerCredentials(): Ucred | number { return -E.NOPROTOOPT; }
+  /** the socket on its way to another process, connected across realms (bridge.ts); a family's that cannot is null */
+  cross(): CrossingSocket | null { return null; }
   /** IP_ADD_MEMBERSHIP and its kin: a level this family lacks */
   group(_join: boolean, _group: number[], _ifindex: number): number { return -E.NOPROTOOPT; }
 
@@ -255,6 +258,7 @@ const SOCKET: FileOps<Socket> = {
   // a socket call waiting on the descriptor ends with EBADF
   unnamed: (f) => f.state.wake(),
   close: (f) => f.state.close(),
+  cross: (f) => f.state.cross(),
 };
 /** a new socket's descriptor, the lowest free; `flags` SOCK_NONBLOCK and SOCK_CLOEXEC */
 export function installSocket(socket: Socket, flags: number): number {

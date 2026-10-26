@@ -157,6 +157,12 @@ export function onMain<T>(job: () => Promise<T> | T): Promise<T> {
   });
 }
 
+/** onMain for the Java looper `thread` loops on: `job` runs there between its messages */
+export function onLooper<T>(thread: JThread, job: () => Promise<T> | T): Promise<T> {
+  if (thread === mainThread) return onMain(job);
+  return new Promise<T>((resolve, reject) => (thread.looper as NativeLooper).post(async () => { try { resolve(await job()); } catch (error) { reject(error); } }));
+}
+
 /** onMain for a job no caller waits on: its exception escapes the main thread, where it ran */
 export function postMain(job: () => unknown, escape: Escape = toThread(mainThread)): void {
   if (!processExited()) onMain(job).catch(escape);

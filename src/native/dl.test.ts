@@ -32,7 +32,7 @@ test("dlclose unloads an image at its last reference, running its destructors an
     const handle = await call("dlopen", name, 2);
     const mod = modules.find((m) => m.name === "libfini.so")!, tls = mod.tls!;
     expect(mod.phdr).toBe(mod.base + 64);                                         // the headers as mapped
-    const block = cpu.staticTls(mod, tls.image, tls.size, tls.align);
+    const block = cpu.staticTls(mod, tls);
     expect(await call("dlopen", name, 2)).toBe(handle);
     expect(await call("dlclose", handle)).toBe(0);
     expect([calls, loaded()]).toEqual([["init"], true]);

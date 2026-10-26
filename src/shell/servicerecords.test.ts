@@ -16,7 +16,7 @@ function records() {
     persistent: () => false,
   });
   const starts = r.starts("p", "p");
-  const record = (cls: string) => (r as any).records.get("p/" + cls);
+  const all = (): any[] => [...(r as any).records.values()], record = (cls: string) => all().find((x) => x.cls === cls);
   /** the hosting process created `cls`, with this start state */
   const report = (cls: string, state: { startRequested?: boolean; stopIfKilled?: boolean; foreground?: boolean; starts?: StartItem[] } = {}) => {
     starts.created(cls, intent);
@@ -24,7 +24,7 @@ function records() {
   };
   const bind = (cls: string, key: string, flags: number) => void r.request(2, "p", "p", { kind: "bind", cls, intent, key, flags });
   const delay = (cls: string) => Math.round((record(cls).nextRestart - uptimeMillis()) / 100) * 100;
-  return { r, starts, restarts, gone, attached, record, report, bind, delay, dispose: () => { for (const x of (r as any).records.values()) clearTimeout(x.timer); } };
+  return { r, starts, restarts, gone, attached, record, report, bind, delay, dispose: () => { for (const x of all()) clearTimeout(x.timer); } };
 }
 
 test("a killed process's services restart as killServicesLocked decides, spaced and backed off", () => {

@@ -16,13 +16,13 @@ import { handle, deref } from "./handles.ts";
 import { hasProperty, propertyValue } from "../shell/properties.ts";
 import { logUncaught } from "../jvm/natives/jthrowable.ts";
 import { processLife } from "../shell/broker-access.ts";
-import { E } from "../native/abi.ts";
 import { fdInt, mkFd } from "../jvm/natives/jio.ts";
 import { FD, sys, threadTid } from "../jvm/natives/linux.ts";
-import { vfs } from "../shell/vfs.ts";
-import { processAshmemCreate, processAshmemSize, processAshmemProtect } from "../native/process-fd.ts";
-import { localOpen, bytesFd } from "../native/fs.ts";
-import { openFd, whenLastClosed, fdSource, localFdStat, readFd } from "../native/fd.ts";
+import { vfs, type VfsFile } from "../shell/vfs.ts";
+import { processAshmemCreate } from "../native/process-fd.ts";
+import { localOpen, bytesFd, regionFd, ASHMEM_IOCTL } from "../native/fs.ts";
+import { ashmemContent } from "../native/shm.ts";
+import { whenLastClosed, fdSource, ioctlIntFd, readFd } from "../native/fd.ts";
 import { inotifyAddWatch, inotifyInit, inotifyRmWatch } from "../native/inotify.ts";
 import { uptimeMillis, wallMillis } from "../guest-clock.ts";
 
@@ -198,31 +198,22 @@ export function fdOverBytes(bytes: Uint8Array, sink: ((b: Uint8Array) => unknown
   });
   return fd;
 }
-// The region belongs to the open backing, including dup'd descriptors and retained mappings.
-const regionOf = (fd: number) => openFd(fd)?.content.ashmem;
-/** an ashmem region's protection, undefined for a descriptor on anything else */
-export const ashmemProt = (fd: number): number | undefined => regionOf(fd)?.prot;
 /** a descriptor on a new region holding `bytes`, which hands them to `sink` once the last descriptor closes */
 export function ashmemFd(bytes: Uint8Array, prot = 7, sink: ((b: Uint8Array) => unknown) | null = null): number {
-  const fd = fdOverBytes(bytes, sink ?? (() => {}));
-  openFd(fd)!.content.ashmem = { prot };
+  const content: VfsFile = { path: null, data: bytes, len: bytes.length, ashmem: { prot } }, fd = regionFd(content);
+  if (sink) whenLastClosed(fd, () => { void (async () => sink(content.data.subarray(0, content.len)))().catch(logUncaught); });
   return fd;
 }
 // libcutils' ashmem calls, which SharedMemory's natives and libandroid's ASharedMemory both make
 /** ashmem_create_region: a descriptor on a new region of zeros, or -errno */
-export const ashmemCreate = (size: number): number | Promise<number> => processAshmemCreate(size) ?? ashmemFd(new Uint8Array(size));
+export const ashmemCreate = (size: number): number | Promise<number> => processAshmemCreate(size) ?? regionFd(ashmemContent(size));
 /** ashmem_get_size_region: -1 for a descriptor on anything else */
-export const ashmemSize = (fd: number): number | Promise<number> => processAshmemSize(fd) ?? (regionOf(fd) ? localFdStat(fd)!.size : -1);
+export const ashmemSize = (fd: number): number | Promise<number> => after(ioctlIntFd(fd, ASHMEM_IOCTL.GET_SIZE), (n) => n < 0 ? -1 : n);
+/** an ashmem region's protection, undefined for a descriptor on anything else */
+export const ashmemProt = (fd: number): number | undefined | Promise<number | undefined> =>
+  after(ioctlIntFd(fd, ASHMEM_IOCTL.GET_PROT_MASK), (n) => n < 0 ? undefined : n);
 /** ashmem_set_prot_region: 0 or -errno; a region's protection only narrows */
-export function ashmemSetProt(fd: number, prot: number): number | Promise<number> {
-  const pending = processAshmemProtect(fd, prot);
-  if (pending) return pending;
-  const region = regionOf(fd);
-  if (!region) return -E.NOTTY;
-  if (prot & ~region.prot) return -E.INVAL;
-  region.prot = prot;
-  return 0;
-}
+export const ashmemSetProt = (fd: number, prot: number): number | Promise<number> => ioctlIntFd(fd, ASHMEM_IOCTL.SET_PROT_MASK, prot);
 rt.registerJnis("android/os/SharedMemory", {
   "nCreate(Ljava/lang/String;I)Ljava/io/FileDescriptor;": waits((_name: string | null, size: number) => after(ashmemCreate(size), fd => { sys("ashmem_create_region", fd); return mkFd(fd); })),
   "nGetSize(Ljava/io/FileDescriptor;)I": waits((d: JObj | null) => ashmemSize(fdInt(d))),

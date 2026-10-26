@@ -10,7 +10,7 @@ import { bundle } from "./bundle.ts";
 import { runNode } from "./node.ts";
 import { WORKER_SCRIPTS } from "../src/worker-scripts.ts";
 import { WEB_PROXY_WORKER } from "../src/shell/webinject.ts";
-import { BACKEND_PATHS } from "../src/shell/serve-routes.ts";
+import { BACKEND_PATHS, ISOLATED_PATHS, ISOLATION } from "../src/shell/serve-routes.ts";
 
 const PART_SIZE = 24 * 1024 * 1024;
 const aospFiles = [...PLATFORM_JARS, "framework-res.apk", ...Object.keys(PLATFORM_DATA).map((path) => path.slice(1))];
@@ -55,8 +55,10 @@ async function copyAot(out: string): Promise<void> {
   if (manifest.source !== sourceKey()) throw new Error("vendor/wasm-aot is a build of other sources; run pnpm aot");
   await cp(join(AOT_ROOT, manifest.key), join(out, "aot", manifest.key), { recursive: true });
   await writeFile(join(out, "aot/current.json"), JSON.stringify(manifest));
-  await writeFile(join(out, "_headers"), "/aot/*/*\n  Cache-Control: public, max-age=31536000, immutable\n");
 }
+/** Pages' _headers: the shell page and its Worker scripts isolated, and a platform build's files kept for good (copyAot) */
+const HEADERS = [...ISOLATED_PATHS.map((path) => [path, ISOLATION] as const), ["/aot/*/*", { "cache-control": "public, max-age=31536000, immutable" }] as const]
+  .map(([path, headers]) => `${path}\n${Object.entries(headers).map(([name, value]) => `  ${name}: ${value}\n`).join("")}`).join("");
 
 /** what Pages runs its Function for (functions/): the platform files it answers in ranges or inflates, and the backend's routes */
 const FUNCTION_ROUTES = ["/vendor/aosp/*", "/vendor/android-cacerts.pem", "/vendor/microg/*", ...BACKEND_PATHS];
@@ -86,6 +88,7 @@ export function prodAssets(): Plugin {
       this.emitFile({ type: "asset", fileName: "font-index.json", source: sources[WORKERS.length] });
       // the page's own service worker, which serves a local package's WebView assets
       this.emitFile({ type: "asset", fileName: "webview-worker.js", source: WEB_PROXY_WORKER });
+      this.emitFile({ type: "asset", fileName: "_headers", source: HEADERS });
       this.emitFile({ type: "asset", fileName: "_routes.json", source: JSON.stringify({ version: 1, include: FUNCTION_ROUTES, exclude: [] }) });
       // without one Pages answers every unknown path with index.html, which optional fetches (aot/current.json) take for a file
       this.emitFile({ type: "asset", fileName: "404.html", source: "<!doctype html><title>Not found</title>Not found" });

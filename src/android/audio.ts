@@ -104,7 +104,7 @@ hostService("audio", "webdroid/AudioService", "android/media/IAudioService$Stub"
   "isMusicActive(Z)Z": (remotely: number) => remotely ? 0 : active((p) => p.stream === STREAM_MUSIC),
   // RINGER_MODE_NORMAL, MODE_NORMAL
   ...stubs(2, "getRingerModeExternal()I", "getRingerModeInternal()I"),
-  ...stubs(0, "getMode()I", "isStreamMute(I)Z", "isMasterMute()Z", "isSpeakerphoneOn()Z", "isBluetoothScoOn()Z", "isBluetoothA2dpOn()Z", "isVolumeFixed()Z",
+  ...stubs(0, "getMode()I", "isStreamMute(I)Z", "isMasterMute()Z", "isMicrophoneMuted()Z", "isSpeakerphoneOn()Z", "isBluetoothScoOn()Z", "isBluetoothA2dpOn()Z", "isVolumeFixed()Z",
     "isSpatializerEnabled()Z", "isSpatializerAvailable()Z", "getSpatializerImmersiveAudioLevel()I",
     "canBeSpatialized(Landroid/media/AudioAttributes;Landroid/media/AudioFormat;)Z"),
   ...noops("registerSpatializerCallback(Landroid/media/ISpatializerCallback;)V", "unregisterSpatializerCallback(Landroid/media/ISpatializerCallback;)V"),

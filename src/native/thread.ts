@@ -8,7 +8,7 @@ import { parkTimeout, unparkTimeout, yieldToLoop } from "../jvm/yield.ts";
 import { WaitQueue } from "./poll.ts";
 import { E } from "./abi.ts";
 import { JThread, threadExit } from "../jvm/natives/jentry.ts";
-import { dispatchUncaught, logUncaught } from "../jvm/natives/jthrowable.ts";
+import { dispatchUncaught, logUncaught, toThread } from "../jvm/natives/jthrowable.ts";
 import { readTs, clockTime, KLAYOUT } from "./kernel.ts";
 import { guestSleep, MAX_TIMER_DELAY } from "../guest-clock.ts";
 
@@ -26,6 +26,17 @@ threadExit.hook = (t) => {
   if (!cpu || cpu.loops || cpu.depth) return;
   void cpu.endThread().catch(logUncaught).finally(() => { if (!cpu.loops) cpu.dispose(); });
 };
+
+/** a library's own thread (a binder thread, a callback looper), made when first needed, that runs the guest
+ *  callbacks handed to it one after another */
+export function callbackThread(name: string): (run: (cpu: Cpu) => Promise<unknown>) => void {
+  let cpu: Cpu | null = null, calls: Promise<unknown> = Promise.resolve();
+  return (run) => {
+    if (!cpu) { const thread = new JThread(); thread.jname = name; cpu = new Cpu(thread, name); bindCpu(thread, cpu); }
+    const c = cpu;
+    calls = calls.then(() => run(c)).catch(toThread(c.jthread));
+  };
+}
 
 // ── futex: what libc++ and an engine's own primitives wait on when they bypass pthread
 export const futexStats = new Map<string, Record<string, number>>();

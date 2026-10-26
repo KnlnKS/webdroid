@@ -11,13 +11,13 @@ import { fixProcessBitness, processBitness, setTargetSdkVersion } from "../jvm/n
 import { loadFramework, mountPlatformJars } from "../android/framework.ts";
 import { deviceNightMode } from "../android/settings.ts";
 import { qualify as componentClass } from "../jvm/roots.ts";
-import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml.ts";
+import { parseAXML, attr, attrStr } from "../android/axml.ts";
 import { setDeviceNight, syncDeviceOrientation, applyApplicationLocales, localesFromTags, initDeviceLocales, applyDeviceConfiguration, type Locales } from "../android/configuration.ts";
 import { appHost, setAppHost } from "../android/apphost.ts";
-import { setManifest } from "../android/pm.ts";
+import { launcherActivity, setManifest } from "../android/pm.ts";
 import { packageConfig, setPackageConfig } from "../android/packageconfig.ts";
 import { setProcessIdentity, setProcessName } from "../android/os.ts";
-import { packageUid, packages, usesSdk } from "../android/packages.ts";
+import { applicationOf, packageUid, packages, usesSdk } from "../android/packages.ts";
 import { onMain, postMain } from "../android/mainloop.ts";
 import { zygoteInit } from "../android/zygote.ts";
 import { readAheadFonts } from "../android/cssfonts.ts";
@@ -91,21 +91,6 @@ function turnTo(landscape: boolean): boolean {
   return true;
 }
 
-const qualify = (pkg: string, name: string) => name.startsWith(".") ? pkg + name : name;
-const isLauncher = (node: XmlNode) => node.children.some((filter) =>
-  filter.name === "intent-filter" && filter.children.some((x) => x.name === "category" && attrStr(x, "name") === "android.intent.category.LAUNCHER"));
-
-/** The launch component's orientation, resolving an alias to its target Activity when needed. */
-function launcherOrientation(app: XmlNode | undefined, launcher: XmlNode, pkg: string): number {
-  const own = attr(launcher, "screenOrientation");
-  if (own) return own.data;
-  const target = attrStr(launcher, "targetActivity");
-  if (!target) return -1;
-  const full = qualify(pkg, target);
-  const targetNode = app?.children.find((node) => node.name === "activity" && qualify(pkg, attrStr(node, "name") ?? "") === full);
-  return (targetNode && attr(targetNode, "screenOrientation")?.data) ?? -1;
-}
-
 /** UiModeManager's persisted application night mode: MODE_NIGHT_NO, MODE_NIGHT_YES, else the device's */
 let applicationNightOverride: boolean | null = null;
 const nightOverride = (mode: unknown): boolean | null => mode === 1 ? false : mode === 2 ? true : null;
@@ -131,11 +116,11 @@ export async function bootApk(install: Install, assetKey = "", processName: stri
   const zip = install.zip;
   const manifest = parseAXML(zip["AndroidManifest.xml"]);
   const pkg = attrStr(manifest, "package") ?? "app";
-  const appNode = manifest.children.find((c) => c.name === "application");
-  const launcher = appNode?.children.find((node) => (node.name === "activity" || node.name === "activity-alias") && isLauncher(node));
+  const appNode = applicationOf(manifest);
+  const launcher = processName ? null : launcherActivity(pkg);
   if (!launcher && !processName) throw new Error("no launcher activity found");
   // the Application, then the launcher Activity a launch instantiates first
-  const launch = [appNode && attrStr(appNode, "name"), !processName && launcher && (attrStr(launcher, "targetActivity") ?? attrStr(launcher, "name"))]
+  const launch = [appNode && attrStr(appNode, "name"), launcher && (attrStr(launcher.node, "targetActivity") ?? launcher.name)]
     .flatMap((name) => name ? [componentClass(pkg, name)] : []);
   // The app's dex goes in after the boot class path, which loadDex's first-wins keeps ahead: an
   // app's copy of a platform class is never loaded, as PathClassLoader asks its parent first.
@@ -158,7 +143,7 @@ export async function bootApk(install: Install, assetKey = "", processName: stri
   // Orientation precedes resource construction: both app and framework tables must select the
   // same -land/-port entries the Activity will see through Configuration. Another process of the
   // package keeps the display it started with until the activity started in it sets one.
-  if (!processName && launcher) applyOrientationRequest(launcherOrientation(appNode, launcher, pkg));
+  if (launcher) applyOrientationRequest(attr(launcher.node, "screenOrientation")?.data ?? -1);
   await restoreRoots();
   rt.classpath = zip;
   // sourceDir is the base apk, not the container it arrived in: a library that re-extracts its
@@ -180,7 +165,6 @@ export async function bootApk(install: Install, assetKey = "", processName: stri
 
   setAppHost({
     pkg, assetKey, zip,
-    splits: install.splits.map((sp) => sp.name),
     setApplicationNightMode: (mode) => setApplicationNightMode(pkg, mode),
     setApplicationLocales: (locales) => setApplicationLocales(pkg, locales),
   });

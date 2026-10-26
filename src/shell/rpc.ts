@@ -10,6 +10,8 @@ export const qualified = (methods: MethodTree): string[] =>
 type Message = { kind: "call" | "notify"; id: number; method: string; args: unknown[] }
   | { kind: "result"; id: number; value: unknown }
   | { kind: "error"; id: number; error: CallFailure } | { kind: "close"; error?: CallFailure };
+/** the methods of C that are not in a domain */
+export type Own<C> = { [K in keyof C as C[K] extends (...args: never[]) => unknown ? K : never]: C[K] };
 /** `names`, which must list every method of C; a proxy can only call the methods it names */
 export const methodsOf = <C extends Contract>() => <const L extends readonly (keyof C & string)[]>(
   names: L & ([Exclude<keyof C, L[number]>] extends [never] ? unknown : { missing: Exclude<keyof C, L[number]> })): L => names;
@@ -43,16 +45,18 @@ export function closePort(port: MessagePort, error?: CallFailure): void {
   port.close();
 }
 
+/** each method of a contract by the name a call gives it, a domain's as `domain.method` */
+type Named<C> = { [K in keyof C & string]: C[K] extends (...args: never[]) => unknown ? [K, C[K]] : { [M in keyof C[K] & string]: [`${K}.${M}`, C[K][M]] }[keyof C[K] & string] }[keyof C & string];
 /** per method, what acts on a call's result */
-type ByResult<C, R> = { [K in keyof C]?: C[K] extends (...args: never[]) => infer V ? (value: Awaited<V>) => R : never };
+export type ByResult<C, R> = { [E in Named<C> as E[0]]?: E[1] extends (...args: never[]) => infer V ? (value: Awaited<V>) => R : never };
 /** per method, what acts on a call's arguments */
-type ByArgs<C, R> = { [K in keyof C]?: C[K] extends (...args: infer A) => unknown ? (...args: A) => R : never };
+export type ByArgs<C, R> = { [E in Named<C> as E[0]]?: E[1] extends (...args: infer A) => unknown ? (...args: A) => R : never };
 const NONE: Transferable[] = [];
 /** One process's endpoint, whose object members are domains of methods. Calls are dispatched independently: a Binder
  *  callback may reenter this endpoint while the request that caused it is suspended. `undelivered` releases a result that
  *  never reached its caller; `transfer` names what a result gives away. A proxy may call over the same port (duplex). */
 export function serveCalls<C extends object>(port: MessagePort, endpoint: C, onClose: () => void = () => {},
-  undelivered: ByResult<C, unknown> = {}, transfer: ByResult<C, Transferable[]> = {}): () => void {
+  undelivered: NoInfer<ByResult<C, unknown>> = {}, transfer: NoInfer<ByResult<C, Transferable[]>> = {}): () => void {
   // by the name each is called by, a method's object and its timeline index
   const served = new Map<string, { self: Record<string, unknown>; name: string; at: number }>();
   const serve = (self: Record<string, unknown>, prefix: string) => {
@@ -104,7 +108,7 @@ export type ProxyOptions<C> = {
   makeError?: (error: CallFailure) => unknown;
   onClose?: (error: CallFailure) => void;
   /** what a call's arguments give away */
-  transfer?: ByArgs<C, Transferable[]>;
+  transfer?: NoInfer<ByArgs<C, Transferable[]>>;
 };
 /** The proxy of an endpoint with the methods `names` lists, or with each domain of methods a tree lists. */
 export function callProxy<C extends object>(port: MessagePort, names: readonly (keyof C & string)[] | MethodTree,

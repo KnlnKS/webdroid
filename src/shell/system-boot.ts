@@ -46,7 +46,7 @@ export async function prepareWorkerInstall(install: import("./install.ts").Insta
     import("../android/packagearchive.ts"), import("../android/installpackage.ts"), import("./lazyfile.ts"),
   ]);
   const bytes = install.base instanceof Uint8Array ? install.base : await readFully(install.base);
-  const archive = packageArchive(install.zip, await apkCertificates(bytes, install.zip));
-  const record = registerPackage(archive, { source: install.base, install });
+  const archive = packageArchive(install.zip, await apkCertificates(bytes, install.zip), install);
+  const record = registerPackage(archive, { source: install.base });
   return { pkg: record.pkg, label: record.label() };
 }

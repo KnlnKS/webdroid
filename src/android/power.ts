@@ -86,19 +86,28 @@ function* uidSnapshots(uids: Int32Array): Gen<JObj[]> {
   for (const uid of uids) snapshots.push(yield* uidSnapshot(uid));
   return jarray(snapshots, HPARCELER);
 }
+/** `receiver` answers with result code 0 and a Bundle of `parcelables` under `key` */
+function* sendParcelables(receiver: JObj, key: string, parcelables: JObj): Gen<void> {
+  const result = yield newObj("android/os/Bundle", "(I)V", 1);
+  yield vcall(result, "putParcelableArray", "(Ljava/lang/String;[Landroid/os/Parcelable;)V", key, parcelables);
+  yield vcall(receiver, "send", "(ILandroid/os/Bundle;)V", 0, result);
+}
 hostService("batterystats", "webdroid/BatteryStatsService", "com/android/internal/app/IBatteryStats$Stub", {
   "isCharging()Z": () => +pluggedIn(),
   "computeChargeTimeRemaining()J": () => -1n,
   [`takeUidSnapshot(I)${HPARCELER}`]: driven(uidSnapshot),
   [`takeUidSnapshots([I)[${HPARCELER}`]: driven(uidSnapshots),
   "takeUidSnapshotsAsync([ILandroid/os/ResultReceiver;)V": driven(function* (uids: Int32Array, receiver: JObj) {
-    const result = yield newObj("android/os/Bundle", "(I)V", 1);
-    yield vcall(result, "putParcelableArray", "(Ljava/lang/String;[Landroid/os/Parcelable;)V", "uid_snapshots", yield* uidSnapshots(uids));
-    yield vcall(receiver, "send", "(ILandroid/os/Bundle;)V", 0, result);
+    yield* sendParcelables(receiver, "uid_snapshots", yield* uidSnapshots(uids));
   }),
 });
-// IPowerStatsService: present on every device; nothing here reads a power monitor
-hostService("powerstats", "webdroid/PowerStatsService", "android/os/IPowerStatsService$Stub");
+// IPowerStatsService: present on every device; without a power monitor HAL, PowerStatsService
+// reports no monitors
+hostService("powerstats", "webdroid/PowerStatsService", "android/os/IPowerStatsService$Stub", {
+  "getSupportedPowerMonitors(Landroid/os/ResultReceiver;)V": driven(function* (receiver: JObj) {
+    yield* sendParcelables(receiver, "monitors", jarray([], "Landroid/os/PowerMonitor;"));
+  }),
+});
 hostService("batteryproperties", "webdroid/BatteryPropertiesRegistrar", "android/os/IBatteryPropertiesRegistrar$Stub", {
   "getProperty(ILandroid/os/BatteryProperty;)I": (id: number, prop: JObj) => {
     const value = id === BATTERY_CAPACITY ? device.battery.level : id === BATTERY_STATUS ? device.battery.status : null;

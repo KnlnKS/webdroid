@@ -17,6 +17,7 @@ import {
   prepareDraw, setSamplerUnits, glForTextureFormat, shaderRecs, programRecs, samplerSlots, uniformHandles, pbo, type GL, type ContextState,
 } from "./gles3-state.ts";
 import { i32, u32, f32, u8, pixelStore, readGuestPixels, texData, PACK, UNPACK } from "./gles3-pixels.ts";
+import { bufferTexture, imageBuffer, ownsTexture } from "./hardwarebuffer.ts";
 import { recOf, rec, recAt, bindRec, shadowed, withTarget, writeBuffers, writeBack, contents, realize, syncVertexBuffer, syncFeedback, COPY_READ, COPY_WRITE } from "./gles3-buffers.ts";
 import { vertexAttribPointer, clientArray, drawClientArrays, drawClientElements } from "./gles3-client-arrays.ts";
 import {
@@ -59,8 +60,8 @@ const EXT: [string, string][] = [
   ["EXT_texture_filter_anisotropic", "GL_EXT_texture_filter_anisotropic"], ["EXT_texture_norm16", "GL_EXT_texture_norm16"], ["EXT_float_blend", "GL_EXT_float_blend"],
 ];
 // ES2 extensions that ES 3.0 core subsumes without a new entry point; an engine gating on the name sees them
-// and SurfaceTexture's external textures, which shaders' samplerExternalOES read as 2D storage (gles3-state.ts); EGL makes no EGLImage
-const CORE = "GL_OES_element_index_uint GL_OES_depth24 GL_OES_packed_depth_stencil GL_OES_standard_derivatives GL_OES_texture_float GL_OES_texture_half_float GL_OES_texture_half_float_linear GL_OES_rgb8_rgba8 GL_OES_depth_texture GL_OES_texture_npot GL_OES_fbo_render_mipmap GL_EXT_texture_rg GL_EXT_sRGB GL_EXT_blend_minmax GL_OES_EGL_image_external GL_OES_EGL_image_external_essl3";
+// and external textures (SurfaceTexture's, EGLImages'), which shaders' samplerExternalOES read as 2D storage (gles3-state.ts)
+const CORE = "GL_OES_element_index_uint GL_OES_depth24 GL_OES_packed_depth_stencil GL_OES_standard_derivatives GL_OES_texture_float GL_OES_texture_half_float GL_OES_texture_half_float_linear GL_OES_rgb8_rgba8 GL_OES_depth_texture GL_OES_texture_npot GL_OES_fbo_render_mipmap GL_EXT_texture_rg GL_EXT_sRGB GL_EXT_blend_minmax GL_OES_EGL_image GL_OES_EGL_image_external GL_OES_EGL_image_external_essl3";
 const extsOf = new WeakMap<GL, string[]>();
 /** glClientWaitSync's wait, which EGL's fences share: a wait longer than the fence takes is spent yielding, one macrotask per look */
 export async function clientWait(gl: GL, sync: WebGLSync, flags: number, timeoutNs: bigint): Promise<number> {
@@ -412,11 +413,7 @@ export function gles3Init(): void {
     glGenTextures: keepsClean((_c, a) => { const n = a.i(); gen(T().textures, n, a.p(), () => { const texture = g().createTexture(); if (texture) textureRec(texture).tracking = UNBOUND; return texture; }); }),
     glDeleteTextures: keepsClean((_c, a) => {
       const n = a.i(), p = a.p(), state = contextState();
-      del(T().textures, n, p, (texture) => {
-        textureRec(texture).deleted = true;
-        for (const unit of state.bindings.values()) for (const [target, bound] of unit) if (bound === texture) unit.set(target, null);
-        g().deleteTexture(texture);
-      });
+      del(T().textures, n, p, (texture) => dropTexture(state, texture));
       state.revision++;
     }),
     glIsTexture: keepsClean((_c, a) => (H(T().textures, a.i()) ? 1 : 0)),
@@ -464,6 +461,31 @@ export function gles3Init(): void {
     glTexStorage3D: (_c, a) => {
       const target = a.i(), levels = a.i(), format = a.i(), width = a.i(), height = a.i(), depth = a.i(), gl = glForTextureFormat(format);
       gl.texStorage3D(target, levels, format, width, height, depth);
+    },
+    // GL_OES_EGL_image: the bound texture takes the image's buffer as its storage. WebGL textures share no storage, so
+    // the name comes to stand for the buffer's own texture, with the parameters the name had
+    glEGLImageTargetTexture2DOES: (_c, a) => {
+      const target = a.i(), buffer = imageBuffer(a.p()), gl = g(), state = contextState();
+      if (target !== 0x0de1 && target !== 0x8d65) { raise(0x500); return; }
+      if (!buffer) { raise(0x501); return; }
+      const old = boundTexture(state, state.activeUnit, 0x0de1), name = old ? T().ids.get(old) : undefined;
+      if (!old || !name) { raise(0x502); return; }
+      const ints = TEXTURE_INTS.map((pn) => gl.getTexParameter(0x0de1, pn) as number), floats = TEXTURE_FLOATS.map((pn) => gl.getTexParameter(0x0de1, pn) as number);
+      const texture = bufferTexture(buffer, gl);
+      if (!texture) { gl.bindTexture(0x0de1, old); raise(0x505); return; }
+      if (texture === old) return;
+      TEXTURE_INTS.forEach((pn, i) => gl.texParameteri(0x0de1, pn, ints[i]));
+      TEXTURE_FLOATS.forEach((pn, i) => gl.texParameterf(0x0de1, pn, floats[i]));
+      const was = textureRec(old), rec = textureRec(texture);
+      rec.channels = [...was.channels]; rec.code = was.code;
+      rec.tracking = { kind: "bound", target: 0x0de1, storage: { immutable: true, format: buffer.internalFormat, width: buffer.width, height: buffer.height, levels: buffer.levels } };
+      T().textures[name] = texture; T().ids.set(texture, name);
+      dropTexture(state, old);
+      gl.bindTexture(0x0de1, texture);
+      let unit = state.bindings.get(state.activeUnit);
+      if (!unit) state.bindings.set(state.activeUnit, unit = new Map());
+      unit.set(0x0de1, texture);
+      state.revision++;
     },
     glCopyTexSubImage3D: (_c, a) => g().copyTexSubImage3D(a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i()),
     glGenerateMipmap: (_c, a) => { const t = a.i(); for (const face of t === 0x8513 ? [0x8515, 0x8516, 0x8517, 0x8518, 0x8519, 0x851a] : [t]) forgetImages(face, (level) => level > 0); g().generateMipmap(t); },
@@ -578,6 +600,19 @@ export function gles3Init(): void {
   gles3Procs = G;
   hostLib("libGLESv2.so", G, { closed: true });
   hostLib("libGLESv3.so", G, { closed: true });
+}
+// MIN/MAG_FILTER, WRAP_S/T/R, COMPARE_MODE/FUNC, BASE/MAX_LEVEL; MIN/MAX_LOD
+const TEXTURE_INTS = [0x2801, 0x2800, 0x2802, 0x2803, 0x8072, 0x884c, 0x884d, 0x813c, 0x813d], TEXTURE_FLOATS = [0x813a, 0x813b];
+/** a texture no name stands for any more: deleted, or, a buffer's, which lives on with the buffer, unbound from the context's units */
+function dropTexture(state: ContextState, texture: WebGLTexture): void {
+  const gl = g(), active = TEXTURE0 + state.activeUnit, owned = ownsTexture(texture);
+  for (const [unit, targets] of state.bindings) for (const [target, bound] of targets) {
+    if (bound !== texture) continue;
+    if (owned) { gl.activeTexture(TEXTURE0 + unit); gl.bindTexture(target, null); }
+    targets.set(target, null);
+  }
+  if (owned) gl.activeTexture(active);
+  else { textureRec(texture).deleted = true; gl.deleteTexture(texture); }
 }
 /** glBindTexture in the current context */
 export function bindTexture(name: number, handle: number): void {

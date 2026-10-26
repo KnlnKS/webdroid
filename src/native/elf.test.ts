@@ -80,7 +80,7 @@ test("ELF32 and ELF64 apply RELR address and high bitmap bits before reading con
     const high = 0x400 + (ptr * 8 - 1) * ptr;
     put(0x400, 0x77); put(0x400 + ptr, 0x88); put(high, 0x99);
     const { mod, relocate } = mapElf("relr-test", bytes);
-    relocate(() => { throw new Error("unexpected symbol"); });
+    relocate(() => { throw new Error("unexpected symbol"); }, () => undefined);
     expect(mod.initArray).toEqual([mod.base + 0x77, mod.base + 0x88]);
     expect(mem.u32[(mod.base + high) >>> 2]).toBe(mod.base + 0x99);
   }

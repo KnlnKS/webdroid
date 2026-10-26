@@ -13,7 +13,7 @@ import { filePaths, type AttributeChange } from "../../shell/file-path.ts";
 import { isExternal, mapRemote, mapExternal, memoryAt, memorySync, unmapExternal, writeAt } from "./jmemory.ts";
 import { addressSize } from "./jvmruntime.ts";
 import { mmap, munmap, MAP_PRIVATE, MAP_SHARED, PROT_READ, PROT_WRITE } from "../../native/vm.ts";
-import { fdFile, readlinkAt, resolveAt, statAt, statFd, storageStat } from "../../native/fs.ts";
+import { fdFile, linkTarget, resolveAt, statAt, statFd, storageStat } from "../../native/fs.ts";
 import { remoteOf, processOpenFd } from "../../native/process-fd.ts";
 import { isSocketFd, closeFd, dupFd, seekFd, readFd, preadFd, writeFd, changeFdAttributes,
   pwriteFd, truncateFd, fcntlFd, syncFd, fdStat, ioctlIntFd } from "../../native/fd.ts";
@@ -377,7 +377,7 @@ const unixNativeDispatcher: Record<string, (...args: never[]) => unknown> = {
   "renameat0(IJIJ)V": (fromDir: number, from: bigint, toDir: number, to: bigint) => { const a = atPath(fromDir, from), b = atPath(toDir, to); return after(filePaths(a, b).fileRename(a, b), (n) => { unixSys(n); }); },
   "mkdir0(JI)V": (path: bigint) => { const p = cpath(path); return after(filePaths(p).fileMkdir(p), (n) => { unixSys(n); }); },
   "rmdir0(J)V": (path: bigint) => removeAt(cpath(path), true),
-  "readlink0(J)[B": waits((path: bigint) => after(readlinkAt(cpath(path)), (n) => { throw unixError(-n); })),
+  "readlink0(J)[B": waits((path: bigint) => after(linkTarget(cpath(path)), (target) => { if (typeof target === "number") throw unixError(-target); return bytesOf(target); })),
   "realpath0(J)[B": waits((path: bigint) => { const p = vfs.norm(cpath(path)); return after(statPath(p, null), () => bytesOf(p)); }),
   "stat0(JLsun/nio/fs/UnixFileAttributes;)V": (path: bigint, attrs: JObj) => after(statPath(cpath(path), attrs), () => {}),
   "lstat0(JLsun/nio/fs/UnixFileAttributes;)V": (path: bigint, attrs: JObj) => after(statPath(cpath(path), attrs), () => {}),

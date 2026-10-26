@@ -46,14 +46,17 @@ const F = {
   vsyncId: mangleField(TIMELINE, "vsyncId"), present: mangleField(TIMELINE, "expectedPresentationTime"),
   deadline: mangleField(TIMELINE, "deadline"),
 };
-let latest = { at: -Infinity, nanos: 0n, frame: 0 };
-/** VsyncEventData as NativeDisplayEventReceiver fills it: the browser predicts one presentation, a
- *  frame interval out, which is also the deadline */
+/** a vsync: its uptime, in milliseconds and nanoseconds, and its count, which is its id */
+export interface Vsync { at: number; nanos: bigint; frame: number }
+let latest: Vsync = { at: -Infinity, nanos: 0n, frame: 0 };
+/** a vsync's one frame timeline: the browser predicts one presentation, a frame interval out, which is also the deadline */
+export const presentedAt = (v: Vsync): bigint => v.nanos + device.frameIntervalNanos;
+/** VsyncEventData as NativeDisplayEventReceiver fills it */
 function fill(data: Record<string, unknown>): void {
-  const interval = device.frameIntervalNanos, timeline = (data[F.timelines] as Record<string, unknown>[])[0];
-  data[F.preferred] = 0; data[F.length] = 1; data[F.interval] = interval;
+  const timeline = (data[F.timelines] as Record<string, unknown>[])[0];
+  data[F.preferred] = 0; data[F.length] = 1; data[F.interval] = device.frameIntervalNanos;
   timeline[F.vsyncId] = BigInt(latest.frame);
-  timeline[F.present] = timeline[F.deadline] = latest.nanos + interval;
+  timeline[F.present] = timeline[F.deadline] = presentedAt(latest);
 }
 const ref = (weak: JObj): JObj | null | Promise<JObj | null> => vcall(weak, "get", "()Ljava/lang/Object;");
 
@@ -113,7 +116,8 @@ function hostFrames(frame: (time: number) => void): void {
   if (typeof requestAnimationFrame === "function") requestAnimationFrame(loop);
   setInterval(() => { if (performance.now() - framed > 40) frame(performance.now()); }, 33);
 }
-/** whether this process's windows are on screen, which its display's vsyncs follow */
+/** whether this process's windows are on screen, which its display's vsyncs follow: a process shows until its
+ *  activities stop, so one with none (a GPU process drawing another's window) has vsyncs as on a device */
 let shown = true;
 export const displayShown = (): boolean => shown;
 export function setDisplayShown(visible: boolean): void { note(Ev.Visible, +visible); shown = visible; }
@@ -128,7 +132,10 @@ export function startDisplayLoop(visible: boolean, frame?: () => void): () => nu
   });
   return () => ticks;
 }
-export const vsyncScheduled = (): boolean => scheduled.size > 0 || vsyncHooks.length > 0;
+export const vsyncScheduled = (): boolean => scheduled.size > 0 || vsyncHooks.length > 0 || nativeRequests.length > 0;
+/** native choreographers' requests: each is answered by the next vsync later than `after` */
+let nativeRequests: { after: number; fn: (v: Vsync) => void }[] = [];
+export function requestVsync(after: number, fn: (v: Vsync) => void): void { nativeRequests.push({ after, fn }); }
 let vsyncHooks: { fn: () => void; after: number }[] = [];
 /** run `fn` at a vsync later than the latest: a renderer drawing on its own cadence only steps its
  *  animators, a draw hwui declines twice at one vsync (CanvasContext::canDrawThisFrame) */
@@ -153,6 +160,9 @@ function deliver(stepped: boolean): void {
   const later = (r: { after: number }) => at > r.after;
   const hooks = vsyncHooks.filter(later).map(h => h.fn);
   vsyncHooks = vsyncHooks.filter(h => !later(h));
+  const requests = nativeRequests;
+  nativeRequests = [];
+  for (const r of requests) if (stepped || later(r)) r.fn(latest); else nativeRequests.push(r);
   const dispatch = (r: Receiver) => {
     fill(r.data as never);
     r.looper.frameAt = at;

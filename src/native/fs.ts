@@ -10,8 +10,9 @@ import { E, AT_FDCWD, O_ACCMODE, O_APPEND, O_CLOEXEC, O_CREAT, O_DIRECTORY, O_EX
 import type { Cpu } from "./cpu.ts";
 import { DIRENT64, fillStat, fullStat, logLine, offArg, putDirent, randomBytes, readTs, KLAYOUT, type Stat } from "./kernel.ts";
 import { vfs, EMPTY, storageEstimate, type VfsFile } from "../shell/vfs.ts";
-import { filePaths, changeOpenFile, isCharDevice, openFileStat, type AttributeChange, type CharDevice } from "../shell/file-path.ts";
-import { procMemory, procText, procWritable, procWrite } from "../shell/procfs.ts";
+import { ASHMEM_DEVICE, filePaths, changeOpenFile, isCharDevice, openFileStat, type AttributeChange, type CharDevice } from "../shell/file-path.ts";
+import { procIdentity, procMemory, procText, procWritable, procWrite } from "../shell/procfs.ts";
+import { is64BitProcess } from "../jvm/natives/jvmruntime.ts";
 import { readAt, writable, type FileSource } from "../shell/lazyfile.ts";
 import { utf8 } from "../jvm/abi.ts";
 import { ANON, FIONREAD, installFile, newFile, openFd, placeFile, readFd, preadFd, pwriteFd, writeFd, allocateFd, changeFdAttributes, closeFd, dup2Fd,
@@ -21,6 +22,7 @@ import { closedWrite, hookInotify } from "./inotify.ts";
 import { gather, MSG_NOSIGNAL } from "./socket/abi.ts";
 import { SIGPIPE } from "./signals.ts";
 import { processOpenFd } from "./process-fd.ts";
+import { releaseRegion } from "./shm.ts";
 
 /** up to `n` bytes of a file at `off`, fewer only at its end as a regular file reads: a view of its data, or what its lazy source reads */
 export function contentAt(content: VfsFile, off: number, n: number): Uint8Array | Promise<Uint8Array> {
@@ -105,6 +107,32 @@ const FILE: FileOps = {
   change: (f, change, uid) => changeOpenFile(f.content.path, change, uid),
   close(f) { if (f.content.path && f.statusFlags & O_ACCMODE) closedWrite(f.content.path); },
 };
+/** <linux/ashmem.h>'s requests by type and number, whose direction and size bits differ by ABI */
+export const ASHMEM_IOCTL = { GET_SIZE: 0x7704, SET_PROT_MASK: 0x7705, GET_PROT_MASK: 0x7706, PIN: 0x7707, UNPIN: 0x7708 };
+/** An ashmem region: a file without a name, of the size it was made with, whose protection mask only narrows. fstat
+ *  reports the driver's device, as libcutils and Chromium tell regions apart by. No region is purged, so a pin finds
+ *  its pages as they were left (ASHMEM_NOT_PURGED). */
+const REGION: FileOps = {
+  ...FILE,
+  write: (f, bytes, off) => (off < 0 ? f.pos : off) + bytes.length > f.content.len ? -E.INVAL : writeContent(f, bytes, off),
+  truncate: (f, length) => length === f.content.len ? 0 : -E.INVAL,
+  allocate: (f, off, length) => off + length <= f.content.len ? 0 : -E.INVAL,
+  stat: (f) => ({ ...contentStat(f), device: ASHMEM_DEVICE }),
+  ioctl(f, request, arg) {
+    const region = f.content.ashmem!;
+    switch (request & 0xffff) {
+      case ASHMEM_IOCTL.GET_SIZE: return f.content.len;
+      case ASHMEM_IOCTL.GET_PROT_MASK: return region.prot;
+      case ASHMEM_IOCTL.SET_PROT_MASK:
+        if (arg & ~region.prot) return -E.INVAL;
+        region.prot = arg;
+        return 0;
+      case ASHMEM_IOCTL.PIN: case ASHMEM_IOCTL.UNPIN: return 0;
+      default: return -E.NOTTY;
+    }
+  },
+  close: (f) => releaseRegion(f.content),
+};
 const DIR: FileOps = {
   ...ANON,
   mode: S_IFDIR,
@@ -171,12 +199,12 @@ export function localOpen(name: string, flags: number): number {
 }
 /** a Java-side open of `bytes` into the descriptor table native code reads, so a fd handed across JNI is live */
 export const bytesFd = (bytes: Uint8Array): number => installFile(newFile(SNAPSHOT, "", O_RDONLY, undefined, { path: null, data: bytes, len: bytes.length }));
-/** a descriptor, close-on-exec, on `content`, a file without a name (ashmem) */
-export const anonymousFd = (content: VfsFile): number => installFile(newFile(FILE, "", O_RDWR, undefined, content), true);
+/** a descriptor, close-on-exec, on the ashmem region `content` */
+export const regionFd = (content: VfsFile): number => installFile(newFile(REGION, "", O_RDWR, undefined, content), true);
 /** the file a descriptor reads and writes, which a shared mapping of it shares */
 export function fdFile(fd: number): VfsFile | null {
   const f = openFd(fd);
-  return f?.ops === FILE ? f.content : null;
+  return f?.ops === FILE || f?.ops === REGION ? f.content : null;
 }
 
 /** EPIPE's signal: a write to a pipe or stream socket no one reads any more raises SIGPIPE in the
@@ -187,7 +215,7 @@ export function written(cpu: Cpu | null, f: OpenFile, r: number, flags = 0): num
 }
 /** write(2) of `n` bytes of guest memory at `p` */
 export function fdWrite(cpu: Cpu | null, fd: number, p: number, n: number): number | Promise<number> {
-  const r = writeFd(fd, mem.u8.subarray(p, p + n));
+  const r = writeFd(fd, mem.bytes(p, n));
   return r === -E.PIPE ? written(cpu, openFd(fd)!, r) : r;
 }
 /** readv/writev: each iovec in turn until a transfer comes up short, as the kernel does. `op` is
@@ -213,10 +241,11 @@ function readWouldWait(fd: number): boolean {
   const f = openFd(fd);
   return !!f && !(f.ops.poll(f, POLLIN) & (POLLIN | POLLHUP | POLLERR));
 }
-/** fstat(2): the descriptor's record, or -errno */
+/** fstat(2): the descriptor's record, or its device node's, or -errno */
 export function statFd(fd: number): Stat | number | Promise<Stat | number> {
   const f = openFd(fd);
-  return f ? complete(f.ops.stat(f), (s) => s ? fullStat(s.path ?? f.path, s) : -E.BADF) : -E.BADF;
+  return f ? complete(f.ops.stat(f), (s) => !s ? -E.BADF : s.device ? fullStat(s.device, { ...s, mode: S_IFCHR | 0o666, size: 0 })
+    : fullStat(s.path ?? f.path, s)) : -E.BADF;
 }
 /** a stat call's record into the struct stat at `buf` */
 export function putStat(buf: number, stat: Stat | number | Promise<Stat | number>): number | Promise<number> {
@@ -282,8 +311,22 @@ export function statAt(path: string): Stat | number | Promise<Stat | number> {
   const p = vfs.norm(path);
   return complete(filePaths(p).fileStat(p), ({ errno, value }) => value ? fullStat(p, value) : -(errno || E.NOENT));
 }
-/** readlink(2): no path here is a symbolic link */
-export const readlinkAt = (path: string): number | Promise<number> => complete(statAt(path), (s) => typeof s === "number" ? s : -E.INVAL);
+const PROC_EXE = /^\/proc\/(?:self|thread-self|(\d+))\/exe$/;
+/** readlink(2)'s target, or -errno: /proc's exe is the app_process the zygote of the process's width runs;
+ *  no other path here is a symbolic link */
+export function linkTarget(path: string): string | number | Promise<string | number> {
+  const p = vfs.norm(path), exe = PROC_EXE.exec(p);
+  if (exe && (!exe[1] || +exe[1] === procIdentity.pid)) return `/system/bin/app_process${is64BitProcess() ? 64 : 32}`;
+  return complete(statAt(p), (s) => typeof s === "number" ? s : -E.INVAL);
+}
+/** readlink's copy of the target into `buf`: as much as fits, with no NUL */
+export const readlinkInto = (path: string, buf: number, size: number): number | Promise<number> => size <= 0 ? -E.INVAL :
+  complete(linkTarget(path), (target) => {
+    if (typeof target === "number") return target;
+    const bytes = utf8.enc.encode(target).subarray(0, size);
+    mem.u8.set(bytes, buf);
+    return bytes.length;
+  });
 export function faccessatPath(dirfd: number, name: string, mode: number, flags: number): number | Promise<number> {
   const path = resolveAt(dirfd, name);
   if (flags & ~(0x100 | 0x200) || mode & ~7) return -E.INVAL;
@@ -334,7 +377,7 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
     return vectored(iov, count, (p, n) => fdWrite(cpu, fd, p, n));
   },
   pread64: (_c, a) => preadFd(a.i(), a.p(), a.u(), Number(a.l())),
-  pwrite64: (_c, a) => { const fd = a.i(), p = a.p(), n = a.u(); return pwriteFd(fd, mem.u8.subarray(p, p + n), Number(a.l())); },
+  pwrite64: (_c, a) => { const fd = a.i(), p = a.p(), n = a.u(); return pwriteFd(fd, mem.bytes(p, n), Number(a.l())); },
   lseek: (_c, a) => seekFd(a.i(), offArg(a), a.i()),
   fstat: (_c, a) => { const fd = a.i(); return putStat(a.p(), statFd(fd)); },
   fstatat: (_c, a) => {
@@ -391,12 +434,14 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
     if (!name) return changeFdAttributes(dirfd, change);
     return inDir(dirfd, mem.cstr(name), (path) => filePaths(path).fileSetAttributes(path, change));
   },
-  // the int a request answers into its argument: FIONREAD's, the one request files take
+  // FIONREAD answers into its argument; the other requests take a value and answer one
   ioctl: (_c, a) => {
-    const fd = a.i(), request = a.i(), destination = request === FIONREAD ? anchor(a.p()) : null;
+    const fd = a.i(), request = a.i();
+    if (request !== FIONREAD) return ioctlIntFd(fd, request, a.u());
+    const destination = anchor(a.p());
     return complete(ioctlIntFd(fd, request), n => {
       if (n < 0) return n;
-      mem.st32(destination!(), n);
+      mem.st32(destination(), n);
       return 0;
     });
   },
@@ -407,5 +452,5 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
   // the length with its NUL
   getcwd: (_c, a) => { const b = a.p(), n = a.u(); return n < 2 ? -E.RANGE : mem.putCstr(b, "/", n) + 1; },
   chdir: () => 0,
-  readlinkat: (_c, a) => inDir(a.i(), a.str(), readlinkAt),
+  readlinkat: (_c, a) => { const dirfd = a.i(), name = a.str(), buf = a.p(), size = a.i(); return inDir(dirfd, name, (path) => readlinkInto(path, buf, size)); },
 };

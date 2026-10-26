@@ -51,7 +51,8 @@ export class EglContext {
     (this.group = share?.group ?? new Set()).add(this);
   }
   makeCurrent(draw: GlSurface | null, thread: object = curThread, read: GlSurface | null = draw): boolean {
-    this.gl ??= this.canvas.getContext("webgl2", { alpha: false, antialias: configOf(this.config)!.get(0x3032) === 1, depth: true, stencil: true, preserveDrawingBuffer: false, powerPreference: "high-performance" });
+    const config = configOf(this.config)!;
+    this.gl ??= this.canvas.getContext("webgl2", { alpha: config.get(0x3021)! > 0, antialias: config.get(0x3032) === 1, depth: true, stencil: true, preserveDrawingBuffer: false, powerPreference: "high-performance" });
     if (!this.gl || this.gl.isContextLost()) return false;
     const was = currentContext(thread);
     if (was && was !== this) was.thread = null;
@@ -130,14 +131,16 @@ export function terminate(t: object, dpy: number): boolean {
 /** EGLImpl.getInitCount */
 const initCount = (dpy: number): number => (dpy === DISPLAY ? refs : 0);
 const STRINGS: Record<number, string> = { 0x3053: "webdroid", 0x3054: "1.5", 0x308d: "OpenGL_ES",
-  0x3055: "EGL_ANDROID_presentation_time EGL_KHR_create_context EGL_KHR_fence_sync EGL_KHR_surfaceless_context" };
+  0x3055: "EGL_ANDROID_get_native_client_buffer EGL_ANDROID_image_native_buffer EGL_ANDROID_native_fence_sync EGL_ANDROID_presentation_time EGL_KHR_create_context EGL_KHR_fence_sync "
+    + "EGL_KHR_image_base EGL_KHR_surfaceless_context EGL_KHR_wait_sync" };
 export function queryString(t: object, dpy: number, n: number): string | null {
   begin(t);
   return ready(t, dpy) ? STRINGS[n] ?? fail(t, BAD_PARAMETER, null) : null;
 }
 
 // ── configs: the attributes of EGL 1.5's table 3.1, 0x3020 (BUFFER_SIZE) to 0x3042 (CONFORMANT), then RECORDABLE_ANDROID and
-// COLOR_COMPONENT_TYPE_EXT; the WebGL2 context behind them is the same, multisampled (antialias) for the configs with sample buffers
+// COLOR_COMPONENT_TYPE_EXT; the WebGL2 context behind them is the same, with alpha for the configs with alpha bits and multisampled
+// (antialias) for those with sample buffers
 const SURFACES = 1 | 4, RENDERABLE = 1 | 4 | 0x40;                                 // PBUFFER | WINDOW; ES | ES2 | ES3
 const config = (id: number, alpha: number, visual: number, samples = 0): Attribs => new Map([
   [0x3020, 24 + alpha], [0x3021, alpha], [0x3022, 8], [0x3023, 8], [0x3024, 8], [0x3025, 24], [0x3026, 8], [0x3027, NONE], [0x3028, id],

@@ -3,8 +3,8 @@
 // thread, so a "contended" lock means the acquirer parks until unlock.
 
 import { mem, AddrMap } from "../mem.ts";
-import { NativeFault, TLS_KEYS } from "../core.ts";
-import { NORET, SERVED, type HostFn, PTR, ldp, stp, stLong } from "../host.ts";
+import { NativeFault, TLS_KEYS, TLS_BLOCKS, TLS_MODULES } from "../core.ts";
+import { NORET, type HostFn, PTR, ldp, stp, stLong } from "../host.ts";
 import { type Cpu, cpuByTid, cpus, nameThread } from "../cpu.ts";
 import { msLeft } from "../poll.ts";
 import { RET_SENTINEL, E, PAGE_SIZE, STACK_GUARD, STACK_SIZE } from "../abi.ts";
@@ -77,9 +77,9 @@ const handles = new Map<number, number>();
 export const tidOf = (handle: number): number => handles.get(handle >>> 0) ?? cpuBySelf(handle >>> 0)?.tid ?? -1;
 function cpuBySelf(handle: number): Cpu | undefined { if (handle) for (const c of cpus) if (c.pthreadSelf === handle) return c; return undefined; }
 /** a thread's libc data: its TLS block, whose slot 1 names its pthread_internal_t; errno; the pthread
- *  key table the core serves lookups from; then that pthread_internal_t (its tid at +0x10), which a
+ *  key table and dynamic TLS block table the core serves lookups from; then that pthread_internal_t (its tid at +0x10), which a
  *  crash reporter scans up to a page */
-const ERRNO = 256, KEYS = 264, PTHREAD = KEYS + 8 * TLS_KEYS, PTHREAD_SIZE = 0x200;
+const ERRNO = 256, KEYS = 264, PTHREAD = KEYS + TLS_BLOCKS + 4 * TLS_MODULES, PTHREAD_SIZE = 0x200;
 /** a thread's libc identity, before its first instruction */
 export function bindThread(cpu: Cpu): void {
   const data = mem.calloc(1, PTHREAD + PTHREAD_SIZE);
@@ -245,7 +245,6 @@ export const PTHREAD_LIBC: Record<string, HostFn> = {
     cpu.finished = true;
     return NORET;
   },
-  pthread_self: SERVED,
   pthread_equal: (_c, a) => (a.i() === a.i() ? 1 : 0),
   pthread_sigmask: (cpu, a) => cpu.sigmask(a.i(), a.p(), a.p(), 4),
   pthread_sigmask64: (cpu, a) => cpu.sigmask(a.i(), a.p(), a.p(), 8),
@@ -369,7 +368,6 @@ export const PTHREAD_LIBC: Record<string, HostFn> = {
   pthread_cond_clockwait: (cpu, a) => { const c = a.p(), m = a.p(), clk = a.i(), ts = a.p(); return condWait(cpu, c, m, readTs(ts) - clockTime(clk)); },
   pthread_mutex_clocklock: (cpu, a) => { const m = a.p(), clk = a.i(), ts = a.p(); return lock(cpu, m, false, limit(readTs(ts) - clockTime(clk))); },
   pthread_key_delete: (_c, a) => { keyDtors.delete(a.i()); return 0; },
-  pthread_getspecific: SERVED, pthread_setspecific: SERVED,
   // the control word: 0 untouched, 1 running (callers wait), 2 done — no caller returns before the initializer has
   pthread_once: async (cpu, a) => {
     const once = a.p(), fn = a.p();

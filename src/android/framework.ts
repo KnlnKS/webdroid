@@ -106,7 +106,7 @@ export function installFramework(apk: Uint8Array): Arsc {
     // every entry, inflated on its first read: asset lists and opens see the whole archive
     const entries = new Map<string, FileSource>();
     for (const [name, e] of dir) entries.set(name, { size: e.size, read: (at, n) => files(name)!.subarray(at, at + n) });
-    registerPackage({ root: parseAXML(manifest), apk: { table: arsc, zip: {}, lazyEntries: entries }, certificates: () => pendingCertificates ??= (async () => {
+    registerPackage({ root: parseAXML(manifest), apk: { table: arsc, zip: {}, lazyEntries: entries }, splits: [], certificates: () => pendingCertificates ??= (async () => {
       const certificates = await apkCertificates(apk, signingZip);
       if (certificates.length) return certificates;
       const response = await fetch("/vendor/platform.x509.pem");

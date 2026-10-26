@@ -10,9 +10,13 @@ import { gles1Init } from "./gles1.ts";
 import { gles3Init } from "./gles3.ts";
 import { eglInit } from "./egl.ts";
 import { aaudioInit } from "./aaudio.ts";
+import { hardwareBufferInit } from "./hardwarebuffer.ts";
+import { surfaceControlInit } from "./surfacecontrol.ts";
+import { imageReaderInit } from "./imagereader.ts";
 import { mediaInit } from "./media.ts";
 import { ndkInit } from "./libandroid.ts";
 import { bitmapInit } from "./bitmap.ts";
+import { vulkanInit } from "./vulkan/index.ts";
 import { cpuFor, cpuOf, cpus, setA64, isA64, type Cpu } from "./cpu.ts";
 import { procMemory } from "../shell/procfs.ts";
 import { bootBionic } from "./bionic.ts";
@@ -41,9 +45,13 @@ function nativeInit(wide: boolean): void {
   gles3Init();
   eglInit();
   ndkInit();
+  hardwareBufferInit();
+  surfaceControlInit();
   mediaInit();
+  imageReaderInit();
   aaudioInit();
   bitmapInit();
+  vulkanInit();
   resolveByExport(resolveGlobalOrNull);
 }
 

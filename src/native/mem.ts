@@ -3,7 +3,8 @@
 // address map. The code-page flags let a store into executable pages invalidate the decoder.
 
 import { core, memory, shared, NativeFault, BadAddress, onMemoryGrown } from "./core.ts";
-import { MEM_SIZE, MEM_SIZE_INITIAL, setMemSize, LOW, PAGE_SHIFT, PAGE_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi.ts";
+import { inWindow, poolBytes, poolOffset } from "./window.ts";
+import { MEM_SIZE, MEM_SIZE_INITIAL, setMemSize, LOW, PAGE_SHIFT, PAGE_SIZE, MEM_SIZE_A32, MEM_SIZE_A64, PAGE_MAPPED, PAGE_WRITABLE, PAGE_READONLY } from "./abi.ts";
 import { utf8 } from "../jvm/abi.ts";
 
 let buf: ArrayBuffer, u8: Uint8Array, i8: Int8Array, u16: Uint16Array, u32: Uint32Array, i32: Int32Array, f32: Float32Array, f64: Float64Array, dv: DataView, codePages: Uint8Array;
@@ -11,17 +12,48 @@ let buf: ArrayBuffer, u8: Uint8Array, i8: Int8Array, u16: Uint16Array, u32: Uint
 let SPAN = 0;
 /** a 64-bit process: any buffer offset may be a plane's pool unit */
 let planes = false;
-/** every buffer the memory has had: views made before a grow keep the one they were made over */
-const buffers = new WeakSet<ArrayBufferLike>();
 
 /** a host access of n bytes: in range, and backed where it lands in a plane (which may commit
- *  the plane's writable pages under it) */
-function checkAddr(a: number, n: number): void {
-  if (n === 0) return; // an empty access touches no page (JNI's NewString(NULL, 0), a zero-length write)
-  if (((a >>> 0) - LOW) >>> 0 > SPAN - n) badAddr(a);
+ *  the plane's writable pages under it); false for one in the window, whose bytes the pool holds */
+function checkAddr(a: number, n: number): boolean {
+  if (n === 0) return true; // an empty access touches no page (JNI's NewString(NULL, 0), a zero-length write)
+  if (((a >>> 0) - LOW) >>> 0 > SPAN - n) {
+    if (inWindow(a)) return false;
+    badAddr(a);
+  }
   if (planes && !core.commit_phys(a >>> 0, n)) throw new BadAddress(BigInt(mem.va(a >>> 0)), `[native] host access past a plane's writable pages at 0x${(a >>> 0).toString(16)}+0x${n.toString(16)}`);
+  return true;
 }
-function localBytes(a: number, n: number): Uint8Array { checkAddr(a, n); return u8.subarray(a >>> 0, (a >>> 0) + n); }
+/** the pool's bytes [a, a + n) of the window, where the process maps them (for storing, when `write`) */
+function windowBytes(a: number, n: number, write = false): Uint8Array {
+  const need = PAGE_MAPPED | (write ? PAGE_WRITABLE : 0), end = (a >>> 0) + Math.max(n, 1) - 1;
+  if (!inWindow(a) || end > 0xffffffff) badAddr(a);
+  for (let pg = a >>> PAGE_SHIFT; pg <= end >>> PAGE_SHIFT; pg++) if ((codePages[pg] & need) !== need) badAddr(a);
+  return poolBytes(poolOffset(a, n), n);
+}
+const windowView = (a: number, n: number, write = false): DataView => { const b = windowBytes(a, n, write); return new DataView(b.buffer, b.byteOffset, n); };
+/** the mapped bytes from window address a up to the first NUL, or `max` */
+function windowString(a: number, max: number): Uint8Array {
+  for (let n = 0; ;) {
+    const run = Math.min(max - n, PAGE_SIZE - (((a >>> 0) + n) & (PAGE_SIZE - 1))), nul = windowBytes(a + n, run).indexOf(0);
+    if (nul >= 0) return windowBytes(a, n + nul);
+    if ((n += run) >= max) return windowBytes(a, max);
+  }
+}
+function localBytes(a: number, n: number): Uint8Array { return checkAddr(a, n) ? u8.subarray(a >>> 0, (a >>> 0) + n) : windowBytes(a, n); }
+/** the n bytes at a a host store fills (storing) */
+function target(a: number, n: number): Uint8Array {
+  if (!checkAddr(a, n)) return windowBytes(a, n, true);
+  storing(a, n);
+  return u8.subarray(a >>> 0, (a >>> 0) + n);
+}
+/** a host store of n bytes at a, before it: a page mprotect left read-only refuses it (EFAULT
+ *  from a kernel call), and compiled code it overwrites goes */
+function storing(a: number, n: number): void {
+  const end = Math.min((a >>> 0) + n - 1, 0xffffffff) >>> PAGE_SHIFT;
+  for (let pg = a >>> PAGE_SHIFT; pg <= end; pg++) if (codePages[pg] & PAGE_READONLY) badAddr(a);
+  wrote(a, n);
+}
 /** Invalidate executed code before a host write that may partially trap, or after an atomic write. */
 export function wrote(a: number, n: number): void {
   if (n <= 0) return;
@@ -33,7 +65,6 @@ function badAddr(a: number): never {
 }
 function views(): void {
   buf = memory.buffer;
-  buffers.add(buf);
   SPAN = buf.byteLength - LOW;
   u8 = new Uint8Array(buf); i8 = new Int8Array(buf); u16 = new Uint16Array(buf);
   u32 = new Uint32Array(buf); i32 = new Int32Array(buf); f32 = new Float32Array(buf); f64 = new Float64Array(buf);
@@ -66,40 +97,37 @@ export const mem = {
     setMemSize(size);
     planes = size > MEM_SIZE_A32;
   },
-  /** a view of guest memory */
-  isGuest: (view: ArrayBufferView): boolean => buffers.has(view.buffer),
-
-  ld32(a: number): number { if (((a >>> 0) - LOW) >>> 0 > SPAN - 4) badAddr(a); return (a & 3) === 0 ? i32[a >>> 2] : dv.getInt32(a >>> 0, true); },
-  ld16u(a: number): number { if (((a >>> 0) - LOW) >>> 0 > SPAN - 2) badAddr(a); return (a & 1) === 0 ? u16[a >>> 1] : dv.getUint16(a >>> 0, true); },
+  ld32(a: number): number { if (((a >>> 0) - LOW) >>> 0 > SPAN - 4) return windowView(a, 4).getInt32(0, true); return (a & 3) === 0 ? i32[a >>> 2] : dv.getInt32(a >>> 0, true); },
+  ld16u(a: number): number { if (((a >>> 0) - LOW) >>> 0 > SPAN - 2) return windowView(a, 2).getUint16(0, true); return (a & 1) === 0 ? u16[a >>> 1] : dv.getUint16(a >>> 0, true); },
   ld16s(a: number): number { return (mem.ld16u(a) << 16) >> 16; },
-  ld8u(a: number): number { if (((a >>> 0) - LOW) >>> 0 > SPAN - 1) badAddr(a); return u8[a >>> 0]; },
-  ld8s(a: number): number { if (((a >>> 0) - LOW) >>> 0 > SPAN - 1) badAddr(a); return i8[a >>> 0]; },
+  ld8u(a: number): number { if (((a >>> 0) - LOW) >>> 0 > SPAN - 1) return windowBytes(a, 1)[0]; return u8[a >>> 0]; },
+  ld8s(a: number): number { if (((a >>> 0) - LOW) >>> 0 > SPAN - 1) return windowView(a, 1).getInt8(0); return i8[a >>> 0]; },
   st32(a: number, v: number): void {
-    if (((a >>> 0) - LOW) >>> 0 > SPAN - 4) badAddr(a);
+    if (((a >>> 0) - LOW) >>> 0 > SPAN - 4) return windowView(a, 4, true).setInt32(0, v, true);
+    storing(a, 4);
     if ((a & 3) === 0) i32[a >>> 2] = v; else dv.setInt32(a >>> 0, v, true);
-    wrote(a, 4);
   },
   st16(a: number, v: number): void {
-    if (((a >>> 0) - LOW) >>> 0 > SPAN - 2) badAddr(a);
+    if (((a >>> 0) - LOW) >>> 0 > SPAN - 2) return windowView(a, 2, true).setUint16(0, v, true);
+    storing(a, 2);
     if ((a & 1) === 0) u16[a >>> 1] = v; else dv.setUint16(a >>> 0, v, true);
-    wrote(a, 2);
   },
   st8(a: number, v: number): void {
-    if (((a >>> 0) - LOW) >>> 0 > SPAN - 1) badAddr(a);
+    if (((a >>> 0) - LOW) >>> 0 > SPAN - 1) { windowBytes(a, 1, true)[0] = v; return; }
+    storing(a, 1);
     u8[a >>> 0] = v;
-    wrote(a, 1);
   },
-  ldf32(a: number): number { if (((a >>> 0) - LOW) >>> 0 > SPAN - 4) badAddr(a); return (a & 3) === 0 ? f32[a >>> 2] : dv.getFloat32(a >>> 0, true); },
-  stf32(a: number, v: number): void { if (((a >>> 0) - LOW) >>> 0 > SPAN - 4) badAddr(a); if ((a & 3) === 0) f32[a >>> 2] = v; else dv.setFloat32(a >>> 0, v, true); wrote(a, 4); },
-  ldf64(a: number): number { if (((a >>> 0) - LOW) >>> 0 > SPAN - 8) badAddr(a); return (a & 7) === 0 ? f64[a >>> 3] : dv.getFloat64(a >>> 0, true); },
-  stf64(a: number, v: number): void { if (((a >>> 0) - LOW) >>> 0 > SPAN - 8) badAddr(a); if ((a & 7) === 0) f64[a >>> 3] = v; else dv.setFloat64(a >>> 0, v, true); wrote(a, 8); },
-  ld64(a: number): bigint { if (((a >>> 0) - LOW) >>> 0 > SPAN - 8) badAddr(a); return dv.getBigInt64(a >>> 0, true); },
-  st64(a: number, v: bigint): void { if (((a >>> 0) - LOW) >>> 0 > SPAN - 8) badAddr(a); dv.setBigInt64(a >>> 0, v, true); wrote(a, 8); },
+  ldf32(a: number): number { if (((a >>> 0) - LOW) >>> 0 > SPAN - 4) return windowView(a, 4).getFloat32(0, true); return (a & 3) === 0 ? f32[a >>> 2] : dv.getFloat32(a >>> 0, true); },
+  stf32(a: number, v: number): void { if (((a >>> 0) - LOW) >>> 0 > SPAN - 4) return windowView(a, 4, true).setFloat32(0, v, true); storing(a, 4); if ((a & 3) === 0) f32[a >>> 2] = v; else dv.setFloat32(a >>> 0, v, true); },
+  ldf64(a: number): number { if (((a >>> 0) - LOW) >>> 0 > SPAN - 8) return windowView(a, 8).getFloat64(0, true); return (a & 7) === 0 ? f64[a >>> 3] : dv.getFloat64(a >>> 0, true); },
+  stf64(a: number, v: number): void { if (((a >>> 0) - LOW) >>> 0 > SPAN - 8) return windowView(a, 8, true).setFloat64(0, v, true); storing(a, 8); if ((a & 7) === 0) f64[a >>> 3] = v; else dv.setFloat64(a >>> 0, v, true); },
+  ld64(a: number): bigint { if (((a >>> 0) - LOW) >>> 0 > SPAN - 8) return windowView(a, 8).getBigInt64(0, true); return dv.getBigInt64(a >>> 0, true); },
+  st64(a: number, v: bigint): void { if (((a >>> 0) - LOW) >>> 0 > SPAN - 8) return windowView(a, 8, true).setBigInt64(0, v, true); storing(a, 8); dv.setBigInt64(a >>> 0, v, true); },
 
   /** a plane-0 address of a page the memory backs: not below LOW, nor past the pages in use */
   backed: (a: number): boolean => ((a >>> 0) - LOW) >>> 0 < SPAN,
-  /** a plane-0 page a guest store faults on: a stack's guard gap, the core's own data */
-  writeProtected: (a: number): boolean => !!(codePages[a >>> PAGE_SHIFT] & 2),
+  /** a plane-0 page a guest store faults on: a stack's guard gap, the core's own data, one mprotect left read-only */
+  writeProtected: (a: number): boolean => !!(codePages[a >>> PAGE_SHIFT] & (2 | PAGE_READONLY)),
   malloc: (n: number): number => core.malloc(n >>> 0) >>> 0,
   free(p: number): void { if (p && !core.free(p >>> 0)) badAddr(p); },
   calloc: (n: number, m: number): number => core.calloc(n >>> 0, m >>> 0) >>> 0,
@@ -123,8 +151,9 @@ export const mem = {
   txVa(va: bigint): number { const [h, lo] = split(va); return h ? mem.tx(h, lo) : lo; },
   /** buffer offset → the address the guest knows it by: itself in plane 0, else the plane's */
   va: (phys: number): number | bigint => (planes ? num(core.va(phys >>> 0)) : phys),
-  /** mmap: plane 0 while it has room, else a plane of its own; 0 when neither has room */
-  mapVa: (n: number, reserve: boolean, low = false): number | bigint => (!Number.isSafeInteger(n) || n <= 0 ? 0 : num(core.map_va(BigInt(n), reserve ? 1 : 0, low ? 1 : 0))),
+  /** mmap: at the hint where that space is free, else plane 0 while it has room, else a plane of its own; 0 when
+   *  none has room */
+  mapVa: (n: number, reserve: boolean, low = false, hint = 0n): number | bigint => (!Number.isSafeInteger(n) || n <= 0 ? 0 : num(core.map_va(BigInt(n), reserve ? 1 : 0, low ? 1 : 0, hint))),
   unmapVa: (va: bigint, n: number): boolean => Number.isSafeInteger(n) && n > 0 && core.unmap_va(va, BigInt(n)) !== 0,
   /** grow the mapping [va, va + n) to `size` in place: false when the address space after it is taken */
   extendVa: (va: bigint, n: number, size: number): boolean => core.extend_va(va, BigInt(n), BigInt(size)) !== 0,
@@ -153,6 +182,7 @@ export const mem = {
     if (!core.drop_va(va, BigInt(n))) console.warn(`[mem-native] madvise(DONTNEED) outside the arena ignored: 0x${Number(va).toString(16)}+0x${n.toString(16)}`);
   },
   decommitVa: (va: bigint, n: number): void => core.decommit_va(va, BigInt(n)),
+  protectVa: (va: bigint, n: number, writable: boolean): void => core.protect_va(va, BigInt(n), +writable),
   /** address space for a module image: never freed, 64 KiB aligned by default */
   reserve(size: number, align = 0x10000): number {
     const base = core.reserve(size >>> 0, align) >>> 0;
@@ -177,7 +207,7 @@ export const mem = {
 
   cstr(a: number, max = 0x100000): string {
     if (!a) return "";
-    checkAddr(a, 1);
+    if (!checkAddr(a, 1)) return utf8.dec.decode(windowString(a, max));
     const bytes = u8.subarray(a >>> 0, (a >>> 0) + max), end = bytes.indexOf(0);
     return utf8.dec.decode(end < 0 ? bytes : bytes.subarray(0, end));
   },
@@ -186,23 +216,35 @@ export const mem = {
     const b = utf8.enc.encode(s);
     const n = Math.min(b.length, max - 1);
     if (n < 0) return 0;
-    checkAddr(a, n + 1);
-    u8.set(b.subarray(0, n), a >>> 0);
-    u8[(a >>> 0) + n] = 0;
-    wrote(a, n + 1);
+    const to = target(a, n + 1);
+    to.set(b.subarray(0, n));
+    to[n] = 0;
     return n;
   },
-  strlen(a: number): number {
-    checkAddr(a, 1);
-    const e = u8.indexOf(0, a >>> 0);
-    return (e < 0 ? u8.length : e) - (a >>> 0);
+  /** the length of the C string at a, or `max` */
+  strlen(a: number, max = 0x7fffffff): number {
+    if (!checkAddr(a, 1)) return windowString(a, max).length;
+    const e = u8.subarray(a >>> 0, (a >>> 0) + max).indexOf(0);
+    return e < 0 ? Math.min(max, u8.length - (a >>> 0)) : e;
   },
   bytes: localBytes,
-  /** a host access of n bytes at a, checked: where it lands in u8 */
-  reach(a: number, n: number): number { checkAddr(a, n); return a >>> 0; },
-  write(a: number, src: Uint8Array | ArrayLike<number>): void { checkAddr(a, src.length); u8.set(src, a >>> 0); wrote(a, src.length); },
-  memmove(d: number, s: number, n: number): void { if (n <= 0) return; checkAddr(d, n); checkAddr(s, n); u8.copyWithin(d >>> 0, s >>> 0, (s >>> 0) + n); wrote(d, n); },
-  memset(d: number, v: number, n: number): void { if (n <= 0) return; checkAddr(d, n); u8.fill(v & 0xff, d >>> 0, (d >>> 0) + n); wrote(d, n); },
+  /** a host store of n bytes at a, checked: the bytes holding them and where they start there */
+  reach(a: number, n: number): [Uint8Array, number] { return checkAddr(a, n) ? [u8, a >>> 0] : [windowBytes(a, n, true), 0]; },
+  /** src's bytes to a */
+  write(a: number, src: Uint8Array | ArrayLike<number>): void { target(a, src.length).set(src); },
+  /** src's bytes to a past mprotect's read-only, as a file's changes reach a mapping of it */
+  writeThrough(a: number, src: Uint8Array | ArrayLike<number>): void {
+    if (checkAddr(a, src.length)) u8.set(src, a >>> 0); else windowBytes(a, src.length, true).set(src);
+    wrote(a, src.length);
+  },
+  memmove(d: number, s: number, n: number): void {
+    if (n <= 0) return;
+    if (checkAddr(d, n) && checkAddr(s, n)) { storing(d, n); u8.copyWithin(d >>> 0, s >>> 0, (s >>> 0) + n); }
+    else target(d, n).set(localBytes(s, n));
+  },
+  memset(d: number, v: number, n: number): void {
+    if (n > 0) target(d, n).fill(v & 0xff);
+  },
   strdup(s: string): number {
     const b = utf8.enc.encode(s);
     const p = mem.malloc(b.length + 1);

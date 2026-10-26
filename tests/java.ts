@@ -45,7 +45,7 @@ export function useTestBroker(calls: Partial<BrokerCalls>, worker = false): () =
   return () => (current = previous)();
 }
 export const testAppHost = ({ pkg }: { pkg: string }): AppHost =>
-  ({ pkg, assetKey: "", zip: {}, splits: [], setApplicationNightMode: () => {}, setApplicationLocales: () => {} });
+  ({ pkg, assetKey: "", zip: {}, setApplicationNightMode: () => {}, setApplicationLocales: () => {} });
 
 let apex: Promise<void> | null = null;
 /** the /apex ICU and tz data every realm mounts */

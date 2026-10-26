@@ -55,7 +55,9 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
   View. The `apks/new` XAPKs run on the Wasm tier (2026-10-16): Snapseed edits and exports, Yelp's onboarding, home,
   search, map and business page work, Walmart's flows and cart work, McDonald's reaches home, menu and the store
   locator, and Tubi plays non-DRM titles. APKPure (2026-10-25) searches, downloads and installs Pokémon TCG Pocket's
-  split XAPK; the installed game's launch is unexamined.
+  split XAPK; the installed game's launch is unexamined. Google Chrome (2026-10-25) searches Google and loads pages such as vgpu.sh
+  across its browser, GPU and sandboxed renderer processes; YouTube's watch page plays (360p, about half of 60 fps frames dropped),
+  and vgpu.sh's WebGPU prism draws through the Vulkan driver over WebGPU (with chrome://flags#enable-unsafe-webgpu, about 3.6 frames/s).
 - **Deployment:** one Workers Builds build deploys the page to Pages and the backend, which is also the isolated
   WebView renderer's origin, to a Worker from `main`, and paired previews from other branches. Not yet deployed
   from this layout. See [deployment.md](docs/deployment.md).
@@ -76,6 +78,9 @@ available!" over the onboarding screen the scenario expects.
 After the third code-quality pass (2026-10-25; history, "Third code-quality pass (2026-10-25)"): `pnpm check` passes
 in 134 s and `--corpus` in 213 s, with 2,551 unit tests. In matched `lat` runs every gated tap passes, and Komikku's
 `start` median moved 54.5 → 62 ms on vsync phase while its busy time fell.
+
+After the Chrome work (2026-10-26; history, Google Chrome): `pnpm check` passes in 141 s with the flows' content
+diffs unchanged (Calculator M 0.65%, FitNotes 2.94%, Mihon 22.08% and 10.95%).
 
 `pnpm check` (2026-10-24) runs the typecheck, three unit-test shards, each part of `wasm all` and the seven
 deterministic flows as one pool in 83–89 s on an M4 Pro beside other sessions' load (three runs); `--corpus` adds a
@@ -128,6 +133,10 @@ on both tiers (a notification-permission request and live content); do not raise
    - *YouTube:* search, thumbnails, playback, fullscreen and Shorts work; the fullscreen crash (about 1 in 9
      walks) was a stale handle long naming a reused slot (history, YouTube). The reference's video-open tap is a
      coordinate that can land on a live Short; webdroid's run taps the title.
+   - *Chrome:* YouTube plays at 360p with about half of a 60 fps source's frames dropped. WebGPU needs the
+     unsafe-WebGPU flag (the Android blocklist names Apple's vendor ID). chrome://media-internals and the other
+     developer pages wait for Chrome's on-demand `dev_ui` module, which the XAPK lacks and microG's companion never
+     delivers. The Vulkan driver has no sparse resources or clamp-to-border colours (history, Google Chrome).
    - *NewPipe:* feeds, search, playback (fullscreen, background and popup players), live streams, channels,
      subscriptions, downloads, history and settings work. Live streams intermittently get HTTP 403 from YouTube,
      as they do on the reference AVD. It has no e2e flow.
@@ -171,7 +180,8 @@ Unranked; each needs a measurement or a check against the current code before wo
 - **ARM JIT:** ARM32 regions now cross pages at observed entries, avoiding transfers on direct branches;
   calls and returns still spill and reload. Cross-page loop gains are large, Doodle Jump's frame rate unchanged
   ([measurements and further designs](docs/performance-design.md)); broader CPU-bound games remain unmeasured.
-- **Native:** `AndroidBitmap_lockPixels` copies and converts the whole bitmap per lock; a file read compares a
+- **Native:** only ARM32 native mappings of pooled ashmem share memory between processes; A64 processes and Java
+  mappings copy. `AndroidBitmap_lockPixels` copies and converts the whole bitmap per lock; a file read compares a
   writable `MAP_SHARED` mapping whole; `fork`, `vfork` and non-thread `clone` return EAGAIN (exec ENOSYS), so `popen`,
   `system`, `Runtime.exec` and shelling out to `getprop` fail.
 - **Hidden API:** no hidden-API policy is enforced, so reflection reaches `@hide` members that ART denies apps, and an

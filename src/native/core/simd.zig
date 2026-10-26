@@ -1105,6 +1105,11 @@ fn threeDifferentT(comptime T: type, x: Ctx) Status {
             8 => d +% n *% m,
             10 => d -% n *% m,
             12 => n *% m,
+            // SQDMLAL, SQDMLSL and SQDMULL
+            9, 11, 13 => if (@typeInfo(T).int.signedness == .unsigned or bitsT == 8) return fault(c, x.w) else sq: {
+                const p = sat(W, c, 2 * @as(Wide(W), n) * m);
+                break :sq if (opcode == 13) p else sat(W, c, @as(Wide(W), d) + (if (opcode == 9) p else -@as(Wide(W), p)));
+            },
             14 => if (x.U or bitsT != 8) return fault(c, x.w) else @bitCast(fp.pmul8(@truncate(@as(Unsigned(W), @bitCast(n))), @truncate(@as(Unsigned(W), @bitCast(m))))),
             else => return fault(c, x.w),
         };

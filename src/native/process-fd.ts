@@ -1,14 +1,16 @@
 // The open files another realm owns: a process Worker's descriptors on the page's mutable files,
 // whose position, flags and bytes live with their owner, so every operation is a request to it.
-import { E, O_CLOEXEC, S_IFMT, S_IFDIR, S_IFREG } from "./abi.ts";
-import { ANON, installFile, isKind, newFile, openFd, closeFd, readRest, type FdStat, type FileOps } from "./fd.ts";
+import { E, O_CLOEXEC, S_IFMT, S_IFREG } from "./abi.ts";
+import { ANON, crossingOf, installFile, isKind, newFile, openFd, closeFd, readRest, type FdStat, type FileOps } from "./fd.ts";
 import { localOpen, listAt } from "./fs.ts";
 import { openRemoteFifo } from "./pipe.ts";
 import type { FileSource } from "../shell/lazyfile.ts";
 import { pathOwner } from "../shell/file-path.ts";
 import { vfs } from "../shell/vfs.ts";
-import type { DescriptorCalls, DescriptorRights } from "../shell/file-descriptors.ts";
+import type { DescriptorCalls, DescriptorRights, MappingLease, TakenRight } from "../shell/file-descriptors.ts";
 import { settleRemoteMaps } from "./mappings.ts";
+import { importSocket } from "./socket/unix.ts";
+import type { CrossingSocket } from "./socket/bridge.ts";
 
 export const descriptorTransport: {
   /** the page's own rights, which its kernel answers directly */
@@ -25,11 +27,10 @@ export class RemoteDescriptor {
   async map(offset: number, length: number, prot: number): Promise<ProcessMapping | number> {
     const calls = this.calls, acquired = await calls.mappingAcquire(this.token, offset, length, prot);
     if (typeof acquired === "number") return acquired;
-    const {lease, region, immutable} = acquired;
+    const {lease, ...shared} = acquired;
     return {
       size:length,
-      region,
-      immutable,
+      ...shared,
       async read(offset,length) {
         const bytes = await calls.mappingRead(lease,offset,length);
         if (typeof bytes === "number") throw new Error(`shared mapping read: ${-bytes}`);
@@ -71,6 +72,7 @@ const REMOTE: FileOps<Remote> = {
     .then(([stat, position]) => !stat || position < 0 ? -E.BADF : Math.max(0, stat.size - position)),
   truncate: ({state: {remote}}, length) => remote.calls.truncate(remote.token, length),
   allocate: ({state: {remote}}, offset, length) => remote.calls.allocate(remote.token, offset, length),
+  ioctl: ({state: {remote}}, request, arg) => remote.calls.ioctl(remote.token, request, arg),
   status: ({state: {remote}}, command, arg) => remote.calls.fcntl(remote.token, command, arg),
   change: ({state: {remote}}, change) => remote.calls.changeAttributes(remote.token, change),
   /** a regular file as a source of its size now, read through its owner */
@@ -97,30 +99,44 @@ export const isRemoteFd = (fd: number): boolean => !!remoteOf(fd);
 function installRemote(token: number, calls: DescriptorCalls, path: string, flags: number, dir = false, cloexec = !!(flags & O_CLOEXEC)): number {
   return installFile(newFile(REMOTE, path, flags, { remote: new RemoteDescriptor(token, calls), entries: null }, undefined, dir), cloexec);
 }
+const owner = () => pathOwner()?.descriptors;
+/** `send` of what the page's kernel can hold of this realm's `fd`: a remote descriptor's token, or a socket end crossing to
+ *  another realm; null for an open file the kernel cannot hold */
+function handOver(fd: number, send: (calls: DescriptorCalls, right: number | CrossingSocket) => Promise<number>): number | Promise<number> | null {
+  const remote = remoteOf(fd);
+  if (remote) {
+    // the receiver reads the file from its owner, which has only the stores of this process's mappings that reached it
+    const settled = settleRemoteMaps(), go = () => send(remote.calls, remote.token);
+    return settled ? settled.then(go) : go();
+  }
+  const calls = owner(), socket = calls ? crossingOf(fd) : null;
+  return calls && socket ? send(calls, socket) : null;
+}
+/** a right the page's kernel handed this realm, as a descriptor: a socket end connected across realms, or an open file its owner keeps */
+const installTaken = (calls: DescriptorCalls, right: number | TakenRight): number =>
+  typeof right === "number" ? right : "port" in right ? importSocket(right) : installRemote(right.token, calls, right.path, right.flags, right.dir, true);
 /** this realm's descriptor rights, which the page's kernel holds: the page's own locally, a process's through requests */
 export const processRights: DescriptorRights = {
   stage(fd) {
-    const remote = remoteOf(fd);
-    if (!remote) return descriptorTransport.local?.stage(fd) ?? null;
-    // the receiver reads the file from its owner, which has only the stores of this process's mappings that reached it
-    const settled = settleRemoteMaps(), stage = () => remote.calls.stage(remote.token);
-    return settled ? settled.then(stage) : stage();
+    const local = descriptorTransport.local;
+    return local ? local.stage(fd) : handOver(fd, (calls, right) => calls.stage(right));
   },
-  async take(token) {
-    if (descriptorTransport.local) return descriptorTransport.local.take(token);
-    const calls = pathOwner()?.descriptors;
-    if (!calls) return -E.BADF;
-    const stat = await calls.stat(token);
-    if (typeof stat === "number") return stat;
-    const flags = await calls.fcntl(token, 3, 0);
-    if (flags < 0) { await calls.close(token); return flags; }
-    const taken = await calls.take(token);
-    return taken < 0 ? taken : installRemote(token,calls,stat.path ?? "",flags,(stat.mode & S_IFMT) === S_IFDIR,true);
+  take(token) {
+    const local = descriptorTransport.local, calls = owner();
+    return local ? local.take(token) : calls ? calls.take(token).then(right => installTaken(calls, right)) : -E.BADF;
   },
   discard(token, staged) {
-    const local = descriptorTransport.local, calls = pathOwner()?.descriptors;
+    const local = descriptorTransport.local, calls = owner();
     if (local) return local.discard(token, staged);
     return calls ? (staged ? calls.unstage(token) : calls.close(token)) : Promise.resolve(-E.BADF);
+  },
+  park(fd) {
+    const local = descriptorTransport.local;
+    return local ? local.park(fd) : handOver(fd, (calls, right) => calls.park(right));
+  },
+  claim(ticket) {
+    const local = descriptorTransport.local, calls = owner();
+    return local ? local.claim(ticket) : calls ? calls.claim(ticket).then(right => installTaken(calls, right)) : -E.BADF;
   },
 };
 
@@ -139,17 +155,9 @@ export async function processFileBytes(path: string): Promise<Uint8Array | null>
   try { return await readRest(fd); } finally { await closeFd(fd); }
 }
 
-/** An owner's lease on a range of a file, which outlives the descriptor that took it; `region` names the file. */
-export type ProcessMapping = { size: number; region: number; immutable: boolean; read(offset: number, length: number): Promise<Uint8Array>; write(offset: number, bytes: Uint8Array): Promise<void>; close(): Promise<void> };
+/** An owner's lease on a range of a file, which outlives the descriptor that took it. */
+export type ProcessMapping = Omit<MappingLease, "lease"> & { size: number; read(offset: number, length: number): Promise<Uint8Array>; write(offset: number, bytes: Uint8Array): Promise<void>; close(): Promise<void> };
 export function processAshmemCreate(size: number): Promise<number> | null {
-  const calls = pathOwner()?.descriptors;
+  const calls = owner();
   return calls ? calls.ashmemCreate(size).then(token => token < 0 ? token : installRemote(token,calls,"",2,false,true)) : null;
-}
-export function processAshmemProtect(fd: number, prot: number): Promise<number> | null {
-  const remote = remoteOf(fd);
-  return remote ? remote.calls.ashmemProtect(remote.token, prot) : null;
-}
-export function processAshmemSize(fd: number): Promise<number> | null {
-  const remote = remoteOf(fd);
-  return remote ? remote.calls.stat(remote.token).then(stat => typeof stat === "number" || stat.ashmemProt === undefined ? -1 : stat.size) : null;
 }

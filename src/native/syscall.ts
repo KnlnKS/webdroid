@@ -49,7 +49,7 @@ const NUMBERS32: Record<number, string> = {
   177: "rt_sigtimedwait", 217: "getdents64", 221: "fcntl", 224: "gettid", 238: "tkill", 240: "futex", 241: "sched_setaffinity",
   242: "sched_getaffinity", 263: "clock_gettime", 268: "tgkill", 316: "inotify_init", 317: "inotify_add_watch", 318: "inotify_rm_watch",
   322: "openat", 332: "readlinkat", 334: "faccessat", 335: "pselect6", 336: "ppoll", 350: "timerfd_create", 352: "fallocate",
-  353: "timerfd_settime", 354: "timerfd_gettime", 359: "pipe2", 360: "inotify_init1", 384: "getrandom",
+  353: "timerfd_settime", 354: "timerfd_gettime", 359: "pipe2", 360: "inotify_init1", 363: "rt_tgsigqueueinfo", 384: "getrandom",
 };
 function table(numbers: Record<number, string>): (HostFn | undefined)[] {
   const t = new Array<HostFn | undefined>(Math.max(...Object.keys(numbers).map(Number)) + 1).fill(undefined);

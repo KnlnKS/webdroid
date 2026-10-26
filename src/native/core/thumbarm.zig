@@ -1,7 +1,8 @@
 //! Thumb-2 data processing, multiplies, extensions, reversals, LDM/STM and 16-bit IT bodies as
-//! the ARM words whose compiled forms compute what arm.zig's Thumb paths compute. rwThumb reads
-//! their flag use from the same words. Forms naming PC as an operand do not translate (ARM reads
-//! it as pc + 8), except ADR, whose address is a constant.
+//! the ARM words whose compiled forms compute what arm.zig's Thumb paths compute; arm.zig runs
+//! the multiplies as these words. rwThumb reads their flag use from the same words. Forms naming
+//! PC as an operand do not translate (ARM reads it as pc + 8), except ADR, whose address is a
+//! constant.
 const std = @import("std");
 const bits = @import("bits.zig").bits;
 
@@ -37,29 +38,7 @@ pub fn asArm(pc: u32, h: u32, h2: u32) ?Arm {
         if (n == 15 or h2 == 0 or h2 & 0x2000 != 0 or (!ld and h2 & 0x8000 != 0) or (ld and h & 0x20 != 0 and h2 & (@as(u32, 1) << @intCast(n)) != 0)) return null;
         return .{ .w = (h << 16) | h2 };
     }
-    if (h & 0xfff0 == 0xfb00 and bits(h2, 4, 4) < 2) {
-        // MUL, MLA and MLS: ARM's Rd is Thumb's d, its Ra Thumb's accumulator
-        const a = h2 >> 12;
-        const mls = h2 & 0x10 != 0;
-        if (n == 15 or m == 15 or d == 15 or (mls and a == 15)) return null;
-        const base: u32 = if (mls) 0xe060_0090 else if (a == 15) 0xe000_0090 else 0xe020_0090;
-        return .{ .w = base | (d << 16) | (if (a == 15) 0 else a << 12) | (m << 8) | n };
-    }
-    if (h & 0xfff0 == 0xfb10 and h2 & 0xc0 == 0) {
-        // SMUL<x><y>/SMLA<x><y>: ARM names the first operand Rm (bits 3:0, half x) and the second Rs
-        const a = h2 >> 12;
-        if (n == 15 or m == 15 or d == 15) return null;
-        return .{ .w = 0xe100_0080 | (if (a == 15) @as(u32, 0x0060_0000) else a << 12) | (d << 16) | (m << 8) | (bits(h2, 4, 1) << 6) | (bits(h2, 5, 1) << 5) | n };
-    }
-    if (h & 0xff80 == 0xfb80) {
-        const op = bits(h, 4, 3);
-        const dual = op == 6 and h2 & 0xf0 == 0x60;
-        const lo = h2 >> 12;
-        const hi = d;
-        if (op & 1 != 0 or (h2 & 0xf0 != 0 and !dual) or lo == 15 or hi == 15 or lo == hi or n == 15 or m == 15) return null;
-        const base: u32 = if (dual) 0xe040_0090 else 0xe080_0090 | (if (op & 2 == 0) @as(u32, 1 << 22) else 0) | (if (op & 4 != 0) @as(u32, 1 << 21) else 0);
-        return .{ .w = base | (hi << 16) | (lo << 12) | (m << 8) | n };
-    }
+    if (h & 0xff00 == 0xfb00) return .{ .w = multiply(h, h2) orelse return null };
     if (h & 0xffd0 == 0xfa90 and h2 & 0xf0c0 == 0xf080 and n == m and n < 15 and d < 15) {
         // CLZ, or REV/REV16/RBIT/REVSH as ARM's media reversal
         if (h & 0x20 != 0) return if (h2 & 0x30 == 0) .{ .w = 0xe16f_0f10 | (d << 12) | m } else null;
@@ -119,6 +98,48 @@ pub fn asArm(pc: u32, h: u32, h2: u32) ?Arm {
         return .{ .w = 0xe7c0_0010 | (msb << 16) | (d << 12) | (lsb << 7) | n };
     }
     return dataProcessing(h, h2);
+}
+
+/// The multiplies (0xfb00-0xfbff but SDIV/UDIV), as ARM words with Thumb's d in 19:16, a in
+/// 15:12, m in 11:8 and n in 3:0; ARM's Ra = 15 drops the accumulator as Thumb's does. Long
+/// forms put RdLo in a, RdHi in d.
+pub fn multiply(h: u32, h2: u32) ?u32 {
+    const n = h & 15;
+    const d = bits(h2, 8, 4);
+    const m = h2 & 15;
+    const a = h2 >> 12;
+    if (n == 15 or m == 15 or d == 15) return null;
+    const regs = (d << 16) | (m << 8) | n;
+    const acc = a << 12;
+    const x = bits(h2, 4, 1);
+    // SMLA<x><y> and SMLAL<x><y>: Thumb's N (bit 5) and M (bit 4) are ARM's bits 5 and 6
+    const halves = (x << 6) | (bits(h2, 5, 1) << 5);
+    const op = bits(h, 4, 4);
+    if (op >= 8) {
+        // SMULL, UMULL, SMLAL, UMLAL, UMAAL, SMLAL<x><y>, SMLALD and SMLSLD into RdHi:RdLo
+        if (a == 15 or a == d) return null;
+        return regs | acc | @as(u32, switch (h2 & 0xf0) {
+            0 => if (op & 1 == 0) 0xe080_0090 | (if (op & 2 == 0) @as(u32, 1 << 22) else 0) | (if (op & 4 != 0) @as(u32, 1 << 21) else 0) else return null,
+            0x60 => if (op == 14) 0xe040_0090 else return null,
+            0x80, 0x90, 0xa0, 0xb0 => if (op == 12) 0xe140_0080 | halves else return null,
+            0xc0, 0xd0 => if (op == 12 or op == 13) 0xe740_0010 | ((op & 1) << 6) | (x << 5) else return null,
+            else => return null,
+        });
+    }
+    if (op == 0) {
+        // MUL, MLA and MLS
+        if (h2 & 0xe0 != 0 or (x == 1 and a == 15)) return null;
+        return regs | @as(u32, if (x == 1) 0xe060_0090 | acc else if (a == 15) 0xe000_0090 else 0xe020_0090 | acc);
+    }
+    if (h2 & @as(u32, if (op == 1) 0xc0 else if (op == 7) 0xf0 else 0xe0) != 0) return null;
+    return regs | @as(u32, switch (op) {
+        1 => 0xe100_0080 | halves | (if (a == 15) @as(u32, 0x0060_0000) else acc),
+        // SMLAD, SMLSD; SMLAW<y> (SMULW<y> with ARM's bit 5); SMMLA, SMMLS; USADA8
+        2, 4 => 0xe700_0010 | ((op & 4) << 4) | (x << 5) | acc,
+        3 => 0xe120_0080 | (x << 6) | (if (a == 15) @as(u32, 0x20) else acc),
+        5, 6 => if (op == 6 and a == 15) return null else 0xe750_0010 | (if (op == 6) @as(u32, 0xc0) else 0) | (x << 5) | acc,
+        else => 0xe780_0010 | acc,
+    });
 }
 
 /// The data-processing forms with a modified immediate or a shifted register, in arm.zig's

@@ -18,7 +18,27 @@ import { existingAotProfile } from "./aot-profile.ts";
 import { timelineSince } from "../timeline.ts";
 import { tierStatus } from "../jvm/tier.ts";
 import { procIdentity } from "./procfs.ts";
+import { native } from "../native/debug.ts";
+import { connectFromHost } from "../native/socket/unix.ts";
+import type { Loopback } from "../native/socket/core.ts";
+import { dropFile } from "../native/fd.ts";
 
+/** connections the host opened to this process's unix sockets (`forward`), by id, each closed once the host has not
+ *  polled it for FORWARD_IDLE_MS */
+const forwarded = new Map<number, { conn: Loopback; idle: ReturnType<typeof setTimeout> }>();
+const FORWARD_IDLE_MS = 60_000;
+function unforward(id: number): void {
+  const open = forwarded.get(id);
+  if (!open) return;
+  forwarded.delete(id); clearTimeout(open.idle);
+  open.conn.close().forEach(dropFile);
+}
+type NativeEntries = typeof native;
+/** wd.native (debug.ts) as another realm calls it: each entry's result, or a copy of its value */
+type NativeCalls = { [K in keyof NativeEntries]: NativeEntries[K] extends (...args: infer A) => infer R ? (...args: A) => Promise<Awaited<R>> :
+  () => Promise<NativeEntries[K] extends Set<infer V> ? V[] : NativeEntries[K]> };
+const nativeCalls = Object.fromEntries(Object.entries(native).map(([name, entry]: [string, unknown]) => [name, typeof entry === "function"
+  ? async (...args: unknown[]) => entry(...args) : async () => entry instanceof Set ? [...entry] : structuredClone({ ...entry as object })])) as NativeCalls;
 /** one finger's touch event, at `eventTime` on the guest's uptime clock */
 const touch = (action: number, x: number, y: number, eventTime?: number) => dispatchTouches(action, [{ id: 0, x, y }], eventTime);
 const identity = () => ({ pid: procIdentity.pid, uid: procIdentity.uid, process: procIdentity.name, pkg: appHost?.pkg ?? null });
@@ -83,6 +103,21 @@ export function workerControl(logs: string[], phase: () => WorkerPhase, ticks: (
     testFrame: async (): Promise<void> => { if (displayShown()) await testFrame(); },
     /** the frame-path events since `from` (ms since the epoch), each [ms since the epoch, event, arg] */
     timeline: async (from: number) => timelineSince(from - performance.timeOrigin),
+    /** debug (adb forward): writes `bytes` to connection `id` to the stream socket listening at `path`, opening it first, and
+     *  answers what it has read since, or null once it has closed or nothing listens there */
+    forward: async (id: number, path: string, bytes: Uint8Array): Promise<Uint8Array | null> => {
+      const open = forwarded.get(id), conn = open?.conn ?? connectFromHost(path);
+      if (!conn) return null;
+      clearTimeout(open?.idle);
+      forwarded.set(id, { conn, idle: setTimeout(() => unforward(id), FORWARD_IDLE_MS) });
+      if (bytes.length) conn.write(bytes);
+      const out = new Uint8Array(conn.available());
+      conn.take(out, 0, out.length);
+      if (!out.length && conn.eof) { unforward(id); return null; }
+      return out;
+    },
+    /** this realm's wd.native debug entries (debug.ts) */
+    native: nativeCalls,
   };
 }
 export type WorkerControl = ReturnType<typeof workerControl>;

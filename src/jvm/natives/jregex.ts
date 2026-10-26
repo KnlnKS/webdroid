@@ -336,8 +336,11 @@ function property(c: Ctx, negated: boolean, inClass: boolean): string {
     c.i = close + 1;
   }
   const ranges = POSIX[name.replace(/^I[sn]/, "")] ?? blockRange(name);
-  // ICU reads `Is` as introducing a category or a binary property
-  if (ranges === undefined) return `\\${negated ? "P" : "p"}{${name.startsWith("Is") ? name.slice(2) : name}}`;
+  if (ranges === undefined) {
+    // ICU reads `Is` as introducing a category, a script or a binary property
+    const bare = name.startsWith("Is") ? name.slice(2) : name;
+    return `\\${negated ? "P" : "p"}{${jsProperty(bare) ?? bare}}`;
+  }
   if (!inClass) return `[${negated ? "^" : ""}${ranges}]`;
   if (!negated) return ranges;
   // a complement within a class is a nested class
@@ -416,6 +419,26 @@ const POSIX: Record<string, string> = {
   javaJavaIdentifierStart: "\\p{L}\\p{Nl}\\p{Sc}\\p{Pc}", javaJavaIdentifierPart: "\\p{L}\\p{Nl}\\p{Sc}\\p{Pc}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Cf}\\x00-\\x08\\x0E-\\x1B\\x7F-\\x9F",
   all: "\\u{0}-\\u{10ffff}",
 };
+const PROPERTY_KEYS: Record<string, string> = { gc: "General_Category", generalcategory: "General_Category", sc: "Script", script: "Script",
+  scx: "Script_Extensions", scriptextensions: "Script_Extensions" };
+/** a property name as ICU matches it, loosely (UAX44-LM3: case, spaces, hyphens and underscores aside) */
+const looseKey = (name: string) => name.toLowerCase().replace(/[\s_-]/g, "");
+/** `\p{form}` is a property JS knows; it has no table of the names it takes, so ask its parser */
+const jsKnows = (form: string) => { try { new RegExp(`\\p{${form}}`, "u"); return true; } catch { return false; } };
+const jsProperties = new Map<string, string | null>();
+/** ICU's property name as JS spells it, or null: ICU matches names loosely and takes a lone script name, where JS
+ *  takes canonical names and `Script=` */
+function jsProperty(name: string): string | null {
+  let known = jsProperties.get(name);
+  if (known !== undefined) return known;
+  const eq = name.indexOf("="), value = name.slice(eq + 1).trim();
+  const key = eq < 0 ? "" : PROPERTY_KEYS[looseKey(name.slice(0, eq))];
+  const spellings = [value, value.split(/[\s_-]+/).map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join("_"), value.toUpperCase()];
+  const forms = eq < 0 ? [...spellings, ...spellings.map((v) => `Script=${v}`)] : key ? spellings.map((v) => `${key}=${v}`) : [];
+  known = forms.find(jsKnows) ?? null;
+  jsProperties.set(name, known);
+  return known;
+}
 let blocks: Map<string, string> | undefined;
 /** the code point range of the block `\p{InX}`, `\p{Block=X}` or `\p{blk=X}` names */
 function blockRange(name: string): string | undefined {
@@ -429,7 +452,7 @@ function blockRange(name: string): string | undefined {
       for (const n of names) blocks!.set(n, `\\u{${start}}-\\u{${end.toString(16)}}`);
     });
   }
-  return blocks.get(m[1].toLowerCase().replace(/[\s_-]/g, ""));
+  return blocks.get(looseKey(m[1]));
 }
 const compiled = new Map<string, CompiledPattern>();
 /** Pattern.compile(source, flags), cached: apps compile one pattern again and again (String.split compiles one each call). Its

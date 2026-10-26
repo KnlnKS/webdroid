@@ -5,6 +5,9 @@ const cpu = @import("cpu.zig");
 const a64 = @import("a64.zig");
 const fp = @import("fp.zig");
 const simd = @import("simd.zig");
+const neon = @import("arm_neon.zig");
+const vfp = @import("arm_vfp.zig");
+const thumbarm = @import("thumbarm.zig");
 const Cpu = cpu.Cpu;
 const Status = cpu.Status;
 const Fault = cpu.Fault;
@@ -12,13 +15,13 @@ const Fault = cpu.Fault;
 const bits = @import("bits.zig").bits;
 const ld = mem.ld;
 const st = cpu.st;
-inline fn r(c: *Cpu, n: u32) u32 {
+pub inline fn r(c: *Cpu, n: u32) u32 {
     return @truncate(c.x[n]);
 }
-inline fn set(c: *Cpu, n: u32, v: u32) void {
+pub inline fn set(c: *Cpu, n: u32, v: u32) void {
     c.x[n] = v;
 }
-inline fn reg(c: *Cpu, n: u32, pc: u32) u32 {
+pub inline fn reg(c: *Cpu, n: u32, pc: u32) u32 {
     return if (n == 15) pc +% 8 else r(c, n);
 }
 inline fn setNZ(c: *Cpu, v: u32) void {
@@ -51,25 +54,59 @@ fn thumbData(c: *Cpu, op: u32, n: u32, rhs: u32, flags: bool) u32 {
         else => unreachable,
     };
 }
-inline fn fault(c: *Cpu, code: Fault, w: u32, pc: u32) Status {
+pub inline fn fault(c: *Cpu, code: Fault, w: u32, pc: u32) Status {
     c.pc = pc;
     return cpu.raise(c, code, w);
 }
-inline fn badAddr(c: *Cpu, w: u32, pc: u32) Status {
+pub inline fn badAddr(c: *Cpu, w: u32, pc: u32) Status {
     return fault(c, .bad_address, w, pc);
 }
-inline fn misaligned(c: *Cpu, a: u32, w: u32, pc: u32) Status {
+pub inline fn misaligned(c: *Cpu, a: u32, w: u32, pc: u32) Status {
     c.fault_addr = a;
     return badAddr(c, w, pc);
 }
 /// below LOW, or past the 2 GiB an ARM32 process's memory ends at, which as a signed compare
-/// costs no more than the null page's alone
-inline fn addr(c: *Cpu, a: u32) ?u32 {
-    if (@as(i32, @bitCast(a)) < abi.LOW) {
+/// costs no more than the null page's alone, unless the process maps the window there
+pub inline fn addr(c: *Cpu, a: u32) ?u32 {
+    if (@as(i32, @bitCast(a)) < abi.LOW and !mem.windowed(a, 1, false)) {
         c.fault_addr = a;
         return null;
     }
     return a;
+}
+/// LDREX of n bytes, a doubleword's second word high, opening the monitor
+fn loadExclusive(c: *Cpu, a: u32, n: u32) u64 {
+    const v: u64 = switch (n) {
+        1 => ld(u8, a),
+        2 => ld(u16, a),
+        4 => ld(u32, a),
+        else => @as(u64, ld(u32, a + 4)) << 32 | ld(u32, a),
+    };
+    c.excl = 1;
+    if (a >= mem.window) c.excl_val = v;
+    return v;
+}
+/// STREX of n bytes: whether it stored, null when the process may not store there. Into the
+/// window, which other processes store to at the same time, it stores only over the value LDREX
+/// read, as their stores would clear the monitor.
+fn storeExclusive(c: *Cpu, a: u32, n: u32, lo: u32, hi: u32) ?bool {
+    if (c.excl == 0) return false;
+    const stored = if (a >= mem.window) stored: {
+        if (!mem.windowed(a, n, true)) {
+            c.fault_addr = a;
+            return null;
+        }
+        if (n == 8) break :stored mem.shm_cas64(a, c.excl_val, @as(u64, hi) << 32 | lo) != 0;
+        const expected: u32 = @truncate(c.excl_val);
+        break :stored mem.shm_cas(a, n, expected, lo) == expected;
+    } else switch (n) {
+        1 => st(u8, c, a, @truncate(lo)),
+        2 => st(u16, c, a, @truncate(lo)),
+        4 => st(u32, c, a, lo),
+        else => st(u32, c, a, lo) and st(u32, c, a + 4, hi),
+    } or return null;
+    c.excl = 0;
+    return stored;
 }
 inline fn bx(c: *Cpu, target: u32) Status {
     cpu.setPc32(c, target);
@@ -130,357 +167,9 @@ fn thumbExpandImm(c: *Cpu, imm12: u32) Shifted {
     return .{ .v = v, .carry = v >> 31 };
 }
 
-fn neonStruct(c: *Cpu, w: u32, pc: u32) Status {
-    if (w & (1 << 23) != 0) return neonLane(c, w, pc);
-    const kind = bits(w, 8, 4);
-    const structures: u32 = switch (kind) {
-        7, 10, 6, 2 => 1,
-        8, 9, 3 => 2,
-        4, 5 => 3,
-        0, 1 => 4,
-        else => return fault(c, .unimplemented, w, pc),
-    };
-    const regs: u32 = switch (kind) { 10, 3 => 2, 6 => 3, 2 => 4, else => 1 };
-    const stride: u32 = if (kind == 9 or kind == 3 or kind == 5 or kind == 1) 2 else 1;
-    const size = bits(w, 6, 2);
-    const alignment = bits(w, 4, 2);
-    if (structures > 1 and size == 3 or structures == 3 and alignment > 1 or structures == 2 and regs == 1 and alignment == 3)
-        return fault(c, .undefined, w, pc);
-    if (structures == 1 and (regs & 1 != 0 and alignment > 1 or regs == 2 and alignment == 3)) return fault(c, .undefined, w, pc);
-    const load = w & (1 << 21) != 0;
-    const n = bits(w, 16, 4);
-    const d = (bits(w, 22, 1) << 4) | bits(w, 12, 4);
-    if (n == 15 or d + (structures - 1) * stride + regs > 32) return fault(c, .undefined, w, pc);
-    const a = addr(c, r(c, n)) orelse return badAddr(c, w, pc);
-    if (alignment != 0 and a & ((@as(u32, 4) << @intCast(alignment)) - 1) != 0) return misaligned(c, a, w, pc);
-    if (structures == 1) {
-        var i: u32 = 0;
-        while (i < regs) : (i += 1) {
-            if (load) vreg(u64, c, d + i).* = ld(u64, a + i * 8) else if (!st(u64, c, a + i * 8, vreg(u64, c, d + i).*)) return badAddr(c, w, pc);
-        }
-    } else {
-        const ok = switch (size) {
-            0 => neonInterleave(u8, c, a, d, regs, structures, stride, load),
-            1 => neonInterleave(u16, c, a, d, regs, structures, stride, load),
-            else => neonInterleave(u32, c, a, d, regs, structures, stride, load),
-        };
-        if (!ok) return badAddr(c, w, pc);
-    }
-    const m = w & 15;
-    if (m != 15) set(c, n, r(c, n) +% (if (m == 13) regs * structures * 8 else r(c, m)));
-    return .next;
-}
-
-fn neonLane(c: *Cpu, w: u32, pc: u32) Status {
-    if (bits(w, 8, 2) != 0) return fault(c, .unimplemented, w, pc);
-    const load = w & (1 << 21) != 0;
-    const replicate = bits(w, 10, 2) == 3;
-    const size = if (replicate) bits(w, 6, 2) else bits(w, 10, 2);
-    const index_align = bits(w, 4, 4);
-    if (replicate) {
-        if (!load or size == 3 or size == 0 and index_align & 1 != 0) return fault(c, .undefined, w, pc);
-    } else if (switch (size) {
-        0 => index_align & 1 != 0,
-        1 => index_align & 2 != 0,
-        else => index_align & 7 != 0 and index_align & 7 != 3,
-    }) return fault(c, .undefined, w, pc);
-    const bytes = @as(u32, 1) << @intCast(size);
-    const alignment = if (index_align & 1 != 0) bytes else 1;
-    const regs: u32 = if (replicate) 1 + bits(w, 5, 1) else 1;
-    const n = bits(w, 16, 4);
-    const d = (bits(w, 22, 1) << 4) | bits(w, 12, 4);
-    if (n == 15 or d + regs > 32) return fault(c, .undefined, w, pc);
-    const a = addr(c, r(c, n)) orelse return badAddr(c, w, pc);
-    if (a & (alignment - 1) != 0) return misaligned(c, a, w, pc);
-    const first = if (replicate) 0 else index_align >> @intCast(size + 1);
-    const end = if (replicate) regs * 8 / bytes else first + 1;
-    const dst: [*]u8 = @ptrCast(vreg(u64, c, d));
-    var lane = first;
-    while (lane < end) : (lane += 1) {
-        var i: u32 = 0;
-        while (i < bytes) : (i += 1) {
-            if (load) dst[lane * bytes + i] = ld(u8, a + i) else if (!st(u8, c, a + i, dst[lane * bytes + i])) return badAddr(c, w, pc);
-        }
-    }
-    const m = w & 15;
-    if (m != 15) set(c, n, r(c, n) +% (if (m == 13) bytes else r(c, m)));
-    return .next;
-}
-
-fn neonInterleave(comptime T: type, c: *Cpu, base: u32, d: u32, regs: u32, structures: u32, stride: u32, load: bool) bool {
-    var a = base;
-    var index: u32 = 0;
-    while (index < regs) : (index += 1) {
-        for (0..8 / @sizeOf(T)) |lane| {
-            var s: u32 = 0;
-            while (s < structures) : (s += 1) {
-                const vector: [*]align(1) T = @ptrCast(vreg(u64, c, d + index + s * stride));
-                if (load) vector[lane] = ld(T, a) else if (!st(T, c, a, vector[lane])) return false;
-                a += @sizeOf(T);
-            }
-        }
-    }
-    return true;
-}
-
-fn neonImmediate(c: *Cpu, w: u32, pc: u32, imm8: u32) Status {
-    const d = (bits(w, 22, 1) << 4) | bits(w, 12, 4);
-    const q = w & 0x40 != 0;
-    if (q and d & 1 != 0) return fault(c, .undefined, w, pc);
-    const ex = simd.expandImm(bits(w, 5, 1), bits(w, 8, 4), 0, imm8) orelse return fault(c, .undefined, w, pc);
-    const count: u32 = if (q) 2 else 1;
-    var i: u32 = 0;
-    while (i < count) : (i += 1) {
-        const dst = vreg(u64, c, d + i);
-        dst.* = switch (ex.kind) {
-            .movi, .fmov => ex.v,
-            .mvni => ~ex.v,
-            .orr => dst.* | ex.v,
-            .bic => dst.* & ~ex.v,
-        };
-    }
-    return .next;
-}
-
-fn neonShift(c: *Cpu, w: u32, pc: u32) Status {
-    const d = (bits(w, 22, 1) << 4) | bits(w, 12, 4);
-    const m = (bits(w, 5, 1) << 4) | bits(w, 0, 4);
-    const q = bits(w, 6, 1);
-    const op = bits(w, 8, 4);
-    const widen = op == 10;
-    const narrow = op == 8 or op == 9;
-    if (op > 7 and !widen and !narrow) return fault(c, .unimplemented, w, pc);
-    if (narrow) {
-        if (m & 1 != 0) return fault(c, .undefined, w, pc);
-        const imm = (bits(w, 7, 1) << 6) | bits(w, 16, 6);
-        @memcpy(&c.v[18], @as([*]u8, @ptrCast(vreg(u64, c, m)))[0..16]);
-        const opcode = 16 + (op - 8) * 2 + q;
-        const result = simd.exec(c, 0x0f000400 | (bits(w, 24, 1) << 29) | (imm << 16) | (opcode << 11) | (18 << 5) | 16);
-        if (result == .next) @memcpy(@as([*]u8, @ptrCast(vreg(u64, c, d)))[0..8], c.v[16][0..8]);
-        return result;
-    }
-    if ((widen and (d & 1 != 0 or q != 0)) or (q != 0 and (d | m) & 1 != 0)) return fault(c, .undefined, w, pc);
-    const imm = (bits(w, 7, 1) << 6) | bits(w, 16, 6);
-    const count: usize = if (q != 0 or widen) 16 else 8;
-    const read_count = if (widen) 8 else count;
-    @memcpy(c.v[16][0..count], @as([*]u8, @ptrCast(vreg(u64, c, d)))[0..count]);
-    @memcpy(c.v[18][0..read_count], @as([*]u8, @ptrCast(vreg(u64, c, m)))[0..read_count]);
-    const result = simd.exec(c, 0x0f000400 | (q << 30) | (bits(w, 24, 1) << 29) | (imm << 16) | (op << 12) | (18 << 5) | 16);
-    if (result == .next) @memcpy(@as([*]u8, @ptrCast(vreg(u64, c, d)))[0..count], c.v[16][0..count]);
-    return result;
-}
-
-fn neonMisc(c: *Cpu, w: u32, pc: u32) Status {
-    if (w & 0xffb30e10 == 0xf3b20000) return neonPermute(c, w, pc);
-    const d = (bits(w, 22, 1) << 4) | bits(w, 12, 4);
-    const m = (bits(w, 5, 1) << 4) | bits(w, 0, 4);
-    const q = bits(w, 6, 1);
-    const duplicate = w & 0xffb00f90 == 0xf3b00c00;
-    if (w & 0xffb00c10 == 0xf3b00800) {
-        const n = (bits(w, 7, 1) << 4) | bits(w, 16, 4);
-        const len = bits(w, 8, 2) + 1;
-        if (n + len > 32) return fault(c, .undefined, w, pc);
-        const table: [*]const u8 = @ptrCast(vreg(u64, c, n));
-        var out: [8]u8 = @bitCast(vreg(u64, c, d).*);
-        simd.tableLookup(table[0 .. 8 * len], std.mem.asBytes(vreg(u64, c, m)), &out, q != 0);
-        vreg(u64, c, d).* = @bitCast(out);
-        return .next;
-    }
-    const narrow = w & 0xffb30fd0 == 0xf3b20200;
-    if (q != 0 and (d | (if (duplicate) @as(u32, 0) else m)) & 1 != 0) return fault(c, .undefined, w, pc);
-    const translated: u32 = if (duplicate) blk: {
-        const imm = bits(w, 16, 4);
-        if (imm & 7 == 0) return fault(c, .undefined, w, pc);
-        break :blk 0x0e000400 | (imm << 16);
-    } else if (narrow) blk: {
-        const size = bits(w, 18, 2);
-        if (size == 3 or m & 1 != 0) return fault(c, .undefined, w, pc);
-        break :blk 0x0e212800 | (size << 22);
-    } else if (w & 0xffbf0f10 == 0xf3bb0500)
-        0x0ea1d800 | (bits(w, 7, 1) << 29)
-    else if (w & 0xffbf0f90 == 0xf3b00580)
-        0x2e205800
-    else if (w & 0xffbf0e10 == 0xf3bb0600)
-        (if (w & 0x100 != 0) @as(u32, 0x0ea1b800) else 0x0e21d800) | (bits(w, 7, 1) << 29)
-    else if (w & 0xffb30810 == 0xf3b10000) blk: {
-        const size = bits(w, 18, 2);
-        const op = bits(w, 7, 3);
-        const float = bits(w, 10, 1);
-        if (size == 3 or op == 5 or (float != 0 and size != 2)) return fault(c, .undefined, w, pc);
-        break :blk 0x0e200800 | ((8 + op / 2 + 4 * float) << 12) | (size << 22) | ((op & 1) << 29);
-    } else if (w & 0xffb30e10 == 0xf3b00000) blk: {
-        const op = bits(w, 7, 2);
-        const size = bits(w, 18, 2);
-        if (op > 2 or size + op >= 3) return fault(c, .undefined, w, pc);
-        break :blk 0x0e200800 | (size << 22) | (if (op == 1) @as(u32, 1 << 29) else if (op == 2) @as(u32, 1 << 12) else 0);
-    } else return fault(c, .unimplemented, w, pc);
-    const count: usize = if (q != 0) 16 else 8;
-    const read_count = if (duplicate) 8 else if (narrow) 16 else count;
-    @memcpy(c.v[18][0..read_count], @as([*]u8, @ptrCast(vreg(u64, c, m)))[0..read_count]);
-    if (w & 0xffbf0c10 == 0xf3b90400 or w & 0xffbf0f10 == 0xf3bb0500) {
-        const lanes: *[4]f32 = @ptrCast(&c.v[18]);
-        for (lanes[0 .. count / 4]) |*lane| lane.* = fp.standard32(lane.*);
-    }
-    const result = simd.exec(c, translated | (q << 30) | (18 << 5) | 16);
-    if (result == .next and (w & 0xffbf0f10 == 0xf3bb0500 or w & 0xffbf0f10 == 0xf3b90700)) {
-        const lanes: *[4]f32 = @ptrCast(&c.v[16]);
-        for (lanes[0 .. count / 4]) |*lane| lane.* = fp.standard32(lane.*);
-    }
-    if (result == .next) @memcpy(@as([*]u8, @ptrCast(vreg(u64, c, d)))[0..count], c.v[16][0..count]);
-    return result;
-}
-
-fn neonPermute(c: *Cpu, w: u32, pc: u32) Status {
-    const d = (bits(w, 22, 1) << 4) | bits(w, 12, 4);
-    const m = (bits(w, 5, 1) << 4) | bits(w, 0, 4);
-    const q = bits(w, 6, 1);
-    const size = bits(w, 18, 2);
-    const op = bits(w, 7, 2);
-    if (size == 3 or (q != 0 and (d | m) & 1 != 0)) return fault(c, .undefined, w, pc);
-    if (op == 0) {
-        if (size != 0) return fault(c, .undefined, w, pc);
-        for (0..(if (q != 0) @as(usize, 2) else 1)) |i| {
-            std.mem.swap(u64, vreg(u64, c, d + @as(u32, @intCast(i))), vreg(u64, c, m + @as(u32, @intCast(i))));
-        }
-        return .next;
-    }
-    const count: usize = if (q != 0) 16 else 8;
-    @memcpy(c.v[17][0..count], @as([*]u8, @ptrCast(vreg(u64, c, d)))[0..count]);
-    @memcpy(c.v[18][0..count], @as([*]u8, @ptrCast(vreg(u64, c, m)))[0..count]);
-    const opcode: u32 = if (op == 1) 2 else if (op == 2) 1 else 3;
-    const translated = 0x0e000800 | (q << 30) | (size << 22) | (opcode << 12) | (18 << 16) | (17 << 5);
-    const low = simd.exec(c, translated | 16);
-    if (low != .next) return low;
-    const high = simd.exec(c, translated | (4 << 12) | 19);
-    if (high != .next) return high;
-    @memcpy(@as([*]u8, @ptrCast(vreg(u64, c, d)))[0..count], c.v[16][0..count]);
-    @memcpy(@as([*]u8, @ptrCast(vreg(u64, c, m)))[0..count], c.v[19][0..count]);
-    return .next;
-}
-
-/// The three-registers-of-different-lengths operation a long form computes: its own, or for a
-/// by-scalar form (bit 6) the one it multiplies as (VMLAL, VQDMLAL, VMLSL, VQDMLSL, VMULL, VQDMULL).
-pub fn neonLongOp(w: u32) u32 {
-    return if (w & 0x40 != 0) 8 + (bits(w, 10, 2) << 1) + bits(w, 8, 1) else bits(w, 8, 4);
-}
-
-/// Whether a by-scalar form is one of those long forms, which neonLong computes.
-pub fn neonLongByScalar(w: u32) bool {
-    const op = bits(w, 8, 4);
-    return op & 2 != 0 and op < 12;
-}
-
-/// A by-scalar form's Dm[x]: the D register and the lane.
-pub fn neonScalar(w: u32, size: u32) struct { u32, u32 } {
-    return if (size == 1) .{ bits(w, 0, 3), (bits(w, 5, 1) << 1) | bits(w, 3, 1) } else .{ bits(w, 0, 4), bits(w, 5, 1) };
-}
-
-/// The by-scalar forms' Dm[x], in every lane of v18.
-fn splatScalar(c: *Cpu, w: u32, size: u32) void {
-    const m, const lane = neonScalar(w, size);
-    if (size == 1)
-        @as(*[8]u16, @ptrCast(&c.v[18])).* = @splat(@as([*]u16, @ptrCast(vreg(u64, c, m)))[lane])
-    else
-        @as(*[4]u32, @ptrCast(&c.v[18])).* = @splat(@as([*]u32, @ptrCast(vreg(u64, c, m)))[lane]);
-}
-
-fn neonLong(c: *Cpu, w: u32, pc: u32) Status {
-    const scalar = w & 0x40 != 0;
-    const op = neonLongOp(w);
-    const size = bits(w, 20, 2);
-    const d = (bits(w, 22, 1) << 4) | bits(w, 12, 4);
-    const n = (bits(w, 7, 1) << 4) | bits(w, 16, 4);
-    const m = (bits(w, 5, 1) << 4) | bits(w, 0, 4);
-    const narrow = op == 4 or op == 6;
-    const wide = op == 1 or op == 3;
-    const q_operands = if (narrow) n | m else if (wide) d | n else d;
-    const polynomial_undefined = op == 14 and (size == 1 or bits(w, 24, 1) != 0);
-    if (size == 3 or (scalar and size == 0) or q_operands & 1 != 0 or op == 15 or polynomial_undefined) return fault(c, .undefined, w, pc);
-    // the saturating doubling forms and VMULL.P64
-    if (op == 9 or op == 11 or op == 13 or (op == 14 and size == 2)) return fault(c, .unimplemented, w, pc);
-    const count: usize = if (narrow) 8 else 16;
-    @memcpy(c.v[16][0..count], @as([*]u8, @ptrCast(vreg(u64, c, d)))[0..count]);
-    @memcpy(c.v[17][0..(if (narrow or wide) @as(usize, 16) else 8)], @as([*]u8, @ptrCast(vreg(u64, c, n))));
-    if (scalar) splatScalar(c, w, size) else @memcpy(c.v[18][0..(if (narrow) @as(usize, 16) else 8)], @as([*]u8, @ptrCast(vreg(u64, c, m))));
-    const result = simd.exec(c, 0x0e200000 | (bits(w, 24, 1) << 29) | (size << 22) | (op << 12) | (18 << 16) | (17 << 5) | 16);
-    if (result == .next) @memcpy(@as([*]u8, @ptrCast(vreg(u64, c, d)))[0..count], c.v[16][0..count]);
-    return result;
-}
-
-fn neonSame(c: *Cpu, w: u32, pc: u32) Status {
-    const scalar = w & 0xfe800050 == 0xf2800040 and bits(w, 20, 2) != 3;
-    if (scalar and neonLongByScalar(w)) return neonLong(c, w, pc);
-    const size = bits(w, 20, 2);
-    const d = (bits(w, 22, 1) << 4) | bits(w, 12, 4);
-    const n = (bits(w, 7, 1) << 4) | bits(w, 16, 4);
-    const m = (bits(w, 5, 1) << 4) | bits(w, 0, 4);
-    const q = if (scalar) bits(w, 24, 1) else bits(w, 6, 1);
-    if (q != 0 and (d | n | (if (scalar) @as(u32, 0) else m)) & 1 != 0) return fault(c, .undefined, w, pc);
-    const op = bits(w, 8, 4);
-    const extract = w & 0xffb00010 == 0xf2b00000;
-    if (extract and q == 0 and op >= 8) return fault(c, .undefined, w, pc);
-    const b = bits(w, 4, 1);
-    const u = bits(w, 24, 1);
-    if (!scalar and op == 15 and b == 1 and u == 0 and size & 1 == 0) {
-        const lhs: [*]f32 = @ptrCast(vreg(u64, c, n));
-        const rhs: [*]f32 = @ptrCast(vreg(u64, c, m));
-        const dst: [*]f32 = @ptrCast(vreg(u64, c, d));
-        for (0..if (q != 0) @as(usize, 4) else 2) |i| dst[i] = fp.recipStep32(lhs[i], rhs[i], size == 2);
-        return .next;
-    }
-    if (scalar and (size == 0 or (op & 1 != 0 and size != 2))) return fault(c, .undefined, w, pc);
-    if (scalar and op & 0xe != 0 and op & 0xe != 4 and op & 0xe != 8) return fault(c, .unimplemented, w, pc);
-    const variable_shift = !scalar and !extract and op == 4 and b == 0;
-    const accumulate = if (scalar) op == 1 or op == 5 else op == 13 and b == 1 and u == 0 and size & 1 == 0;
-    const translated: u32 = if (scalar and op & 1 == 0)
-        0x0e209400 | (size << 22) | (if (op == 8) @as(u32, 1 << 11) else if (op == 4) @as(u32, 1 << 29) else 0)
-    else if (scalar)
-        (if (op == 9) @as(u32, 0x2e20dc00) else 0x0e20d400 | (if (op == 5) @as(u32, 1 << 23) else 0))
-    else if (extract)
-        0x2e000000 | (op << 11)
-    else if (op == 8 and b == 0)
-        0x0e208400 | (u << 29) | (size << 22)
-    else if (op == 3 and size != 3)
-        0x0e203400 | (u << 29) | (size << 22) | (b << 11)
-    else if (op == 6 and size != 3)
-        0x0e206400 | (u << 29) | (size << 22) | (b << 11)
-    else if (op == 8 and b == 1)
-        0x0e208c00 | (u << 29) | (size << 22)
-    else if (op == 9 and size != 3 and (b == 0 or u == 0))
-        0x0e209400 | (u << 29) | (size << 22) | (b << 11)
-    else if (op == 10 and size != 3 and q == 0)
-        0x0e20a400 | (u << 29) | (size << 22) | (b << 11)
-    else if (op == 11 and b == 1 and u == 0 and size != 3 and q == 0)
-        0x0e20bc00 | (size << 22)
-    else if (op == 1 and b == 1)
-        0x0e201c00 | (u << 29) | (size << 22)
-    else if (variable_shift)
-        0x0e204400 | (u << 29) | (size << 22)
-    else if (op == 13 and size & 1 == 0 and b == 0)
-        0x0e20d400 | (u << 29) | (bits(w, 21, 1) << 23)
-    else if (op == 13 and size == 0 and b == 1 and u == 1)
-        0x2e20dc00
-    else if (op == 14 and size & 1 == 0 and (u == 1 or (b == 0 and size == 0)))
-        0x0e20e400 | (u << 29) | (bits(w, 21, 1) << 23) | (b << 11)
-    else if (op == 15 and b == 0 and size & 1 == 0)
-        0x0e20f400 | (u << 29) | (bits(w, 21, 1) << 23)
-    else if (accumulate)
-        0x0e20d400 | (bits(w, 21, 1) << 23)
-    else
-        return fault(c, .unimplemented, w, pc);
-    // A32 D registers alias halves of Q registers; the upper A64 registers are scratch.
-    const count: usize = if (q != 0) 16 else 8;
-    @memcpy(c.v[16][0..count], @as([*]u8, @ptrCast(vreg(u64, c, d)))[0..count]);
-    @memcpy(c.v[17][0..count], @as([*]u8, @ptrCast(vreg(u64, c, if (variable_shift) m else n)))[0..count]);
-    if (scalar) splatScalar(c, w, size) else @memcpy(c.v[18][0..count], @as([*]u8, @ptrCast(vreg(u64, c, if (variable_shift) n else m)))[0..count]);
-    if (accumulate) {
-        // A32 VMLA/VMLS round the product before adding; A64 FMLA is fused.
-        const multiplied = simd.exec(c, 0x2e20dc00 | (q << 30) | (18 << 16) | (17 << 5) | 19);
-        if (multiplied != .next) return multiplied;
-    }
-    const result = simd.exec(c, translated | (q << 30) | (if (accumulate) @as(u32, (19 << 16) | (16 << 5)) else (18 << 16) | (17 << 5)) | 16);
-    if (result == .next) @memcpy(@as([*]u8, @ptrCast(vreg(u64, c, d)))[0..count], c.v[16][0..count]);
-    return result;
+pub inline fn vreg(comptime T: type, c: *Cpu, n: u32) *align(@sizeOf(T)) T {
+    const per = 16 / @sizeOf(T);
+    return @ptrCast(@alignCast(&c.v[n / per][(n % per) * @sizeOf(T)]));
 }
 
 fn multiplyHigh(n: u32, m: u32, accumulator: u32, subtract: bool, round: bool) u32 {
@@ -531,12 +220,12 @@ fn execArm(c: *Cpu, pc: u32) Status {
     const cc = w >> 28;
     c.pc = pc + 4;
     if (cc == 15) {
-        if (w & 0xfe800010 == 0xf2800010 and w & 0x00380080 != 0) return neonShift(c, w, pc);
-        if (w & 0xffb00010 == 0xf3b00000) return neonMisc(c, w, pc);
-        if (w & 0xfe800000 == 0xf2000000 or w & 0xffb00010 == 0xf2b00000 or w & 0xfe800050 == 0xf2800040) return neonSame(c, w, pc);
-        if (w & 0xfe800050 == 0xf2800000) return neonLong(c, w, pc);
-        if (w & 0xff100000 == 0xf4000000) return neonStruct(c, w, pc);
-        if (w & 0xfeb00010 == 0xf2800010) return neonImmediate(c, w, pc, (bits(w, 24, 1) << 7) | (bits(w, 16, 3) << 4) | bits(w, 0, 4));
+        if (w & 0xfe800010 == 0xf2800010 and w & 0x00380080 != 0) return neon.neonShift(c, w, pc);
+        if (w & 0xffb00010 == 0xf3b00000) return neon.neonMisc(c, w, pc);
+        if (w & 0xfe800000 == 0xf2000000 or w & 0xffb00010 == 0xf2b00000 or w & 0xfe800050 == 0xf2800040) return neon.neonSame(c, w, pc);
+        if (w & 0xfe800050 == 0xf2800000) return neon.neonLong(c, w, pc);
+        if (w & 0xff100000 == 0xf4000000) return neon.neonStruct(c, w, pc);
+        if (w & 0xfeb00010 == 0xf2800010) return neon.neonImmediate(c, w, pc, (bits(w, 24, 1) << 7) | (bits(w, 16, 3) << 4) | bits(w, 0, 4));
         if ((w & 0x0e000000) == 0x0a000000) {
             const off: u32 = @bitCast((@as(i32, @bitCast(w << 8)) >> 6) | @as(i32, @intCast((w >> 23) & 2)));
             set(c, 14, pc + 4);
@@ -548,12 +237,12 @@ fn execArm(c: *Cpu, pc: u32) Status {
             c.excl = 0;
             return .next;
         }
+        if (w & 0x0f000e10 == 0x0e000a00) return vfp.vfp(c, w, pc) orelse fault(c, .unimplemented, w, pc);
         return fault(c, .undefined, w, pc);
     }
     if (cc != 14 and !cond(c, cc)) return .next;
     const rn = bits(w, 16, 4);
     const rd = bits(w, 12, 4);
-    const rs = bits(w, 8, 4);
     const rm = w & 15;
     const top = bits(w, 25, 3);
     switch (top) {
@@ -562,9 +251,9 @@ fn execArm(c: *Cpu, pc: u32) Status {
             if (w & (1 << 24) != 0) set(c, 14, pc + 4);
             return jump(c, pc +% 8 +% off);
         },
-        0, 1 => return dataProcessing(c, w, pc, top, rn, rd, rs, rm),
+        0, 1 => return dataProcessing(c, w, pc, top, rn, rd, rm),
         2, 3 => {
-            if (top == 3 and w & 0x10 != 0) return media(c, w, pc, rd, rn, rm, rs);
+            if (top == 3 and w & 0x10 != 0) return media(c, w, pc, rd, rn, rm);
             const P = w & (1 << 24) != 0;
             const U = w & (1 << 23) != 0;
             const B = w & (1 << 22) != 0;
@@ -623,20 +312,20 @@ fn execArm(c: *Cpu, pc: u32) Status {
             }
             return .next;
         },
-        6 => return vfp(c, w, pc) orelse fault(c, .unimplemented, w, pc),
+        6 => return vfp.vfp(c, w, pc) orelse fault(c, .unimplemented, w, pc),
         7 => {
             if (w & (1 << 24) != 0) return swi(c);
             if ((w & 0x0ff00fff) == 0x0e1d0f70 and bits(w, 8, 4) == 15) {
                 set(c, rd, @truncate(c.tls));
                 return .next;
             }
-            return vfp(c, w, pc) orelse fault(c, .unimplemented, w, pc);
+            return vfp.vfp(c, w, pc) orelse fault(c, .unimplemented, w, pc);
         },
         else => return fault(c, .undefined, w, pc),
     }
 }
 
-fn dataProcessing(c: *Cpu, w: u32, pc: u32, top: u32, rn: u32, rd: u32, rs: u32, rm: u32) Status {
+fn dataProcessing(c: *Cpu, w: u32, pc: u32, top: u32, rn: u32, rd: u32, rm: u32) Status {
     if (top == 0) {
         if ((w & 0x0ff000f0) == 0x01200010) return bx(c, reg(c, rm, pc));
         if ((w & 0x0ff000f0) == 0x01200030) {
@@ -654,24 +343,7 @@ fn dataProcessing(c: *Cpu, w: u32, pc: u32, top: u32, rn: u32, rd: u32, rs: u32,
             set(c, rd, c.cpsr | 0x10);
             return .next;
         }
-        if ((w & 0x0fc000f0) == 0x00000090 or (w & 0x0ff000f0) == 0x00600090) {
-            var v = reg(c, rm, pc) *% reg(c, rs, pc);
-            if (w & (1 << 22) != 0) v = r(c, rd) -% v else if (w & (1 << 21) != 0) v +%= r(c, rd);
-            set(c, rn, v);
-            if (w & (1 << 20) != 0) setNZ(c, v);
-            return .next;
-        }
-        const dual_accumulate = w & 0x0ff000f0 == 0x00400090;
-        if ((w & 0x0f8000f0) == 0x00800090 or dual_accumulate) {
-            const signed = !dual_accumulate and w & (1 << 22) != 0;
-            var p: u64 = if (signed) @bitCast(@as(i64, @as(i32, @bitCast(reg(c, rm, pc)))) *% @as(i64, @as(i32, @bitCast(reg(c, rs, pc))))) else @as(u64, reg(c, rm, pc)) *% @as(u64, reg(c, rs, pc));
-            if (dual_accumulate) p += @as(u64, r(c, rn)) + r(c, rd)
-            else if (w & (1 << 21) != 0) p +%= (@as(u64, r(c, rn)) << 32) | r(c, rd);
-            set(c, rd, @truncate(p));
-            set(c, rn, @intCast(p >> 32));
-            if (w & (1 << 20) != 0) c.cpsr = (c.cpsr & 0x3fff_ffff) | (@as(u32, @intCast(p >> 63)) << 31) | (@as(u32, @intFromBool(p == 0)) << 30);
-            return .next;
-        }
+        if (multiply(c, w, pc)) |status| return status;
         if ((w & 0x0fb000f0) == 0x01000090) {
             const byte = w & (1 << 22) != 0;
             const a = addr(c, reg(c, rn, pc)) orelse return badAddr(c, w, pc);
@@ -681,53 +353,20 @@ fn dataProcessing(c: *Cpu, w: u32, pc: u32, top: u32, rn: u32, rd: u32, rs: u32,
             return .next;
         }
         if ((w & 0x0f800ff0) == 0x01800f90) {
-            const Ld = w & (1 << 20) != 0;
-            const sz = bits(w, 21, 2);
+            const n: u32 = switch (bits(w, 21, 2)) {
+                0 => 4,
+                1 => 8,
+                2 => 1,
+                else => 2,
+            };
             const a = addr(c, reg(c, rn, pc)) orelse return badAddr(c, w, pc);
-            if (Ld) {
-                c.excl = 1;
-                switch (sz) {
-                    0 => set(c, rd, ld(u32, a)),
-                    2 => set(c, rd, ld(u8, a)),
-                    3 => set(c, rd, ld(u16, a)),
-                    else => {
-                        set(c, rd, ld(u32, a));
-                        set(c, rd + 1, ld(u32, a + 4));
-                    },
-                }
+            if (w & (1 << 20) != 0) {
+                const v = loadExclusive(c, a, n);
+                set(c, rd, @truncate(v));
+                if (n == 8) set(c, rd + 1, @truncate(v >> 32));
             } else {
-                const ok = c.excl == 0 or switch (sz) {
-                    0 => st(u32, c, a, r(c, rm)),
-                    2 => st(u8, c, a, @truncate(r(c, rm))),
-                    3 => st(u16, c, a, @truncate(r(c, rm))),
-                    else => st(u32, c, a, r(c, rm)) and st(u32, c, a + 4, r(c, rm + 1)),
-                };
-                if (!ok) return badAddr(c, w, pc);
-                set(c, rd, c.excl ^ 1);
-                c.excl = 0;
-            }
-            return .next;
-        }
-        if ((w & 0x0f900090) == 0x01000080) {
-            const o = bits(w, 21, 2);
-            const x = bits(w, 5, 1);
-            const y = bits(w, 6, 1);
-            const m = reg(c, rm, pc);
-            const s = reg(c, rs, pc);
-            switch (o) {
-                0 => set(c, rn, halfAccumulate(c, signedHalf(m, x), signedHalf(s, y), r(c, rd))),
-                3 => set(c, rn, @bitCast(signedHalf(m, x) *% signedHalf(s, y))),
-                1 => {
-                    // SMLAW sets Q when its accumulation overflows, as SMLA does
-                    const p: i64 = @as(i64, @as(i32, @bitCast(m))) * @as(i64, signedHalf(s, y)) >> 16;
-                    set(c, rn, if (x == 0) halfAccumulate(c, @intCast(p), 1, r(c, rd)) else @truncate(@as(u64, @bitCast(p))));
-                },
-                else => {
-                    const p: u64 = @bitCast(@as(i64, signedHalf(m, x)) * @as(i64, signedHalf(s, y)));
-                    const acc = ((@as(u64, r(c, rn)) << 32) | r(c, rd)) +% p;
-                    set(c, rd, @truncate(acc));
-                    set(c, rn, @intCast(acc >> 32));
-                },
+                const stored = storeExclusive(c, a, n, r(c, rm), if (n == 8) r(c, rm + 1) else 0) orelse return badAddr(c, w, pc);
+                set(c, rd, @intFromBool(!stored));
             }
             return .next;
         }
@@ -809,10 +448,10 @@ fn logic(o: u32, a: u32, t: u32) u32 {
         else => ~t,
     };
 }
-inline fn sxb(v: u32) u32 {
+pub inline fn sxb(v: u32) u32 {
     return @bitCast(@as(i32, @as(i8, @bitCast(@as(u8, @truncate(v))))));
 }
-inline fn sxh(v: u32) u32 {
+pub inline fn sxh(v: u32) u32 {
     return @bitCast(@as(i32, @as(i16, @bitCast(@as(u16, @truncate(v))))));
 }
 inline fn rev16(v: u32) u32 {
@@ -898,8 +537,100 @@ fn halfAccumulate(c: *Cpu, a: i32, b: i32, acc: u32) u32 {
     if (sum > std.math.maxInt(i32) or sum < std.math.minInt(i32)) c.cpsr |= 1 << 27;
     return @truncate(@as(u64, @bitCast(sum)));
 }
+/// The products of n's and m's halves (m's swapped first for the X forms), the top one subtracted for SMLSD/SMLSLD
+fn dualProduct(n: u32, m: u32, exchange: bool, subtract: bool) i64 {
+    const swapped = if (exchange) std.math.rotr(u32, m, 16) else m;
+    const low = @as(i64, signedHalf(n, 0)) * signedHalf(swapped, 0);
+    const high = @as(i64, signedHalf(n, 1)) * signedHalf(swapped, 1);
+    return if (subtract) low - high else low + high;
+}
+/// SMLAD/SMLSD, SMUAD/SMUSD with a zero accumulator: Q is set when the sum overflows 32 bits
+fn dualAccumulate(c: *Cpu, n: u32, m: u32, exchange: bool, subtract: bool, acc: u32) u32 {
+    const sum = dualProduct(n, m, exchange, subtract) + @as(i32, @bitCast(acc));
+    if (sum > std.math.maxInt(i32) or sum < std.math.minInt(i32)) c.cpsr |= 1 << 27;
+    return @truncate(@as(u64, @bitCast(sum)));
+}
+/// SMLAW<y>/SMULW<y>: the top 32 bits of the 48-bit product of n and m's half, accumulated as SMLA does
+fn wordHalfAccumulate(c: *Cpu, n: u32, m: u32, top: u32, acc: ?u32) u32 {
+    const p: i64 = @as(i64, @as(i32, @bitCast(n))) * @as(i64, signedHalf(m, top)) >> 16;
+    return if (acc) |a| halfAccumulate(c, @intCast(p), 1, a) else @truncate(@as(u64, @bitCast(p)));
+}
+fn byteDifferences(n: u32, m: u32, acc: u32) u32 {
+    var sum = acc;
+    var i: u5 = 0;
+    while (i < 4) : (i += 1) sum +%= @abs(@as(i32, @intCast((n >> (8 * i)) & 255)) - @as(i32, @intCast((m >> (8 * i)) & 255)));
+    return sum;
+}
 
-fn media(c: *Cpu, w: u32, pc: u32, rd: u32, rn: u32, rm: u32, rs: u32) Status {
+/// RdHi:RdLo (19:16 and 15:12) set to the product plus, when `accumulate`, their own value
+fn accumulateLong(c: *Cpu, w: u32, product: u64, accumulate: bool) u64 {
+    const hi = bits(w, 16, 4);
+    const lo = bits(w, 12, 4);
+    const sum = product +% if (accumulate) (@as(u64, r(c, hi)) << 32) | r(c, lo) else 0;
+    set(c, lo, @truncate(sum));
+    set(c, hi, @intCast(sum >> 32));
+    return sum;
+}
+/// MUL, MLA, MLS, the long multiplies and the halfword multiplies, as Thumb's run too
+/// (thumbarm.multiply). Rd (RdHi) is at 19:16, the accumulator (RdLo) at 15:12.
+fn multiply(c: *Cpu, w: u32, pc: u32) ?Status {
+    if (w & 0xf0 != 0x90 and w & 0x90 != 0x80) return null;
+    const rn = bits(w, 16, 4);
+    const rd = bits(w, 12, 4);
+    const m = reg(c, w & 15, pc);
+    const s = reg(c, bits(w, 8, 4), pc);
+    if ((w & 0x0fc000f0) == 0x00000090 or (w & 0x0ff000f0) == 0x00600090) {
+        var v = m *% s;
+        if (w & (1 << 22) != 0) v = r(c, rd) -% v else if (w & (1 << 21) != 0) v +%= r(c, rd);
+        set(c, rn, v);
+        if (w & (1 << 20) != 0) setNZ(c, v);
+        return .next;
+    }
+    const dual_accumulate = w & 0x0ff000f0 == 0x00400090;
+    if ((w & 0x0f8000f0) == 0x00800090 or dual_accumulate) {
+        const signed = !dual_accumulate and w & (1 << 22) != 0;
+        var p: u64 = if (signed) @bitCast(@as(i64, @as(i32, @bitCast(m))) *% @as(i64, @as(i32, @bitCast(s)))) else @as(u64, m) *% @as(u64, s);
+        if (dual_accumulate) p += @as(u64, r(c, rn)) + r(c, rd);
+        const v = accumulateLong(c, w, p, !dual_accumulate and w & (1 << 21) != 0);
+        if (w & (1 << 20) != 0) c.cpsr = (c.cpsr & 0x3fff_ffff) | (@as(u32, @intCast(v >> 63)) << 31) | (@as(u32, @intFromBool(v == 0)) << 30);
+        return .next;
+    }
+    if ((w & 0x0f900090) == 0x01000080) {
+        const x = bits(w, 5, 1);
+        const y = bits(w, 6, 1);
+        switch (bits(w, 21, 2)) {
+            0 => set(c, rn, halfAccumulate(c, signedHalf(m, x), signedHalf(s, y), r(c, rd))),
+            3 => set(c, rn, @bitCast(signedHalf(m, x) *% signedHalf(s, y))),
+            1 => set(c, rn, wordHalfAccumulate(c, m, s, y, if (x == 0) r(c, rd) else null)),
+            else => _ = accumulateLong(c, w, @bitCast(@as(i64, signedHalf(m, x)) * @as(i64, signedHalf(s, y))), true),
+        }
+        return .next;
+    }
+    return null;
+}
+/// The media multiplies: SMLAD/SMLSD (SMUAD/SMUSD where Ra is 15), SMLALD/SMLSLD, USADA8 and
+/// SMMLA/SMMLS, the second operand at 11:8 swapped by the X forms
+fn multiplyMedia(c: *Cpu, w: u32, pc: u32) ?Status {
+    const rn = bits(w, 16, 4);
+    const rd = bits(w, 12, 4);
+    const m = reg(c, w & 15, pc);
+    const s = reg(c, bits(w, 8, 4), pc);
+    const acc = if (rd == 15) 0 else r(c, rd);
+    if ((w & 0x0ff000f0) == 0x07800010) {
+        set(c, rn, byteDifferences(m, s, acc));
+    } else if ((w & 0x0fb00090) == 0x07000010) {
+        const exchange = w & 0x20 != 0;
+        const subtract = w & 0x40 != 0;
+        if (w & (1 << 22) == 0) set(c, rn, dualAccumulate(c, m, s, exchange, subtract, acc)) else _ = accumulateLong(c, w, @bitCast(dualProduct(m, s, exchange, subtract)), true);
+    } else if ((w & 0x0ff000d0) == 0x07500010 or (w & 0x0ff000d0) == 0x075000d0) {
+        const subtract = w & 0x80 != 0;
+        if (subtract and rd == 15) return fault(c, .undefined, w, pc);
+        set(c, rn, multiplyHigh(m, s, acc, subtract, w & 0x20 != 0));
+    } else return null;
+    return .next;
+}
+
+fn media(c: *Cpu, w: u32, pc: u32, rd: u32, rn: u32, rm: u32) Status {
     const op1 = bits(w, 20, 5);
     const op2b = bits(w, 5, 3);
     const RM = reg(c, rm, pc);
@@ -954,25 +685,7 @@ fn media(c: *Cpu, w: u32, pc: u32, rd: u32, rn: u32, rm: u32, rs: u32) Status {
         set(c, rd, packHalf(RN, RM, @intCast(bits(w, 7, 5)), w & (1 << 6) != 0));
         return .next;
     }
-    if ((w & 0x0ff000f0) == 0x07800010) {
-        const s = reg(c, rs, pc);
-        var sum: u32 = if (rd == 15) 0 else r(c, rd);
-        var i: u5 = 0;
-        while (i < 4) : (i += 1) sum +%= @abs(@as(i32, @intCast((RM >> (8 * i)) & 255)) - @as(i32, @intCast((s >> (8 * i)) & 255)));
-        set(c, rn, sum);
-        return .next;
-    }
-    if ((w & 0x0ff000f0) == 0x0700f010) {
-        set(c, rn, RM *% reg(c, rs, pc));
-        return .next;
-    }
-    if ((w & 0x0ff000d0) == 0x07500010 or (w & 0x0ff000d0) == 0x075000d0) {
-        const subtract = w & 0x80 != 0;
-        if (subtract and rd == 15) return fault(c, .undefined, w, pc);
-        set(c, rn, multiplyHigh(RM, reg(c, rs, pc), if (rd == 15) 0 else r(c, rd), subtract, w & 0x20 != 0));
-        return .next;
-    }
-    return fault(c, .unimplemented, w, pc);
+    return multiplyMedia(c, w, pc) orelse fault(c, .unimplemented, w, pc);
 }
 
 fn swi(c: *Cpu) Status {
@@ -994,172 +707,6 @@ fn swi(c: *Cpu) Status {
         },
     }
     return .jump;
-}
-
-inline fn vreg(comptime T: type, c: *Cpu, n: u32) *align(@sizeOf(T)) T {
-    const per = 16 / @sizeOf(T);
-    return @ptrCast(@alignCast(&c.v[n / per][(n % per) * @sizeOf(T)]));
-}
-fn vfp(c: *Cpu, w: u32, pc: u32) ?Status {
-    const cp = bits(w, 8, 4);
-    if (cp != 10 and cp != 11) return null;
-    const dp = cp == 11;
-    const top = bits(w, 24, 4);
-    const Dd = bits(w, 22, 1);
-    const N = bits(w, 7, 1);
-    const M = bits(w, 5, 1);
-    const vd = bits(w, 12, 4);
-    const vn = bits(w, 16, 4);
-    const vm = bits(w, 0, 4);
-    const d = if (dp) (Dd << 4) | vd else (vd << 1) | Dd;
-    const n = if (dp) (N << 4) | vn else (vn << 1) | N;
-    const m = if (dp) (M << 4) | vm else (vm << 1) | M;
-    if (top == 12 or top == 13) {
-        const P = bits(w, 24, 1) != 0;
-        const U = bits(w, 23, 1) != 0;
-        const W = bits(w, 21, 1) != 0;
-        const Ld = bits(w, 20, 1) != 0;
-        const rn = bits(w, 16, 4);
-        const imm8 = w & 255;
-        if (top == 12 and !U and !W and bits(w, 21, 2) == 2) {
-            const rt = bits(w, 12, 4);
-            const rt2 = bits(w, 16, 4);
-            const lo = if (dp) m * 2 else m;
-            if (Ld) {
-                set(c, rt, vreg(u32, c, lo).*);
-                set(c, rt2, vreg(u32, c, lo + 1).*);
-            } else {
-                vreg(u32, c, lo).* = r(c, rt);
-                vreg(u32, c, lo + 1).* = r(c, rt2);
-            }
-            return .next;
-        }
-        if (P and !W) {
-            const base = if (rn == 15) (pc +% 8) & ~@as(u32, 3) else r(c, rn);
-            const a = addr(c, if (U) base +% imm8 * 4 else base -% imm8 * 4) orelse return badAddr(c, w, pc);
-            if (Ld) {
-                if (dp) vreg(u32, c, d * 2).* = ld(u32, a) else vreg(u32, c, d).* = ld(u32, a);
-                if (dp) vreg(u32, c, d * 2 + 1).* = ld(u32, a + 4);
-            } else {
-                if (!st(u32, c, a, vreg(u32, c, if (dp) d * 2 else d).*)) return badAddr(c, w, pc);
-                if (dp and !st(u32, c, a + 4, vreg(u32, c, d * 2 + 1).*)) return badAddr(c, w, pc);
-            }
-            return .next;
-        }
-        const count = if (dp) imm8 >> 1 else imm8;
-        const nbytes = imm8 * 4;
-        var a = addr(c, if (U) r(c, rn) else r(c, rn) -% nbytes) orelse return badAddr(c, w, pc);
-        var i: u32 = 0;
-        while (i < count) : (i += 1) {
-            const words: u32 = if (dp) 2 else 1;
-            var k: u32 = 0;
-            while (k < words) : (k += 1) {
-                const slot = if (dp) (d + i) * 2 + k else d + i;
-                if (Ld) vreg(u32, c, slot).* = ld(u32, a) else if (!st(u32, c, a, vreg(u32, c, slot).*)) return badAddr(c, w, pc);
-                a += 4;
-            }
-        }
-        if (W) set(c, rn, if (U) r(c, rn) +% nbytes else r(c, rn) -% nbytes);
-        return .next;
-    }
-    if (top != 14) return null;
-    if (w & 0x10 != 0) {
-        const rt = bits(w, 12, 4);
-        const o = bits(w, 21, 3);
-        const Ld = bits(w, 20, 1) != 0;
-        if (dp and !Ld and o & 4 != 0 and w & 0x4f == 0) {
-            const q = bits(w, 21, 1);
-            const size: u32 = if (w & (1 << 22) != 0) 1 else if (w & (1 << 5) != 0) 2 else 4;
-            if (q != 0 and n & 1 != 0) return fault(c, .undefined, w, pc);
-            const value = r(c, rt);
-            const out: [*]u8 = @ptrCast(vreg(u64, c, n));
-            var i: u32 = 0;
-            while (i < (if (q != 0) @as(u32, 16) else 8)) : (i += 1) out[i] = @truncate(value >> @intCast((i % size) * 8));
-            return .next;
-        }
-        if (o == 0 and !dp) {
-            if (Ld) set(c, rt, vreg(u32, c, n).*) else vreg(u32, c, n).* = reg(c, rt, pc);
-            return .next;
-        }
-        if (o == 7 and !dp) {
-            if (Ld) {
-                if (vn == 1) {
-                    if (rt == 15) c.cpsr = (c.cpsr & 0x0fff_ffff) | (c.fpcr & 0xf000_0000) else set(c, rt, c.fpcr);
-                } else set(c, rt, if (vn == 0) 0x410330c0 else if (vn == 6) 0x11111111 else if (vn == 7) 0x00011100 else 0);
-            } else if (vn == 1) c.fpcr = r(c, rt);
-            return .next;
-        }
-        if (dp and (Ld or o < 4) and w & 15 == 0) {
-            const size: u32 = if (w & (1 << 22) != 0) 1 else if (w & 0x20 != 0) 2 else 4;
-            if (size == 4 and w & 0x800040 != 0) return fault(c, .undefined, w, pc);
-            const offset = (bits(w, 21, 1) << 2) | (if (size == 1) bits(w, 5, 2) else if (size == 2) bits(w, 6, 1) << 1 else 0);
-            const a = @as(u32, @intFromPtr(vreg(u64, c, n))) + offset;
-            const unsigned = w & (1 << 23) != 0;
-            if (Ld) set(c, rt, switch (size) {
-                1 => if (unsigned) ld(u8, a) else sxb(ld(u8, a)),
-                2 => if (unsigned) ld(u16, a) else sxh(ld(u16, a)),
-                else => ld(u32, a),
-            }) else switch (size) {
-                1 => mem.ptr(u8, a).* = @truncate(r(c, rt)),
-                2 => mem.ptr(u16, a).* = @truncate(r(c, rt)),
-                else => mem.ptr(u32, a).* = r(c, rt),
-            }
-            return .next;
-        }
-        return null;
-    }
-    return if (dp) vfpArith(f64, c, w, d, n, m) else vfpArith(f32, c, w, d, n, m);
-}
-fn vfpArith(comptime F: type, c: *Cpu, w: u32, d: u32, n: u32, m: u32) ?Status {
-    const dp = F == f64;
-    const opc1 = bits(w, 20, 4) & 0xb;
-    const o6 = bits(w, 6, 1) != 0;
-    const vd = vreg(F, c, d).*;
-    const vn = vreg(F, c, n).*;
-    const vm = vreg(F, c, m).*;
-    switch (opc1) {
-        0x0 => vreg(F, c, d).* = if (o6) vd - vn * vm else vd + vn * vm,
-        0x1 => vreg(F, c, d).* = if (o6) -vd - vn * vm else -vd + vn * vm,
-        0x2 => vreg(F, c, d).* = if (o6) -(vn * vm) else vn * vm,
-        0x3 => vreg(F, c, d).* = if (o6) vn - vm else vn + vm,
-        0x8 => {
-            if (o6) return null;
-            vreg(F, c, d).* = vn / vm;
-        },
-        0x9 => vreg(F, c, d).* = if (o6) fp.fma(F, -vn, vm, -vd) else fp.fma(F, vn, vm, -vd),
-        0xa => vreg(F, c, d).* = if (o6) fp.fma(F, -vn, vm, vd) else fp.fma(F, vn, vm, vd),
-        0xb => {
-            if (!o6) {
-                const imm = simd.vfpImm(bits(w, 16, 4) << 4 | (w & 15), dp);
-                if (dp) vreg(u32, c, d * 2).* = @truncate(imm) else vreg(u32, c, d).* = @truncate(imm);
-                if (dp) vreg(u32, c, d * 2 + 1).* = @intCast(imm >> 32);
-                return .next;
-            }
-            const opc2 = bits(w, 16, 4);
-            const o7 = bits(w, 7, 1) != 0;
-            switch (opc2) {
-                0 => vreg(F, c, d).* = if (o7) @abs(vm) else vm,
-                1 => vreg(F, c, d).* = if (o7) @sqrt(vm) else -vm,
-                4, 5 => c.fpcr = (c.fpcr & 0x0fff_ffff) | fp.fcmp(vd, if (opc2 == 5) @as(F, 0) else vm),
-                7 => {
-                    if (!o7) return null;
-                    if (dp) vreg(f32, c, (bits(w, 12, 4) << 1) | bits(w, 22, 1)).* = @floatCast(vm) else vreg(f64, c, (bits(w, 22, 1) << 4) | bits(w, 12, 4)).* = vreg(f32, c, m).*;
-                },
-                8 => {
-                    const src = vreg(u32, c, (bits(w, 0, 4) << 1) | bits(w, 5, 1)).*;
-                    vreg(F, c, d).* = if (o7) @floatFromInt(@as(i32, @bitCast(src))) else @floatFromInt(src);
-                },
-                12, 13 => {
-                    const t = if (o7) @trunc(vm) else fp.rne(F, vm);
-                    const dst = vreg(u32, c, (bits(w, 12, 4) << 1) | bits(w, 22, 1));
-                    dst.* = if (opc2 == 13) @bitCast(fp.toInt(i32, t)) else fp.toInt(u32, t);
-                },
-                else => return null,
-            }
-        },
-        else => return null,
-    }
-    return .next;
 }
 
 fn execThumb(c: *Cpu, pc: u32) Status {
@@ -1184,23 +731,23 @@ inline fn execThumb32(c: *Cpu, h: u32, second: u32, pc: u32) ?Status {
     if (execThumb32Branches(c, h, second, pc)) |status| return status;
     if (h & 0xef80 == 0xef80 and second & 0x10 != 0 and (h & 0x38 != 0 or second & 0x80 != 0)) {
         c.pc = pc + 4;
-        return neonShift(c, 0xf2000000 | ((h & 0x1000) << 12) | ((h & 0xff) << 16) | second, pc);
+        return neon.neonShift(c, 0xf2000000 | ((h & 0x1000) << 12) | ((h & 0xff) << 16) | second, pc);
     }
     if (h & 0xffb0 == 0xffb0 and second & 0x10 == 0) {
         c.pc = pc + 4;
-        return neonMisc(c, 0xf3000000 | ((h & 0xff) << 16) | second, pc);
+        return neon.neonMisc(c, 0xf3000000 | ((h & 0xff) << 16) | second, pc);
     }
     if (h & 0xef80 == 0xef00 or (h & 0xffb0 == 0xefb0 and second & 0x10 == 0) or (h & 0xef80 == 0xef80 and second & 0x50 == 0x40)) {
         c.pc = pc + 4;
-        return neonSame(c, 0xf2000000 | ((h & 0x1000) << 12) | ((h & 0xff) << 16) | second, pc);
+        return neon.neonSame(c, 0xf2000000 | ((h & 0x1000) << 12) | ((h & 0xff) << 16) | second, pc);
     }
     if (h & 0xef80 == 0xef80 and second & 0x50 == 0) {
         c.pc = pc + 4;
-        return neonLong(c, 0xf2000000 | ((h & 0x1000) << 12) | ((h & 0xff) << 16) | second, pc);
+        return neon.neonLong(c, 0xf2000000 | ((h & 0x1000) << 12) | ((h & 0xff) << 16) | second, pc);
     }
     const cp = (second >> 8) & 15;
     if (cp == 10 or cp == 11) {
-        if (vfp(c, h << 16 | second, pc -% 4)) |status| {
+        if (vfp.vfp(c, h << 16 | second, pc -% 4)) |status| {
             if (status != .fault) c.pc = pc + 4;
             return status;
         }
@@ -1239,7 +786,7 @@ inline fn execThumb32Data(c: *Cpu, h: u32, h2: u32, pc: u32) ?Status {
         if (h2 & 0x10 == 0) return fault(c, .undefined, h << 16 | h2, pc);
         c.pc = pc + 4;
         const imm8 = ((h >> 5) & 0x80) | ((h & 7) << 4) | (h2 & 15);
-        return neonImmediate(c, h << 16 | h2, pc, imm8);
+        return neon.neonImmediate(c, h << 16 | h2, pc, imm8);
     }
     const wideMoveImm = h & 0xfbef;
     if (wideMoveImm == 0xf04f or wideMoveImm == 0xf06f) {
@@ -1339,26 +886,13 @@ inline fn execThumb32Data(c: *Cpu, h: u32, h2: u32, pc: u32) ?Status {
             return .next;
         }
     }
-    if ((h & 0xff80) == 0xfb80) {
-        const op = (h >> 4) & 7;
-        const dual_accumulate = op == 6 and h2 & 0x00f0 == 0x60;
-        if (op & 1 == 0 and (h2 & 0x00f0 == 0 or dual_accumulate)) {
-            const lo = h2 >> 12;
-            const hi = (h2 >> 8) & 15;
-            const n = h & 15;
-            const m = h2 & 15;
-            if (lo == 15 or hi == 15 or lo == hi or n == 15 or m == 15) return fault(c, .undefined, h << 16 | h2, pc);
-            var product: u64 = if (op == 0 or op == 4)
-                @bitCast(@as(i64, @as(i32, @bitCast(r(c, n)))) *% @as(i64, @as(i32, @bitCast(r(c, m)))))
-            else
-                @as(u64, r(c, n)) *% @as(u64, r(c, m));
-            if (dual_accumulate) product += @as(u64, r(c, hi)) + r(c, lo)
-            else if (op >= 4) product +%= (@as(u64, r(c, hi)) << 32) | r(c, lo);
+    if (h & 0xff00 == 0xfb00) {
+        if (thumbarm.multiply(h, h2)) |w| {
             c.pc = pc + 4;
-            set(c, lo, @truncate(product));
-            set(c, hi, @intCast(product >> 32));
-            return .next;
+            return (if (w & 0x0e00_0000 == 0) multiply(c, w, pc) else multiplyMedia(c, w, pc)).?;
         }
+        // SDIV/UDIV are not implemented
+        if (h & 0xffd0 != 0xfb90) return fault(c, .undefined, h << 16 | h2, pc);
     }
     if ((h & 0xfe00) == 0xea00) {
         if (h2 & 0x8000 != 0) return fault(c, .undefined, h << 16 | h2, pc);
@@ -1377,33 +911,6 @@ inline fn execThumb32Data(c: *Cpu, h: u32, h2: u32, pc: u32) ?Status {
             const out = thumbData(c, op, n, shifted.v, S);
             if (S and op <= 4) setNZC(c, out, shifted.carry);
             if (d != 15) set(c, d, out);
-            return .next;
-        }
-    }
-    if ((h & 0xfff0) == 0xfb50 or (h & 0xfff0) == 0xfb60) {
-        const a = h2 >> 12;
-        const subtract = h & 0x20 != 0;
-        if (h2 & 0xe0 != 0 or (subtract and a == 15)) return fault(c, .undefined, h << 16 | h2, pc);
-        set(c, bits(h2, 8, 4), multiplyHigh(r(c, h & 15), r(c, h2 & 15), if (a == 15) 0 else r(c, a), subtract, h2 & 0x10 != 0));
-        c.pc = pc + 4;
-        return .next;
-    }
-    if ((h & 0xfff0) == 0xfb10) {
-        if (h2 & 0xc0 != 0) return fault(c, .undefined, h << 16 | h2, pc);
-        const a = h2 >> 12;
-        const n = signedHalf(r(c, h & 15), bits(h2, 5, 1));
-        const m = signedHalf(r(c, h2 & 15), bits(h2, 4, 1));
-        set(c, bits(h2, 8, 4), if (a == 15) @bitCast(n * m) else halfAccumulate(c, n, m, r(c, a)));
-        c.pc = pc + 4;
-        return .next;
-    }
-    if ((h & 0xfff0) == 0xfb00) {
-        const op = (h2 >> 4) & 15;
-        const a = h2 >> 12;
-        if ((op == 0 or op == 1) and (op == 0 or a != 15)) {
-            c.pc = pc + 4;
-            const product = r(c, h & 15) *% r(c, h2 & 15);
-            set(c, (h2 >> 8) & 15, if (a == 15) product else if (op == 0) product +% r(c, a) else r(c, a) -% product);
             return .next;
         }
     }
@@ -1435,18 +942,14 @@ inline fn execThumb32Transfers(c: *Cpu, h: u32, h2: u32, pc: u32) ?Status {
         const a = addr(c, r(c, n) +% (if (extended) 0 else (h2 & 255) * 4)) orelse return badAddr(c, h << 16 | h2, pc);
         if ((load and status != 15) or (!load and status == 15)) return fault(c, .undefined, h << 16 | h2, pc);
         c.pc = pc + 4;
+        const size: u32 = if (double) 8 else if (byte) 1 else if (half) 2 else 4;
         if (load) {
-            if (double) set(c, (h2 >> 8) & 15, ld(u32, a + 4));
-            set(c, h2 >> 12, if (byte) ld(u8, a) else if (half) ld(u16, a) else ld(u32, a));
-            c.excl = 1;
+            const v = loadExclusive(c, a, size);
+            if (double) set(c, (h2 >> 8) & 15, @truncate(v >> 32));
+            set(c, h2 >> 12, @truncate(v));
         } else {
-            if (c.excl != 0) {
-                const value = r(c, h2 >> 12);
-                if (!(if (byte) st(u8, c, a, @truncate(value)) else if (half) st(u16, c, a, @truncate(value)) else st(u32, c, a, value))) return badAddr(c, h << 16 | h2, pc);
-                if (double and !st(u32, c, a + 4, r(c, (h2 >> 8) & 15))) return badAddr(c, h << 16 | h2, pc);
-            }
-            set(c, status, c.excl ^ 1);
-            c.excl = 0;
+            const stored = storeExclusive(c, a, size, r(c, h2 >> 12), if (double) r(c, (h2 >> 8) & 15) else 0) orelse return badAddr(c, h << 16 | h2, pc);
+            set(c, status, @intFromBool(!stored));
         }
         return .next;
     }
@@ -1539,7 +1042,7 @@ inline fn execThumb32Branches(c: *Cpu, h: u32, h2: u32, pc: u32) ?Status {
 inline fn execThumb32Late(c: *Cpu, h: u32, h2: u32, pc: u32) ?Status {
     if ((h & 0xff10) == 0xf900) {
         c.pc = pc + 4;
-        return neonStruct(c, h << 16 | h2, pc);
+        return neon.neonStruct(c, h << 16 | h2, pc);
     }
     const wideMove = h & 0xfbf0;
     if (wideMove == 0xf240 or wideMove == 0xf2c0) {

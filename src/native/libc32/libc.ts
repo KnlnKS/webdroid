@@ -4,7 +4,7 @@
 // data through the Cpu's thread hooks. A 64-bit process runs bionic itself (bionic.ts).
 
 import { mem } from "../mem.ts";
-import { hostLib, hostData, markKernelEntries, NORET, ARG0, SERVED, ptr, vaList, type HostFn, retF, retD, PTR, stp, ldp, cstr } from "../host.ts";
+import { hostLib, hostData, markKernelEntries, NORET, ARG0, ptr, vaList, type HostFn, retF, retD, PTR, stp, ldp, cstr } from "../host.ts";
 import { E, strerror, PAGE_SIZE } from "../abi.ts";
 import { utf8 as codec } from "../../jvm/abi.ts";
 import { invalidateRange, setThreadHooks, type Cpu } from "../cpu.ts";
@@ -15,7 +15,7 @@ import { stdioLibc } from "./stdio.ts";
 import { PTHREAD_LIBC, bindThread, endThread } from "./pthread.ts";
 import { KERNEL_SYSCALLS, rawSyscall } from "../syscall.ts";
 import { asWrappers, fail, fillRandom, kernelResult, logLine, wrapped } from "../kernel.ts";
-import { mmap } from "../vm.ts";
+import { nativeMmap } from "../vm.ts";
 import { zlibLibc } from "./zlib.ts";
 import { libmLibc } from "./libm.ts";
 import { localeLibc, mbLen, wlen, wstr, WCTEST, WCTYPES } from "./locale.ts";
@@ -28,6 +28,7 @@ import { sysconf } from "../../shell/procfs.ts";
 import { wallMillis } from "../../guest-clock.ts";
 import { processEnv } from "../../shell/environment.ts";
 import { FDSAN_LIBC32 } from "../fdsan.ts";
+import { tlsAddress } from "../dl.ts";
 /** the C locale's month and weekday names (strftime, asctime) */
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -280,16 +281,19 @@ export function libcInit(): void {
     },
     setlocale: (_c, a) => { a.i(); const l = a.p(); return l && mem.cstr(l) !== "" && mem.cstr(l) !== "C" && mem.cstr(l) !== "POSIX" ? 0 : cLocale; },
     localeconv: () => localeConv,
-    mmap64: wrapped((_c, a) => mmap(a.va(), Number(a.va()), a.i(), a.i(), a.i(), Number(a.l()))),
+    mmap64: wrapped((_c, a) => nativeMmap(a.va(), Number(a.va()), a.i(), a.i(), a.i(), Number(a.l()))),
     // the raw syscalls a runtime issues past libc: futex is the one that must block
     // syscall(2), -1 with errno set on failure
     syscall: (cpu, a) => kernelResult(cpu, rawSyscall(cpu, a.i(), a)),
     cacheflush: (_c, a) => { const s = a.p(), e = a.p(); invalidateRange(s, e - s, "cacheflush"); return 0; },
     __aeabi_read_tp: (cpu) => cpu.tlsBase,
+    // the general-dynamic model's TlsIndex: { module id, offset }
+    __tls_get_addr: (cpu, a) => { const index = a.p(); return tlsAddress(cpu, mem.ld32(index), mem.ld32(index + 4)); },
 
-    malloc: SERVED, free: SERVED, calloc: SERVED, realloc: SERVED, memalign: SERVED, posix_memalign: SERVED, malloc_usable_size: SERVED,
     valloc: (_c, a) => mem.memalign(PAGE_SIZE, a.u()),
-    memcpy: SERVED, memmove: SERVED, memset: SERVED, memcmp: SERVED, memchr: SERVED,
+    // what the core serves but for an argument in the window
+    memcmp: (_c, a) => { const x = a.p(), y = a.p(), n = a.u(); return compare(mem.bytes(x, n), mem.bytes(y, n)); },
+    memchr: (_c, a) => { const p = a.p(), c = a.i() & 255, i = mem.bytes(p, a.u()).indexOf(c); return i < 0 ? 0 : ptr(p + i); },
     memmem: (_c, a) => {
       const h = a.p(), length = a.u(), n = a.p(), size = a.u();
       if (!size) return ptr(h);
@@ -305,21 +309,21 @@ export function libcInit(): void {
     },
     memrchr: (_c, a) => { const p = a.p(), c = a.i() & 255, n = a.u(); for (let i = p + n - 1; i >= p; i--) if (mem.u8[i] === c) return ptr(i); return 0; },
     bcopy: (_c, a) => { const s = a.p(), d = a.p(), n = a.u(); mem.memmove(d, s, n); },
-    bzero: (_c, a) => { const d = a.p(), n = a.u(); mem.memset(d, 0, n); },
 
-    strlen: SERVED, strnlen: SERVED,
+    strlen: (_c, a) => mem.strlen(a.p()), strnlen: (_c, a) => mem.strlen(a.p(), a.u()),
     strcpy: (_c, a) => { const d = a.p(), s = a.p(); const n = mem.strlen(s); mem.memmove(d, s, n + 1); return ARG0; },
     strncpy: (_c, a) => { strncpy(a.p(), a.p(), a.u()); return ARG0; },
     stpcpy: (_c, a) => { const d = a.p(), s = a.p(); const n = mem.strlen(s); mem.memmove(d, s, n + 1); return ptr(d + n); },
     strcat: (_c, a) => { const d = a.p(), s = a.p(); const dl = mem.strlen(d), n = mem.strlen(s); mem.memmove(d + dl, s, n + 1); return ARG0; },
     strncat: (_c, a) => { strncat(a.p(), a.p(), a.u()); return ARG0; },
-    strcmp: SERVED, strncmp: SERVED,
+    strcmp: (_c, a) => compare(cString(a.p()), cString(a.p())),
+    strncmp: (_c, a) => { const x = a.p(), y = a.p(), n = a.u(); return compare(cString(x, n), cString(y, n)); },
     strcasecmp: (_c, a) => strcmpAt(a.p(), a.p(), 0x7fffffff, true),
     strncasecmp: (_c, a) => strcmpAt(a.p(), a.p(), a.u(), true),
     strcoll: (_c, a) => strcmpAt(a.p(), a.p(), 0x7fffffff, false),
     strxfrm: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); const l = mem.strlen(s); if (n) { const k = Math.min(l, n - 1); mem.memmove(d, s, k); mem.st8(d + k, 0); } return l; },
-    strchr: (_c, a) => { const p = a.p(), c = a.i() & 255; for (let i = p; ; i++) { if (mem.u8[i] === c) return ptr(i); if (!mem.u8[i]) return 0; } },
-    strrchr: (_c, a) => { const p = a.p(), c = a.i() & 255; let r = 0; for (let i = p; ; i++) { if (mem.u8[i] === c) r = i; if (!mem.u8[i]) return ptr(r); } },
+    strchr: (_c, a) => { const p = a.p(), i = cString(p).indexOf(a.i() & 255); return i < 0 ? 0 : ptr(p + i); },
+    strrchr: (_c, a) => { const p = a.p(), i = cString(p).lastIndexOf(a.i() & 255); return i < 0 ? 0 : ptr(p + i); },
     strstr: (_c, a) => { const i = strstrAt(a.p(), a.p(), false); return i ? ptr(i) : 0; },
     strcasestr: (_c, a) => { const i = strstrAt(a.p(), a.p(), true); return i ? ptr(i) : 0; },
     strpbrk: (_c, a) => { const p = a.p(), set = byteSet(a.p()); for (let i = p; mem.u8[i]; i++) if (set[mem.u8[i]]) return ptr(i); return 0; },
@@ -471,11 +475,6 @@ export function libcInit(): void {
   M.strtold = M.strtod; M.strtold_l = M.strtod; M.__strchr_chk = M.strchr; M.__strrchr_chk = M.strrchr;
   M._setjmp = M.sigsetjmp = M.setjmp; M._longjmp = M.siglongjmp = M.longjmp;
   M.rand = M.random = M.lrand48; M.srand = M.srandom = M.srand48; M.ntohs = M.htons; M.ntohl = M.htonl;
-  M.__aeabi_memclr = M.__aeabi_memclr4 = M.__aeabi_memclr8 = M.bzero;
-  M.__aeabi_memset = M.__aeabi_memset4 = M.__aeabi_memset8 = (_c, a) => {
-    const d = a.p(), n = a.u(), value = a.i();
-    mem.memset(d, value, n);
-  };
   const libm = libmLibc();
   hostLib("libc.so", { ...asWrappers(KERNEL_SYSCALLS), ...M, ...stdioLibc(), ...PTHREAD_LIBC, ...libm, ...localeLibc(), ...SIGNAL_LIBC, ...procLibc(), ...netLibc(), ...FDSAN_LIBC32 });
   hostLib("libm.so", libm);
@@ -496,6 +495,13 @@ function strstrAt(h: number, n: number, ci: boolean): number {
     while (k < nl && low(u8[i + k]) === low(u8[n + k])) k++;
     if (k === nl) return i;
   }
+  return 0;
+}
+/** the C string at a with its NUL, through n bytes at most */
+const cString = (a: number, n = 0x7fffffff): Uint8Array => mem.bytes(a, Math.min(mem.strlen(a, n) + 1, n));
+/** memcmp's order of x and y, through the shorter */
+function compare(x: Uint8Array, y: Uint8Array): number {
+  for (let i = 0, n = Math.min(x.length, y.length); i < n; i++) if (x[i] !== y[i]) return x[i] - y[i];
   return 0;
 }
 const accept = new Uint8Array(256);

@@ -15,8 +15,9 @@ const post = (status: ProcessWorkerStatus) => globalThis.postMessage(status);
 let rateKnown!: (hz: number) => void;
 /** the display's rate, which the page sends once it has measured it */
 const rate = new Promise<number>((resolve) => { rateKnown = resolve; });
-async function prepare({ clock, jars, tier: ports }: Extract<ProcessWorkerMessage, { kind: "prestart" }>) {
+async function prepare({ clock, jars, tier: ports, pool }: Extract<ProcessWorkerMessage, { kind: "prestart" }>) {
   (await import("./guest-clock.ts")).attachGuestClockPort(clock);
+  if (pool) (await import("./native/shm.ts")).joinPool(pool);
   await import("./natives.ts");
   (await import("./android/framework.ts")).receivePlatformJars(jars);
   const [control, rpc, core, apex, cacerts, packages, device, skia, tier, config, jvmruntime, vsync] = await Promise.all([
@@ -45,7 +46,7 @@ globalThis.onmessage = async ({ data }: MessageEvent<ProcessWorkerMessage>) => {
     started = true;
     const p = await prepared;
     await attachWorkerBootstrap(data.bootstrap);
-    closeControl = p.rpc.serveCalls(data.control, p.control.workerControl(logs, () => phase, p.vsync.startDisplayLoop(false)));
+    closeControl = p.rpc.serveCalls(data.control, p.control.workerControl(logs, () => phase, p.vsync.startDisplayLoop(true)));
     p.core.jitStats.on = switchOn("jit", true);
     enter("packages");
     const boot = await p.packages.loadProcessPackages(data.bootstrap);

@@ -7,11 +7,17 @@ import { failedAnswer, fromProxyHeaders, parseProxyQuery, writeAnswer } from "./
 const DROP = /^(content-encoding|transfer-encoding|set-cookie)$/i;
 const DROP_FRAME = /^(x-frame-options|content-security-policy(-report-only)?|cross-origin-(opener|embedder)-policy)$/i;
 
+/** what a frame inside the cross-origin isolated page embeds on (serve-routes.ts' ISOLATION). Credentialless embedding
+ *  takes a WebView page's cross-origin subresources without their consent, as no-cors requests without credentials. */
+export const EMBEDDER = { "cross-origin-embedder-policy": "credentialless" };
+
 /** A WebView page reaches this server through its frame's fetches; a document loaded straight from it
  *  (a page's frame pointed at it) runs in an opaque origin, never as the origin that serves it. */
 export function sandboxDocument(request: Request, response: Response): Response {
-  if (/^(|document|iframe|frame|object|embed)$/.test(request.headers.get("sec-fetch-dest") ?? ""))
+  if (/^(|document|iframe|frame|object|embed)$/.test(request.headers.get("sec-fetch-dest") ?? "")) {
     response.headers.set("content-security-policy", "sandbox allow-scripts allow-forms allow-popups allow-modals");
+    for (const [name, value] of Object.entries(EMBEDDER)) response.headers.set(name, value);
+  }
   return response;
 }
 

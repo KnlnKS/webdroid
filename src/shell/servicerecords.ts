@@ -39,6 +39,8 @@ type Record = { pkg: string; process: string; cls: string; intent: ParcelData; r
   startRequested: boolean; stopIfKilled: boolean; lastStartId: number; starts: StartItem[]; foreground: boolean;
   bindings: Map<string, ServiceBinding>; restartDelay: number; restartTime: number; nextRestart: number; timer: GuestTimer | null; crashCount: number };
 const unawaited = (work: Promise<unknown> | null) => void work?.catch((error) => console.error("[services]", error));
+/** a ServiceRecord's identity: its component, in the process an isolated service's instance runs in */
+const nameOf = (pkg: string, process: string, cls: string) => pkg + "/" + process + "/" + cls;
 
 export class ServiceRecords {
   private port: ServicePort;
@@ -47,7 +49,7 @@ export class ServiceRecords {
   constructor(port: ServicePort) { this.port = port; }
 
   private record(pkg: string, process: string, cls: string, intent: ParcelData): Record {
-    const name = pkg + "/" + cls;
+    const name = nameOf(pkg, process, cls);
     let r = this.records.get(name);
     if (!r) this.records.set(name, r = { pkg, process, cls, intent, running: false, startRequested: false, stopIfKilled: false, lastStartId: 0, starts: [], foreground: false,
       bindings: new Map(), restartDelay: 0, restartTime: 0, nextRestart: 0, timer: null, crashCount: 0 });
@@ -59,7 +61,7 @@ export class ServiceRecords {
   async request(client: number | null, pkg: string, process: string, request: ServiceRequest): Promise<BinderHandle | null> {
     if (request.kind === "bind" || request.kind === "unbind") request = { ...request, key: client + "/" + request.key };
     if (request.kind === "unbind") this.unbind(request.key);
-    if (request.kind === "stop") this.stop(pkg, request.cls);
+    if (request.kind === "stop") this.stop(pkg, process, request.cls);
     const waits = request.kind === "unbind" || request.kind === "stop" || request.kind === "peek" || request.kind === "bind" && !(request.flags & BIND_AUTO_CREATE);
     // the process is up (attaching the bindings that wait on it) before this binding waits too
     const sent = this.port.send(client, pkg, process, request, !waits);
@@ -102,8 +104,8 @@ export class ServiceRecords {
     return [...this.records.values()].filter((r) => r.running && r.pkg === pkg && r.process === process).flatMap((r) => [...r.bindings.values()]);
   }
   /** stopService of a service waiting to restart: its explicit start is gone */
-  private stop(pkg: string, cls: string): void {
-    const r = this.records.get(pkg + "/" + cls);
+  private stop(pkg: string, process: string, cls: string): void {
+    const r = this.records.get(nameOf(pkg, process, cls));
     if (!r?.timer) return;
     r.startRequested = false; r.starts = [];
     this.settle(r);
@@ -111,7 +113,7 @@ export class ServiceRecords {
   /** the start state of the services `process` runs, as its ActiveServices changes it */
   starts(pkg: string, process: string) {
     // delivered starts precede pending ones
-    const at = (cls: string) => this.records.get(pkg + "/" + cls);
+    const at = (cls: string) => this.records.get(nameOf(pkg, process, cls));
     const delivered = (r: Record | undefined, id: number) => r ? r.starts.findIndex((si) => si.id === id && si.delivered !== null) : -1;
     return {
       /** realStartServiceLocked; bringUpServiceLocked takes it off the restart list */
@@ -231,7 +233,7 @@ export class ServiceRecords {
   private remove(r: Record): void {
     if (r.timer !== null) clearGuestTimeout(r.timer);
     for (const key of r.bindings.keys()) this.byKey.delete(key);
-    this.records.delete(r.pkg + "/" + r.cls);
+    this.records.delete(nameOf(r.pkg, r.process, r.cls));
   }
   /** scheduleServiceRestartLocked(r, allowCancel = true); a persistent package's services restart at once */
   private schedule(r: Record, persistent: boolean): boolean {

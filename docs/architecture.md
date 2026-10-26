@@ -147,8 +147,8 @@ realm's files go through one `pathOwner()` (`src/shell/file-path.ts`).
 ARM32 and A64 execute in `src/native/core/` (Zig compiled to Wasm), with an interpreter and a JIT whose results
 must agree; `src/native/cpu.ts` drives asynchronous exits, and host calls exit `run_slice`. 64-bit processes run
 the reference build's bionic as guest code (decision below). 32-bit processes keep the HLE libc
-(`src/native/libc32/`), because the reference build ships no 32-bit bionic. EGL/GLES (onto WebGL), audio, media codecs and DRM stay high-level
-emulation. Networking goes through the dev server's or Worker's HTTP proxy, DNS lookup and TCP WebSocket relay.
+(`src/native/libc32/`), because the reference build ships no 32-bit bionic. EGL/GLES (onto WebGL), Vulkan (onto WebGPU in
+`src/native/vulkan/`, which translates SPIR-V to WGSL), audio, media codecs and DRM stay high-level emulation. Networking goes through the dev server's or Worker's HTTP proxy, DNS lookup and TCP WebSocket relay.
 
 ## Rendering and text
 

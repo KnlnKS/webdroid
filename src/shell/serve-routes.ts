@@ -1,7 +1,13 @@
 // What the dev server (server.ts) and the deployed Worker (worker/index.ts) both answer; each host lends its
 // bridge sessions, its resolver, its renderer origin and its upstream fetch.
 import { WEB_FRAME, WEB_PROXY_WORKER } from "./webinject.ts";
-import { forwardDnsMessage, proxyRequest, type ProxyOptions } from "./proxy.ts";
+import { EMBEDDER, forwardDnsMessage, proxyRequest, type ProxyOptions } from "./proxy.ts";
+import { WORKER_SCRIPTS } from "../worker-scripts.ts";
+
+/** Cross-origin isolation, which lets process Workers share memory: the paths of the shell page and its Worker scripts
+ *  answer with it, on the dev server and in the Pages deployment's _headers. A subresource needs none. */
+export const ISOLATION = { "cross-origin-opener-policy": "same-origin", ...EMBEDDER };
+export const ISOLATED_PATHS = ["/", ...Object.values(WORKER_SCRIPTS).map(({ url }) => url)];
 
 /** a renderer bridge's id, as the page's crypto.randomUUID() names it */
 const BRIDGE_ID = /^[a-f0-9-]{36}$/;
@@ -37,7 +43,7 @@ export function fromApp(url: URL, header: Header, host: ServeHost): boolean {
   return origin !== null && host.isApp(origin, url);
 }
 const forbidden = () => new Response("forbidden", { status: 403 });
-const frame = () => new Response(WEB_FRAME, { headers: { "content-type": "text/html", "cache-control": "no-store" } });
+const frame = () => new Response(WEB_FRAME, { headers: { "content-type": "text/html", "cache-control": "no-store", ...EMBEDDER } });
 const bridgeCall = async (request: Request, host: ServeHost): Promise<Response> => {
   const id = new URL(request.url).searchParams.get("id") ?? "";
   return BRIDGE_ID.test(id) ? host.bridge(request, id) : new Response("bad bridge", { status: 403 });

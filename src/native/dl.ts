@@ -9,6 +9,7 @@ import { KLAYOUT } from "./kernel.ts";
 import { cpuFor, cpus, setSymbolizeHook, isA64, type Cpu } from "./cpu.ts";
 import type { TombstoneFrame } from "./tombstone.ts";
 import { trampSlot, RET_SENTINEL } from "./abi.ts";
+import { TLS_BLOCKS, TLS_MODULES } from "./core.ts";
 import { rt, type Gen } from "../jvm/runtime.ts";
 import { curThread } from "../jvm/natives/jentry.ts";
 import { vfs } from "../shell/vfs.ts";
@@ -26,6 +27,9 @@ let dlerrorMsg: string | null = null;
 let dlerrorBuf = 0;
 const inflight = new Map<string, Promise<Module>>();
 const tlsDescriptors = new Map<number, { mod: Module; offset: number }>();
+/** the loaded images with a TLS segment, by the module id DTPMOD relocations name */
+const tlsModules = new Map<number, Module>();
+let nextTlsId = 1;
 let tlsDescResolver = 0;
 /** names the host serves in place of any image's own definition */
 export const interposed = new Map<string, number>();
@@ -93,8 +97,11 @@ export async function loadModule(file: string, bytes?: Uint8Array, link = false,
       else if (!hostLibNames().includes(n) && libSource(n)) yield loadModule(n, undefined, link, cpu);
     }
     yield* resolveIfuncs(mod, cpu);
-    if (mod.tls) linkerHooks.placeTls?.(mod);
-    relocate(resolveGlobal);
+    if (mod.tls) {
+      tlsModules.set(mod.tlsId = nextTlsId++, mod);
+      linkerHooks.placeTls?.(mod);
+    }
+    relocate(resolveGlobal, resolveTls);
     installTlsDescriptors(mod);
     yield linkerHooks.linked(mod, cpu);
     if (!link) yield* initialize(mod, cpu);
@@ -126,7 +133,7 @@ function installTlsDescriptors(mod: Module): void {
     const tls = entry.mod.tls;
     if (!tls) return cpu.fault("TLS descriptor without a TLS segment");
     if (entry.mod.tpOffset !== null) return entry.mod.tpOffset + entry.offset;
-    return BigInt(cpu.staticTls(entry.mod, tls.image, tls.size, tls.align) + entry.offset) - cpu.tlsVa;
+    return BigInt(cpu.staticTls(entry.mod, tls) + entry.offset) - cpu.tlsVa;
   });
   for (const entry of mod.tlsDescriptors) {
     tlsDescriptors.set(entry.addr, { mod, offset: entry.offset });
@@ -167,10 +174,29 @@ async function unload(root: Module, cpu: Cpu): Promise<void> {
     byName.delete(m.name);
     handles.forEach((h, i) => { if (h && "mod" in h && h.mod === m) handles[i] = null; });
     for (const at of tlsDescriptors.keys()) if (at >= m.base && at < m.end) tlsDescriptors.delete(at);
-    if (m.tls) for (const c of cpus) c.releaseTls(m);
+    tlsModules.delete(m.tlsId);
+    if (m.tls) for (const c of cpus) { c.releaseTls(m); dynamicTls(c, m.tlsId, 0); }
     mem.releaseImage(m.start, m.end - m.start);
   }
 }
+
+/** `__tls_get_addr`: this thread's copy of offset `offset` in TLS module `id`'s block, made on its first use */
+export function tlsAddress(cpu: Cpu, id: number, offset: number): number {
+  const m = tlsModules.get(id), tls = m?.tls;
+  if (!m || !tls) return cpu.fault(`__tls_get_addr: no TLS module ${id}`);
+  if (m.tpOffset !== null) return Number(cpu.tlsVa) + m.tpOffset + offset;
+  const block = cpu.staticTls(m, tls);
+  dynamicTls(cpu, id, block);
+  return block + offset;
+}
+/** the core serves a thread's later lookups in module `id` from its block's address, kept after its key table (libc.zig) */
+function dynamicTls(cpu: Cpu, id: number, block: number): void {
+  if (id < TLS_MODULES && cpu.keyTable) mem.st32(cpu.keyTable + TLS_BLOCKS + 4 * id, block);
+}
+const resolveTls = (sym: string) => {
+  for (const m of modules) { const offset = m.tlsExports.get(sym); if (offset !== undefined) return { id: m.tlsId, offset }; }
+  return undefined;
+};
 
 function resolveGlobal(sym: string, weak: boolean, from: Module): number {
   const h = resolveGlobalOrNull(sym, from.needed);

@@ -74,8 +74,8 @@ describe("file-descriptor", () => {
     const call = clients[1];
     try {
       seekFd(fd,23,0);
-      const token = await kernel.receive(1001,kernel.stageLocal(1001,fd),1002);
-      expect(await call.take(token)).toBe(0);
+      const token = await kernel.receive(1001,kernel.rights(1001).stage(fd) as number,1002);
+      expect(await call.take(token)).toMatchObject({token});
       const acquired = await call.mappingAcquire(token,0,4096,3);
       if (typeof acquired === "number") throw new Error(`mappingAcquire: ${acquired}`);
       const a = acquired.lease;
@@ -236,10 +236,10 @@ describe("file-descriptor", () => {
       const bundle = await newObj("android/os/Bundle", "()V");
       for (const key of ["a", "b"]) await vcall(bundle, "putParcelable", "(Ljava/lang/String;Landroid/os/Parcelable;)V", key, pfd);
       let stages = 0;
-      const rights = { ...kernel.rights(1001), stage: (n: number) => { if (++stages === 2) throw new Error("stage failure"); return kernel.stageLocal(1001, n); } };
+      const rights = { ...kernel.rights(1001), stage: (n: number) => { if (++stages === 2) throw new Error("stage failure"); return kernel.rights(1001).stage(n); } };
       await expect(Promise.resolve(parcelled(bundle, rights))).rejects.toThrow("stage failure");
       expect(file.references).toBe(1);
-      const data = await parcelled(bundle, { ...rights, stage: (n: number) => kernel.stageLocal(1001, n) });
+      const data = await parcelled(bundle, { ...rights, stage: kernel.rights(1001).stage });
       data.bytes[4] = 0; // Corrupt Bundle's magic so its real CREATOR rejects the imported rights.
       stored = await StoredParcel.retain(kernel, 1001, data);
       let failed = false;

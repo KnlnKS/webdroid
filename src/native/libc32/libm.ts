@@ -2,7 +2,7 @@
 // bionic's). Registered under libm.so and libc.so (bionic exports both).
 
 import { mem } from "../mem.ts";
-import { type HostFn, retF, retD, SERVED, fbits, bitsf, dbits, bitsd } from "../host.ts";
+import { type HostFn, retF, retD, fbits, bitsf, dbits, bitsd } from "../host.ts";
 import type { Cpu } from "../cpu.ts";
 
 /** a long result */
@@ -26,7 +26,6 @@ export function libmLibc(): Record<string, HostFn> {
   const f2 = (f: (x: number, y: number) => number): HostFn => (c, a) => retF(c, f(a.f(), a.f()));
   const both = (name: string, f1d: (x: number) => number, f1f = f1d): [string, HostFn][] => [[name, d1(f1d)], [name + "f", f1(f1f)]];
   const both2 = (name: string, f: (x: number, y: number) => number): [string, HostFn][] => [[name, d2(f)], [name + "f", f2(f)]];
-  const served = (...names: string[]): [string, HostFn][] => names.flatMap((n) => [[n, SERVED], [n + "f", SERVED]]);
   const logb = (x: number) => (x === 0 ? -Infinity : !isFinite(x) ? Infinity : Math.floor(Math.log2(Math.abs(x))));
   const frexp = (v: number, ep: number): number => {
     if (v === 0 || !isFinite(v)) { mem.st32(ep, 0); return v; }
@@ -35,13 +34,12 @@ export function libmLibc(): Record<string, HostFn> {
     return v / 2 ** e;
   };
   const M: Record<string, HostFn> = Object.fromEntries([
-    ...served("sin", "cos", "tan", "exp", "log", "sqrt", "pow", "atan2", "fmod", "sincos"),
     ...both("asin", Math.asin), ...both("acos", Math.acos), ...both("atan", Math.atan),
     ...both("sinh", Math.sinh), ...both("cosh", Math.cosh), ...both("tanh", Math.tanh),
     ...both("asinh", Math.asinh), ...both("acosh", Math.acosh), ...both("atanh", Math.atanh),
     ...both("cbrt", Math.cbrt), ...both("exp2", (x) => 2 ** x), ...both("expm1", Math.expm1),
     ...both("log2", Math.log2), ...both("log10", Math.log10), ...both("log1p", Math.log1p), ...both("logb", logb),
-    ...both("floor", Math.floor), ...both("ceil", Math.ceil), ...both("trunc", Math.trunc), ...both("fabs", Math.abs),
+    ...both("fabs", Math.abs),
     ...both2("hypot", Math.hypot),
     ...both2("fmax", Math.max), ...both2("fmin", Math.min), ...both2("fdim", (x, y) => (x > y ? x - y : 0)),
     ...both2("copysign", (x, y) => (y < 0 || (y === 0 && 1 / y < 0) ? -Math.abs(x) : Math.abs(x))),
@@ -61,7 +59,6 @@ export function libmLibc(): Record<string, HostFn> {
       return bitsf(fbits(x) + ((y > x) === (x > 0) ? 1 : -1));
     }),
     powl: (c, a) => retD(c, Math.pow(a.d(), a.d())),
-    round: (c, a) => retD(c, rna(a.d())), roundf: (c, a) => retF(c, rna(a.f())),
     rint: (c, a) => retD(c, rint(c, a.d())), rintf: (c, a) => retF(c, rint(c, a.f())),
     nearbyint: (c, a) => retD(c, rint(c, a.d())), nearbyintf: (c, a) => retF(c, rint(c, a.f())),
     lround: (c, a) => retLong(rna(a.d())), lroundf: (c, a) => retLong(rna(a.f())),

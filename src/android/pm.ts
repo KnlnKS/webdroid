@@ -19,7 +19,7 @@ import { SHARED_LIBRARIES } from "../jvm/bootclasspath.ts";
 import { once } from "../jvm/suspend.ts";
 import { systemActivity, SYSTEM_ACTIVITY, intentQuery$, type IntentQuery } from "./intent.ts";
 import { intentTarget$, manifestFilter$, matches$ } from "./intent-filter.ts";
-import { type PackageRecord, packages, uidPackages, qualifyComponent, componentState, installTime, type ComponentKind,
+import { type PackageRecord, packages, uidPackages, qualifyComponent, applicationOf, componentState, installTime, type ComponentKind,
   GET_ACTIVITIES, GET_RECEIVERS, GET_SERVICES, GET_PROVIDERS, GET_INSTRUMENTATION, GET_SIGNATURES, GET_META_DATA, GET_SHARED_LIBRARY_FILES,
   GET_PERMISSIONS, GET_CONFIGURATIONS, GET_SIGNING_CERTIFICATES, MATCH_DISABLED_COMPONENTS, MATCH_DEFAULT_ONLY, MATCH_DIRECT_BOOT_UNAWARE,
   MATCH_DIRECT_BOOT_AWARE, MATCH_SYSTEM_ONLY } from "./packages.ts";
@@ -50,7 +50,8 @@ export function setManifest(root: XmlNode): void {
   if (currentPackage) linkerHooks.appLib = extractNativeLibraries(currentPackage);
 }
 /** the splits installed beside the booted package's base; this process holds no other package's */
-const ownSplits = (record: PackageRecord): readonly string[] => record === currentPackage && appHost ? appHost.splits : [];
+const ownSplits = (record: PackageRecord): PackageRecord["splits"] => record === currentPackage && appHost ? record.splits : [];
+const splitNames = (record: PackageRecord) => ownSplits(record).map((split) => split.name);
 
 // ── native libraries, laid out as PackageAbiHelper derives them for a cluster install
 const INSTRUCTION_SETS: Record<string, string> = { "arm64-v8a": "arm64", "armeabi-v7a": "arm", armeabi: "arm", x86_64: "x86_64", x86: "x86" };
@@ -144,6 +145,7 @@ function privateFlags(record: PackageRecord): number {
   ]);
   const resizeable = app && attr(app, "resizeableActivity") ? record.flag(app, "resizeableActivity", true) : null;
   flags |= resizeable === null ? target >= 24 ? 0x1000 : 0 : resizeable ? 0x400 : 0x800;
+  if (record.flag(record.root, "isolatedSplits", false)) flags |= 0x8000; // PRIVATE_FLAG_ISOLATED_SPLIT_LOADING
   if (record.flag(app, "debuggable", false) || app?.children.some((n) => n.name === "profileable" && record.flag(n, "shell", false))) flags |= 0x800000;
   if (!record.flag(app, "directBootAware", false) && Object.values(record.components).some((kind) => [...kind.values()].some((n) => record.flag(n, "directBootAware", false))))
     flags |= 0x100; // PRIVATE_FLAG_PARTIALLY_DIRECT_BOOT_AWARE
@@ -162,10 +164,25 @@ const privateFlagsExt = (record: PackageRecord) => {
   return (record.flag(profileable, "enabled", true) ? 1 : 0) | (record.flag(app, "enableOnBackInvokedCallback", false) ? 8 : 0);
 };
 
+/** SplitAssetDependencyLoader.createDependenciesFromPackage: the base is index 0 and split i is i + 1. A feature split
+ *  depends on the split it uses, else the base; each config split follows the split it configures */
+function* splitDependencies$({ splits }: PackageRecord): Gen<JObj> {
+  const index = (name: string | null) => name ? splits.findIndex((split) => split.name === name) + 1 : 0;
+  const dependencies = new Map<number, number[]>([[0, [-1]]]);
+  splits.forEach(({ feature, uses }, i) => { if (feature) dependencies.set(i + 1, [index(uses)]); });
+  splits.forEach(({ feature, configFor }, i) => {
+    if (feature) return;
+    const target = index(configFor);
+    dependencies.set(target, [...dependencies.get(target) ?? [], i + 1]);
+  });
+  const array: JObj = yield newObj("android/util/SparseArray", "()V");
+  for (const [split, on] of dependencies) yield vcall(array, "put", "(ILjava/lang/Object;)V", split, Int32Array.from(on));
+  return array;
+}
 /** the ApplicationInfo PackageInfoUtils.generateApplicationInfo makes for `flags` */
 function* buildApplicationInfo$(record: PackageRecord, flags: number): Gen<JObj> {
   const ai: JObj = yield newObj(APP), app = record.application, pkg = record.pkg, { min, target } = record.sdk;
-  const own = ownSplits(record), splits = own.length ? own : null;
+  const own = ownSplits(record), splits = own.length ? own.map((split) => split.name) : null;
   const abi = primaryAbi(record);
   const qualified = (name: string) => { const value = app && attrStr(app, name); return value ? qualifyComponent(value, pkg) : null; };
   const className = qualified("name");
@@ -184,6 +201,8 @@ function* buildApplicationInfo$(record: PackageRecord, flags: number): Gen<JObj>
     splitNames: splits && strArray(splits),
     splitSourceDirs: splits && jarray(splits.map((n) => apkPath(n)), "Ljava/lang/String;"),
     splitPublicSourceDirs: splits && jarray(splits.map((n) => apkPath(n)), "Ljava/lang/String;"),
+    splitClassLoaderNames: splits && jarray(own.map(({ manifest }) => { const split = applicationOf(manifest); return split && attrStr(split, "classLoader"); }), "Ljava/lang/String;"),
+    splitDependencies: splits && record.flag(record.root, "isolatedSplits", false) ? yield* splitDependencies$(record) : null,
     primaryCpuAbi: abi, nativeLibraryRootDir: nativeLibraryRoot(record), nativeLibraryRootRequiresIsa: 1,
     nativeLibraryDir: nativeLibraryDir(record, abi), dataDir: `/data/data/${pkg}`, credentialProtectedDataDir: `/data/data/${pkg}`,
     deviceProtectedDataDir: `/data/user_de/0/${pkg}`, storageUuid: yield uuidDefault(),
@@ -279,6 +298,7 @@ function* componentInfo$(o: JObj, c: Component, flags: number, app: JObj | null)
     applicationInfo: app ?? (yield* applicationInfo$(c.owner, flags)), processName: componentProcess(c),
     descriptionRes: intAttr(c.node, "description", 0), enabled: c.owner.flag(c.node, "enabled", true) ? 1 : 0,
     exported: exported(c) ? 1 : 0, directBootAware: directBootAware(c) ? 1 : 0, attributionTags: NO_STRINGS,
+    splitName: c.owner.splitOf.get(c.node) ?? null,
   });
 }
 const qualifiedAttr = (c: Component, name: string) => { const cls = attrStr(c.node, name); return cls ? qualifyComponent(cls, c.owner.pkg) : null; };
@@ -470,7 +490,7 @@ function* instrumentationInfo$(record: PackageRecord, node: XmlNode, flags: numb
 function* packageInfo$(record: PackageRecord, flags: number): Gen<JObj> {
   const pi: JObj = yield newObj(PACKAGE), root = record.root, app: JObj = yield* applicationInfo$(record, flags);
   const version = attr(root, "versionName");
-  const splits = ownSplits(record);
+  const splits = splitNames(record);
   const time = installTime(record.pkg);
   setDeclared(pi, PACKAGE, {
     packageName: record.pkg, splitNames: strArray(splits), splitRevisionCodes: new Int32Array(splits.length),
@@ -521,7 +541,7 @@ rt.registerJnis("android/os/incremental/IncrementalManager", {
 const wholeChecksumAlgorithms: readonly [number, string][] = [[2, "MD5"], [4, "SHA-1"], [8, "SHA-256"], [16, "SHA-512"]];
 async function apkDigests(record: PackageRecord, includeSplits: boolean, required: number): Promise<[string | null, number, Uint8Array][]> {
   const files: [string | null, string][] = [[null, record.path]];
-  if (includeSplits) files.push(...ownSplits(record).map((name): [string, string] => [name, apkPath(name)]));
+  if (includeSplits) files.push(...splitNames(record).map((name): [string, string] => [name, apkPath(name)]));
   const result: [string | null, number, Uint8Array][] = [];
   for (const [splitName, path] of files) {
     const bytes = await vfs.readFile(path);

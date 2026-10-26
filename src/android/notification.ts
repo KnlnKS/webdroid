@@ -721,7 +721,7 @@ hostService("notification", "webdroid/NotificationManagerService", "android/app/
     },
   "cancelToast(Ljava/lang/String;Landroid/os/IBinder;)V": (pkg: string, token: JObj) => {
     const t = toastQueue.find((r) => r.pkg === pkg && r.token === token);
-    if (t) return rt.drive(hideToast(t));
+    if (t) postMain(() => rt.drive(hideToast(t)), logUncaught);
   },
   // ToastPresenter reports the window gone; the record left the queue when it was hidden
   "finishToken(Ljava/lang/String;Landroid/os/IBinder;)V": () => {},

@@ -4,23 +4,34 @@
 
 import { mem } from "./mem.ts";
 import { type HostFn, PTR, ldWord, stWord, stLong, ARG0 } from "./host.ts";
-import { E, PAGE_SIZE } from "./abi.ts";
+import { E, PAGE_SIZE, MAIN_STACK_SIZE } from "./abi.ts";
 import { type Cpu, cpuByOsTid, isA64, nameThread } from "./cpu.ts";
 import { exitGroup } from "./crash.ts";
 import { clockTime, fillRandom, writeTs, KLAYOUT } from "./kernel.ts";
 import { device } from "../shell/config.ts";
 import { procIdentity, uname } from "../shell/procfs.ts";
-import { guestNow } from "../guest-clock.ts";
+import { uptimeMillis } from "../guest-clock.ts";
 
 const CAP_VERSION_1 = 0x19980330, CAP_VERSION_2 = 0x20071026, CAP_VERSION_3 = 0x20080522;
 const capWords = (version: number) => version === CAP_VERSION_1 ? 1 : version === CAP_VERSION_2 || version === CAP_VERSION_3 ? 2 : 0;
 const resourceLimits = new Map<number, { soft: bigint; hard: bigint }>();
-/** RLIMIT_STACK is Android's 8 MiB, the main thread's stack; the rest keep 1 MiB */
-const limit = (resource: number) => resourceLimits.get(resource) ?? (resource === 3 ? { soft: 0x800000n, hard: 0x800000n } : { soft: 0x100000n, hard: 0x100000n });
-/** a limit as an rlim_t word: one past the word's range is RLIM_INFINITY, all ones */
-const limitWord = (value: bigint) => { const infinity = (1n << BigInt(8 * PTR)) - 1n; return value > infinity ? infinity : value; };
+const RLIM_INFINITY = (1n << 64n) - 1n, RLIM_NLIMITS = 16;
+/** an app process's limits on the reference device, by resource: stack (3) the main thread's 8 MiB, core (4), nproc (6),
+ *  nofile (7), memlock (8), sigpending (11), msgqueue (12), nice (13) and rtprio (14); the rest unlimited */
+const DEFAULT_LIMITS: Record<number, [bigint, bigint]> = {
+  3: [BigInt(MAIN_STACK_SIZE), RLIM_INFINITY], 4: [0n, RLIM_INFINITY], 6: [9802n, 9802n], 7: [32768n, 32768n], 8: [65536n, 65536n],
+  11: [9802n, 9802n], 12: [819200n, 819200n], 13: [40n, 40n], 14: [0n, 0n],
+};
+const limit = (resource: number) => {
+  const [soft, hard] = DEFAULT_LIMITS[resource] ?? [RLIM_INFINITY, RLIM_INFINITY];
+  return resourceLimits.get(resource) ?? { soft, hard };
+};
+/** a limit as an rlim_t word, whose all ones is RLIM_INFINITY like any value past its range, and back */
+const wordInfinity = () => (1n << BigInt(8 * PTR)) - 1n;
+const limitWord = (value: bigint) => value > wordInfinity() ? wordInfinity() : value;
+const wordLimit = (word: bigint) => word === wordInfinity() ? RLIM_INFINITY : word;
 const setLimit = (resource: number, soft: bigint, hard: bigint) => {
-  if (soft > hard) return -E.INVAL;
+  if (resource < 0 || resource >= RLIM_NLIMITS || soft > hard) return -E.INVAL;
   if (hard > limit(resource).hard) return -E.PERM;
   resourceLimits.set(resource, { soft, hard });
   return 0;
@@ -43,7 +54,7 @@ function fillSysinfo(p: number): void {
   const totalRam = device.cpu.memKb * 1024;
   mem.memset(p, 0, KLAYOUT.SYSINFO_SIZE);
   const put = (off: number, v: number) => stLong(p + off, v);
-  put(0, Math.floor(guestNow() / 1000));
+  put(0, Math.floor(uptimeMillis() / 1000));
   put(L * 4, totalRam / unit); put(L * 5, totalRam / (2 * unit));
   mem.st16(p + L * 10, 1);
   mem.st32(p + KLAYOUT.SYSINFO_UNIT, unit);
@@ -151,13 +162,15 @@ export const PROC_SYSCALLS: Record<string, HostFn> = {
     return 0;
   },
   getrlimit: (_cpu, a) => {
-    const current = limit(a.i()), out = a.p();
+    const resource = a.i(), out = a.p();
+    if (resource < 0 || resource >= RLIM_NLIMITS) return -E.INVAL;
+    const current = limit(resource);
     stWord(out, limitWord(current.soft)); stWord(out + PTR, limitWord(current.hard));
     return 0;
   },
   setrlimit: (_c, a) => {
     const resource = a.i(), next = a.p();
-    return setLimit(resource, ldWord(next), ldWord(next + PTR));
+    return setLimit(resource, wordLimit(ldWord(next)), wordLimit(ldWord(next + PTR)));
   },
   // struct rusage: ru_utime and ru_stime (timevals), then 14 longs. A process's or thread's CPU-time clock,
   // all of it user time; no child has run
@@ -171,6 +184,7 @@ export const PROC_SYSCALLS: Record<string, HostFn> = {
   prlimit64: (cpu, a) => {
     const pid = a.i(), resource = a.i(), next = a.p(), old = a.p();
     if (pid !== 0 && pid !== cpu.pid) return -E.SRCH;
+    if (resource < 0 || resource >= RLIM_NLIMITS) return -E.INVAL;
     const previous = limit(resource);
     if (old) { mem.st64(old, previous.soft); mem.st64(old + 8, previous.hard); }
     return next ? setLimit(resource, BigInt.asUintN(64, mem.ld64(next)), BigInt.asUintN(64, mem.ld64(next + 8))) : 0;

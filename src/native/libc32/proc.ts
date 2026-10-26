@@ -4,7 +4,7 @@
 // device at its process limit or under its sandbox.
 
 import { wrote, mem } from "../mem.ts";
-import { hostData, type HostFn, PTR, stp, vaList, ARG0, ptr, guestSort } from "../host.ts";
+import { hostData, type HostFn, PTR, ldp, stp, vaList, ARG0, ptr, guestSort } from "../host.ts";
 import { E } from "../abi.ts";
 import { setAbortMessage } from "../crash.ts";
 import { fail, logLine, wrapped } from "../kernel.ts";
@@ -65,6 +65,11 @@ export function procLibc(): Record<string, HostFn> {
       if (name) writeProperty(name, key);
       return value ? writeProperty(value, propertyValue(key) ?? "") : 0;
     },
+    // the handle is the name's string; the value lives for the callback
+    __system_property_read_callback: async (cpu, a) => {
+      const pi = a.p(), callback = a.p(), cookie = a.p(), value = mem.strdup(propertyValue(propertyKey(pi) ?? "") ?? "");
+      try { await cpu.call(callback, [cookie, pi, value, 0]); } finally { mem.free(value); }
+    },
     // only init's property service sets properties, and it refuses an app
     __system_property_set: () => -1,
     android_set_abort_message: (_c, a) => { setAbortMessage(a.str()); },
@@ -73,7 +78,11 @@ export function procLibc(): Record<string, HostFn> {
     __register_atfork: () => 0,
     __cxa_thread_atexit_impl: () => 0,
     __gnu_strerror_r: (_c, a) => { const e = a.i(), b = a.p(), n = a.u(); mem.putCstr(b, `error ${e}`, n); return ptr(b); },
-    __cmsg_nxthdr: () => 0,
+    // bionic's CMSG_NXTHDR: the header after `cmsg`, or none once a whole header no longer fits msg_control
+    __cmsg_nxthdr: (_c, a) => {
+      const msg = a.p(), cmsg = a.p(), next = cmsg + ((ldp(cmsg) + PTR - 1) & -PTR);
+      return next + PTR + 8 - ldp(msg + 4 * PTR) > ldp(msg + 5 * PTR) ? 0 : ptr(next);
+    },
     if_nametoindex: () => 0, if_indextoname: () => 0,
     // sorting and searching call back into the guest for every comparison
     qsort: async (cpu, a) => {

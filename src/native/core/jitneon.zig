@@ -1,8 +1,8 @@
-//! ARM32 Advanced SIMD data processing in compiled regions, lane for lane as arm.zig's neonSame,
-//! neonMisc, neonShift, neonLong and neonImmediate compute it. D registers are the 8-byte halves
-//! of cpu.v: an operation may read the lanes past a D operand, but a D result stores only its own
-//! 8 bytes. Anything else falls back to the interpreter.
-const arm = @import("arm.zig");
+//! ARM32 Advanced SIMD data processing in compiled regions, lane for lane as arm_neon.zig's
+//! neonSame, neonMisc, neonShift, neonLong and neonImmediate compute it. D registers are the
+//! 8-byte halves of cpu.v: an operation may read the lanes past a D operand, but a D result
+//! stores only its own 8 bytes. Anything else falls back to the interpreter.
+const neon = @import("arm_neon.zig");
 const cpu = @import("cpu.zig");
 const jit = @import("jit.zig");
 const simd = @import("simd.zig");
@@ -97,7 +97,7 @@ fn shuffle(b: *Buf, mask: [16]u8) void {
 fn same(b: *Buf, w: u32) bool {
     const size = bits(w, 20, 2);
     const scalar = is(w, 0xfe800050, 0xf2800040) and size != 3;
-    if (scalar and arm.neonLongByScalar(w)) return long(b, w);
+    if (scalar and neon.neonLongByScalar(w)) return long(b, w);
     const d = reg(w, 22, 12);
     const n = reg(w, 7, 16);
     const m = reg(w, 5, 0);
@@ -372,6 +372,23 @@ fn misc(b: *Buf, w: u32) bool {
         if (size == 3 or op == 5 or (float and size != 2)) return false;
         b.get(L_CPU);
         unary(b, m, size, op, float);
+    } else if (is(w, 0xffb30b10, 0xf3b00200)) {
+        // VPADDL, and VPADAL (bit 10) adding to d: adjacent lanes summed into lanes twice as wide
+        if (size == 3) return false;
+        const unsigned = w & 0x80 != 0;
+        b.get(L_CPU);
+        if (w & 0x400 != 0) load(b, d);
+        load(b, m);
+        if (size < 2) b.emit(.{sv(S.extadd_pairwise[size][@intFromBool(unsigned)])}) else {
+            b.set(VA);
+            for ([_][16]u8{ .{ 0, 1, 2, 3, 8, 9, 10, 11 } ++ @as([8]u8, @splat(0)), .{ 4, 5, 6, 7, 12, 13, 14, 15 } ++ @as([8]u8, @splat(0)) }) |lanes| {
+                b.emit(.{ get(VA), get(VA) });
+                shuffle(b, lanes);
+                b.emit(.{sv(S.extend_low_s[2] + @as(u8, if (unsigned) 2 else 0))});
+            }
+            b.emit(.{sv(S.add[3])});
+        }
+        if (w & 0x400 != 0) b.emit(.{sv(S.add[size + 1])});
     } else if (is(w, 0xffb30e10, 0xf3b00000)) {
         const rev = op & 3;
         if (rev > 2 or size + rev >= 3) return false;
@@ -493,14 +510,14 @@ fn shift(b: *Buf, w: u32) bool {
 
 /// A by-scalar form's Dm[x].
 fn scalarLane(w: u32, size: u32) Lane {
-    const m, const lane = arm.neonScalar(w, size);
+    const m, const lane = neon.neonScalar(w, size);
     return .{ .off = OFF_V + m * 8 + (lane << @intCast(size)), .esz = size };
 }
 
 /// VMLAL, VMLSL and VMULL, by vector or by scalar: widening products of the D operands' lanes.
 fn long(b: *Buf, w: u32) bool {
     const scalar = w & 0x40 != 0;
-    const op = arm.neonLongOp(w);
+    const op = neon.neonLongOp(w);
     const size = bits(w, 20, 2);
     const d = reg(w, 22, 12);
     if (size == 3 or (scalar and size == 0) or d & 1 != 0 or (op != 8 and op != 10 and op != 12)) return false;

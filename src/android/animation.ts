@@ -3,20 +3,21 @@
 // holder then calls on its target, dispatched virtually.
 
 import { rt, type JObj } from "../jvm/runtime.ts";
-import { vcall, linkClass, after } from "../jvm/natives/jentry.ts";
+import { vcall } from "../jvm/natives/jentry.ts";
+import { java } from "../jvm/javahost.ts";
 import { deref, handle } from "./handles.ts";
 
-/** a jmethodID: the virtual method `name``desc` a class has, which NoSuchMethodError reports missing */
+/** a jmethodID: the virtual method `name``desc` the class has, its defining loader's (an app split's class is no
+ *  boot class), which NoSuchMethodError reports missing */
 const ids = new Map<string, bigint>();
-function methodId(cls: JObj, name: string, desc: string): bigint | Promise<bigint> {
-  return after(vcall(cls, "getName", "()Ljava/lang/String;"), (dotted: string) => {
-    const owner = dotted.replace(/\./g, "/");
-    if (!linkClass(owner).has(name, desc)) throw rt.mkThrowable("java/lang/NoSuchMethodError", `no non-static method "L${owner};.${name}${desc}"`);
-    const key = name + desc;
-    let id = ids.get(key);
-    if (id === undefined) ids.set(key, id = handle({ name, desc }));
-    return id;
-  });
+function methodId(cls: JObj, name: string, desc: string): bigint {
+  const c = java.jni.classOf(cls);
+  if (!c || !java.jni.hasMethod(c, name, desc, false))
+    throw rt.mkThrowable("java/lang/NoSuchMethodError", `no non-static method "L${c && java.jni.binaryName(c.name)};.${name}${desc}"`);
+  const key = name + desc;
+  let id = ids.get(key);
+  if (id === undefined) ids.set(key, id = handle({ name, desc }));
+  return id;
 }
 const call = (target: object, id: bigint, ...args: unknown[]) => { const m = deref<{ name: string; desc: string }>(id); return vcall(target, m.name, m.desc, ...args); };
 rt.registerJnis("android/animation/PropertyValuesHolder", {

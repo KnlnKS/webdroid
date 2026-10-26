@@ -2,9 +2,10 @@ import { beforeAll, describe, expect, test } from "vite-plus/test";
 import { mem } from "./mem.ts";
 import { Cpu, setA64 } from "./cpu.ts";
 import { core, jitStats, JIT_HEAT } from "./core.ts";
-import { execute, pattern, run, sweep } from "./a64.testkit.ts";
+import { execute, pattern, place, run, sweep } from "./a64.testkit.ts";
 import { RET_SENTINEL } from "./abi.ts";
 import { LOOP_BODY, placeLoop } from "./loop.testkit.ts";
+import { ashmemContent, mapWindow, unmapWindow } from "./shm.ts";
 
 function runThumb(half: number[], setup: (c: Cpu) => void = () => {}): Cpu {
   const at = mem.reserve((half.length * 2 + 0xfff) & ~0xfff, 0x1000);
@@ -411,18 +412,65 @@ describe("arm decoder", () => {
       expect(Array.from(c.si.slice(20, 24))).toEqual([8, 9, 10, 11]);
     }
   });
-  test("NEON narrowing shifts retain rounding and saturation", () => {
+  test("NEON narrowing shifts, moves and fixed-point conversions retain rounding and saturation", () => {
     const cases: [number, number, bigint[], number[]][] = [
       [0xf2f23812, 0xeff2, [0x123456789abcdef0n, 0xfedcba9876543210n], [0x59e26af3, 0xea61d950]],
       [0xf2f23852, 0xeff2, [0x123456789abcdef0n, 0xfedcba9876543210n], [0x59e26af3, 0xea61d951]],
       [0xf2f23912, 0xeff2, [0x7fffffffffffffffn, 0x8000000000000000n], [0x7fffffff, 0x80000000]],
       [0xf3f23812, 0xfff2, [0x7fffffffffffffffn, 0x8000000000000000n], [0xffffffff, 0]],
+      // vqmovun.s64, vqmovn.s64 and vqmovn.u64
+      [0xf3fa3242, 0xfffa, [0x7fffffffffffffffn, 0x8000000000000000n], [0xffffffff, 0]],
+      [0xf3fa3282, 0xfffa, [0x7fffffffffffffffn, 0x8000000000000000n], [0x7fffffff, 0x80000000]],
+      [0xf3fa32c2, 0xfffa, [0x7fffffffffffffffn, 0x8000000000000000n], [0xffffffff, 0xffffffff]],
+      // vshll.i32 q9, d2, #32
+      [0xf3fa2302, 0xfffa, [0x87654321_12345678n, 0n], [0, 0x87654321]],
+      // vcvt.f32.s32 q9, q1, #16 and vcvt.s32.f32 q9, q1, #16
+      [0xf2f02e52, 0xeff0, [0n, 0xffff0000_00018000n], [0x3fc00000, 0xbf800000]],
+      [0xf2f02f52, 0xeff0, [0n, 0xc0300000_3fc00000n], [0x18000, 0xfffd4000]],
     ];
     for (const [word, first, values, expected] of cases) {
       const setup = (cpu: Cpu) => { new BigUint64Array(cpu.si.buffer, cpu.si.byteOffset, 32).set(values, 2); };
       for (const c of both([word, BXLR], [first, word & 0xffff, 0x4770], setup)) {
         expect(Array.from(c.si.slice(38, 40), x => x >>> 0)).toEqual(expected);
       }
+    }
+  });
+  test("ARMv8 VFP selects and rounds by its own fields, and fixed-point VCVT scales in place", () => {
+    const words = [0xfe200a81, 0xfe701a81, 0xfe832b44, 0xfeb85a65, 0xfebf6bc7, 0xeef76a48, 0xeefe8ac8, 0xeebb9a46];
+    const setup = (cpu: Cpu) => {
+      cpu.cpsr |= 0xd0000000;
+      cpu.s.set([7, -3], 1);
+      cpu.d.set([NaN, 1.5], 3);
+      cpu.s[11] = -2.5; cpu.d[7] = -1.5; cpu.s.set([2.5, -1.25], 16); cpu.si[18] = 0xffff0024 | 0;
+    };
+    for (const c of both([...words, BXLR], [...words.flatMap(w => [w >>> 16, w & 0xffff]), 0x4770], setup)) {
+      // vselge, vselgt (Z set), vminnm.f64, vrinta, vcvtm.s32.f64, vrintx, vcvt.s32.f32 #16, vcvt.f32.u16 #4
+      expect([c.s[0], c.s[3], c.d[2], c.s[10], c.si[12], c.s[13], c.si[17] >>> 0, c.s[18]]).toEqual([7, -3, 1.5, -3, -2, 2, 0xfffec000, 2.25]);
+    }
+  });
+  test("NEON structure lanes, saturating doubling and counting forms run in ARM and Thumb", () => {
+    const data = mem.reserve(0x1000, 0x1000);
+    const words = [0xf4e0036f, 0xf4e04e6d, 0xf4c1a98f, 0xf3daccca, 0xf2e2e903, 0xf3b44485, 0xf3b06787, 0xf2098c1a];
+    const thumb = (w: number) => [(w >>> 24 === 0xf4 ? 0xf900 : 0xef00 | (w >>> 12) & 0x1000) | (w >>> 16) & 0xff, w & 0xffff];
+    const setup = (cpu: Cpu) => {
+      mem.u8.fill(0, data, data + 0x1000);
+      mem.u8.set(Array.from({ length: 16 }, (_, i) => i + 1), data);
+      cpu.w[0] = data; cpu.w[2] = data + 64;
+      cpu.si.set([0x80000000, 0x40000000, 0x80000000 | 0, 2], 4);
+      cpu.si.set([0x00018000, 0x00ff0000, 0, 0, 0x807f0100 | 0], 10);
+      cpu.s.set([-1, 2, 1 + 2 ** -23, 3, 1 - 2 ** -23, 4], 16);
+      cpu.si.set([0x80004000 | 0, 0x11111111, 0, 0x22222222], 52);
+      cpu.si.set([1, 0, 5, 0], 60);
+    };
+    for (const c of both([...words, BXLR], [...words.flatMap(thumb), 0x4770], setup)) {
+      // vld4.8 to lane 3, vld3.16 to every lane with writeback, vst2.32 from lane 1
+      expect([c.si[32], c.si[34], c.si[36], c.si[38]]).toEqual([0x01000000, 0x02000000, 0x03000000, 0x04000000]);
+      expect([c.si[40], c.si[41], c.si[44], c.si[48], c.w[0] - data]).toEqual([0x02010201, 0x02010201, 0x04030403, 0x06050605, 6]);
+      expect([mem.u32[(data + 64) >>> 2], mem.u32[(data + 68) >>> 2]]).toEqual([0x11111111, 0x22222222]);
+      // vqdmulh.s16 by scalar, vqdmlal.s32 saturating, vclz.i16, vqneg.s8, vfma.f32 fused
+      expect(Array.from(c.si.slice(56, 64), x => x >>> 0)).toEqual([0x7fffc000, 0xeeefeeef, 0, 0xdddeddde, 0xffffffff, 0x7fffffff, 5, 1]);
+      expect(Array.from(c.si.slice(8, 10)).concat(c.si[12] >>> 0)).toEqual([0x000f0000, 0x00080010, 0x7f81ff00]);
+      expect([c.s[16], c.s[17]]).toEqual([-(2 ** -46), 14]);
     }
   });
   test("NEON arithmetic shares D/Q lanes in ARM and Thumb encodings", () => {
@@ -507,6 +555,19 @@ describe("arm decoder", () => {
       expect(Array.from(c.si.slice(0, 4))).toEqual([-1, 0, 0, -1]);
       expect(Array.from(c.si.slice(16, 20))).toEqual([-1, -1, 0, 0]);
       expect(Array.from(c.si.slice(36, 40))).toEqual([0xffff, 0, 0, 0]);
+    }
+  });
+  test("NEON saturating and rounding-shift lanes follow their A32 operand order", () => {
+    const setup = (cpu: Cpu) => {
+      cpu.si.set([0x00050001, 0x7fff0003, 0, 0], 36);
+      cpu.si.set([0x00030002, 0x00010004, 0, 0x00010000], 32);
+      cpu.si.set([5, -7, -1, 1], 2);
+    };
+    // vqadd.s16 q10, q9, q8; vqsub.u16 q9, q9, q8; vrshl.s32 d0, d1, d2
+    for (const c of both([0xf25240f0, 0xf35222f0, 0xf2220501, BXLR], [0xef52, 0x40f0, 0xff52, 0x22f0, 0xef22, 0x0501, 0x4770], setup)) {
+      expect(Array.from(c.si.slice(40, 44))).toEqual([0x00080003, 0x7fff0007, 0, 0x00010000]);
+      expect(Array.from(c.si.slice(36, 40))).toEqual([0x00020000, 0x7ffe0000, 0, 0]);
+      expect(Array.from(c.si.slice(0, 2))).toEqual([3, -14]);
     }
   });
   test("NEON integer comparison and multiplication retain unsigned lanes", () => {
@@ -949,8 +1010,8 @@ describe("thumb decoder", () => {
       // vext, vrev64/32/16, vtrn/vzip/vuzp/vswp, vmull/vmlal/vmlsl, modified immediates
       [0xf2fa034c, 0xf2fa250c, 0xf3f84046, 0xf3f4608a, 0xf3f0710b, 0xf3fa80a9, 0xf3f6a1ec, 0xf3f2e12f, 0xf3b20001, 0xf3b620c4,
         0xf3ac6c0e, 0xf29a880b, 0xf38caa0d, 0xf28ecc0f, 0xf284e45f, 0xf2831b3f, 0xf2872f18, 0xf3823e35, 0xf382403b, 0xf2815710],
-      // vpadd.i16, vpmax.s8, vpmin.u32, vpadd.f32, vpmax.f32 and vpmin.f32 over NaN lanes: checked only against the interpreter
-      [0xf2103b11, 0xf2004a01, 0xf3205a11, 0xf3006d01, 0xf3007f01, 0xf3218f05],
+      // vpadd.i16, vpmax.s8, vpmin.u32, vpadd.f32, vpmax.f32 and vpmin.f32 over NaN lanes, vpaddl and vpadal: checked only against the interpreter
+      [0xf2103b11, 0xf2004a01, 0xf3205a11, 0xf3006d01, 0xf3007f01, 0xf3218f05, 0xf3b0a2c6, 0xf3b0a6c8, 0xf3b40201, 0xf3b8c6ce, 0xf3b82203],
     ];
     const setup = (cpu: Cpu) => {
       for (let i = 0; i < 64; i++) cpu.si[i] = Math.imul(i + 1, 0x9e3779b9) ^ (i << 7);
@@ -1290,6 +1351,15 @@ describe("thumb decoder", () => {
     const arm = run([0xe1010381, BXLR], setup);
     expect([arm.w[2], arm.q]).toEqual([-2147483648, 1]);
   });
+  test("dual, word-by-half and long halfword multiplies and byte differences", () => {
+    const setup = (cpu: Cpu) => { cpu.w[0] = 0x00030002; cpu.w[2] = 0x00050004; cpu.w[4] = 100; cpu.w[6] = 0x80008000; cpu.w[14] = -1; };
+    // smuad r4; smladx r5; smlsd r6; smlald r7, r8; smlaltb r7, r8; smlawb r10; smulwt r12; usada8 r11; smuad r9, r3, r3
+    for (const c of both([0xe704f110, 0xe7052130, 0xe7062150, 0xe7487110, 0xe14871a0, 0xe12a2081, 0xe12c00e1, 0xe78b2110, 0xe709f313, BXLR],
+      [0xfb20, 0xf401, 0xfb20, 0x2511, 0xfb40, 0x2601, 0xfbc0, 0x78c1, 0xfbc0, 0x78a1, 0xfb31, 0x2a00, 0xfb31, 0xfc10, 0xfb70, 0x2b01, 0xfb23, 0xf903, 0x4770], setup)) {
+      expect([4, 5, 6, 7, 8, 10, 12, 11, 9].map((i) => c.w[2 * i])).toEqual([23, 122, 93, 34, 1, 110, 15, 104, -2147483648]);
+      expect(c.q).toBe(1);
+    }
+  });
 
   test("wide reversals and leading-zero count preserve their source", () => {
     const c = runThumb([
@@ -1485,5 +1555,30 @@ describe("arm block coverage", () => {
     mem.u32[(at + 0x1000) >>> 2] = bxLr;
     execute(at + 0xff0, () => {});
     expect(core.code_write(at + 0xff0, 4)).toBe(1);
+  });
+});
+
+describe("shared memory window", () => {
+  test("stores, exclusives and host accesses reach a pooled region in both tiers, until it is unmapped", () => {
+    const region = ashmemContent(0x1000), va = mapWindow(region.ashmem!.pool!, 0, 0x1000, 3, () => {})!;
+    const word = () => new DataView(region.data.buffer, region.data.byteOffset, 4).getInt32(0, true);
+    // ldr r1, [r0]; add r1, #1; str r1, [r0]; ldrex r2, [r0]; add r2, #1; strex r3, r2, [r0]
+    const at = place([0xe5901000, 0xe2811001, 0xe5801000, 0xe1902f9f, 0xe2822001, 0xe1803f92, BXLR]);
+    const compiled = jitStats.regions;
+    for (let i = 1; i <= JIT_HEAT + 2; i++) {
+      const c = execute(at, (cpu) => { cpu.w[0] = va; });
+      expect([word(), c.w[6]]).toEqual([2 * i, 0]);
+    }
+    expect(jitStats.regions).toBeGreaterThan(compiled);
+    mem.st32(va + 4, 7);
+    expect([mem.ld32(va), mem.cstr(va + 4)]).toEqual([word(), "\x07"]);
+    // a second mapping of the region has an address of its own onto the same bytes
+    const again = mapWindow(region.ashmem!.pool!, 0, 0x1000, 3, () => {})!;
+    expect(again).not.toBe(va);
+    unmapWindow(va, 0x1000);
+    mem.st32(again, 9);
+    expect(word()).toBe(9);
+    expect(() => mem.ld32(va)).toThrow();
+    expect(() => execute(at, (cpu) => { cpu.w[0] = va; })).toThrow();
   });
 });

@@ -590,6 +590,8 @@ const activityTaskMethods = {
   }),
   "getAppTasks(Ljava/lang/String;)Ljava/util/List;": () => stack.length ? after(appTask(), (task) => newArrayList([task])) : newArrayList([]),
   "getActivityClientController()Landroid/app/IActivityClientController;": activityClientController,
+  // ActivityTaskSupervisor.canPlaceEntityOnDisplay: anything may start on the default display, the only one
+  "isActivityStartAllowedOnDisplay(ILandroid/content/Intent;Ljava/lang/String;I)Z": (displayId: number) => +(displayId === 0),
   // nothing captures the screen, so a screen-capture observer is never called
   ...noops("registerScreenCaptureObserver(Landroid/os/IBinder;Landroid/app/IScreenCaptureObserver;)V",
     "unregisterScreenCaptureObserver(Landroid/os/IBinder;Landroid/app/IScreenCaptureObserver;)V"),

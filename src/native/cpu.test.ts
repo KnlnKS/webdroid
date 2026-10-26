@@ -24,10 +24,12 @@ for (const a64 of [false, true]) describe(a64 ? "A64 thread identity" : "ARM32 t
     setA64(a64);
     const first = new Cpu(new JThread(), "tls-a"), second = new Cpu(new JThread(), "tls-b"), key = {};
     try {
-      const image = Uint8Array.of(3, 5, 8), a = first.staticTls(key, image, 8, 16), b = second.staticTls(key, image, 8, 16);
+      const init = mem.hostAlloc(3), segment = { init, initSize: 3, size: 8, align: 16 };
+      mem.u8.set([3, 5, 8], init);
+      const a = first.staticTls(key, segment), b = second.staticTls(key, segment);
       expect(a & 15).toBe(0);
       expect(a).not.toBe(b);
-      expect(first.staticTls(key, image, 8, 16)).toBe(a);
+      expect(first.staticTls(key, segment)).toBe(a);
       expect([...mem.u8.subarray(a, a + 8)]).toEqual([3, 5, 8, 0, 0, 0, 0, 0]);
       mem.u8[a] = 13;
       expect(mem.u8[b]).toBe(3);

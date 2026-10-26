@@ -144,10 +144,12 @@ export class ProcessBroker {
       const live = this.byName.get(pkg + "/" + process), entry = start ? this.connect(pkg, process) : live && !live.dead ? live : null;
       if (!entry) return null;
       const caller = client === null ? null : this.entries.get(client) ?? null;
+      // a request that would not bring the process up has nothing to do in one that dies before answering, as in one
+      // not running (a service's last unbind may end its process)
       return this.request(entry, (endpoint) => endpoint.service(request)).then((result) => {
         if (caller?.dead) throw rt.mkThrowable("android/os/DeadObjectException", "Service caller died");
         return result;
-      });
+      }, (error) => { if (start || !entry.dead) throw error; return null; });
     },
     connected: (client, key, binder, dead) => {
       if (this.alive(client)) unawaited(this.request(this.entry(client), (endpoint) => endpoint.serviceConnected(key, binder, dead)));
@@ -201,7 +203,7 @@ export class ProcessBroker {
       const packed = packedArchives.get(record.path);
       const source = packed ? { index: packed.index, base: packed.base } : null, file = packed ? null : vfs.source(record.path);
       if (!source && !file) throw new Error("Package bytes unavailable: " + record.pkg);
-      return { certificates: record.certificates(), pkg: record.pkg, source, file, splits: record.splits, uid: record.uid, system: record.system, grants: [...record.grants], signatures: record.compatibilityCertificates };
+      return { certificates: record.certificates(), pkg: record.pkg, source, file, splits: record.splits.map((split) => split.source), uid: record.uid, system: record.system, grants: [...record.grants], signatures: record.compatibilityCertificates };
     });
     const certificates = await Promise.all(registry.map(record => record.certificates));
     const publish = (source: NonNullable<ReturnType<typeof vfs.source>>) => {
@@ -357,9 +359,8 @@ export class ProcessBroker {
   /** the descriptor rights of `pid`, a process in this realm: staging and taking need it alive, discarding does not */
   descriptorRights(pid: number): DescriptorRights {
     const rights = this.fileDescriptors.rights(pid);
-    return {...rights,
-      stage: fd => { this.entry(pid);this.fileDescriptors.ensureReceiver(pid);return rights.stage(fd); },
-      take: token => { this.entry(pid);return rights.take(token); }};
+    const live = <A extends unknown[], R>(call: (...args: A) => R) => (...args: A): R => { this.entry(pid); this.fileDescriptors.ensureReceiver(pid); return call(...args); };
+    return {...rights, stage: live(rights.stage), take: live(rights.take), park: live(rights.park), claim: live(rights.claim)};
   }
   discardDescriptors(pid: number, data: ParcelData, staged: boolean): Promise<void> {
     return releaseRights(data,this.fileDescriptors.rights(pid),staged);
@@ -389,6 +390,15 @@ export class ProcessBroker {
     }
     const target = this.connect(pkg, process);
     return this.request(target, (endpoint) => endpoint.contentProvider(authority));
+  }
+  /** a port from `pid` onto the Surface process `owner` parceled under `token`, once the owner takes the other end */
+  async surfaceConnect(pid: number, owner: number, token: number): Promise<MessagePort | null> {
+    this.entry(pid);
+    if (!this.alive(owner)) return null;
+    const { port1, port2 } = new MessageChannel();
+    if (await this.request(this.entry(owner), (endpoint) => endpoint.surfaceConnect(token, port1, pid))) return port2;
+    port2.close();
+    return null;
   }
   /** `manifest` is the sender's resolution of the intent's manifest receivers */
   async broadcast(pid: number | null, data: ParcelData, manifest: Receiver[], permissions: string[], ordered: boolean,

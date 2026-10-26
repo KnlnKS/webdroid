@@ -6,9 +6,9 @@
 // turn that changed one.
 import { rt, type JObj, noEffect, peerField } from "../jvm/runtime.ts";
 import { after, newObj, vcall } from "../jvm/natives/jentry.ts";
-import { asSystem } from "./binder.ts";
+import { asSystem, onCallerDeath } from "./binder.ts";
 import { handle, deref, release, FINALIZER } from "./handles.ts";
-import { nativeParcel, readLocalObject, writeLocalObject } from "./parcel.ts";
+import { nativeParcel, readInt, readLocalObject, readLong, writeInt, writeLocalObject, writeLong } from "./parcel.ts";
 import { canvasOf } from "./canvas.ts";
 import { cssColor } from "./graphics.ts";
 import { perf } from "../perf.ts";
@@ -18,6 +18,8 @@ import { note, Ev } from "../timeline.ts";
 import { bufferHeight, bufferWidth, presentSurface, type GlSurface } from "./glsurface.ts";
 import { drawnOn, deviceRect, intersect, placeFunctors, type Rect } from "./webfunctor.ts";
 import { detached } from "../jvm/natives/jthrowable.ts";
+import { broker } from "../shell/broker-access.ts";
+import { procIdentity } from "../shell/procfs.ts";
 
 // SurfaceControl.Builder's creation flags
 const HIDDEN = 0x4, FX_SURFACE_EFFECT = 0x20000, FX_SURFACE_MASK = 0xf0000;
@@ -190,6 +192,15 @@ function applyOps(t: Transaction): void {
   for (const fn of ops) fn();
   if (ops.length) scheduleComposite();
 }
+const controlField = peerField<bigint>("android/view/SurfaceControl", "mNativeObject");
+/** the layer of a Java SurfaceControl, which ASurfaceControl_fromJava hangs a native tree from */
+export const javaLayer = (sc: JObj | null): Layer | null => { const h = sc ? controlField(sc) : 0n; return h ? layerOf(h) : null; };
+/** a native tree's composed frame (surfacecontrol.ts) as the layer's buffer */
+export function showFrame(layer: Layer, frame: ImageBitmap): void {
+  releaseFrame(layer.buffer);
+  layer.buffer = frame;
+  scheduleComposite();
+}
 /** a Java SurfaceControl over `layer` */
 export const javaSurfaceControl = (layer: Layer, callsite: string): JObj | Promise<JObj> => after(newObj("android/view/SurfaceControl"),
   (sc) => after(vcall(sc, "assignNativeObject", "(JLjava/lang/String;)V", handle({ layer } satisfies Control), callsite), () => sc));
@@ -316,7 +327,7 @@ rt.registerJnis("android/hardware/SyncFence", {
 
 // ── BLASTBufferQueue and Surface: a window's buffers
 interface Queue { name: string; control: Control | null; width: number; height: number; canvas: OffscreenCanvas | null; frame: bigint;
-  sync: JObj | null; acquireSingle: boolean; pending: Transaction[]; gl: GlSurface | null }
+  sync: JObj | null; acquireSingle: boolean; pending: Transaction[]; gl: GlSurface | null; readers: Map<MessagePort, () => void> }
 /** a producer's handle: on a BLAST queue, on a layer, or on a SurfaceTexture's GL surface */
 export interface Surface { queue: Queue | null; layer: Layer | null; producer?: GlSurface }
 const queue = (h: bigint) => deref<Queue>(h);
@@ -378,11 +389,17 @@ export function glSurfaceOf(s: Surface): GlSurface | null {
 
 rt.registerJnis("android/graphics/BLASTBufferQueue", {
   "nativeCreate(Ljava/lang/String;Z)J": (name: string) =>
-    handle({ name, control: null, width: 0, height: 0, canvas: null, frame: 0n, sync: null, acquireSingle: true, pending: [], gl: null } satisfies Queue),
-  "nativeDestroy(J)V": (h: bigint) => release(h),
-  "nativeUpdate(JJJJI)V": (h: bigint, sc: bigint, w: bigint, ht: bigint) => {
+    handle({ name, control: null, width: 0, height: 0, canvas: null, frame: 0n, sync: null, acquireSingle: true, pending: [], gl: null, readers: new Map() } satisfies Queue),
+  "nativeDestroy(J)V": (h: bigint) => {
     const q = queue(h);
+    for (const end of q.readers.values()) end();
+    unexport((s) => s.queue === q);
+    release(h);
+  },
+  "nativeUpdate(JJJJI)V": (h: bigint, sc: bigint, w: bigint, ht: bigint) => {
+    const q = queue(h), resized = q.width !== Number(w) || q.height !== Number(ht);
     q.control = control(sc); q.width = Number(w); q.height = Number(ht);
+    if (resized) for (const port of q.readers.keys()) port.postMessage({ width: q.width, height: q.height });
   },
   "nativeGetSurface(JZ)Landroid/view/Surface;": (h: bigint) =>
     newObj("android/view/Surface", "(J)V", handle({ queue: queue(h), layer: null } satisfies Surface)),
@@ -408,7 +425,71 @@ rt.registerJnis("android/graphics/BLASTBufferQueue", {
 });
 
 const surface = (h: bigint) => deref<Surface>(h);
+
+// A Surface parceled to another process (view::Surface, which carries its IGraphicBufferProducer):
+// the owner and a token, which a reader elsewhere connects to through the broker. Frames the reader
+// draws reach the owner's queue over that port, and the queue's size comes back over it. A token
+// resolves until what the surface draws to ends; a port closes when either side drops it or dies.
+const exported = new Map<number, Surface>(), tokens = new WeakMap<Surface, number>();
+const imported = new Map<string, Surface>();
+function exportSurface(s: Surface): number {
+  let token = tokens.get(s);
+  if (token === undefined) {
+    const [hi, lo] = crypto.getRandomValues(new Uint32Array(2));
+    token = (hi & 0x1fffff) * 2 ** 32 + lo;
+    tokens.set(s, token);
+    exported.set(token, s);
+  }
+  return token;
+}
+function unexport(ended: (s: Surface) => boolean): void {
+  for (const [token, s] of exported) if (ended(s)) exported.delete(token);
+}
+/** `close` once the port closes from the other side or process `pid` dies; the function that closes it from this side */
+function closedWith(port: MessagePort, pid: number, close: () => void): () => void {
+  const unwatch = onCallerDeath(pid, () => end());
+  const end = () => { unwatch(); port.close(); close(); };
+  port.addEventListener("close", end, { once: true });
+  return end;
+}
+/** the owner's side of the port `reader` connected onto the surface it parceled under `token` */
+export function connectSurface(token: number, port: MessagePort, reader: number): boolean {
+  const s = exported.get(token), target = s && glSurfaceOf(s);
+  if (!s || !target) { port.close(); return false; }
+  port.onmessage = ({ data }: MessageEvent<ImageBitmap | VideoFrame>) => presentSurface(target, data);
+  const end = closedWith(port, reader, () => s.queue?.readers.delete(port));
+  s.queue?.readers.set(port, end);
+  port.postMessage({ width: target.width, height: target.height });
+  return true;
+}
+async function importSurface(owner: number, token: number, key: string): Promise<Surface | null> {
+  const port = await broker().surfaceConnect(owner, token);
+  if (!port) return null;
+  const size = await new Promise<{ width: number; height: number }>((resolve) => { port.onmessage = ({ data }) => resolve(data); });
+  const producer: GlSurface = { ...size, present: null, frames: 0, post: (frame) => port.postMessage(frame, [frame]) };
+  port.onmessage = ({ data }: MessageEvent<{ width: number; height: number }>) => { producer.width = data.width; producer.height = data.height; };
+  closedWith(port, owner, () => { imported.delete(key); unexport((s) => s.producer === producer); });
+  return { queue: null, layer: null, producer };
+}
+const sameProducer = (a: Surface, b: Surface) => a.queue === b.queue && a.layer === b.layer && a.producer === b.producer;
 rt.registerJnis("android/view/Surface", {
+  "nativeWriteToParcel(JLandroid/os/Parcel;)V": (h: bigint, parcel: JObj) => {
+    const p = nativeParcel(parcel);
+    if (!h) return writeInt(p, 0);
+    writeInt(p, procIdentity.pid);
+    writeLong(p, BigInt(exportSurface(surface(h))));
+  },
+  // the same producer keeps its native object; another replaces it, releasing the old
+  "nativeReadFromParcel(JLandroid/os/Parcel;)J": (h: bigint, parcel: JObj) => {
+    const p = nativeParcel(parcel), owner = readInt(p), token = owner ? Number(readLong(p)) : 0, key = `${owner}:${token}`;
+    const found = !owner ? null : owner === procIdentity.pid ? exported.get(token) ?? null : imported.get(key);
+    return after(found === undefined ? importSurface(owner, token, key) : found, (s) => {
+      if (s && found === undefined) imported.set(key, s);
+      if (h && s && sameProducer(surface(h), s)) return h;
+      if (h) release(h);
+      return s ? handle({ ...s } satisfies Surface) : 0n;
+    });
+  },
   "nativeCreateFromSurfaceControl(J)J": (sc: bigint) => handle({ queue: null, layer: layerOf(sc) } satisfies Surface),
   "nativeGetFromSurfaceControl(JJ)J": (_h: bigint, sc: bigint) => handle({ queue: null, layer: layerOf(sc) } satisfies Surface),
   "nativeGetFromBlastBufferQueue(JJ)J": (h: bigint, q: bigint) => h && surface(h).queue === queue(q) ? h : handle({ queue: queue(q), layer: null } satisfies Surface),

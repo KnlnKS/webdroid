@@ -2,7 +2,8 @@
 // ends of its surfaces and its control port. The broker (processes.ts) registers the process and
 // answers the host's bootstrap; the Worker itself is process-worker.ts.
 import { bootstrapTransfers, closeProcessBootstrap, type ProcessBootstrap, type SurfaceName } from "./process-bootstrap-data.ts";
-import { callProxy, methodsOf, type CallFailure } from "./rpc.ts";
+import { callProxy, methodsOf, type CallFailure, type MethodTree, type Own } from "./rpc.ts";
+import { native } from "../native/debug.ts";
 import type { StartPhase, WorkerControl } from "./worker-control.ts";
 import type { ProcessRecord } from "./processes.ts";
 import { createGuestClockPort } from "../guest-clock.ts";
@@ -20,15 +21,19 @@ import { receiveMedia } from "./media-port.ts";
 import { receiveWebSurfaces } from "./web-surface-port.ts";
 import { WORKER_SCRIPTS } from "../worker-scripts.ts";
 import { switches } from "../switches.ts";
+import { sharedPool } from "../native/shm.ts";
 
 /** what the page posts a process Worker: its prestart once spawned, the display's rate once
  *  measured, and its one start */
-export type ProcessWorkerMessage = { kind: "prestart"; clock: ClockBootstrap; jars: MessagePort; tier: TierPorts }
+export type ProcessWorkerMessage = { kind: "prestart"; clock: ClockBootstrap; jars: MessagePort; tier: TierPorts; pool: WebAssembly.Memory | null }
   | { kind: "rate"; rate: number } | { kind: "start"; bootstrap: ProcessBootstrap; endpoint: MessagePort; control: MessagePort };
 /** what a process Worker posts the page as its start passes each phase, or once it fails */
 export type ProcessWorkerStatus = { kind: "phase"; phase: StartPhase } | { kind: "failed"; error: CallFailure; logs: string[] };
 const post = (worker: Worker, message: ProcessWorkerMessage, transfer: Transferable[] = []) => worker.postMessage(message, transfer);
-export const workerControlMethods = methodsOf<WorkerControl>()(["snapshot", "aotProfile", "codeReadiness", "demandMark", "demandSince", "alive", "uiTree", "tap", "swipe", "type", "enter", "imeState", "back", "testFrame", "timeline"]);
+export const workerControlMethods = {
+  "": methodsOf<Own<WorkerControl>>()(["snapshot", "aotProfile", "codeReadiness", "demandMark", "demandSince", "alive", "uiTree", "tap", "swipe", "type", "enter", "imeState", "back", "testFrame", "timeline", "forward"]),
+  native: Object.keys(native) as (keyof typeof native)[],
+} satisfies MethodTree;
 
 type SpareWorker = { pid: number; url: string; worker: Worker; release(): void; error?: string };
 /** the URL of a process Worker; `wide` picks the bitness of the zygote it runs (process-worker.ts) */
@@ -45,7 +50,7 @@ function spawn(pid: number, wide: boolean): SpareWorker {
   sendPlatformJars(jars.port1);
   const spare: SpareWorker = { pid, url, worker, release: () => { clock.close(); tier.close(); } };
   worker.onerror = event => { spare.error ??= event.message; };
-  post(worker, { kind: "prestart", clock: clock.data, jars: jars.port2, tier: tier.ports },
+  post(worker, { kind: "prestart", clock: clock.data, jars: jars.port2, tier: tier.ports, pool: sharedPool() },
     [jars.port2, ...Object.values(tier.ports), ...clock.data.port ? [clock.data.port] : []]);
   // the zygote it runs reads the display's rate
   void displayRate().then(() => post(worker, { kind: "rate", rate: device.refreshRate }));

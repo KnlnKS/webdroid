@@ -138,7 +138,7 @@ fn neonWhole(e: *Emit, w: u32) bool {
 }
 
 /// VLD1/VST1 of one lane, or VLD1 of one element to all lanes of one or two D registers, with
-/// arm.neonLane's alignment fault and writeback.
+/// arm_neon.neonLane's alignment fault and writeback.
 fn neonLane(e: *Emit, w: u32) bool {
     if (bits(w, 8, 2) != 0) return false;
     const ld = w & (1 << 21) != 0;

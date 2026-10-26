@@ -39,7 +39,7 @@ const SPLIT = emptyApk();
 /** the apk installed at `path`, as ApkAssets loads it */
 function apkAt(path: string): Apk | null {
   for (const record of packages.values()) if (record.path === path) return record.apk;
-  return appHost?.splits.some((name) => apkPath(name) === path) ? SPLIT : null;
+  return appHost && packages.get(appHost.pkg)?.splits.some((split) => apkPath(split.name) === path) ? SPLIT : null;
 }
 const apkN = (h: bigint) => deref<ApkN>(h);
 function loadApk(path: string, flags: number): bigint {

@@ -60,6 +60,16 @@ function object(h: number, cpu: Cpu): unknown {
 }
 /** the object behind a reference as the host natives (libandroid, bitmap) read it */
 export const deref = (h: number, cpu: Cpu): unknown => java.jni.host(object(h, cpu));
+/** a local reference to a new `name` its constructor `desc` made of `args`, as NewObject makes one; 0 with the
+ *  exception pending when it threw */
+export const newLocal = (cpu: Cpu, name: string, desc: string, args: unknown[]): number | Promise<number> => rt.drive(function* (): Gen<number> {
+  try {
+    const c: JniClass | null = yield java.jni.resolve(name, cpu.nativeClass);
+    if (!c) { pend(cpu, java.jni.noClass(name)); return 0; }
+    yield java.jni.init(c);
+    return toRef(yield java.jni.construct(c, desc, args), cpu);
+  } catch (e) { failed(cpu, e); return 0; }
+}());
 export function pushFrame(cpu: Cpu): void { const l = locals(cpu); l.frames.push(l.refs.length); }
 export function popFrame(cpu: Cpu): void { const l = locals(cpu); const m = l.frames.pop(); if (m !== undefined) l.refs.length = m; }
 

@@ -157,7 +157,7 @@ const quant = (c: number, max: number) => Math.round(c * max / 255);
 const expand = (v: number, max: number) => Math.round(v * 255 / max);
 const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer);
 /** float to IEEE half, rounding to nearest even */
-function toHalf(v: number): number {
+export function toHalf(v: number): number {
   f32[0] = v;
   const x = u32[0], sign = (x >>> 16) & 0x8000, e = ((x >>> 23) & 0xff) - 127 + 15;
   let m = x & 0x7fffff;

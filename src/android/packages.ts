@@ -5,7 +5,7 @@ import { SHARED_LIBRARIES } from "../jvm/bootclasspath.ts";
 import { device } from "../shell/config.ts";
 import type { PackageState } from "../shell/packagedata.ts";
 import { persisted } from "../shell/device-storage.ts";
-import type { FileSource } from "../shell/lazyfile.ts";
+import type { InstalledSplit } from "../shell/install.ts";
 
 export type ComponentKind = "activity" | "service" | "receiver" | "provider";
 /** PackageManager's flags, which IPackageManager takes as a long */
@@ -27,6 +27,13 @@ export function usesSdk(root: XmlNode): { min: number; target: number } {
   const min = sdk && attr(sdk, "minSdkVersion")?.data || 1;
   return { min, target: sdk && attr(sdk, "targetSdkVersion")?.data || min };
 }
+/** ParsedActivityImpl.makeAlias: an <activity-alias> is its target declared earlier, but for the
+ *  attributes AndroidManifestActivityAlias reads and those makeAlias leaves to the alias */
+const ALIAS_OWN = new Set(["name", "label", "icon", "roundIcon", "logo", "banner", "description", "enabled", "exported", "permission",
+  "targetActivity", "parentActivityName", "attributionTags"]);
+const NOT_COPIED = new Set(["name", "enabled", "exported", "permission", "splitName", "persistableMode", "rotationAnimation", "colorMode", "attributionTags"]);
+const alias = (node: XmlNode, target: XmlNode): XmlNode => ({ ...node,
+  attrs: [...node.attrs.filter((a) => ALIAS_OWN.has(a.name)), ...target.attrs.filter((a) => !NOT_COPIED.has(a.name))] });
 const USES_PERMISSION = new Set(["uses-permission", "uses-permission-sdk-23", "uses-permission-sdk-m"]);
 /** parseMinOrMaxSdkVersion: an integer attribute, else `def` */
 const sdkAttr = (node: XmlNode, name: string, def: number): number => {
@@ -50,8 +57,10 @@ function requestedPermissions(root: XmlNode, target: number): Set<string> {
   return requested;
 }
 
+export const applicationOf = (manifest: XmlNode): XmlNode | null => manifest.children.find((n) => n.name === "application") ?? null;
 /** what provisioning gives a system package: its grants and the signatures it presents in place of its own */
 export type Provisioned = { system?: boolean; grants?: Iterable<string>; signatures?: Uint8Array[] | null };
+
 export class PackageRecord {
   readonly root: XmlNode; readonly apk: Apk; readonly path: string; readonly uid: number; readonly certificates: () => Promise<Uint8Array[]>;
   readonly pkg: string;
@@ -59,25 +68,33 @@ export class PackageRecord {
   readonly components: Record<ComponentKind, Map<string, XmlNode>> = {
     activity: new Map(), service: new Map(), receiver: new Map(), provider: new Map(),
   };
+  /** the installed splits, sorted by name */
+  readonly splits: readonly InstalledSplit[];
+  /** the split a component loads from: the one declaring it, or its android:splitName */
+  readonly splitOf = new Map<XmlNode, string>();
   /** the permissions the package requests (PackageInfo.requestedPermissions) */
   readonly requested: Set<string>;
   readonly system: boolean;
   readonly grants: ReadonlySet<string>;
   readonly compatibilityCertificates: Uint8Array[] | null;
-  /** the split apks installed beside the base */
-  readonly splits: readonly FileSource[];
 
-  constructor(root: XmlNode, apk: Apk, path: string,
-    uid: number, certificates: () => Promise<Uint8Array[]>, { system = false, grants = [], signatures = null, splits = [] }: Provisioned & { splits?: readonly FileSource[] } = {}) {
+  constructor(root: XmlNode, apk: Apk, path: string, uid: number, certificates: () => Promise<Uint8Array[]>,
+    { system = false, grants = [], signatures = null, splits = [] }: Provisioned & { splits?: readonly InstalledSplit[] } = {}) {
     this.root = root; this.apk = apk; this.path = path; this.uid = uid; this.certificates = certificates;
     this.system = system; this.grants = new Set(grants); this.compatibilityCertificates = signatures; this.splits = splits;
     this.pkg = attrStr(root, "package") ?? "";
-    this.application = root.children.find((n) => n.name === "application") ?? null;
-    for (const node of this.application?.children ?? []) {
+    this.application = applicationOf(root);
+    // ParsingPackageUtils: each split's <application> adds its components to the base's
+    for (const { name: split, manifest } of [{ name: null, manifest: root }, ...splits]) for (let node of applicationOf(manifest)?.children ?? []) {
       const kind = node.name === "activity-alias" ? "activity" : node.name;
       if (kind !== "activity" && kind !== "service" && kind !== "receiver" && kind !== "provider") continue;
       const name = attrStr(node, "name");
-      if (name) this.components[kind].set(qualifyComponent(name, this.pkg), node);
+      if (!name) continue;
+      const target = node.name === "activity-alias" && this.components.activity.get(qualifyComponent(attrStr(node, "targetActivity") ?? "", this.pkg));
+      if (target) node = alias(node, target);
+      this.components[kind].set(qualifyComponent(name, this.pkg), node);
+      const splitName = attrStr(node, "splitName") ?? split;
+      if (splitName) this.splitOf.set(node, splitName);
     }
     this.requested = requestedPermissions(root, usesSdk(root).target);
   }

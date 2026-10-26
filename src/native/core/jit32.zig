@@ -6,9 +6,9 @@ const jit = @import("jit.zig");
 const jitvfp = @import("jitvfp.zig");
 const jitneon = @import("jitneon.zig");
 const jit32mem = @import("jit32mem.zig");
-const jit32thumb = @import("jit32thumb.zig");
-const Imm = jit32thumb.Imm;
-const Thumb2 = jit32thumb.Arm;
+const thumbarm = @import("thumbarm.zig");
+const Imm = thumbarm.Imm;
+const Thumb2 = thumbarm.Arm;
 const wasm = @import("wasm.zig");
 const bt = @import("bits.zig");
 const bits = bt.bits;
@@ -80,7 +80,7 @@ fn emitWideMove(e: *Emit, move: WideMove) void {
     if (move.top) b.emit(.{ get(L_X + move.d), c32(0xffff), O.i32_and, c32(@bitCast(move.imm << 16)), O.i32_or }) else b.i32c(@bitCast(move.imm));
     setR(e, move.d);
 }
-const ItOp = struct { pc: u32, cc: u8, body: jit32thumb.ItBody };
+const ItOp = struct { pc: u32, cc: u8, body: thumbarm.ItBody };
 const ItBlock = struct { end: u32, count: u32, ops: ?[4]ItOp };
 fn itBlock(pc: u32, h: u32) ?ItBlock {
     if (h & 0xff00 != 0xbf00 or h & 15 == 0 or bits(h, 4, 4) >= 14 or jit.forcedFallback(pc)) return null;
@@ -95,7 +95,7 @@ fn itBlock(pc: u32, h: u32) ?ItBlock {
         const len: u32 = if (word & 0xf800 >= 0xe800) 4 else 2;
         if ((at & (abi.PAGE_SIZE - 1)) > abi.PAGE_SIZE - len or (len == 4 and jit.forcedFallback(at + 2))) return null;
         if (compiled) {
-            const body: ?jit32thumb.ItBody = if (len == 2) jit32thumb.itBody16(word) else blk: {
+            const body: ?thumbarm.ItBody = if (len == 2) thumbarm.itBody16(word) else blk: {
                 const h2: u32 = mem.ld(u16, at + 2);
                 // no branches, PC loads, table branches or ISB, which end a block
                 break :blk if (thumbCall(word, h2) or thumbBranch(word, h2) or thumbCondBranch(word, h2) or thumbLoadsPc(word, h2) or (word == 0xf3bf and h2 & 0xfff0 == 0x8f60) or
@@ -161,7 +161,7 @@ pub fn rwThumb(pc: u32) jit.RW {
     rw.fw = 0;
     if (h & 0xf800 >= 0xe800) {
         const h2: u32 = mem.ld(u16, pc + 2);
-        if (jit32thumb.asArm(pc, h, h2)) |a| return rwArm(a.w);
+        if (thumbarm.asArm(pc, h, h2)) |a| return rwArm(a.w);
         if (thumbCondBranch(h, h2)) rw.fr = jit.condReads(@intCast(bits(h, 6, 4))) else if (!thumbCall(h, h2) and !thumbBranch(h, h2)) {
             // Other wide-instruction fallbacks can consume incoming carry across block edges.
             return jit.ALL32;
@@ -379,8 +379,9 @@ fn load(e: *Emit, o: u8, off: u32) void {
 }
 fn store(e: *Emit, o: u8, off: u32) void {
     e.b.set(L_R);
-    e.storeCheck(off, switch (o) { O.i32_store8 => 1, O.i32_store16 => 2, else => 4 });
+    e.storeValue(off, switch (o) { O.i32_store8 => 1, O.i32_store16 => 2, else => 4 });
     e.b.emit(.{ get(L_A), get(L_R), mo(o, off) });
+    e.endif();
 }
 
 pub fn emitArm(e: *Emit, pc: u32, k: u32) bool {
@@ -902,7 +903,7 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
             bxExit(e, k);
             return true;
         }
-        if (jit32thumb.asArm(pc, h, h2)) |a| return armBody(e, a, pc, k);
+        if (thumbarm.asArm(pc, h, h2)) |a| return armBody(e, a, pc, k);
         if (jit32mem.emitThumb(e, h, h2)) return false;
         if (h >= 0xec00 and h < 0xef00 and jitvfp.emit(e, h << 16 | h2)) return false;
         if (h & 0xef00 == 0xef00 and jitneon.emit(e, 0xf200_0000 | (h & 0x1000) << 12 | (h & 0xff) << 16 | h2)) return false;

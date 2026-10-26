@@ -30,6 +30,8 @@ pub const Cpu = extern struct {
     errno_addr: u32,
     ic_limit: i64,
     tls_tab: u32,
+    /// what LDREX read from the window, which STREX stores over only while the window still holds it
+    excl_val: u64,
 
     pub inline fn cf(c: *Cpu) u32 {
         return (c.cpsr >> 29) & 1;
@@ -255,14 +257,38 @@ pub inline fn setPc32(c: *Cpu, target: u32) void {
 }
 pub inline fn st(comptime T: type, c: *Cpu, a: u32, v: T) bool {
     const n = @sizeOf(T);
-    if ((mem.page_flags[a >> abi.PAGE_SHIFT] | mem.page_flags[(a +% (n - 1)) >> abi.PAGE_SHIFT]) != 0 and on_store(@intFromPtr(c), a, n) != 0) return false;
+    if ((mem.page_flags[a >> abi.PAGE_SHIFT] | mem.page_flags[(a +% (n - 1)) >> abi.PAGE_SHIFT]) != 0) {
+        if (a >= mem.window) return windowStore(T, c, a, v);
+        if (on_store(@intFromPtr(c), a, n) != 0) return false;
+    }
     mem.ptr(T, a).* = v;
     return true;
+}
+fn windowStore(comptime T: type, c: *Cpu, a: u32, v: T) bool {
+    if (!mem.windowed(a, @sizeOf(T), true)) {
+        c.fault_addr = a;
+        _ = raise(c, .bad_address, 0);
+        return false;
+    }
+    mem.windowStore(T, a, v);
+    return true;
+}
+/// a compiled ARM32 store's slow path, which has the value: 0 to store it, 1 to fault, 2 when the
+/// window took it
+export fn on_store32(cp: u32, a: u32, n: u32, v: u32) u32 {
+    if (a < mem.window) return on_store(cp, a, n);
+    const c: *Cpu = @ptrFromInt(cp);
+    const stored = switch (n) {
+        1 => windowStore(u8, c, a, @truncate(v)),
+        2 => windowStore(u16, c, a, @truncate(v)),
+        else => windowStore(u32, c, a, v),
+    };
+    return if (stored) 2 else 1;
 }
 export fn on_store(cp: u32, a: u32, n: u32) u32 {
     const c: *Cpu = @ptrFromInt(cp);
     const last = a +% (n - 1);
-    for ([_]u32{ a, last }) |at| if (mem.page_flags[at >> abi.PAGE_SHIFT] & 2 != 0) {
+    for ([_]u32{ a, last }) |at| if (mem.page_flags[at >> abi.PAGE_SHIFT] & (2 | abi.PAGE_READONLY) != 0) {
         c.fault_addr = at;
         _ = raise(c, .bad_address, 0);
         return 1;
@@ -387,7 +413,15 @@ export fn run_slice(cp: u32, budget: u32) u32 {
                 if (c.a64 != 0) c.pc = r else setPc32(c, r);
             } else switch (r) {
                 1 => {},
-                2 => return @intFromEnum(Exit.fault),
+                // compiled code reaches the window through the interpreter, one instruction at a time
+                2 => if (c.a64 == 0 and c.exit == @intFromEnum(Fault.bad_address) and mem.windowed(@truncate(c.fault_addr), 1, false)) {
+                    c.ic += 1;
+                    switch (exec_word32(cp, @truncate(c.pc))) {
+                        0, 1 => {},
+                        3 => return @intFromEnum(Exit.syscall),
+                        else => return @intFromEnum(Exit.fault),
+                    }
+                } else return @intFromEnum(Exit.fault),
                 3 => return @intFromEnum(Exit.syscall),
                 else => {
                     // the branch was taken: the pc is the target, as an instruction abort reports it

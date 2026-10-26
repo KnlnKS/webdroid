@@ -3,20 +3,14 @@
 // come into use (mem.zig's back), within the native ABI's address space (mem.init).
 
 import { JIT_BUF, MEM_SIZE_INITIAL, MEM_SIZE_A64, STACK_BASE } from "./abi.ts";
-import { JIT_SLOTS, LIBC_FNS, TLS_KEYS } from "./core-abi.gen.ts";
+import { JIT_SLOTS, LIBC_FNS, TLS_KEYS, TLS_MODULES, TLS_BLOCKS } from "./core-abi.gen.ts";
 export { JIT_HEAT } from "./core-abi.gen.ts";
 import { perf } from "../perf.ts";
-import { guestNow, wallMillis } from "../guest-clock.ts";
+import { uptimeMillis, wallMillis } from "../guest-clock.ts";
 
-export class NativeFault extends Error {
-  pc = 0;
-}
-/** a host access through a guest pointer to nothing mapped: copy_from_user's EFAULT under a
- *  system call, the guest's own SIGSEGV under a libc function that reads it in user space */
-export class BadAddress extends NativeFault {
-  readonly addr: bigint;
-  constructor(addr: bigint, message: string) { super(message); this.addr = addr; }
-}
+export { NativeFault, BadAddress } from "./faults.ts";
+import { NativeFault } from "./faults.ts";
+import { windowImports } from "./window.ts";
 
 interface Core {
   __heap_base: WebAssembly.Global;
@@ -36,7 +30,7 @@ interface Core {
   commit_phys(p: number, n: number): number;
   plane_reserved(h: number): number;
   va(phys: number): bigint;
-  map_va(n: bigint, reserve: number, low: number): bigint;
+  map_va(n: bigint, reserve: number, low: number, hint: bigint): bigint;
   unmap_va(va: bigint, n: bigint): number;
   extend_va(va: bigint, oldSize: bigint, size: bigint): number;
   map_fixed(va: bigint, n: bigint): number;
@@ -45,6 +39,7 @@ interface Core {
   commit_va(va: bigint, n: bigint): number;
   drop_va(va: bigint, n: bigint): number;
   decommit_va(va: bigint, n: bigint): void;
+  protect_va(va: bigint, n: bigint, writable: number): void;
   reserve(size: number, align: number): number;
   release_image(base: number, size: number): void;
   alloc_stack(size: number): number;
@@ -87,11 +82,21 @@ interface Core {
   jit_fmaxnm64(a: number, b: number): number;
   jit_fminnm64(a: number, b: number): number;
   jit_fma64(a: number, b: number, c: number): number;
+  on_store32(cpu: number, addr: number, size: number, value: number): number;
+  window_map(addr: number, size: number, prot: number): number;
 }
+/** the ARM EABI's aligned variants, each served as the call it specializes */
+export const EABI_ALIASES: Record<string, string> = {
+  __aeabi_memcpy: "memmove", __aeabi_memcpy4: "memmove", __aeabi_memcpy8: "memmove",
+  __aeabi_memmove: "memmove", __aeabi_memmove4: "memmove", __aeabi_memmove8: "memmove",
+  __aeabi_memclr: "bzero", __aeabi_memclr4: "bzero", __aeabi_memclr8: "bzero",
+  __aeabi_memset4: "__aeabi_memset", __aeabi_memset8: "__aeabi_memset",
+};
 /** the libc calls the core serves itself, by the id libc.zig gives them */
-export const CORE_LIBC: Record<string, number> = Object.fromEntries(LIBC_FNS.map((n, i) => [n, i + 1]));
-/** pthread keys per thread, the size of the table each Cpu carries */
-export { TLS_KEYS };
+export const CORE_LIBC: Record<string, number> = Object.fromEntries([...LIBC_FNS.map((n, i) => [n, i + 1] as const),
+  ...Object.entries(EABI_ALIASES).map(([n, to]) => [n, LIBC_FNS.indexOf(to) + 1] as const)]);
+/** pthread keys per thread, the size of the table each Cpu carries; the TLS module blocks it keeps after them */
+export { TLS_KEYS, TLS_MODULES, TLS_BLOCKS };
 
 /** The page's realms share one V8 isolate, which counts each committed wasm memory toward its
  *  global heap limit and past it marks without pause, so the memory is committed as the guest
@@ -146,9 +151,11 @@ const instance = await WebAssembly.instantiate(await load(), {
     memory,
     __indirect_function_table: table,
     now_ms: () => performance.now(),
-    guest_ms: guestNow,
-    wall_ms: wallMillis,
+    // read through: a realm's clock may be replaced after instantiation
+    uptime_ms: () => uptimeMillis(),
+    wall_ms: () => wallMillis(),
     mem_grown: () => grown(),
+    ...windowImports(memory),
     js_panic(ptr: number, len: number): never {
       throw new NativeFault("[native] core: " + new TextDecoder().decode(new Uint8Array(memory.buffer, ptr, len)));
     },
@@ -160,7 +167,7 @@ if (core.__heap_base.value > STACK_BASE) throw new Error("[native] the core's da
 // ── the JIT: the core emits a module per batch of hot regions; each region function is linked
 // into the table and the core's slot maps route the dispatcher to it
 const JIT_CAP = 1 << 20; // the last MiB of the KERN region (abi.ts)
-const jitImports = { env: { memory, __indirect_function_table: table, exec: core.exec_word, exec32: core.exec_word32, store: core.on_store, fmax32: core.jit_fmax32, fmin32: core.jit_fmin32, fmaxnm32: core.jit_fmaxnm32, fminnm32: core.jit_fminnm32, fmax64: core.jit_fmax64, fmin64: core.jit_fmin64, fmaxnm64: core.jit_fmaxnm64, fminnm64: core.jit_fminnm64, fma64: core.jit_fma64, it32: core.exec_it_block32, tx: core.tx, estimate32: core.jit_estimate32 } };
+const jitImports = { env: { memory, __indirect_function_table: table, exec: core.exec_word, exec32: core.exec_word32, store: core.on_store, fmax32: core.jit_fmax32, fmin32: core.jit_fmin32, fmaxnm32: core.jit_fmaxnm32, fminnm32: core.jit_fminnm32, fmax64: core.jit_fmax64, fmin64: core.jit_fmin64, fmaxnm64: core.jit_fmaxnm64, fminnm64: core.jit_fminnm64, fma64: core.jit_fma64, it32: core.exec_it_block32, tx: core.tx, estimate32: core.jit_estimate32, store32: core.on_store32 } };
 /** whether the engine has wasm tail calls: a region then hands off to the next region without returning to the dispatcher */
 const TAIL = WebAssembly.validate(new Uint8Array([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0, 1, 5, 1, 0x60, 0, 1, 0x7f, 3, 2, 1, 0, 10, 6, 1, 4, 0, 0x12, 0, 0x0b]));
 core.jit_config((TAIL ? 1 : 0) | (shared ? 2 : 0));

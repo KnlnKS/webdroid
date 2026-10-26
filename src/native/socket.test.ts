@@ -5,11 +5,12 @@ import { ldp } from "./host.ts";
 import { libcInit } from "./libc32/libc.ts";
 import { kernelInit } from "./syscall.ts";
 import { mem } from "./mem.ts";
-import { socketCreate } from "./socket/syscalls.ts";
+import { socketCreate, socketPair } from "./socket/syscalls.ts";
+import { importSocket } from "./socket/unix.ts";
 import type { Socket, Accepted } from "./socket/core.ts";
 import { SOL_SOCKET, type SocketAddress } from "./socket/abi.ts";
 import { E } from "./abi.ts";
-import { closeFd } from "./fd.ts";
+import { closeFd, crossingOf } from "./fd.ts";
 import { readSocket, socketOf } from "./socket/core.ts";
 import { AF_INET, AF_INET6, guestEndpoint, type Endpoint } from "./net-address.ts";
 import { loopbackFetch } from "../shell/devicefetch.ts";
@@ -211,4 +212,19 @@ test("host HTTP to a loopback URL reaches this process's listener", async () => 
   const answer = (await response)!;
   expect([answer.status, answer.headers.get("x-wd-set-cookie"), await answer.text()]).toEqual([200, '["a=1"]', "abcde"]);
   for (const fd of [accepted.fd, server]) closeFd(fd);
+});
+
+test("a socketpair end passed across realms keeps its connection: bytes both ways, then the close", async () => {
+  const [mine, passed] = socketPair(5 /* SOCK_SEQPACKET */) as [number, number];
+  const there = importSocket(crossingOf(passed)!);
+  closeFd(passed);
+  const read = async (fd: number) => { const b = new Uint8Array(8), n = await readSocket(fd, b); return [...b.subarray(0, n)]; };
+  sock(mine).send(Uint8Array.of(1, 2), null, null);
+  expect(await read(there)).toEqual([1, 2]);
+  sock(there).send(Uint8Array.of(3), null, null);
+  expect(await read(mine)).toEqual([3]);
+  closeFd(there);
+  expect(await read(mine)).toEqual([]);
+  expect(sock(mine).send(Uint8Array.of(4), null, null)).toBe(-E.PIPE);
+  closeFd(mine);
 });

@@ -6,7 +6,7 @@
 // code: __errno, getauxval, __init_static_tls, __allocate_thread_mapping, pthread_getattr_np).
 
 import { mem } from "./mem.ts";
-import { defineHost, hostLib, ldp, stp, SERVED, type HostFn } from "./host.ts";
+import { defineHost, hostLib, ldp, stp, PTR, SERVED, type HostFn } from "./host.ts";
 import { interposed, linkerHooks, loadModule, prefetchModules, runInit, libdl as dl, modules } from "./dl.ts";
 import { setThreadHooks, type Cpu } from "./cpu.ts";
 import { setAbortMessage } from "./crash.ts";
@@ -119,8 +119,12 @@ export async function bootBionic(cpu: Cpu): Promise<void> {
   setAbortMessage(() => { const m = mem.ld64(globals + G_ABORT_MSG); return m ? mem.cstr(mem.txVa(m) + 8) : ""; });
   await cfiAdd(mods, cpu);
   for (const mod of mods) await runInit(mod, cpu);
-  // after libc's own init, which zeroes __libc_globals; what scudo allocated before is never freed
-  stp(libc.locals.get("__libc_globals")! + GLOBALS_DISPATCH, heap);
+  // after libc's own init, which zeroes __libc_globals and leaves it read-only, so the store is
+  // WriteProtected::mutate's; what scudo allocated before is never freed
+  const dispatch = libc.locals.get("__libc_globals")! + GLOBALS_DISPATCH;
+  mem.protectVa(BigInt(dispatch), PTR, true);
+  stp(dispatch, heap);
+  mem.protectVa(BigInt(dispatch), PTR, false);
 }
 
 function heapDispatch(): number {
@@ -182,7 +186,7 @@ function attach(cpu: Cpu): void {
   const block = mem.memalign(16, tlsSize), thread = mem.calloc(1, T_SIZE);
   if (!block || !thread) throw new Error("bionic: out of memory for a thread");
   mem.memset(block, 0, tlsSize);
-  for (const mod of staticModules) mem.write(block + TP + mod.tpOffset!, mod.tls!.image);
+  for (const mod of staticModules) mem.memmove(block + TP + mod.tpOffset!, mod.tls!.init, mod.tls!.initSize);
   const tp = block + TP;
   stp(tp + SLOT_DTV, zeroDtv);
   stp(tp + SLOT_THREAD, thread);
@@ -221,10 +225,9 @@ function writeTlsLayout(): void {
   // TlsModule: segment {size, align {value, skew}, init_ptr, init_size}, static_offset, first_generation, soinfo
   const table = mem.calloc(staticModules.length, TLS_MODULE);
   staticModules.forEach((mod, i) => {
-    const e = table + i * TLS_MODULE, tls = mod.tls!, image = mem.malloc(Math.max(tls.image.length, 1));
-    mem.write(image, tls.image);
+    const e = table + i * TLS_MODULE, tls = mod.tls!;
     mem.st64(e, BigInt(tls.size)); mem.st64(e + 8, BigInt(tls.align));
-    stp(e + 0x18, image); mem.st64(e + 0x20, BigInt(tls.image.length));
+    stp(e + 0x18, tls.init); mem.st64(e + 0x20, BigInt(tls.initSize));
     mem.st64(e + 0x28, BigInt(TP + mod.tpOffset!)); mem.st64(e + 0x30, 1n);
   });
   mem.st64(globals + G_MODULE_COUNT, BigInt(staticModules.length));

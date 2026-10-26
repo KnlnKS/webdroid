@@ -3,15 +3,18 @@
 // A name they lack is NULL from dlsym, as on a device without it.
 
 import { mem, anchor } from "./mem.ts";
-import { hostLib, hostData, defineHost, lookupHost, cstr, stp, retF, PTR, complete, type HostFn, type ArgReader } from "./host.ts";
-import { deref } from "./jni.ts";
+import { hostLib, hostData, defineHost, lookupHost, cstr, stp, retF, ptr, PTR, complete, type HostFn, type ArgReader } from "./host.ts";
+import { deref, newLocal } from "./jni.ts";
 import { surfaceTarget, surfaceTextureOf, bufferHeight, bufferWidth, presentSurface, type GlSurface, type NativeSurfaceTexture } from "../android/glsurface.ts";
+import type { Surface } from "../android/surfaceflinger.ts";
 import type { Cpu } from "./cpu.ts";
-import { onMain } from "../android/mainloop.ts";
-import { after, mainThread } from "../jvm/natives/jentry.ts";
+import { onLooper } from "../android/mainloop.ts";
+import { after, type JThread } from "../jvm/natives/jentry.ts";
 import { dispatchUncaught } from "../jvm/natives/jthrowable.ts";
 import { msLeft, pollEntries, type PollEntry } from "./poll.ts";
-import { guestNow } from "../guest-clock.ts";
+import { guestNow, setGuestTimeout, uptimeMillis } from "../guest-clock.ts";
+import { presentedAt, requestVsync, type Vsync } from "../android/vsync.ts";
+import { device } from "../shell/config.ts";
 import { BytesFile, readFully, type FileSource } from "../shell/lazyfile.ts";
 import { Resources, nativeAssets } from "../android/res.ts";
 import { assetDir, assetEntry } from "../android/assetmanager.ts";
@@ -79,6 +82,12 @@ export function nativeWindowFor(surface: GlSurface): number {
   return at;
 }
 export function windowOf(h: number): GlSurface | null { return windows.get(h)?.surface ?? null; }
+export function releaseWindow(h: number): void {
+  const window = windows.get(h);
+  if (!window || --window.refs > 0) return;
+  if (window.bits) mem.free(window.bits);
+  windowBySurface.delete(window.surface); windows.delete(window.handle); mem.free(window.handle);
+}
 const YV12 = 0x32315659;
 
 // ── ASurfaceTexture (surface_texture.cpp): a handle on a Java SurfaceTexture's consumer, whose release frees the handle only.
@@ -150,31 +159,34 @@ async function postWindow(_cpu: Cpu, args: ArgReader): Promise<number> {
 
 // ── ALooper: one per thread; pollOnce parks the thread until a wake or its timeout
 interface LooperFd { ident: number; events: number; callback: number; data: bigint }
-interface Looper { cpu: Cpu; pumping: boolean; woken: boolean; wake: AbortController | null; fds: Map<number, LooperFd>; allowNonCallbacks: boolean }
+/** `jobs`: host work a native thread's looper runs at its next poll, as a looper's messages */
+interface Looper { cpu: Cpu; pumping: boolean; woken: boolean; wake: AbortController | null; fds: Map<number, LooperFd>; jobs: (() => Promise<unknown>)[]; allowNonCallbacks: boolean }
 const loopers: (Looper | null)[] = [null];
 const looperOf = new WeakMap<Cpu, number>();
 function prepareLooper(cpu: Cpu, allowNonCallbacks: boolean): number {
   const existing = looperOf.get(cpu);
   if (existing) return existing;
   const handle = loopers.length;
-  loopers.push({ cpu, pumping: false, woken: false, wake: null, fds: new Map(), allowNonCallbacks });
+  loopers.push({ cpu, pumping: false, woken: false, wake: null, fds: new Map(), jobs: [], allowNonCallbacks });
   looperOf.set(cpu, handle);
   return handle;
 }
 const pollEvents = (events: number) => (events & 1) | ((events & 2) << 1);
 const looperEvents = (events: number) => (events & 1) | ((events & (4 | 8 | 16 | 32)) >> 1);
-async function pollLooper(cpu: Cpu, ms: number, fdOut: bigint, eventsOut: bigint, dataOut: bigint, main = false): Promise<number> {
+/** one poll of `cpu`'s looper; a pumped Java looper's callbacks run on its `thread` */
+async function pollLooper(cpu: Cpu, ms: number, fdOut: bigint, eventsOut: bigint, dataOut: bigint, thread: JThread | null = null): Promise<number> {
   const l = loopers[looperOf.get(cpu) ?? 0];
   if (!l) return -4;
-  const entries = [...l.fds].filter(([, entry]) => !main || entry.callback);
+  const entries = [...l.fds].filter(([, entry]) => !thread || entry.callback);
   const polled: PollEntry[] = entries.map(([fd, entry]) => ({ fd, events: pollEvents(entry.events), revents: 0 }));
   try {
     l.wake = new AbortController();
-    await pollEntries(polled, l.woken ? 0 : ms, l.wake.signal);
+    await pollEntries(polled, l.woken || l.jobs.length ? 0 : ms, l.wake.signal);
     l.wake = null;
     const woken = l.woken;
     l.woken = false;
     let callbacks = false;
+    for (const job of l.jobs.splice(0)) { callbacks = true; await job(); }
     for (let i = 0; i < entries.length; i++) {
       const [fd, entry] = entries[i], events = looperEvents(polled[i].revents);
       if (!events || l.fds.get(fd) !== entry) continue;
@@ -184,7 +196,7 @@ async function pollLooper(cpu: Cpu, ms: number, fdOut: bigint, eventsOut: bigint
           if (l.fds.get(fd) !== entry) return;
           if (!await cpu.call(entry.callback, [fd, events, entry.data], "ALooper callback") && l.fds.get(fd) === entry) l.fds.delete(fd);
         };
-        if (main) await onMain(call); else await call();
+        if (thread) await onLooper(thread, call); else await call();
       }
     }
     if (callbacks) return -2;
@@ -199,15 +211,24 @@ async function pollLooper(cpu: Cpu, ms: number, fdOut: bigint, eventsOut: bigint
     return woken ? -1 : -3;
   } finally { l.wake = null; }
 }
-function pumpMainLooper(l: Looper): void {
-  if (l.cpu.jthread !== mainThread || l.pumping) return;
+/** A Java looper thread's MessageQueue is its ALooper, as libutils' Looper is both: its fd callbacks
+ *  run on it between messages, where nativePollOnce would run them. */
+function pumpLooper(l: Looper): void {
+  const thread = l.cpu.jthread;
+  if (!thread.looper || l.pumping) return;
   l.pumping = true;
   void (async () => {
     try {
-      while (!l.cpu.finished && [...l.fds.values()].some((entry) => entry.callback)) await pollLooper(l.cpu, -1, 0n, 0n, 0n, true);
-    } catch (error) { void dispatchUncaught(mainThread, error); }
+      while (!l.cpu.finished && thread.looper && [...l.fds.values()].some((entry) => entry.callback)) await pollLooper(l.cpu, -1, 0n, 0n, 0n, thread);
+    } catch (error) { void dispatchUncaught(thread, error); }
     finally { l.pumping = false; }
   })();
+}
+/** run `job` on `cpu`'s thread between its looper's messages: a Java looper's, or a native one's at its next poll */
+function onThreadLooper(cpu: Cpu, job: () => Promise<unknown>): void {
+  const thread = cpu.jthread, l = loopers[looperOf.get(cpu) ?? 0];
+  if (thread.looper) onLooper(thread, job).catch((error) => dispatchUncaught(thread, error));
+  else if (l) { l.jobs.push(job); l.wake?.abort(); }
 }
 const poll = (all: boolean): HostFn => async (cpu, a) => {
   const ms = a.i(), fd = a.va(), events = a.va(), data = a.va(), deadline = guestNow() + ms;
@@ -216,6 +237,45 @@ const poll = (all: boolean): HostFn => async (cpu, a) => {
     if (!all || result !== -2) return result;
   }
 };
+
+// ── AChoreographer: one per looper thread, whose frame callbacks run there at the first vsync after they fall due, as
+// DisplayEventDispatcher's fd wakes that looper, never twice at one vsync time. The display's period never changes, so a
+// refresh rate callback hears it once, as handleRefreshRateUpdates calls a new callback.
+interface FrameCallback { fn: number; kind: "long" | "int64" | "vsync"; data: number | bigint; due: number }
+interface Choreographer { cpu: Cpu; callbacks: FrameCallback[]; requested: boolean; lastAt: number; rates: { fn: number; data: number | bigint }[] }
+const choreographers: (Choreographer | null)[] = [null];
+const choreographerOf = new WeakMap<Cpu, number>();
+/** the AChoreographerFrameCallbackData of the vsync callbacks running */
+const frameData = new Map<number, Vsync>();
+let nextFrameData = 1;
+const FD = (a: ArgReader) => frameData.get(a.p())!;
+function requestFrame(c: Choreographer): void {
+  if (c.requested) return;
+  c.requested = true;
+  requestVsync(c.lastAt, (v) => onThreadLooper(c.cpu, () => dispatchFrame(c, v)));
+}
+async function dispatchFrame(c: Choreographer, v: Vsync): Promise<void> {
+  c.requested = false; c.lastAt = v.at;
+  const now = uptimeMillis(), due = c.callbacks.filter((cb) => cb.due <= now);
+  c.callbacks = c.callbacks.filter((cb) => cb.due > now);
+  for (const cb of due) {
+    if (cb.kind !== "vsync") {
+      // a long is 32 bits on ARM32
+      await c.cpu.call(cb.fn, [cb.kind === "long" && !c.cpu.a64 ? Number(BigInt.asIntN(32, v.nanos)) : v.nanos, cb.data], "AChoreographer frame callback");
+      continue;
+    }
+    const id = nextFrameData++;
+    frameData.set(id, v);
+    try { await c.cpu.call(cb.fn, [id, cb.data], "AChoreographer vsync callback"); } finally { frameData.delete(id); }
+  }
+}
+const postFrame = (kind: FrameCallback["kind"], delayed = false): HostFn => (_c, a) => {
+  const c = choreographers[a.p()], fn = a.p(), data = ptr(a.p()), delay = delayed ? Math.max(0, a.i()) : 0;
+  if (!c || !fn) return;
+  c.callbacks.push({ fn, kind, data, due: uptimeMillis() + delay });
+  if (delay) setGuestTimeout(() => requestFrame(c), delay); else requestFrame(c);
+};
+const refreshRateCallback = (a: ArgReader) => { const c = choreographers[a.p()], fn = a.p(); return { c, fn, data: ptr(a.p()) }; };
 
 // ── AAsset: assets/ entries as the AssetManager2 behind a Java AssetManager opens them. An
 // AAssetManager* is that AssetManager2's handle, as AOSP's is its address.
@@ -243,13 +303,13 @@ export function ndkInit(): void {
       if (!surf) return 0;
       return nativeWindowFor(surf);
     },
-    ANativeWindow_acquire: (_c, a) => { const window = W(a); if (window) window.refs++; },
-    ANativeWindow_release: (_c, a) => {
-      const window = W(a);
-      if (!window || --window.refs > 0) return;
-      if (window.bits) mem.free(window.bits);
-      windowBySurface.delete(window.surface); windows.delete(window.handle); mem.free(window.handle);
+    // a Surface whose producer is the window's surface, as android_view_Surface_createFromSurface makes one
+    ANativeWindow_toSurface: (cpu, a) => {
+      a.p(); const window = W(a);
+      return window ? newLocal(cpu, "android/view/Surface", "(J)V", [handle({ queue: null, layer: null, producer: window.surface } satisfies Surface)]) : 0;
     },
+    ANativeWindow_acquire: (_c, a) => { const window = W(a); if (window) window.refs++; },
+    ANativeWindow_release: (_c, a) => releaseWindow(a.p()),
     // the consumer's default size (NATIVE_WINDOW_WIDTH); setBuffersGeometry sizes only the buffers
     ANativeWindow_getWidth: (_c, a) => { const s = W(a); return s ? s.surface.width : BAD_VALUE; },
     ANativeWindow_getHeight: (_c, a) => { const s = W(a); return s ? s.surface.height : BAD_VALUE; },
@@ -293,11 +353,42 @@ export function ndkInit(): void {
       if (!l || fd < 0 || (!callback && (!l.allowNonCallbacks || ident < 0))) return -1;
       l.fds.set(fd, { ident, events, callback, data });
       l.wake?.abort();
-      pumpMainLooper(l);
+      pumpLooper(l);
       return 1;
     },
     ALooper_removeFd: (_c, a) => { const l = loopers[a.i()], fd = a.i(); if (!l) return -1; const removed = l.fds.delete(fd); if (removed) l.wake?.abort(); return Number(removed); },
     ALooper_pollOnce: poll(false), ALooper_pollAll: poll(true),
+
+    AChoreographer_getInstance: (cpu) => {
+      const existing = choreographerOf.get(cpu);
+      if (existing) return existing;
+      // "No looper prepared for thread"
+      if (!looperOf.has(cpu) && !cpu.jthread.looper) return 0;
+      choreographers.push({ cpu, callbacks: [], requested: false, lastAt: -Infinity, rates: [] });
+      choreographerOf.set(cpu, choreographers.length - 1);
+      return choreographers.length - 1;
+    },
+    AChoreographer_postFrameCallback: postFrame("long"), AChoreographer_postFrameCallbackDelayed: postFrame("long", true),
+    AChoreographer_postFrameCallback64: postFrame("int64"), AChoreographer_postFrameCallbackDelayed64: postFrame("int64", true),
+    AChoreographer_postVsyncCallback: postFrame("vsync"),
+    AChoreographer_registerRefreshRateCallback: (_c, a) => {
+      const { c, fn, data } = refreshRateCallback(a);
+      if (!c || !fn || c.rates.some((r) => r.fn === fn && r.data === data)) return;
+      const rate = { fn, data };
+      c.rates.push(rate);
+      onThreadLooper(c.cpu, async () => { if (c.rates.includes(rate)) await c.cpu.call(fn, [device.frameIntervalNanos, data], "AChoreographer refresh rate callback"); });
+    },
+    AChoreographer_unregisterRefreshRateCallback: (_c, a) => {
+      const { c, fn, data } = refreshRateCallback(a);
+      if (c) c.rates = c.rates.filter((r) => r.fn !== fn || r.data !== data);
+    },
+    // one frame timeline, as DisplayEventReceiver's VsyncEventData has it
+    AChoreographerFrameCallbackData_getFrameTimeNanos: (_c, a) => FD(a).nanos,
+    AChoreographerFrameCallbackData_getFrameTimelinesLength: () => 1,
+    AChoreographerFrameCallbackData_getPreferredFrameTimelineIndex: () => 0,
+    AChoreographerFrameCallbackData_getFrameTimelineVsyncId: (_c, a) => BigInt(FD(a).frame),
+    AChoreographerFrameCallbackData_getFrameTimelineExpectedPresentationTimeNanos: (_c, a) => presentedAt(FD(a)),
+    AChoreographerFrameCallbackData_getFrameTimelineDeadlineNanos: (_c, a) => presentedAt(FD(a)),
 
     // the device has no sensors (the Java SensorManager says the same)
     ASensorManager_getInstance: () => 1, ASensorManager_getInstanceForPackage: () => 1,

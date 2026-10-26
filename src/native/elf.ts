@@ -35,7 +35,11 @@ export interface Module {
   /** the loaded program headers, for dl_iterate_phdr */
   phdr: number;
   phnum: number;
-  tls: { image: Uint8Array; size: number; align: number } | null;
+  tls: TlsSegment | null;
+  /** the dynamic TLS module id the linker gave the image (DTPMOD), 0 without a TLS segment */
+  tlsId: number;
+  /** exported STT_TLS symbols: their offsets in the TLS segment */
+  tlsExports: Map<string, number>;
   tlsDescriptors: { addr: number; offset: number }[];
   /** the TLS segment's offset from the thread pointer, when the linker placed it in static TLS */
   tpOffset: number | null;
@@ -47,7 +51,13 @@ export interface Module {
   path?: string;
 }
 
+/** PT_TLS as bionic's TlsSegment holds it: each thread's block starts as a copy of the loaded,
+ *  relocated template at `init` (`.tdata` may hold pointers), zero-filled to `size` */
+export interface TlsSegment { init: number; initSize: number; size: number; align: number }
+
 type Resolver = (sym: string, weak: boolean, from: Module) => number;
+/** a TLS symbol another image defines: that image's TLS module id and the symbol's offset in its block */
+type TlsResolver = (sym: string) => { id: number; offset: number } | undefined;
 
 const PT_LOAD = 1, PT_DYNAMIC = 2, PT_PHDR = 6, PT_TLS = 7, PT_ARM_EXIDX = 0x70000001;
 
@@ -57,7 +67,7 @@ interface Fmt {
   dynEnt: number;
   symEnt: number; symValue: number; symInfo: number; symShndx: number;
   relEnt: number; rela: boolean;
-  RELATIVE: number; ABS: number; GLOB_DAT: number; JUMP_SLOT: number; REL32: number; TLSDESC: number; TPREL: number;
+  RELATIVE: number; ABS: number; GLOB_DAT: number; JUMP_SLOT: number; REL32: number; TLSDESC: number; TPREL: number; DTPMOD: number; DTPOFF: number;
   shOff: number; shEntOff: number; shType: number; shOffset: number; shSize: number; shLink: number;
 }
 const ELF32: Fmt = {
@@ -66,7 +76,8 @@ const ELF32: Fmt = {
   dynEnt: 8,
   symEnt: 16, symValue: 4, symInfo: 12, symShndx: 14,
   relEnt: 8, rela: false,
-  RELATIVE: 23, ABS: 2, GLOB_DAT: 21, JUMP_SLOT: 22, REL32: 3, TLSDESC: -1, TPREL: -1,
+  // ARM32 Android reaches dynamic TLS through __tls_get_addr (the general-dynamic model), never descriptors
+  RELATIVE: 23, ABS: 2, GLOB_DAT: 21, JUMP_SLOT: 22, REL32: 3, TLSDESC: -1, TPREL: 19, DTPMOD: 17, DTPOFF: 18,
   shOff: 32, shEntOff: 46, shType: 4, shOffset: 16, shSize: 20, shLink: 24,
 };
 const ELF64: Fmt = {
@@ -77,10 +88,10 @@ const ELF64: Fmt = {
   relEnt: 24, rela: true,
   // AArch64 emits exactly these four across every .so in the corpus; R_AARCH64_REL32 exists but
   // is not one of them, and -1 matches no type
-  RELATIVE: 1027, ABS: 257, GLOB_DAT: 1025, JUMP_SLOT: 1026, REL32: -1, TLSDESC: 1031, TPREL: 1030,
+  RELATIVE: 1027, ABS: 257, GLOB_DAT: 1025, JUMP_SLOT: 1026, REL32: -1, TLSDESC: 1031, TPREL: 1030, DTPMOD: -1, DTPOFF: -1,
   shOff: 40, shEntOff: 58, shType: 4, shOffset: 24, shSize: 32, shLink: 40,
 };
-const STT_GNU_IFUNC = 10;
+const STT_TLS = 6, STT_GNU_IFUNC = 10;
 
 type PackedRelocation = { off: number; info: bigint; addend: number };
 
@@ -166,7 +177,7 @@ function gnuHashSymCount(p: number, ptr: number): number {
 
 /** Map and parse an image without binding its imports: DT_NEEDED modules must be loaded
  *  before `relocate` sees them, and every unresolved slot stays a stub for good. */
-export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate: (resolve: Resolver) => void } {
+export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate: (resolve: Resolver, resolveTls: TlsResolver) => void } {
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const cls = bytes[4];
   if (dv.getUint32(0, true) !== 0x464c457f || (cls !== 1 && cls !== 2) || bytes[5] !== 1) throw new Error(`${name}: not a little-endian ELF image`);
@@ -191,7 +202,7 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
     else if (type === PT_TLS) {
       const align = dv.getUint32(p + f.phAlign, true);
       if (filesz > memsz || off + filesz > bytes.length || align && (align & (align - 1))) throw new Error(`${name}: invalid PT_TLS`);
-      tls = { image: bytes.slice(off, off + filesz), size: memsz, align: align || 1 };
+      tls = { init: vaddr, initSize: filesz, size: memsz, align: align || 1 };
     }
     // exidx is ARM's unwind table; AArch64 has no such segment and reuses the number
     else if (type === PT_ARM_EXIDX && cls === 1) { exidxAddr = vaddr; exidxSz = memsz; }
@@ -208,10 +219,11 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
   if (phdrAddr < 0 && first.off === 0 && phoff + tableSize <= first.filesz) phdrAddr = first.vaddr + phoff;
   if (phdrAddr < 0 || !loads.some((l) => phdrAddr >= l.vaddr && phdrAddr + tableSize <= l.vaddr + l.filesz)) throw new Error(`${name}: can't find loaded phdr`);
   const phdr = base + phdrAddr;
+  if (tls) tls.init += base;
   const mod: Module = {
     name, base, end: base + hi, start: base + lo, w64: cls === 2, exports: new Map(), initArray: [], init: 0, finiArray: [], fini: 0, nodelete: false, needed: [],
     exidx: { addr: base + exidxAddr, count: exidxSz >> 3 }, symbols: { addr: new Uint32Array(0), names: [] },
-    refs: 1, inited: false, phdr, phnum, tls, tlsDescriptors: [], tpOffset: null, ifuncs: new Map(), locals: new Map(),
+    refs: 1, inited: false, phdr, phnum, tls, tlsId: 0, tlsExports: new Map(), tlsDescriptors: [], tpOffset: null, ifuncs: new Map(), locals: new Map(),
   };
   if (!dynOff) return { mod, relocate: () => {} };
 
@@ -253,7 +265,7 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
   const str = (off: number) => mem.cstr(base + strtab + off);
   mod.needed = neededOffs.map(str);
   const nsyms = hash ? mem.u32[(base + hash + 4) >>> 2] : gnuHash ? gnuHashSymCount(base + gnuHash, f.ptr) : 0;
-  const symAddr = new Uint32Array(nsyms), symName: string[] = new Array(nsyms);
+  const symAddr = new Uint32Array(nsyms), symName: string[] = new Array(nsyms), tlsSyms = new Map<number, number>();
   const symAddrs: number[] = [], symNames: string[] = [];
   for (let i = 0; i < nsyms; i++) {
     const s = base + symtab + i * f.symEnt;
@@ -264,6 +276,8 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
     const nm = str(nameOff);
     // an IFUNC's value is its resolver: references bind through the scope, to what it resolves to
     if (type === STT_GNU_IFUNC) { mod.ifuncs.set(nm, base + value); continue; }
+    // a TLS symbol's value is its offset in the image's TLS block, which each thread has its own of
+    if (type === STT_TLS) { tlsSyms.set(i, value); if (bind === 1 || bind === 2) mod.tlsExports.set(nm, value); continue; }
     symName[i] = nm;
     symAddr[i] = base + value;
     if (bind === 1 || bind === 2) mod.exports.set(nm, base + value);
@@ -277,8 +291,19 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
 
   // relocations: DT_SYMBOLIC modules bind to their own definitions first, which is what the
   // `shndx !== 0` check above already gives us for every module.
-  const relocate = (resolve: Resolver) => {
+  const relocate = (resolve: Resolver, resolveTls: TlsResolver) => {
   const cache = new Map<number, number>();
+  /** the TLS module and offset symbol `idx` names: the image's own block for none */
+  const tlsOf = (idx: number): { id: number; offset: number } => {
+    const own = idx ? tlsSyms.get(idx) : 0;
+    if (own !== undefined) {
+      if (!mod.tlsId) throw new Error(`${name}: TLS relocation without a TLS segment`);
+      return { id: mod.tlsId, offset: own };
+    }
+    const sym = str(mem.u32[(base + symtab + idx * f.symEnt) >>> 2]), found = resolveTls(sym);
+    if (!found) throw new Error(`${name}: undefined TLS symbol ${sym}`);
+    return found;
+  };
   const symValue = (idx: number): number => {
     let v = cache.get(idx);
     if (v !== undefined) return v;
@@ -307,6 +332,8 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
       case f.TPREL:
         if (mod.tpOffset === null || sym) throw new Error(`${name}: initial-exec TLS outside static TLS`);
         value = mod.tpOffset + addend; break;
+      case f.DTPMOD: value = tlsOf(sym).id; break;
+      case f.DTPOFF: value = (f.rela ? 0 : mem.u32[at]) + (sym ? tlsOf(sym).offset : 0) + addend; break;
       case 0: return;
       default: throw new Error(`${name}: unsupported relocation type ${type} at 0x${off.toString(16)}`);
     }

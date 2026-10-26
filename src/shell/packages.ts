@@ -4,7 +4,7 @@ import { openDb, txDone } from "./idb.ts";
 import { BlobFile } from "./lazyfile.ts";
 import { openInstalledSplits } from "./install.ts";
 import { attrStr } from "../android/axml.ts";
-import { parsePackageArchive, type PackageArchive } from "../android/packagearchive.ts";
+import { packageArchive, parsePackageArchive, type PackageArchive } from "../android/packagearchive.ts";
 import { verifyApkSignature } from "../android/apksignature.ts";
 import { registerPackage, InstallFailure, INSTALL_FAILED_UPDATE_INCOMPATIBLE, INSTALL_FAILED_VERSION_DOWNGRADE,
   INSTALL_PARSE_FAILED_NO_CERTIFICATES } from "../android/installpackage.ts";
@@ -20,7 +20,7 @@ const store = () => database ??= openDb("webdroid-packages", "apks");
 /** `archive`'s package, its base `base`, with the stored splits over it */
 async function register(archive: PackageArchive, base: Uint8Array, splits: Blob[], path?: string): Promise<PackageRecord> {
   const install = await openInstalledSplits(splits.map((split) => new BlobFile(split)), { zip: archive.apk.zip, base });
-  return registerPackage(archive, { path, source: base, install });
+  return registerPackage(packageArchive(archive.apk.zip, archive.certificates, install), { path, source: base });
 }
 let restored: Promise<void> | null = null;
 /** the persisted installs, registered unless a package of the same name already is */

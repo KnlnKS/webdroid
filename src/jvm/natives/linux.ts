@@ -16,7 +16,7 @@ import { OS_CONSTANTS } from "../../android/os-constants.ts";
 import { E, ERRSTR, POLLIN, POLLERR, strerror } from "../../native/abi.ts";
 import { mmap, munmap } from "../../native/vm.ts";
 import { processOpenFd } from "../../native/process-fd.ts";
-import { readlinkAt, statAt, statFd, storageStat } from "../../native/fs.ts";
+import { linkTarget, statAt, statFd, storageStat } from "../../native/fs.ts";
 import { openFd, dupFd, dup2Fd, dropFile, readFd, preadFd, writeFd, pwriteFd, seekFd, truncateFd, allocateFd, syncFd, fcntlFd, ioctlIntFd, fdsanOwnerTag } from "../../native/fd.ts";
 import { fdsanClose, fdsanExchangeOwnerTag, fdsanTagType, fdsanTagValue } from "../../native/fdsan.ts";
 import { pipeFds } from "../../native/pipe.ts";
@@ -167,7 +167,7 @@ const files: Record<string, (...args: never[]) => unknown> = {
       if (fdInt(d) < 0) throw errno("fstatvfs", E.BADF);
       return structStatVfs();
     },
-    "readlink(Ljava/lang/String;)Ljava/lang/String;": (path: string) => { if (path === null) rt.npe(); return after(readlinkAt(path), (n) => { throw errno("readlink", -n); }); },
+    "readlink(Ljava/lang/String;)Ljava/lang/String;": (path: string) => { if (path === null) rt.npe(); return after(linkTarget(path), (target) => { if (typeof target === "number") throw errno("readlink", -target); return target; }); },
     "access(Ljava/lang/String;I)Z": (path: string, mode: number) => {
       if (path === null) rt.npe();
       return after(filePaths(path).fileAccess(path, mode), result => { sys("access", result); return 1; });

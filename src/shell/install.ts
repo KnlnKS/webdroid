@@ -1,7 +1,7 @@
 // Shared by the shell, the dev server's /asset route and the node scripts, so an xapk is an apk
 // everywhere or nowhere.
 
-import { parseAXML, attrStr } from "../android/axml.ts";
+import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml.ts";
 import { isDexEntry } from "../jvm/dex.ts";
 import { centralDirOfSource, inflateEntry, localDataOffset, zipTree, type ZEntry } from "../zip.ts";
 import { BlobFile, BytesFile, RangeFile, SliceFile, readFully, type FileSource } from "./lazyfile.ts";
@@ -15,30 +15,47 @@ export interface Install {
   lazyEntries: Map<string, FileSource>;
   /** the base apk's own bytes: what sourceDir names and what ZipFile(sourceDir) must open */
   base: Uint8Array | FileSource;
-  /** a resident config split keeps its own resource table: the entries for its configs only */
-  splits: { name: string; source: FileSource; bytes: Uint8Array | null; resources: Uint8Array | null }[];
+  /** each split, and a resident config split's own resource table: the entries for its configs only */
+  splits: InstalledSplit[];
 }
-type OpenedApk = { source: FileSource; split: string | null; hasManifest: boolean } & (
+/** a split as ApkLiteParseUtils reads its manifest: its name, whether it is a feature split, the split its
+ *  code uses and the one it configures */
+export interface Split { name: string; manifest: XmlNode; feature: boolean; uses: string | null; configFor: string | null }
+/** a split with its apk */
+export type InstalledSplit = Split & { source: FileSource; bytes: Uint8Array | null; resources: Uint8Array | null };
+type OpenedApk = { source: FileSource; manifest: XmlNode | null; split: Split | null } & (
   { kind: "resident"; bytes: Uint8Array; zip: Record<string, Uint8Array> }
   | { kind: "lazy"; bytes: null; zip: null; entries: Map<string, ZEntry>; resources: Uint8Array | null }
 );
 
+const flag = (manifest: XmlNode, name: string) => !!attr(manifest, name)?.data;
+function parseSplit(manifest: XmlNode | null): Split | null {
+  const name = manifest && attrStr(manifest, "split");
+  if (!manifest || !name) return null;
+  const uses = manifest.children.find((n) => n.name === "uses-split");
+  return { name, manifest, feature: flag(manifest, "isFeatureSplit"), uses: uses ? attrStr(uses, "name") : null, configFor: attrStr(manifest, "configForSplit") };
+}
 /** the apks merged over their base: the one among `opened`, or `base` when its tree is already open */
 export function mergeInstall(opened: OpenedApk[], base?: Pick<Install, "zip" | "base">): Install {
+  let manifest: XmlNode | null = null;
   if (!base) {
-    const apk = opened.find((o) => o.hasManifest && !o.split);
+    const apk = opened.find((o) => o.manifest && !o.split);
     if (!apk || apk.kind !== "resident") throw new Error("split install has no resident base apk");
     base = { zip: apk.zip, base: apk.bytes };
+    manifest = apk.manifest;
     opened = opened.filter((o) => o !== apk);
   }
   const merged = base.zip;
+  // with isolatedSplits each feature split's code stays in its apk, for the class loader LoadedApk gives that split
+  const isolated = flag(manifest ?? parseAXML(merged["AndroidManifest.xml"]), "isolatedSplits");
   const lazyEntries = new Map<string, FileSource>();
   const splits: Install["splits"] = [];
   let extra = 0;
   for (const o of opened) {
+    const ownCode = isolated && !!o.split?.feature;
     if (o.kind === "resident") zipTree(o.bytes, merged, (path) => {
       const target = path === "AndroidManifest.xml" || path === "resources.arsc" || path.startsWith("META-INF/") ? null
-        : isDexEntry(path) ? `classes${1000 + extra++}.dex` : path;
+        : isDexEntry(path) ? ownCode ? null : `classes${1000 + extra++}.dex` : path;
       return target && !lazyEntries.has(target) ? target : null;
     });
     else for (const [path, entry] of o.entries) {
@@ -46,8 +63,8 @@ export function mergeInstall(opened: OpenedApk[], base?: Pick<Install, "zip" | "
       if (Object.hasOwn(merged, path) || lazyEntries.has(path)) continue;
       lazyEntries.set(path, new ZipEntryFile(o.source, entry));
     }
-    if (o.split) splits.push({ name: o.split, source: o.source, bytes: o.bytes, resources: o.kind === "resident" ? o.zip["resources.arsc"] ?? null : o.resources });
-    console.log("[webdroid] split", o.split ?? "(unnamed)", o.kind === "resident" ? Object.keys(o.zip).length : "lazy", "entries");
+    if (o.split) splits.push({ ...o.split, source: o.source, bytes: o.bytes, resources: o.kind === "resident" ? o.zip["resources.arsc"] ?? null : o.resources });
+    console.log("[webdroid] split", o.split?.name ?? "(unnamed)", o.kind === "resident" ? Object.keys(o.zip).length : "lazy", "entries");
   }
   return { zip: merged, lazyEntries, base: base.base, splits };
 }
@@ -58,9 +75,8 @@ export function openInstall(bytes: Uint8Array): Install {
   const apks = Object.keys(outer).filter((n) => n.endsWith(".apk"));
   if (!apks.length) throw new Error("no AndroidManifest.xml and no apks inside: not an apk or a split install");
   const opened = apks.map((n) => outer[n]).map((b): OpenedApk => {
-    const z = zipTree(b);
-    const m = z["AndroidManifest.xml"];
-    return { kind: "resident", source: new BytesFile(b), bytes: b, zip: z, split: m ? attrStr(parseAXML(m), "split") : null, hasManifest: !!m };
+    const z = zipTree(b), m = z["AndroidManifest.xml"], manifest = m ? parseAXML(m) : null;
+    return { kind: "resident", source: new BytesFile(b), bytes: b, zip: z, manifest, split: parseSplit(manifest) };
   });
   return mergeInstall(opened);
 }
@@ -91,16 +107,15 @@ async function openedApk(source: FileSource, entries: Map<string, ZEntry>, lazy:
   const manifestSource = manifestEntry ? await entrySource(source, manifestEntry) : null;
   const manifest = manifestSource ? await readFully(manifestSource) : null;
   const xml = manifest ? parseAXML(manifest) : null;
-  const split = xml ? attrStr(xml, "split") : null;
   const assetPack = xml?.children.some((node) => node.name === "module" && attrStr(node, "type") === "asset-pack") ?? false;
-  const resident = !lazy && (!assetPack || !split || [...entries.keys()].some((name) =>
+  const split = parseSplit(xml), resident = !lazy && (!assetPack || !split || [...entries.keys()].some((name) =>
     isDexEntry(name) || name === "resources.arsc" || name.startsWith("lib/")));
   if (!resident) {
     const table = entries.get("resources.arsc"), resources = table ? await readFully(await entrySource(source, table)) : null;
-    return { kind: "lazy", source, bytes: null, zip: null, entries, resources, split, hasManifest: !!manifest };
+    return { kind: "lazy", source, bytes: null, zip: null, entries, resources, manifest: xml, split };
   }
   const bytes = await readFully(source);
-  return { kind: "resident", source: new BytesFile(bytes), bytes, zip: zipTree(bytes), split, hasManifest: !!manifest };
+  return { kind: "resident", source: new BytesFile(bytes), bytes, zip: zipTree(bytes), manifest: xml, split };
 }
 
 async function openInstallSource(source: FileSource): Promise<Install> {

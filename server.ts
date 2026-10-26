@@ -19,7 +19,7 @@ import { bundle } from "./scripts/bundle.ts";
 import { runNode } from "./scripts/node.ts";
 import { fileResponse, respond, toWeb } from "./scripts/serve.ts";
 import { WORKER_SCRIPTS } from "./src/worker-scripts.ts";
-import { bridgeSocket, fromApp, sharedRoute, type ServeHost } from "./src/shell/serve-routes.ts";
+import { ISOLATION, bridgeSocket, fromApp, sharedRoute, type ServeHost } from "./src/shell/serve-routes.ts";
 import { tcpTarget } from "./src/shell/tcpwire.ts";
 import { relayTcp, relayUdp } from "./socket-relays.ts";
 
@@ -63,12 +63,12 @@ const fontIndexJson = memo(() => runNode("scripts/font-index.ts"));
 const apkAssets = memo(async (apk) => openInstall(new Uint8Array(await readFile(`${apkDirectory}/${apk}`))).zip);
 /** a Worker script bundled for the page, until a source changes */
 const workerBuild = memo((entry) => bundle(entry, { define: { "process.env.NODE_ENV": '"development"' } }));
-const workerScript = async (entry: string) => new Response(await workerBuild(entry), { headers: { "content-type": "text/javascript", "cache-control": "no-cache" } });
+const workerScript = async (entry: string) => new Response(await workerBuild(entry), { headers: { "content-type": "text/javascript", "cache-control": "no-cache", ...ISOLATION } });
 
 type Route = (req: Request, url: URL, params: string[]) => Response | Promise<Response>;
 const ROUTES: [RegExp, Route][] = [
   // as written: Vite's HTML transform would only add its HMR client, which this server leaves out
-  [/^\/$/, (req) => fileResponse("index.html", req, { "cache-control": "no-cache" })],
+  [/^\/$/, (req) => fileResponse("index.html", req, { "cache-control": "no-cache", ...ISOLATION })],
   ...Object.values(WORKER_SCRIPTS).map(({ url, entry }): [RegExp, Route] => [new RegExp(`^${url.replaceAll(".", "\\.")}$`), () => workerScript(entry)]),
   [/^\/font-index\.json$/, async () => new Response(await fontIndexJson(), { headers: { "content-type": "application/json" } })],
   // an apk's assets/ entry — what file:///android_asset/ resolves to inside a WebView. Path-shaped

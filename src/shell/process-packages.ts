@@ -36,8 +36,8 @@ async function openArchive({ source, certificates }: PackageSnapshot): Promise<{
   const file = new RemoteFile(source);
   return { archive: await packageArchiveSource(file, certificates), base: file };
 }
-const register = (snapshot: PackageSnapshot, archive: PackageArchive, source: Install["base"], install?: Install) =>
-  registerPackage(archive, { path: installedPath(snapshot.pkg), source, install, uid: snapshot.uid, system: snapshot.system,
+const register = (snapshot: PackageSnapshot, archive: PackageArchive, source: Install["base"]) =>
+  registerPackage(archive, { path: installedPath(snapshot.pkg), source, uid: snapshot.uid, system: snapshot.system,
     grants: snapshot.grants, signatures: snapshot.signatures?.map((s) => u8(s)) ?? null });
 /** a package installed after this process started */
 export async function registerSnapshot(snapshot: PackageSnapshot): Promise<void> {
@@ -50,20 +50,21 @@ export async function loadProcessPackages(data: ProcessBootstrap): Promise<Insta
   const opened = await Promise.all(data.registry.map(async (snapshot) => {
     if (snapshot.pkg !== data.pkg) return { snapshot, ...await openArchive(snapshot) };
     const source = snapshot.source;
-    let archive, base: Pick<Install, "zip" | "base">;
+    let certificates, base: Pick<Install, "zip" | "base">;
     if ("index" in source) {
       const packed = await preparedArchive(source.index, source.base, true);
-      archive = packageArchive(packed.zip, source.index.certificates.map(hexBytes));
+      certificates = source.index.certificates.map(hexBytes);
       rt.classpathSource = packed;
       base = { zip: packed.zip, base: packed };
     } else {
-      const bytes = await readFully(new RemoteFile(source)), zip = zipTree(bytes);
-      archive = packageArchive(zip, snapshot.certificates);
-      base = { zip, base: bytes };
+      const bytes = await readFully(new RemoteFile(source));
+      certificates = snapshot.certificates;
+      base = { zip: zipTree(bytes), base: bytes };
     }
     boot = await openInstallApks(snapshot.splits.map((split) => new RemoteFile(split)), base);
-    return { snapshot, archive, base: base.base, install: boot };
+    // the record's apk is the one ApkAssets loads at sourceDir: the splits join it
+    return { snapshot, archive: packageArchive(base.zip, certificates, boot), base: base.base };
   }));
-  for (const { snapshot, archive, base, install } of opened) register(snapshot, archive, base, install);
+  for (const { snapshot, archive, base } of opened) register(snapshot, archive, base);
   return boot;
 }

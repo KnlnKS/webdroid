@@ -32,6 +32,15 @@ pub const MEM_SIZE_INITIAL: u32 = 0x1000_0000;
 pub const MEM_SIZE_A32: u32 = 0x8000_0000;
 /// 4 GiB less a page: the whole 32-bit space a WebAssembly memory can back.
 pub const MEM_SIZE_A64: u32 = 0xffff_0000;
+/// An ARM32 process's addresses from its memory's end up are a window onto the pool its processes
+/// share (src/native/shm.ts): each shared mapping there shows a run of a region's pool pages.
+pub const WINDOW: u32 = MEM_SIZE_A32;
+pub const WINDOW_SIZE: u32 = MEM_SIZE_A64 - WINDOW;
+/// page_flags of the window's pages a process maps, and of those it may store to
+pub const PAGE_MAPPED: u32 = 4;
+pub const PAGE_WRITABLE: u32 = 8;
+/// page_flags of a page mprotect left without PROT_WRITE, in a process's own memory
+pub const PAGE_READONLY: u32 = 16;
 pub const STACK_SIZE: u32 = 0x10_0000;
 pub const STACK_GUARD: u32 = 0x1_0000;
 
@@ -60,9 +69,8 @@ pub const JIT_BUF: u32 = KERN_END - 0x0010_0000;
 /// The entries of a block before the JIT takes it, the most its u8 heat holds (jit.zig).
 pub const JIT_HEAT = 255;
 /// clock_gettime: REALTIME, REALTIME_COARSE and REALTIME_ALARM read the wall clock; every other
-/// clock is the guest's monotonic one, offset so it is never 0 (libc.zig, kernel.ts clockTime).
+/// clock is the guest's uptime, Java's System.nanoTime (libc.zig, kernel.ts clockTime).
 pub const WALL_CLOCKS: u32 = (1 << 0) | (1 << 5) | (1 << 8);
-pub const MONOTONIC_BASE_MS = 1000;
 
 /// A check that survives ReleaseFast, which is the build that ships. `assert` is the right tool
 /// for an invariant the core owns -- it costs nothing here and the ReleaseSafe build the tests run

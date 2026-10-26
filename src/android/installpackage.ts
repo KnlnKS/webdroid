@@ -7,22 +7,17 @@ import type { PackageArchive } from "./packagearchive.ts";
 import { vfs } from "../shell/vfs.ts";
 import { PackedArchive, packedArchives } from "../shell/packedarchive.ts";
 import type { FileSource } from "../shell/lazyfile.ts";
-import type { Install } from "../shell/install.ts";
 
 /** a package's manifest and apk, with its signing certificates or how to read them */
-type PackageContents = Pick<PackageArchive, "root" | "apk"> & { certificates: Uint8Array[] | (() => Promise<Uint8Array[]>) };
-/** a package the package manager knows, its base apk at `path` (`source`'s bytes, when given); the entries and
- *  resource tables of `install`'s splits, merged over the base, join its apk, which ApkAssets loads them over */
-export function registerPackage({ root, apk, certificates }: PackageContents, { path, uid, source, install, ...provisioned }: Provisioned &
-  { path?: string; uid?: number; source?: Uint8Array | FileSource; install?: Pick<Install, "lazyEntries" | "splits"> } = {}): PackageRecord {
+type PackageContents = Pick<PackageArchive, "root" | "apk" | "splits"> & { certificates: Uint8Array[] | (() => Promise<Uint8Array[]>) };
+/** a package the package manager knows, its base apk at `path` (`source`'s bytes, when given) */
+export function registerPackage({ root, apk, certificates, splits }: PackageContents, { path, uid, source, ...provisioned }: Provisioned &
+  { path?: string; uid?: number; source?: Uint8Array | FileSource } = {}): PackageRecord {
   const pkg = attrStr(root, "package") ?? "";
   path ??= installedPath(pkg);
   if (source) vfs.place(path, source);
   if (source instanceof PackedArchive) packedArchives.set(path, source);
-  for (const [name, entry] of install?.lazyEntries ?? []) apk.lazyEntries.set(name, entry);
-  for (const split of install?.splits ?? []) if (split.resources) apk.table?.add(split.resources);
-  const record = new PackageRecord(root, apk, path, uid ?? packageUid(pkg), typeof certificates === "function" ? certificates : () => Promise.resolve(certificates),
-    { ...provisioned, splits: install?.splits.map((split) => split.source) });
+  const record = new PackageRecord(root, apk, path, uid ?? packageUid(pkg), typeof certificates === "function" ? certificates : () => Promise.resolve(certificates), { ...provisioned, splits });
   packages.set(pkg, record);
   return record;
 }

@@ -10,8 +10,7 @@
 // leaves for another process; stores of other processes reach a mapping only when it is mapped again.
 import { guestAt, mem } from "./mem.ts";
 import { vfs, type VfsFile } from "../shell/vfs.ts";
-import { E } from "./abi.ts";
-import { remoteOf, type ProcessMapping } from "./process-fd.ts";
+import type { ProcessMapping } from "./process-fd.ts";
 
 /** an owner's lease on another process's file, which covers the file from offset `start` */
 type Lease = { lease: ProcessMapping; start: number };
@@ -34,7 +33,7 @@ function propagate(cache: VfsFile | number, at: number, bytes: Uint8Array, from:
     const lo = Math.max(at, m.off), hi = Math.min(at + bytes.length, m.off + m.n);
     if (lo >= hi) continue;
     const part = bytes.subarray(lo - at, hi - at);
-    mem.write(guestAt(m.va, lo - m.off), part);
+    mem.writeThrough(guestAt(m.va, lo - m.off), part);
     m.base?.set(part, lo - m.off);
   }
 }
@@ -110,18 +109,6 @@ export async function mapLease(va: bigint, lease: ProcessMapping, start: number,
   const bytes = await lease.read(0, lease.size);
   mem.write(guestAt(va), bytes);
   maps.push({ va, n: lease.size, off: start, owner: { lease, start }, shared: true, base: prot & 2 ? bytes.slice() : null });
-}
-/** a shared mapping at va of [off, off + n) of the file `fd` reaches in another process; an errno, or 0. File bytes past
- *  EOF are not the file's, so the lease covers what the file holds and the rest of the mapping stays zero. */
-export async function mapRemoteShared(va: bigint, n: number, off: number, fd: number, prot: number): Promise<number> {
-  const remote = remoteOf(fd), stat = await remote?.stat();
-  if (!remote || !stat) return E.BADF;
-  const length = Math.max(0, Math.min(n, stat.size - off));
-  if (!length) return 0;
-  const lease = await remote.map(off, length, prot);
-  if (typeof lease === "number") return -lease;
-  await mapLease(va, lease, off, prot);
-  return 0;
 }
 /** this process's stores through remote mappings, on their way to their files, where another process sees them */
 export function settleRemoteMaps(): Promise<unknown> | null {

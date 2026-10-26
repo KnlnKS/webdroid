@@ -42,8 +42,8 @@ export const native = {
     const total = [...profile.samples.values()].reduce((a, b) => a + b, 0);
     return [...profile.samples].sort((a, b) => b[1] - a[1]).slice(0, n).map(([pc, k]) => `${(100 * k / total).toFixed(1)}% ${symbolizePc(pc)}`);
   },
-  /** step(true) single-steps every Cpu into step.ring (pc + changed registers) */
-  step: (on = true) => { setStepMode(on); return stepMode; },
+  /** step(true) single-steps every Cpu into stepRing (pc + changed registers), keeping the last lines */
+  step: (on = true) => { setStepMode(on); return stepMode.on; },
   stepRing: stepMode.ring,
   mem: mem.stats, memObj: mem, cpus: () => [...cpus],
   /** the frame-pointer chain of a thread; a watched pc logs its registers on every entry */

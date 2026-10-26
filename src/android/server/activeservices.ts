@@ -10,13 +10,14 @@ import { newObj, vcall } from "../../jvm/natives/jentry.ts";
 import { logUncaught, detached } from "../../jvm/natives/jthrowable.ts";
 import { parceledList, exportBinder, importBinder, type ParcelData, binderEscape } from "../binder.ts";
 import { encodeIntent, decodeIntent } from "../intentipc.ts";
-import { runningApp } from "../apphost.ts";
+import { appHost, runningApp } from "../apphost.ts";
 import { packages, qualifyComponent } from "../packages.ts";
 import { checkPermission } from "../permissions.ts";
 import { grantIntentUris$ } from "./urigrants.ts";
 import { type JComponentName, componentParts$, mkComponentName, newIntent, withComponent$ } from "../intent.ts";
 import { startForegroundNotification, stopForegroundNotification } from "../notification.ts";
-import { scheduleOnApp, compatInfo, pms, runsHere, STOCK_PM_FLAGS } from "./process.ts";
+import { scheduleOnApp, compatInfo, pms, runsHere, STOCK_PM_FLAGS, hostsService, instanceProcess, isolatedService } from "./process.ts";
+import { processName } from "../os.ts";
 import { processState, PROCESS_STATE_SERVICE } from "./atm.ts";
 import type { ServiceBinding, ServiceRequest } from "../../shell/servicerecords.ts";
 import { broker } from "../../shell/broker-access.ts";
@@ -63,6 +64,13 @@ function* resolve(intent: JObj, resolvedType: string | null): Gen<Target | null>
     name: yield* awaited(mkComponentName(pkg, getDeclared(info, SI, "name"))) };
 }
 const isLocal = (t: Target) => runsHere(t.pkg, t.process);
+/** retrieveServiceLocked's service of a named instance: each instance of an isolated service is its own record, in its own
+ *  process, named for the instance as a device lists it */
+function instanceOf(t: Target, instance: string): Target {
+  if (!isolatedService(t.pkg, serviceClass(t)))
+    throw rt.mkThrowable("java/lang/IllegalArgumentException", `Can't use instance name '${instance}' with non-isolated service '${serviceClass(t)}'`);
+  return { ...t, process: instanceProcess(t.process, serviceClass(t), instance) };
+}
 /** retrieveServiceLocked's refusal of the calling package, or null */
 function* denial(t: Target, callingPackage: string): Gen<string | null> {
   const uid = getDeclared<number>(getDeclared(t.info, SI, "applicationInfo"), "android/content/pm/ApplicationInfo", "uid");
@@ -192,10 +200,13 @@ function* peekLocal(t: Target): Gen<JObj | null> {
 const remoteConnection = (key: string, flags: number): Connection => ({ id: key, autoCreate: !!(flags & BIND_AUTO_CREATE),
   connected: (binder, dead) => detached(() => broker().serviceConnected(key, exportBinder(binder), dead), logUncaught) });
 
+/** `t` as this process runs it, if it does: a process started for an instance of an isolated service hosts that instance */
+const hosted = (t: Target): Target | null =>
+  t.pkg === appHost?.pkg && hostsService(t.pkg, serviceClass(t), processName()) ? { ...t, process: processName() } : null;
 /** what a broker request for this process's services does */
 function* local(intent: JObj): Gen<Target> {
-  const t = yield* resolve(intent, null);
-  if (!t || !isLocal(t)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Service not hosted here: " + (yield vcall(intent, "toString", "()Ljava/lang/String;")));
+  const resolved = yield* resolve(intent, null), t = resolved && hosted(resolved);
+  if (!t) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Service not hosted here: " + (yield vcall(intent, "toString", "()Ljava/lang/String;")));
   return t;
 }
 export const hostedServices = {
@@ -224,6 +235,8 @@ export function remoteServiceConnected(key: string, binder: JObj | null, dead: b
   if (dead) remoteBindings.delete(key);
   binding?.connected(binder, dead);
 }
+/** the keys of the bindings `conn` holds to other processes' services */
+const remoteKeysOf = (conn: JObj) => [...remoteBindings].filter(([, b]) => b.conn === conn).map(([key]) => key);
 function remoteUnbind(key: string): unknown {
   const binding = remoteBindings.get(key);
   remoteBindings.delete(key);
@@ -288,9 +301,10 @@ export const activeServiceMethods = {
     return 1;
   }),
   "bindServiceInstance(Landroid/app/IApplicationThread;Landroid/os/IBinder;Landroid/content/Intent;Ljava/lang/String;Landroid/app/IServiceConnection;JLjava/lang/String;Ljava/lang/String;I)I":
-    driven(function* (_caller: JObj, _token: JObj | null, intent: JObj, resolvedType: string | null, conn: JObj, flags: bigint, _instance: string | null, callingPackage: string) {
-      const t = yield* resolve(intent, resolvedType);
-      if (!t) return 0;
+    driven(function* (_caller: JObj, _token: JObj | null, intent: JObj, resolvedType: string | null, conn: JObj, flags: bigint, instance: string | null, callingPackage: string) {
+      const resolved = yield* resolve(intent, resolvedType);
+      if (!resolved) return 0;
+      const t = instance === null ? resolved : instanceOf(resolved, instance);
       if (yield* denial(t, callingPackage)) return -1;
       const bound = yield* withComponent$(intent, t.name), bits = Number(BigInt.asIntN(32, flags));
       const connected = (binder: JObj | null, dead: boolean) => detached(() => vcall(conn, "connected", CONNECTED, t.name, binder, +dead), binderEscape());
@@ -308,10 +322,16 @@ export const activeServiceMethods = {
       return 1;
     }),
   "unbindService(Landroid/app/IServiceConnection;)Z": driven(function* (conn: JObj) {
-    const held = [...remoteBindings].filter(([, b]) => b.conn === conn).map(([key]) => key);
+    const held = remoteKeysOf(conn);
     for (const key of held) detached(() => remoteUnbind(key), logUncaught);
     return +((yield* unbindLocal(conn)) || held.length > 0);
   }),
+  // updateServiceGroupLocked: the group and importance set an isolated service's process's OOM adjustment, which no
+  // process has here; a connection that never bound is the caller's error
+  "updateServiceGroup(Landroid/app/IServiceConnection;II)V": (conn: JObj) => {
+    if (remoteKeysOf(conn).length || [...services.values()].some((s) => s.bindings.some((b) => b.connections.some((c) => c.id === conn)))) return;
+    throw rt.mkThrowable("java/lang/IllegalArgumentException", "Could not find connection");
+  },
   "publishService(Landroid/os/IBinder;Landroid/content/Intent;Landroid/os/IBinder;)V": driven(function* (token: JObj, intent: JObj, binder: JObj | null) {
     const s = byToken(token), b = s && (yield* bindingFor(s, intent, false));
     if (!b) return;

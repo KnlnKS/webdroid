@@ -69,7 +69,7 @@ function streamClientArrays(state: ContextState, lo: number, hi: number, instanc
     let end = spans[k].end, base = spans[k].array.ptr, j = k + 1;
     for (; j < n && spans[j].start <= end; j++) { end = Math.max(end, spans[j].end); base = Math.min(base, spans[j].array.ptr); }
     base -= base % 4;                                                          // offsets keep the guest alignment
-    const start = spans[k].start, data = mem.u8.subarray(start, end);
+    const start = spans[k].start, data = mem.bytes(start, end - start);
     gl.bindBuffer(ARRAY, state.streams[group] ??= gl.createBuffer());
     if (start === base) gl.bufferData(ARRAY, data, gl.STREAM_DRAW);
     else { gl.bufferData(ARRAY, end - base, gl.STREAM_DRAW); gl.bufferSubData(ARRAY, start - base, data); }

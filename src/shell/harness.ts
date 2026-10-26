@@ -63,6 +63,8 @@ function harness(canvas: HTMLCanvasElement, ticks: () => number, { boot, back }:
     scall: (cls: string, name: string, desc: string, ...args: unknown[]) => onMain(() => scall(cls, name, desc, ...args)),
     boot, back,
     workerProcesses: () => workerSnapshots(processBroker().processes()),
+    /** the control port of process `pid`'s Worker */
+    process: (pid: number) => [...processBroker().processes()].find(entry => entry.pid === pid)?.host?.control,
     workerAotProfiles: () => workerAotProfiles(processBroker().processes()),
     /** the shown processes' canvases bottom to top, then the page's */
     displayCanvases: () => [...processBroker().activities.shownEntries().flatMap(entry => entry.host ? [entry.host.canvas] : []), canvas],

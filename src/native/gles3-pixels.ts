@@ -8,12 +8,13 @@ type Ctor<A> = { new (b: ArrayBuffer, off: number, n: number): A; new (b: ArrayB
 /** a typed view over guest memory; a misaligned pointer is copied, which GL data rarely is */
 export function view<A extends ArrayBufferView>(K: Ctor<A>, p: number, n: number): A {
   const bpe = K.BYTES_PER_ELEMENT;
-  return p % bpe ? new K(mem.u8.slice(p, p + n * bpe).buffer) : new K(mem.buf, p, n);
+  const b = mem.bytes(p, n * bpe);
+  return b.byteOffset % bpe ? new K(b.slice().buffer) : new K(b.buffer as ArrayBuffer, b.byteOffset, n);
 }
 export const i32 = (p: number, n: number) => view(Int32Array, p, n);
 export const u32 = (p: number, n: number) => view(Uint32Array, p, n);
 export const f32 = (p: number, n: number) => view(Float32Array, p, n);
-export const u8 = (p: number, n: number) => mem.u8.subarray(p, p + n);
+export const u8 = (p: number, n: number) => mem.bytes(p, n);
 function pixelArray(type: number): Ctor<ArrayBufferView> {
   return type === 0x1406 ? Float32Array : type === 0x1404 ? Int32Array : type === 0x1402 ? Int16Array : type === 0x1400 ? Int8Array
     : type === 0x1401 ? Uint8Array : (type === 0x1403 || type === 0x140b || type === 0x8d61 || type === 0x8033 || type === 0x8034 || type === 0x8363) ? Uint16Array : Uint32Array;
@@ -71,7 +72,7 @@ export function uploadExtent(type: number, format: number, dimensions: PixelDime
 function uploadPixels(type: number, p: number, format: number, dimensions: PixelDimensions): ArrayBufferView {
   const required = uploadExtent(type, format, dimensions), K = pixelArray(type);
   if (required < 0) return pixels(type, p);
-  return view(K, p, Math.floor(Math.min(required, mem.u8.length - p) / K.BYTES_PER_ELEMENT));
+  return view(K, p, Math.floor(required / K.BYTES_PER_ELEMENT));
 }
 export function readGuestPixels(gl: WebGLRenderingContext | WebGL2RenderingContext, x: number, y: number, w: number, h: number, format: number, type: number, p: number): void {
   const K = pixelArray(type), element = K.BYTES_PER_ELEMENT;
@@ -79,11 +80,11 @@ export function readGuestPixels(gl: WebGLRenderingContext | WebGL2RenderingConte
   if (!bytes || w <= 0 || h <= 0) { gl.readPixels(x, y, w, h, format, type, pixels(type, p)); return; }
   const rowLength = pixelParam(gl, 0x0d02) || w;
   const { stride, skip, extent } = pixelRows(w, h, bytes, pixelParam(gl, 0x0d05), rowLength, pixelParam(gl, 0x0d03), pixelParam(gl, 0x0d04));
-  const data = view(K, p, Math.floor(Math.min(extent, mem.u8.length - p) / element));
+  const data = view(K, p, Math.floor(extent / element));
   gl.readPixels(x, y, w, h, format, type, data);
   // A short destination is rejected by WebGL. Padding and skipped pixels are never written.
   if (extent > data.byteLength) return;
-  if (!mem.isGuest(data)) mem.u8.set(new Uint8Array(data.buffer, data.byteOffset, data.byteLength), p);
+  if (p % element) mem.write(p, new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
   for (let row = 0; row < h; row++) wrote(p + skip + row * stride, w * bytes);
 }
 export const PACK = 0x88eb, UNPACK = 0x88ec;

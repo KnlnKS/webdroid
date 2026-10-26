@@ -1,4 +1,4 @@
-//! ARM32 VFP in compiled regions, as the interpreter's arm.vfp runs it: arithmetic, compares and
+//! ARM32 VFP in compiled regions, as the interpreter's arm_vfp.vfp runs it: arithmetic, compares and
 //! conversions, moves between core registers and the VFP file, and single and multiple
 //! loads and stores. Anything else falls back to the interpreter.
 const cpu = @import("cpu.zig");

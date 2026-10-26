@@ -11,11 +11,12 @@ import { concat } from "../jvm/abi.ts";
 import type { VfsFile } from "../shell/vfs.ts";
 import type { FileSource } from "../shell/lazyfile.ts";
 import type { AttributeChange } from "../shell/file-path.ts";
+import type { CrossingSocket } from "./socket/bridge.ts";
 
 /** stat(2)'s answer: st_mode with the file type, st_size, st_mtime in milliseconds and the owner */
 export type FileStat = { mode: number; size: number; mtime: number; uid: number; gid: number };
-/** fstat(2)'s answer, with the path the open file has now */
-export type FdStat = FileStat & { path: string | null };
+/** fstat(2)'s answer, with the path the open file has now, or the device node fstat reports for it */
+export type FdStat = FileStat & { path: string | null; device?: string };
 
 /** an open file: what descriptors dup(2) and SCM_RIGHTS share, with its kind's state */
 export interface OpenFile<S = unknown> {
@@ -49,6 +50,8 @@ export interface FileOps<S = unknown> {
   sync(f: OpenFile<S>): number | Promise<number>;
   /** FIONREAD: what a read could take now */
   available(f: OpenFile<S>): number | Promise<number>;
+  /** ioctl(2) with an int argument and result, but FIONREAD */
+  ioctl(f: OpenFile<S>, request: number, arg: number): number | Promise<number>;
   truncate(f: OpenFile<S>, length: number): number | Promise<number>;
   allocate(f: OpenFile<S>, off: number, length: number): number | Promise<number>;
   /** F_GETFL and F_SETFL */
@@ -62,6 +65,8 @@ export interface FileOps<S = unknown> {
   unnamed(f: OpenFile<S>): void;
   /** the last descriptor sharing the open file closed it; a remote one answers once its owner has */
   close(f: OpenFile<S>): void | Promise<number>;
+  /** a socket end as it crosses to another realm, its connection carried across the port (socket/bridge.ts) */
+  cross?(f: OpenFile<S>): CrossingSocket | null;
 }
 const F_DUPFD = 0, F_GETFD = 1, F_SETFD = 2, F_GETFL = 3, F_SETFL = 4;
 const F_DUPFD_CLOEXEC = 0x406;
@@ -84,6 +89,7 @@ export const ANON: FileOps = {
   stat: (f) => ({ mode: f.ops.mode, size: 0, path: null, uid: procIdentity.uid, gid: procIdentity.uid, mtime: 0 }),
   sync: () => -E.INVAL,
   available: () => -E.NOTTY,
+  ioctl: () => -E.NOTTY,
   truncate: () => -E.INVAL,
   allocate: () => -E.NODEV,
   status(f, cmd, arg) {
@@ -191,8 +197,8 @@ export const woken = (f: OpenFile): Promise<void> => new Promise((resolve) => { 
 export function readFd(fd: number, into: Uint8Array | number, n: number, off = -1): number | Promise<number> {
   const f = fds.get(fd), error = refused(f, off, false);
   if (error) return error;
-  const guest = typeof into === "number";
-  const r = f!.ops.read(f!, guest ? mem.u8 : into, guest ? mem.reach(into, n) : 0, n, off, fd);
+  const guest = typeof into === "number", [target, start] = guest ? mem.reach(into, n) : [into, 0];
+  const r = f!.ops.read(f!, target, start, n, off, fd);
   if (typeof r !== "number") {
     if (!guest) return r.then((v) => typeof v === "number" ? v : (into.set(v), v.length));
     const at = anchor(into);
@@ -248,10 +254,10 @@ export function allocateFd(fd: number, off: number, length: number): number | Pr
   if (!f || (f.statusFlags & O_ACCMODE) === O_RDONLY) return -E.BADF;
   return off < 0 || length <= 0 ? -E.INVAL : f.ops.allocate(f, off, length);
 }
-/** ioctl(2) requests with an int result; FIONREAD is the one files answer */
-export function ioctlIntFd(fd: number, request: number): number | Promise<number> {
+/** ioctl(2) requests with an int result: FIONREAD, which files answer, and those a kind takes (ashmem's) */
+export function ioctlIntFd(fd: number, request: number, arg = 0): number | Promise<number> {
   const f = fds.get(fd);
-  return !f ? -E.BADF : request === FIONREAD ? f.ops.available(f) : -E.NOTTY;
+  return !f ? -E.BADF : request === FIONREAD ? f.ops.available(f) : f.ops.ioctl(f, request, arg);
 }
 export function fdStat(fd: number): FdStat | null | Promise<FdStat | null> {
   const f = fds.get(fd);
@@ -270,6 +276,11 @@ export function fdSource(fd: number): FileSource | null | Promise<FileSource | n
 export function changeFdAttributes(fd: number, change: AttributeChange, uid?: number): number | Promise<number> {
   const f = fds.get(fd);
   return f ? f.ops.change(f, change, uid) : -E.BADF;
+}
+/** what the open file `fd` names becomes crossing to another realm, if it is a socket end that can */
+export function crossingOf(fd: number): CrossingSocket | null {
+  const f = fds.get(fd);
+  return f?.ops.cross?.(f) ?? null;
 }
 export const isSocketFd = (fd: number): boolean => ((fds.get(fd)?.ops.mode ?? 0) & S_IFMT) === S_IFSOCK;
 /** poll(2)'s answer for one descriptor: which of `events` it is ready for, with POLLERR and POLLHUP */
