@@ -5,6 +5,7 @@
 
 import { mem } from "./mem.ts";
 import { hostLib, ldp, stp, ptr, PTR, type HostFn } from "./host.ts";
+import { Handles } from "./handles.ts";
 import { nativeWindowFor, releaseWindow } from "./libandroid.ts";
 import { closeFd } from "./fd.ts";
 import { allocate, release, type HardwareBuffer } from "./hardwarebuffer.ts";
@@ -13,7 +14,7 @@ import { after } from "../jvm/natives/jentry.ts";
 import { frameSize, frameTimestamp, type GlSurface } from "../android/glsurface.ts";
 
 type Frame = VideoFrame | ImageBitmap;
-const OK = 0, INVALID_PARAMETER = -10004, UNSUPPORTED = -10002, NO_BUFFER_AVAILABLE = -30001, MAX_IMAGES_ACQUIRED = -30002;
+const OK = 0, UNKNOWN = -10000, INVALID_PARAMETER = -10004, UNSUPPORTED = -10002, NO_BUFFER_AVAILABLE = -30001, MAX_IMAGES_ACQUIRED = -30002;
 /** BufferQueueDefs::NUM_BUFFER_SLOTS, the most images a reader may hold */
 const SLOTS = 64;
 /** the AIMAGE_FORMATs whose buffers hold frames here: RGBA_8888, RGBX_8888, RGB_888, RGB_565, RGBA_FP16, PRIVATE and
@@ -23,7 +24,7 @@ const PRIVATE = 0x22, CPU_READ = 0xfn;
 
 interface Image { reader: Reader; buffer: HardwareBuffer; timestamp: bigint }
 class Reader {
-  readonly handle: number; readonly format: number; readonly usage: bigint; readonly maxImages: number;
+  handle = 0; readonly format: number; readonly usage: bigint; readonly maxImages: number;
   readonly surface: GlSurface;
   window = 0;
   /** the context and onImageAvailable of the listener set */
@@ -33,8 +34,8 @@ class Reader {
   readonly free: HardwareBuffer[] = [];
   acquired = 0;
   deleted = false;
-  constructor(handle: number, width: number, height: number, format: number, usage: bigint, maxImages: number) {
-    this.handle = handle; this.format = format; this.usage = usage; this.maxImages = maxImages;
+  constructor(width: number, height: number, format: number, usage: bigint, maxImages: number) {
+    this.format = format; this.usage = usage; this.maxImages = maxImages;
     this.surface = { width, height, present: null, frames: 0, post: (frame) => this.queue(frame) };
   }
   /** the producer's frame into a free buffer; past maxImages waiting, the oldest is dropped, as a producer that
@@ -56,11 +57,11 @@ class Reader {
     if (!out) return INVALID_PARAMETER;
     if (this.acquired >= this.maxImages) return MAX_IMAGES_ACQUIRED;
     if (latest) while (this.queued.length > 1) this.recycle(this.queued.shift()!.buffer);
-    const image = this.queued.shift();
+    const image = this.queued[0];
     if (!image) return NO_BUFFER_AVAILABLE;
-    const at = mem.malloc(PTR);
-    images.set(at, image);
-    this.acquired++;
+    const at = images.alloc(image);
+    if (!at) return UNKNOWN;
+    this.queued.shift(); this.acquired++;
     stp(out, at);
     if (fence) mem.st32(fence, -1);
     return OK;
@@ -76,24 +77,22 @@ class Reader {
     for (const buffer of this.free.splice(0)) release(buffer);
     if (this.window) releaseWindow(this.window);
     readers.delete(this.handle);
-    mem.free(this.handle);
   }
 }
-const readers = new Map<number, Reader>(), images = new Map<number, Image>();
+const readers = new Handles<Reader>("AImageReader"), images = new Handles<Image>("AImage");
 const callbacks = callbackThread("ImageReader");
 
 /** the image's buffer back to its reader, or freed with a reader deleted */
 function deleteImage(at: number): void {
-  const image = images.get(at);
+  const image = images.delete(at);
   if (!image) return;
-  images.delete(at); mem.free(at);
   const { reader, buffer } = image;
   if (reader.deleted) { release(buffer); return; }
   reader.acquired--;
   reader.recycle(buffer);
 }
 const imageField = (get: (image: Image) => number | bigint): HostFn => (_c, a) => {
-  const image = images.get(a.p()), out = a.p();
+  const image = images.find(a.p()), out = a.p();
   if (!image || !out) return INVALID_PARAMETER;
   const v = get(image);
   if (typeof v === "bigint") mem.st64(out, v); else mem.st32(out, v);
@@ -101,15 +100,16 @@ const imageField = (get: (image: Image) => number | bigint): HostFn => (_c, a) =
 };
 
 export function imageReaderInit(): void {
-  const R = (p: number) => readers.get(p);
+  const R = (p: number) => readers.find(p);
   hostLib("libmediandk.so", {
     AImageReader_newWithUsage: (_c, a) => {
       const width = a.i(), height = a.i(), format = a.i(), usage = a.l(), maxImages = a.i(), out = a.p();
       if (!out || width < 1 || height < 1 || maxImages < 1 || maxImages > SLOTS || format === PRIVATE && usage & CPU_READ) return INVALID_PARAMETER;
       if (!FORMATS.has(format)) return UNSUPPORTED;
-      const at = mem.malloc(PTR);
-      readers.set(at, new Reader(at, width, height, format, usage, maxImages));
-      stp(out, at);
+      const reader = new Reader(width, height, format, usage, maxImages);
+      reader.handle = readers.alloc(reader);
+      if (!reader.handle) return UNKNOWN;
+      stp(out, reader.handle);
       return OK;
     },
     AImageReader_delete: (_c, a) => R(a.p())?.delete(),
@@ -146,14 +146,14 @@ export function imageReaderInit(): void {
     AImage_getTimestamp: imageField((image) => image.timestamp),
     // AImageCropRect: left, top, right, bottom; a decoded frame's buffer is its visible area
     AImage_getCropRect: (_c, a) => {
-      const image = images.get(a.p()), out = a.p();
+      const image = images.find(a.p()), out = a.p();
       if (!image || !out) return INVALID_PARAMETER;
       mem.st32(out, 0); mem.st32(out + 4, 0); mem.st32(out + 8, image.buffer.width); mem.st32(out + 12, image.buffer.height);
       return OK;
     },
     // the buffer stays the image's: its caller does not release it
     AImage_getHardwareBuffer: (_c, a) => {
-      const image = images.get(a.p()), out = a.p();
+      const image = images.find(a.p()), out = a.p();
       if (!image || !out) return INVALID_PARAMETER;
       stp(out, image.buffer.at);
       return OK;
