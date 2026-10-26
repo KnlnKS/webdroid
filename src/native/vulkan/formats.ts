@@ -5,7 +5,7 @@ import { toHalf } from "../../android/bitmap.ts";
 
 /** VkFormatFeatureFlagBits */
 export const F = {
-  SAMPLED: 0x1, STORAGE: 0x2, STORAGE_ATOMIC: 0x4, VERTEX: 0x40, COLOR: 0x80, BLEND: 0x100, DEPTH: 0x200,
+  SAMPLED: 0x1, STORAGE: 0x2, STORAGE_ATOMIC: 0x4, UNIFORM_TEXEL: 0x8, STORAGE_TEXEL: 0x10, VERTEX: 0x40, COLOR: 0x80, BLEND: 0x100, DEPTH: 0x200,
   BLIT_SRC: 0x400, BLIT_DST: 0x800, LINEAR: 0x1000, TRANSFER_SRC: 0x4000, TRANSFER_DST: 0x8000,
 } as const;
 
@@ -113,9 +113,12 @@ const VERTEX = new Map<number, GPUVertexFormat>([
 ]);
 export const vertexFormat = (vk: number): GPUVertexFormat | undefined => VERTEX.get(vk);
 
+/** the texel buffer features of the formats whose texels are 32-bit components, which shaders read as arrays of them
+ *  (spirv/): uniform texel buffers in the single-component ones, as a sampled buffer's format is unknown to its shader */
+const texelBuffer = (vk: number) => vk >= 98 && vk <= 100 ? F.UNIFORM_TEXEL | F.STORAGE_TEXEL : [101, 102, 103, 107, 108, 109].includes(vk) ? F.STORAGE_TEXEL : 0;
 /** VkFormatProperties for `vk` on an adapter with `features`: optimal-tiling and buffer features; nothing is linear */
 export function formatFeatures(vk: number, features: ReadonlySet<string>): { optimal: number; buffer: number } {
-  const buffer = VERTEX.has(vk) ? F.VERTEX : 0, f = textures.get(vk);
+  const buffer = (VERTEX.has(vk) ? F.VERTEX : 0) | texelBuffer(vk), f = textures.get(vk);
   if (!f || (f.needs && !features.has(f.needs))) return { optimal: 0, buffer };
   const tier1 = features.has("texture-formats-tier1"), caps = f.caps, has = (c: string) => caps.includes(c) || (tier1 && caps.includes("1"));
   let optimal = F.SAMPLED | F.TRANSFER_SRC | F.TRANSFER_DST;

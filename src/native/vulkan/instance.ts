@@ -1,6 +1,6 @@
 // The Vulkan instance and its one physical device: the host's WebGPU adapter, its identity, limits and
 // features answered in Vulkan's terms. The device exposes what WebGPU can carry out: no geometry or
-// tessellation stages, sparse resources, texel buffers, input attachments or resource arrays a shader indexes.
+// tessellation stages, sparse resources, input attachments or resource arrays a shader indexes.
 
 import { mem } from "../mem.ts";
 import { PTR, ldp, stp, type HostFn } from "../host.ts";

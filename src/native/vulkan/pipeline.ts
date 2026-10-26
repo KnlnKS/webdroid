@@ -7,13 +7,16 @@
 
 import { mem } from "../mem.ts";
 import { PTR, stp, type HostFn } from "../host.ts";
-import { struct, list, u64s, stU64, WHOLE, type Read } from "../struct.ts";
+import { struct, list, u64s, ldU64, stU64, WHOLE, type Read } from "../struct.ts";
 import { textureFormat, vertexFormat } from "./formats.ts";
 import { R, UNUSED, COMPARE, UNIFORM_RANGE, objects, nd } from "./vk.ts";
-import { Buffer, View, Device } from "./device.ts";
+import { Buffer, BufferView, View, Device } from "./device.ts";
 import { translate, PUSH_BINDING, type Stage, type Translation, type Resource } from "./spirv/index.ts";
 
 export const DESCRIPTOR = { SAMPLER: 0, COMBINED: 1, SAMPLED_IMAGE: 2, STORAGE_IMAGE: 3, UNIFORM_TEXEL: 4, STORAGE_TEXEL: 5, UNIFORM: 6, STORAGE: 7, UNIFORM_DYNAMIC: 8, STORAGE_DYNAMIC: 9, INPUT_ATTACHMENT: 10 } as const;
+const isBuffer = (type: number) => type >= DESCRIPTOR.UNIFORM && type <= DESCRIPTOR.STORAGE_DYNAMIC;
+const isTexel = (type: number) => type === DESCRIPTOR.UNIFORM_TEXEL || type === DESCRIPTOR.STORAGE_TEXEL;
+const isImage = (type: number) => type <= DESCRIPTOR.STORAGE_IMAGE || type === DESCRIPTOR.INPUT_ATTACHMENT;
 
 export interface SetLayoutBinding { type: number; count: number; samplers: GPUSampler[] }
 export class SetLayout {
@@ -28,6 +31,7 @@ export class SetLayout {
 }
 export type Descriptor =
   | { kind: "buffer"; buffer: Buffer; offset: number; range: number }
+  | { kind: "texel"; view: BufferView }
   | { kind: "image"; view: View | null; sampler: GPUSampler | null };
 /** the bind groups made from an owner's contents, by the layout each was made for, then by what else they hold */
 export class BindGroupCache {
@@ -112,7 +116,8 @@ export function bindGroup(dev: Device, pipeline: GPURenderPipeline | GPUComputeP
       const type = bound.set.layout.bindings.get(r.binding)!.type, uniform = type === DESCRIPTOR.UNIFORM || type === DESCRIPTOR.UNIFORM_DYNAMIC;
       const size = uniform ? Math.min(UNIFORM_RANGE, d.buffer.gpu.size - offset) : d.range === WHOLE ? d.buffer.size - d.offset : d.range;
       entries.push({ binding: 2 * r.binding, resource: { buffer: d.buffer.gpu, offset, size } });
-    } else {
+    } else if (d.kind === "texel") entries.push({ binding: 2 * r.binding, resource: { buffer: d.view.buffer.gpu, offset: d.view.offset, size: d.view.size } });
+    else {
       if (r.kind !== "sampler") entries.push({ binding: 2 * r.binding, resource: d.view!.gpu });
       if (r.kind === "sampler") entries.push({ binding: 2 * r.binding, resource: d.sampler! });
       else if (r.kind === "combined") entries.push({ binding: 2 * r.binding + 1, resource: d.sampler! });
@@ -130,6 +135,8 @@ const SetAllocateInfo = struct("sType:u32 pNext:ptr descriptorPool:u64 descripto
 const WriteSet = struct("sType:u32 pNext:ptr dstSet:u64 dstBinding:u32 dstArrayElement:u32 descriptorCount:u32 descriptorType:u32 pImageInfo:ptr pBufferInfo:ptr pTexelBufferView:ptr");
 const ImageInfo = struct("sampler:u64 imageView:u64 imageLayout:u32");
 const BufferInfo = struct("buffer:u64 offset:u64 range:u64");
+const TemplateInfo = struct("sType:u32 pNext:ptr flags:u32 entryCount:u32 pEntries:ptr templateType:u32 setLayout:u64 bindPoint:u32 pipelineLayout:u64 set:u32");
+const TemplateEntry = struct("binding:u32 element:u32 count:u32 type:u32 offset:size stride:size");
 const CopySet = struct("sType:u32 pNext:ptr srcSet:u64 srcBinding:u32 srcArrayElement:u32 dstSet:u64 dstBinding:u32 dstArrayElement:u32 descriptorCount:u32");
 const RenderPassInfo = struct("sType:u32 pNext:ptr flags:u32 attachmentCount:u32 pAttachments:ptr subpassCount:u32 pSubpasses:ptr dependencyCount:u32 pDependencies:ptr");
 const AttachmentS = struct("flags:u32 format:u32 samples:u32 loadOp:u32 storeOp:u32 stencilLoadOp:u32 stencilStoreOp:u32 initialLayout:u32 finalLayout:u32");
@@ -169,6 +176,27 @@ const BLEND_FACTOR = ["zero", "one", "src", "one-minus-src", "dst", "one-minus-d
   "one-minus-dst-alpha", "constant", "one-minus-constant", "constant", "one-minus-constant", "src-alpha-saturated", "src1", "one-minus-src1", "src1-alpha", "one-minus-src1-alpha"] as GPUBlendFactor[];
 const BLEND_OP: GPUBlendOperation[] = ["add", "subtract", "reverse-subtract", "min", "max"];
 
+/** writes `count` descriptors of `type` into `set` from `binding`'s `element` on, the i-th from the VkDescriptorBufferInfo,
+ *  VkBufferView or VkDescriptorImageInfo at `info(i)` */
+function writeDescriptors(set: DescriptorSet, binding: number, element: number, count: number, type: number, info: (i: number) => number): void {
+  for (let i = 0; i < count; i++, element++) {
+    // a write past a binding's end goes on in the next binding (descriptor update consecutive-binding rules)
+    while (element >= (set.slots.get(binding)?.length ?? Infinity)) { binding++; element = 0; }
+    const slots = set.slots.get(binding)!, at = info(i);
+    if (isBuffer(type)) {
+      const b = BufferInfo.read(at);
+      slots[element] = { kind: "buffer", buffer: objects.get(b.buffer, Buffer), offset: b.offset, range: b.range };
+    } else if (isTexel(type)) slots[element] = { kind: "texel", view: objects.get(ldU64(at), BufferView) };
+    else if (isImage(type)) {
+      const im = ImageInfo.read(at), prev = slots[element], fixed = set.layout.bindings.get(binding)!.samplers[element];
+      slots[element] = {
+        kind: "image", view: type === DESCRIPTOR.SAMPLER ? null : objects.get(im.imageView, View),
+        sampler: fixed ?? (type === DESCRIPTOR.SAMPLER || type === DESCRIPTOR.COMBINED ? objects.get<GPUSampler>(im.sampler) : prev.kind === "image" ? prev.sampler : null),
+      };
+    } else throw new Error(`vulkan: descriptor type ${type}`);
+  }
+  set.changed();
+}
 function attachmentOf(a: Read<typeof AttachmentS>): Attachment {
   return { format: a.format, samples: a.samples, load: LOAD[a.loadOp] ?? "load", store: store(a.storeOp), stencilLoad: LOAD[a.stencilLoadOp] ?? "load", stencilStore: store(a.stencilStoreOp), clear: a.loadOp === 1, stencilClear: a.stencilLoadOp === 1 };
 }
@@ -308,32 +336,24 @@ export const PIPELINE: Record<string, HostFn> = {
   vkUpdateDescriptorSets: (_c, a) => {
     a.p(); const writes = a.u(), pWrites = a.p(), copies = a.u(), pCopies = a.p();
     for (const w of list(pWrites, writes, WriteSet.size(), (at) => WriteSet.read(at))) {
-      const set = objects.get(w.dstSet, DescriptorSet);
-      let binding = w.dstBinding, element = w.dstArrayElement;
-      for (let i = 0; i < w.descriptorCount; i++) {
-        // a write past a binding's end goes on in the next binding (descriptor update consecutive-binding rules)
-        while (element >= (set.slots.get(binding)?.length ?? Infinity)) { binding++; element = 0; }
-        const slots = set.slots.get(binding)!;
-        if (w.descriptorType >= DESCRIPTOR.UNIFORM && w.descriptorType <= DESCRIPTOR.STORAGE_DYNAMIC) {
-          const b = BufferInfo.read(w.pBufferInfo + i * BufferInfo.size());
-          slots[element] = { kind: "buffer", buffer: objects.get(b.buffer, Buffer), offset: b.offset, range: b.range };
-        } else if (w.descriptorType <= DESCRIPTOR.STORAGE_IMAGE || w.descriptorType === DESCRIPTOR.INPUT_ATTACHMENT) {
-          const im = ImageInfo.read(w.pImageInfo + i * ImageInfo.size()), prev = slots[element];
-          const fixed = set.layout.bindings.get(binding)!.samplers[element];
-          slots[element] = {
-            kind: "image", view: w.descriptorType === DESCRIPTOR.SAMPLER ? null : objects.get(im.imageView, View),
-            sampler: fixed ?? (w.descriptorType === DESCRIPTOR.SAMPLER || w.descriptorType === DESCRIPTOR.COMBINED ? objects.get<GPUSampler>(im.sampler) : prev.kind === "image" ? prev.sampler : null),
-          };
-        } else throw new Error(`vulkan: texel buffer descriptors`);
-        element++;
-      }
-      set.changed();
+      const t = w.descriptorType, [p, size] = isBuffer(t) ? [w.pBufferInfo, BufferInfo.size()] : isTexel(t) ? [w.pTexelBufferView, 8] : [w.pImageInfo, ImageInfo.size()];
+      writeDescriptors(objects.get(w.dstSet, DescriptorSet), w.dstBinding, w.dstArrayElement, w.descriptorCount, t, (i) => p + i * size);
     }
     for (const c of list(pCopies, copies, CopySet.size(), (at) => CopySet.read(at))) {
       const src = objects.get(c.srcSet, DescriptorSet), dst = objects.get(c.dstSet, DescriptorSet);
       for (let i = 0; i < c.descriptorCount; i++) dst.slots.get(c.dstBinding)![c.dstArrayElement + i] = src.slots.get(c.srcBinding)![c.srcArrayElement + i];
       dst.changed();
     }
+  },
+  vkCreateDescriptorUpdateTemplate: (_c, a) => {
+    a.p(); const info = TemplateInfo.read(a.p()); a.p();
+    stU64(a.p(), objects.add(list(info.pEntries, info.entryCount, TemplateEntry.size(), (at) => TemplateEntry.read(at))));
+    return R.SUCCESS;
+  },
+  vkDestroyDescriptorUpdateTemplate: (_c, a) => { a.p(); objects.delete(nd(a)); },
+  vkUpdateDescriptorSetWithTemplate: (_c, a) => {
+    a.p(); const set = objects.get(nd(a), DescriptorSet), entries = objects.get<Read<typeof TemplateEntry>[]>(nd(a)), data = a.p();
+    for (const e of entries) writeDescriptors(set, e.binding, e.element, e.count, e.type, (i) => data + e.offset + i * e.stride);
   },
 
   vkCreateRenderPass: (_c, a) => {

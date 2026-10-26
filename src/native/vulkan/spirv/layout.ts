@@ -4,6 +4,15 @@
 import { fromHalf } from "../../../android/bitmap.ts";
 import { D, O, Module, type Of } from "./module.ts";
 
+/** Dim Buffer: a texel buffer, declared as an array of its texels' 32-bit components (interface.ts); as many as its storage
+ *  format has, and one for a sampled one, as formats.ts offers uniform texel buffers only in single-component formats */
+export const BUFFER_DIM = 5;
+const TEXEL_COMPONENTS: Record<number, number> = { 0: 1, 1: 4, 3: 1, 6: 2, 21: 4, 24: 1, 25: 2, 30: 4, 33: 1, 35: 2 };
+export function texelComponents(img: Of<"image">): number {
+  const n = TEXEL_COMPONENTS[img.format];
+  if (!n) throw new Error(`SPIR-V: texel buffer format ${img.format}`);
+  return n;
+}
 const TEXEL_FORMAT: Record<number, string> = {
   1: "rgba32float", 2: "rgba16float", 3: "r32float", 4: "rgba8unorm", 5: "rgba8snorm", 6: "rg32float", 7: "rg16float", 15: "r16float",
   21: "rgba32sint", 22: "rgba16sint", 23: "rgba8sint", 24: "r32sint", 25: "rg32sint", 30: "rgba32uint", 31: "rgba16uint", 32: "rgba8uint", 33: "r32uint", 35: "rg32uint",

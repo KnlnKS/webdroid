@@ -2,7 +2,7 @@
 // function-scope `var` a value used outside its block is hoisted to.
 
 import { O, type Inst, type Of } from "./module.ts";
-import type { MatLayout, Translator } from "./layout.ts";
+import { BUFFER_DIM, texelComponents, type MatLayout, type Translator } from "./layout.ts";
 import type { Fn } from "./cfg.ts";
 
 export interface Ctx { t: Translator; fn: Fn; lines: string[]; depth: number; vals: Map<number, string>; refs: Map<number, string>; mats: Map<number, MatRef>; hoisted: Set<number>; phis: Map<number, Inst[]>; done: Set<number> }
@@ -240,11 +240,17 @@ export function emitInst(c: Ctx, i: Inst): void {
     case O.ImageGather: case O.ImageDrefGather: return define(c, id, sample(c, i));
     case O.ImageFetch: case O.ImageRead: return define(c, id, fetch(c, i));
     case O.ImageWrite: {
-      const img = imageOf(c, w[0]), { coords, layer } = split(c, w[1], img.arrayed);
+      const img = imageOf(c, w[0]);
+      if (img.dim === BUFFER_DIM) {
+        const at = texelAt(c, w[1], img);
+        return line(c, `{ let v = ${texel(c, w[2], img)}; ${at.map((a, k) => `${value(c, w[0])}[${a}] = v.${"xyzw"[k]};`).join(" ")} }`);
+      }
+      const { coords, layer } = split(c, w[1], img.arrayed);
       return line(c, `textureStore(${value(c, w[0])}, ${coords}${layer ? `, ${layer}` : ""}, ${texel(c, w[2], img)});`);
     }
     case O.ImageQuerySizeLod: case O.ImageQuerySize: {
       const img = imageOf(c, w[2]), lod = op === O.ImageQuerySizeLod ? `, ${value(c, w[3])}` : "", v = value(c, w[2]);
+      if (img.dim === BUFFER_DIM) return define(c, id, as2(c, `arrayLength(&${v}) / ${texelComponents(img)}u`, ty));
       const dims = `textureDimensions(${v}${lod})`, rt = t.type(ty), n = rt.k === "vec" ? rt.n : 1;
       const parts = img.dim === 0 ? [dims] : [`${dims}.x`, `${dims}.y`, ...(img.dim === 2 ? [`${dims}.z`] : [])];
       if (img.arrayed) parts.push(`textureNumLayers(${v})`);
@@ -321,13 +327,24 @@ function sample(c: Ctx, i: Inst): string {
   // a depth texture samples to a scalar; SPIR-V's result is a vector with it first
   return depth ? `vec4<f32>(${r}, 0.0, 0.0, 0.0)` : r;
 }
+/** the array indices of the components of a texel buffer's texel `coord` */
+function texelAt(c: Ctx, coord: number, img: Of<"image">): string[] {
+  const n = texelComponents(img);
+  return Array.from({ length: n }, (_, k) => `${n}u * u32(${value(c, coord)}) + ${k}u`);
+}
 function fetch(c: Ctx, i: Inst): string {
-  const w = i.w, img = imageOf(c, w[2]), { coords, layer } = split(c, w[3], img.arrayed), ops = imageOperands(c, w, 4);
+  const w = i.w, img = imageOf(c, w[2]), want = c.t.wgsl(w[0]), have = `vec4<${c.t.wgsl(img.sampled)}>`;
+  if (img.dim === BUFFER_DIM) {
+    // the components a texel lacks read as (0, 0, 0, 1)
+    const at = texelAt(c, w[3], img), s = c.t.wgsl(img.sampled);
+    const r = `${have}(${[0, 1, 2, 3].map((k) => at[k] ? `${value(c, w[2])}[${at[k]}]` : `${s}(${k === 3 ? 1 : 0})`).join(", ")})`;
+    return want === have ? r : `bitcast<${want}>(${r})`;
+  }
+  const { coords, layer } = split(c, w[3], img.arrayed), ops = imageOperands(c, w, 4);
   const args = [value(c, w[2]), coords];
   if (layer) args.push(layer);
   if (i.op === O.ImageFetch) args.push(img.ms ? ops.sample ?? "0" : ops.lod ?? "0");
   const r = `textureLoad(${args.join(", ")})`;
   if (img.depth === 1 || c.t.depth(w[2])) return `vec4<f32>(${r}, 0.0, 0.0, 0.0)`;
-  const want = c.t.wgsl(w[0]), have = `vec4<${c.t.wgsl(img.sampled)}>`;
   return want === have ? r : `bitcast<${want}>(${r})`;
 }

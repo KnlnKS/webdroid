@@ -11,13 +11,10 @@ import { COMMANDS } from "./commands.ts";
 import { SYNC } from "./submit.ts";
 import { SWAPCHAIN } from "./swapchain.ts";
 
-/** the Vulkan 1.1 commands the modules above leave out: queries, texel buffer views, device
- *  groups (VK_KHR_swapchain's among them) and descriptor update templates */
+/** the Vulkan 1.1 commands the modules above leave out: queries and device groups, VK_KHR_swapchain's among them */
 const UNIMPLEMENTED = `vkCreateQueryPool vkDestroyQueryPool vkGetQueryPoolResults vkCmdBeginQuery vkCmdEndQuery vkCmdResetQueryPool
-  vkCmdWriteTimestamp vkCmdCopyQueryPoolResults vkCreateBufferView vkDestroyBufferView
-  vkGetDeviceGroupPeerMemoryFeatures vkCmdDispatchBase vkCreateDescriptorUpdateTemplate vkDestroyDescriptorUpdateTemplate
-  vkUpdateDescriptorSetWithTemplate vkGetDeviceGroupPresentCapabilitiesKHR vkGetDeviceGroupSurfacePresentModesKHR
-  vkGetPhysicalDevicePresentRectanglesKHR vkAcquireNextImage2KHR`.trim().split(/\s+/);
+  vkCmdWriteTimestamp vkCmdCopyQueryPoolResults vkGetDeviceGroupPeerMemoryFeatures vkCmdDispatchBase vkGetDeviceGroupPresentCapabilitiesKHR
+  vkGetDeviceGroupSurfacePresentModesKHR vkGetPhysicalDevicePresentRectanglesKHR vkAcquireNextImage2KHR`.trim().split(/\s+/);
 /** the extension names of commands Vulkan 1.1 promoted, which an application may load by either name */
 const PROMOTED = `vkGetPhysicalDeviceFeatures2 vkGetPhysicalDeviceProperties2 vkGetPhysicalDeviceFormatProperties2
   vkGetPhysicalDeviceImageFormatProperties2 vkGetPhysicalDeviceQueueFamilyProperties2 vkGetPhysicalDeviceMemoryProperties2

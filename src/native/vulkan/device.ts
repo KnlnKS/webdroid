@@ -7,7 +7,7 @@
 import { mem } from "../mem.ts";
 import { PTR, ldp, stp, type HostFn } from "../host.ts";
 import { bufferAt, acquire, release as releaseBuffer, vulkanFormat, type HardwareBuffer } from "../hardwarebuffer.ts";
-import { struct, ptrs, stU64 } from "../struct.ts";
+import { struct, ptrs, stU64, WHOLE } from "../struct.ts";
 import { R, S, AHB_HANDLE, REMAINING, COMPARE, UNIFORM_RANGE, objects, dispatchable, nd, chain } from "./vk.ts";
 import { F, formatFeatures, textureFormat, vkFormatOf, type TextureFormat } from "./formats.ts";
 import { DEVICE_EXTENSIONS, MEMORY_TYPES, Physical, deviceAdapter } from "./instance.ts";
@@ -83,6 +83,11 @@ export class Image {
     };
   }
 }
+/** a texel buffer view: the range of the buffer a shader reads as an array of its texels' components */
+export class BufferView {
+  readonly buffer: Buffer; readonly offset: number; readonly size: number;
+  constructor(buffer: Buffer, offset: number, size: number) { this.buffer = buffer; this.offset = offset; this.size = size; }
+}
 export class View {
   readonly gpu: GPUTextureView;
   readonly image: Image;
@@ -104,6 +109,7 @@ const ImageInfo = struct(`sType:u32 pNext:ptr flags:u32 imageType:u32 format:u32
   samples:u32 tiling:u32 usage:u32 sharingMode:u32 queueFamilyIndexCount:u32 pQueueFamilyIndices:ptr initialLayout:u32`);
 const ExternalImage = struct("sType:u32 pNext:ptr handleTypes:u32");
 const ExternalFormat = struct("sType:u32 pNext:ptr externalFormat:u64");
+const BufferViewInfo = struct("sType:u32 pNext:ptr flags:u32 buffer:u64 format:u32 offset:u64 range:u64");
 const ViewInfo = struct(`sType:u32 pNext:ptr flags:u32 image:u64 viewType:u32 format:u32 r:u32 g:u32 b:u32 a:u32
   aspectMask:u32 baseMipLevel:u32 levelCount:u32 baseArrayLayer:u32 layerCount:u32`);
 const SamplerInfo = struct(`sType:u32 pNext:ptr flags:u32 magFilter:u32 minFilter:u32 mipmapMode:u32 addressModeU:u32 addressModeV:u32
@@ -241,6 +247,13 @@ export const DEVICE: Record<string, HostFn> = {
     }
     return R.SUCCESS;
   },
+
+  vkCreateBufferView: (_c, a) => {
+    a.p(); const info = BufferViewInfo.read(a.p()); a.p(); const out = a.p(), b = objects.get(info.buffer, Buffer);
+    stU64(out, objects.add(new BufferView(b, info.offset, info.range === WHOLE ? (b.size - info.offset) & ~3 : info.range)));
+    return R.SUCCESS;
+  },
+  vkDestroyBufferView: (_c, a) => { a.p(); objects.delete(nd(a)); },
 
   vkCreateImage: (_c, a) => {
     const dev = objects.get(a.p(), Device), info = ImageInfo.read(a.p()); a.p(); const out = a.p();

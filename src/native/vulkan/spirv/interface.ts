@@ -3,11 +3,11 @@
 // interface variables from its parameters, calls the SPIR-V entry and returns its outputs.
 
 import { D, O, SC, operandIds, str, type Inst } from "./module.ts";
-import type { Translator } from "./layout.ts";
+import { BUFFER_DIM, type Translator } from "./layout.ts";
 import type { Fn } from "./cfg.ts";
 
 export type Stage = "vertex" | "fragment" | "compute";
-export interface Resource { set: number; binding: number; kind: "buffer" | "texture" | "sampler" | "combined" | "storage" | "push" }
+export interface Resource { set: number; binding: number; kind: "buffer" | "texel" | "texture" | "sampler" | "combined" | "storage" | "push" }
 /** the WGSL binding of push constants: past those of Vulkan bindings below 499 (2b and 2b + 1), under maxBindingsPerBindGroup */
 export const PUSH_BINDING = 999;
 interface Variable { id: number; type: number }
@@ -87,8 +87,11 @@ export function declarations(t: Translator, globals: Inst[], used: Set<number>, 
       decls.push(`${at} var<${space}> ${name}: ${t.wgsl(ty)};`);
       resources.push({ set, binding, kind: "buffer" });
     } else if (sc === SC.UniformConstant) {
-      const rt = t.type(ty), depth = t.depthVars.has(id);
-      if (rt.k === "sampled") {
+      const rt = t.type(ty), depth = t.depthVars.has(id), image = rt.k === "sampled" ? t.kind(rt.image, "image") : rt.k === "image" ? rt : null;
+      if (image?.dim === BUFFER_DIM) {
+        decls.push(`${at} var<storage, ${image.usage === 2 && accessOf(t, id) !== "read" ? "read_write" : "read"}> ${name}: array<${t.wgsl(image.sampled)}>;`);
+        resources.push({ set, binding, kind: "texel" });
+      } else if (rt.k === "sampled") {
         decls.push(`${at} var ${name}: ${t.imageType(rt.image, t.kind(rt.image, "image"), depth)};`, `@group(${set}) @binding(${2 * binding + 1}) var ${name}_s: ${depth ? "sampler_comparison" : "sampler"};`);
         resources.push({ set, binding, kind: "combined" });
       } else {
