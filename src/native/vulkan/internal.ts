@@ -1,6 +1,7 @@
 // The commands WebGPU has no counterpart of, carried out with the driver's own pipelines: clears of
-// attachment rectangles, scaled blits and buffer copies at any byte offset. The draws cover their
-// viewport with one triangle and read their parameters from a slot of the device's push buffers.
+// attachment rectangles, scaled blits, buffer copies at any byte offset and the decoding of images
+// held as partial blocks. The draws cover their viewport with one triangle and read their parameters
+// from a slot of the device's push buffers.
 
 import { UNUSED } from "./vk.ts";
 import { BU, type Image } from "./device.ts";
@@ -122,6 +123,29 @@ export function blit(r: Replay, src: Image, s: Blit, dst: Image, d: Blit, linear
       { binding: 2, resource: r.data(new Uint32Array(rect.buffer)) },
     ] }));
     pass.setViewport(Math.min(d.x0, d.x1), Math.min(d.y0, d.y1), Math.abs(dw), Math.abs(dh), 0, 1);
+    pass.draw(3);
+    pass.end();
+  }
+}
+
+/** a pipeline that writes each texel of a view of compressed blocks (group 0) to the same place in a target of `format` */
+function decodePipeline(gpu: GPUDevice, format: GPUTextureFormat): GPURenderPipeline {
+  return cached(gpu, `decode|${format}`, () => {
+    const module = gpu.createShaderModule({ code: `${TRIANGLE}
+      @group(0) @binding(0) var t: texture_2d<f32>;
+      @vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f { return corner(i); }
+      @fragment fn fs(@builtin(position) p: vec4f) -> @location(0) vec4f { return textureLoad(t, vec2i(p.xy), 0); }` });
+    return gpu.createRenderPipeline({ layout: "auto", primitive: { topology: "triangle-list" }, vertex: { module, entryPoint: "vs" }, fragment: { module, entryPoint: "fs", targets: [{ format }] } });
+  });
+}
+/** decodes level `mip` of layers of an image held as partial blocks into its texture */
+export function decode(r: Replay, img: Image, mip: number, layer: number, layers: number): void {
+  const gpu = r.dev.gpu, enc = r.outside(), pipeline = decodePipeline(gpu, img.texture.format);
+  for (let l = layer; l < layer + layers; l++) {
+    const range = { dimension: "2d", baseMipLevel: mip, mipLevelCount: 1, baseArrayLayer: l, arrayLayerCount: 1 } as const;
+    const pass = enc.beginRenderPass({ colorAttachments: [{ view: img.texture.createView(range), loadOp: "clear", storeOp: "store" }] });
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(0, gpu.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: img.blocks!.createView(range) }] }));
     pass.draw(3);
     pass.end();
   }

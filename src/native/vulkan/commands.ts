@@ -11,7 +11,7 @@ import { R, UNUSED, objects, dispatchable, nd } from "./vk.ts";
 import { BU, TU, Buffer, Device, Image } from "./device.ts";
 import { bindGroup, BindGroupCache, PUSH_SIZE, PUSH_SLOT, DescriptorSet, GraphicsPipeline, type Bound, type ComputePipeline, type Framebuffer, type PushSlot, type RenderPass } from "./pipeline.ts";
 import { take } from "./ahb.ts";
-import { blit, clearAttachments, copyBytes } from "./internal.ts";
+import { blit, clearAttachments, copyBytes, decode } from "./internal.ts";
 import type { Resource } from "./spirv/index.ts";
 
 /** an operation of a command buffer, carried out in a submit's replay */
@@ -201,8 +201,9 @@ function bufferImage(img: Image, c: BufferImageRegion, buffer: GPUBuffer) {
   const f = img.format, layered = !img.is3d;
   const rowTexels = c.bufferRowLength || c.width, rows = Math.ceil((c.bufferImageHeight || c.height) / f.bh);
   const bytesPerRow = Math.ceil(rowTexels / f.bw) * f.bytes;
-  const texture: GPUTexelCopyTextureInfo = { texture: img.texture, mipLevel: c.mipLevel, origin: { x: c.x, y: c.y, z: layered ? c.baseArrayLayer : c.z }, aspect: img.aspect(c.aspectMask) };
-  const size = { width: c.width, height: c.height, depthOrArrayLayers: layered ? c.layerCount : c.depth };
+  const texture: GPUTexelCopyTextureInfo = { texture: img.copied, mipLevel: c.mipLevel, origin: { x: c.x, y: c.y, z: layered ? c.baseArrayLayer : c.z }, aspect: img.aspect(c.aspectMask) };
+  // whole blocks, as WebGPU copies them: a region reaching a level's edge ends where its last block does
+  const size = { width: Math.ceil(c.width / f.bw) * f.bw, height: Math.ceil(c.height / f.bh) * f.bh, depthOrArrayLayers: layered ? c.layerCount : c.depth };
   return { texture, size, layout: { buffer, offset: c.bufferOffset, bytesPerRow, rowsPerImage: rows }, rowBytes: bytesPerRow, rows };
 }
 /** a buffer–image copy, row by row where the buffer's rows are not 256-byte aligned as WebGPU's must be */
@@ -384,7 +385,9 @@ export const COMMANDS: Record<string, HostFn> = {
   vkCmdCopyBufferToImage: (_c, a) => {
     const h = a.p(), src = objects.get(nd(a), Buffer), img = objects.get(nd(a), Image); a.u(); const n = a.u(), regions = list(a.p(), n, BufferImageCopy.size(), (at) => BufferImageCopy.read(at));
     cbOf(h).use(src);
-    record(h, (r) => { const enc = r.outside(); for (const c of regions) copyBufferImage(enc, img, c, src.gpu, true); });
+    record(h, (r) => {
+      for (const c of regions) { copyBufferImage(r.outside(), img, c, src.gpu, true); if (img.blocks) decode(r, img, c.mipLevel, c.baseArrayLayer, c.layerCount); }
+    });
   },
   vkCmdCopyImageToBuffer: (_c, a) => {
     const h = a.p(), img = objects.get(nd(a), Image); a.u(); const dst = objects.get(nd(a), Buffer), n = a.u(), regions = list(a.p(), n, BufferImageCopy.size(), (at) => BufferImageCopy.read(at));
@@ -393,13 +396,14 @@ export const COMMANDS: Record<string, HostFn> = {
   },
   vkCmdCopyImage: (_c, a) => {
     const h = a.p(), src = objects.get(nd(a), Image); a.u(); const dst = objects.get(nd(a), Image); a.u(); const n = a.u(), regions = list(a.p(), n, ImageCopy.size(), (at) => ImageCopy.read(at));
+    const { bw, bh } = src.format;
     record(h, (r) => {
-      const enc = r.outside();
       for (const c of regions) {
-        enc.copyTextureToTexture(
-          { texture: src.texture, mipLevel: c.srcMip, origin: { x: c.srcX, y: c.srcY, z: src.is3d ? c.srcZ : c.srcLayer }, aspect: src.aspect(c.srcAspect) },
-          { texture: dst.texture, mipLevel: c.dstMip, origin: { x: c.dstX, y: c.dstY, z: dst.is3d ? c.dstZ : c.dstLayer }, aspect: dst.aspect(c.dstAspect) },
-          { width: c.width, height: c.height, depthOrArrayLayers: src.is3d ? c.depth : c.srcLayers });
+        r.outside().copyTextureToTexture(
+          { texture: src.copied, mipLevel: c.srcMip, origin: { x: c.srcX, y: c.srcY, z: src.is3d ? c.srcZ : c.srcLayer }, aspect: src.aspect(c.srcAspect) },
+          { texture: dst.copied, mipLevel: c.dstMip, origin: { x: c.dstX, y: c.dstY, z: dst.is3d ? c.dstZ : c.dstLayer }, aspect: dst.aspect(c.dstAspect) },
+          { width: Math.ceil(c.width / bw) * bw, height: Math.ceil(c.height / bh) * bh, depthOrArrayLayers: src.is3d ? c.depth : c.srcLayers });
+        if (dst.blocks) decode(r, dst, c.dstMip, c.dstLayer, c.dstLayers);
       }
     });
   },

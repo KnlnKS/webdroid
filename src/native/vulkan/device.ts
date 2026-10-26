@@ -9,7 +9,7 @@ import { PTR, ldp, stp, type HostFn } from "../host.ts";
 import { bufferAt, acquire, release as releaseBuffer, vulkanFormat, type HardwareBuffer } from "../hardwarebuffer.ts";
 import { struct, ptrs, stU64, WHOLE } from "../struct.ts";
 import { R, S, AHB_HANDLE, REMAINING, COMPARE, UNIFORM_RANGE, objects, dispatchable, nd, chain } from "./vk.ts";
-import { F, formatFeatures, textureFormat, vkFormatOf, type TextureFormat } from "./formats.ts";
+import { F, decodedFormat, formatFeatures, textureFormat, vkFormatOf, type TextureFormat } from "./formats.ts";
 import { DEVICE_EXTENSIONS, MEMORY_TYPES, Physical, deviceAdapter } from "./instance.ts";
 import type { PushChunk } from "./pipeline.ts";
 
@@ -53,6 +53,9 @@ export class Buffer {
 type Extent = Required<GPUExtent3DDict>;
 export class Image {
   gpu: GPUTexture | null = null;
+  /** a compressed image whose size is not whole blocks, which WebGPU cannot create: its blocks, padded to whole blocks, as copies
+   *  give them, which `texture` holds decoded at the image's size (internal.ts decodes them after each copy) */
+  blocks: GPUTexture | null = null;
   ahb: HardwareBuffer | null = null;
   readonly desc: GPUTextureDescriptor & { size: Extent };
   readonly format: TextureFormat;
@@ -68,6 +71,17 @@ export class Image {
     this.is3d = desc.dimension === "3d"; this.levels = desc.mipLevelCount ?? 1; this.layers = this.is3d ? 1 : desc.size.depthOrArrayLayers;
   }
   get texture(): GPUTexture { if (!this.gpu) throw new Error("vulkan: image without memory"); return this.gpu; }
+  /** the texture copies to and from the image use */
+  get copied(): GPUTexture { return this.blocks ?? this.texture; }
+  /** whether its size is not whole blocks of its format */
+  get partial(): boolean { const { width, height } = this.desc.size; return width % this.format.bw !== 0 || height % this.format.bh !== 0; }
+  create(gpu: GPUDevice): void {
+    if (!this.partial) { this.gpu = gpu.createTexture(this.desc); return; }
+    const { bw, bh } = this.format, { width, height } = this.desc.size;
+    this.blocks = gpu.createTexture({ ...this.desc, size: { ...this.desc.size, width: align(width, bw), height: align(height, bh) }, usage: TU.COPY_SRC | TU.COPY_DST | TU.TEXTURE_BINDING, viewFormats: [] });
+    this.gpu = gpu.createTexture({ ...this.desc, format: decodedFormat(this.format), usage: this.desc.usage | TU.RENDER_ATTACHMENT, viewFormats: [] });
+  }
+  destroy(): void { this.gpu?.destroy(); this.blocks?.destroy(); }
   /** level `l`'s extent, a layer's */
   extent(l: number): Extent {
     const { width, height, depthOrArrayLayers } = this.desc.size;
@@ -159,7 +173,7 @@ function bind(dev: Device, img: Image, memory: Memory): number {
     if (!b) return R.INVALID_EXTERNAL_HANDLE;
     img.ahb = b;
   }
-  img.gpu = dev.gpu.createTexture(img.desc);
+  img.create(dev.gpu);
   return R.SUCCESS;
 }
 function writeRequirements(at: number, size: number, bits: number): void { Requirements.write(at, { size, alignment: ALIGN, memoryTypeBits: bits }); }
@@ -270,11 +284,12 @@ export const DEVICE: Record<string, HostFn> = {
       size: { width: info.width, height: info.height, depthOrArrayLayers: info.imageType === 2 ? info.depth : info.arrayLayers },
       usage: imageUsage(info.usage, samples, renderable), viewFormats: pair ? [pair] : [],
     }, f, info.format, external, renderable);
-    if (!external) img.gpu = dev.gpu.createTexture(img.desc);
+    if (img.partial && img.is3d) return R.FORMAT_NOT_SUPPORTED;
+    if (!external) img.create(dev.gpu);
     stU64(out, objects.add(img));
     return R.SUCCESS;
   },
-  vkDestroyImage: (_c, a) => { a.p(); const h = nd(a); objects.find(h, Image)?.gpu?.destroy(); objects.delete(h); },
+  vkDestroyImage: (_c, a) => { a.p(); const h = nd(a); objects.find(h, Image)?.destroy(); objects.delete(h); },
   vkGetImageMemoryRequirements: (_c, a) => { a.p(); const img = objects.get(nd(a), Image); writeRequirements(a.p(), imageBytes(img), 1); },
   vkGetImageMemoryRequirements2: (_c, a) => {
     a.p(); const img = objects.get(ObjectInfo.read(a.p()).object, Image), out = a.p();
@@ -301,7 +316,7 @@ export const DEVICE: Record<string, HostFn> = {
     // an image of an external format has views of no format of their own
     const f = info.format ? textureFormat(info.format) : img.format;
     if (!f) return R.FORMAT_NOT_SUPPORTED;
-    const desc: GPUTextureViewDescriptor = { format: f.gpu, dimension: VIEW_DIMENSION[info.viewType], aspect: img.aspect(info.aspectMask), ...img.range(info) };
+    const desc: GPUTextureViewDescriptor = { format: img.blocks ? img.texture.format : f.gpu, dimension: VIEW_DIMENSION[info.viewType], aspect: img.aspect(info.aspectMask), ...img.range(info) };
     const swizzle = [info.r, info.g, info.b, info.a].map((c, i) => "rgba01"[c === 0 ? i : c === 1 ? 4 : c === 2 ? 5 : c - 3]).join("");
     if (swizzle !== "rgba") {
       if (!dev.physical.features.has("texture-component-swizzle")) return R.FEATURE_NOT_PRESENT;

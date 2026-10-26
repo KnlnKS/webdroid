@@ -74,7 +74,7 @@ export const SWAPCHAIN: Record<string, HostFn> = {
     const size = { width: info.width, height: info.height, depthOrArrayLayers: 1 };
     const images = Array.from({ length: Math.min(MAX_IMAGES, Math.max(MIN_IMAGES, info.minImageCount)) }, () => {
       const img = new Image({ dimension: "2d", format: f.gpu, size, usage: TU.COPY_SRC | TU.COPY_DST | TU.TEXTURE_BINDING | TU.RENDER_ATTACHMENT }, f, info.imageFormat, false, true);
-      img.gpu = dev.gpu.createTexture(img.desc);
+      img.create(dev.gpu);
       return objects.add(img);
     });
     stU64(out, objects.add(new Swapchain(objects.get(info.surface, Surface), images, info.width, info.height)));
@@ -83,7 +83,7 @@ export const SWAPCHAIN: Record<string, HostFn> = {
   vkDestroySwapchainKHR: (_c, a) => {
     a.p(); const h = nd(a), sc = objects.find(h, Swapchain);
     if (!sc) return;
-    for (const i of sc.images) { objects.get(i, Image).gpu?.destroy(); objects.delete(i); }
+    for (const i of sc.images) { objects.get(i, Image).destroy(); objects.delete(i); }
     objects.delete(h);
   },
   vkGetSwapchainImagesKHR: (_c, a) => { a.p(); const sc = objects.get(nd(a), Swapchain); return enumerate(sc.images, a.p(), a.p(), 8, stU64); },

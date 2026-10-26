@@ -63,6 +63,8 @@ ASTC.forEach((dims, i) => {
 const byGpu = new Map([...textures].map(([vk, f]) => [f.gpu, vk]));
 
 export const textureFormat = (vk: number): TextureFormat | undefined => textures.get(vk);
+/** what a compressed format's texels decode to without loss: 8-bit unorm channels, else half floats */
+export const decodedFormat = (f: TextureFormat): GPUTextureFormat => f.gpu.endsWith("-srgb") ? "rgba8unorm-srgb" : /^(bc[456]|eac)/.test(f.gpu) ? "rgba16float" : "rgba8unorm";
 
 const srgb = (c: number) => c <= 0.0031308 ? c * 12.92 : 1.055 * c ** (1 / 2.4) - 0.055;
 const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
