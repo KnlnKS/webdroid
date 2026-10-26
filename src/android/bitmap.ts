@@ -171,7 +171,7 @@ export function toHalf(v: number): number {
   const half = sign | (e << 10) | (m >>> 13), rest = m & 0x1fff;
   return half + (rest > 0x1000 || rest === 0x1000 && half & 1 ? 1 : 0);
 }
-function fromHalf(h: number): number {
+export function fromHalf(h: number): number {
   const e = (h >>> 10) & 0x1f, m = h & 0x3ff, s = h & 0x8000 ? -1 : 1;
   return e === 0 ? s * m * 2 ** -24 : e === 31 ? (m ? NaN : s * Infinity) : s * (1 + m / 1024) * 2 ** (e - 15);
 }
