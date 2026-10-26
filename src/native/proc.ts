@@ -44,9 +44,11 @@ let atRandom = 0;
  *  assume; and AES, PMULL, SHA1 and SHA2, which spare TLS libraries their software ciphers (OpenSSL
  *  reads them only beside ASIMD). The other optional features stay unadvertised, steering
  *  libraries away from paths the emitter lacks. */
+const HWCAP_FP = 1 << 0, HWCAP_ASIMD = 1 << 1, HWCAP_AES = 1 << 3, HWCAP_PMULL = 1 << 4, HWCAP_SHA1 = 1 << 5, HWCAP_SHA2 = 1 << 6, HWCAP_CRC32 = 1 << 7;
+const A64_HWCAP = HWCAP_FP | HWCAP_ASIMD | HWCAP_AES | HWCAP_PMULL | HWCAP_SHA1 | HWCAP_SHA2 | HWCAP_CRC32;
 export function auxv(): [number, number][] {
   if (!atRandom) { atRandom = mem.hostAlloc(16); fillRandom(atRandom, 16); }
-  return [[6, 4096], [16, isA64() ? 0xfb : 0], [26, 0], [23, 0], [25, atRandom]];
+  return [[6, 4096], [16, isA64() ? A64_HWCAP : 0], [26, 0], [23, 0], [25, atRandom]];
 }
 /** struct sysinfo: uptime, loads[3], totalram, freeram, sharedram, bufferram, totalswap, freeswap
  *  at the long stride, then procs (u16), totalhigh, freehigh, mem_unit (u32); a 32-bit build
