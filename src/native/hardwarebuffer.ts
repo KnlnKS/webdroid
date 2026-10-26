@@ -8,6 +8,7 @@
 import { mem } from "./mem.ts";
 import { hostLib, defineHost, stp, PTR, type HostFn, type ArgReader } from "./host.ts";
 import { struct } from "./struct.ts";
+import { Handles } from "./handles.ts";
 import { textureRec } from "./gles3-state.ts";
 import { pixelArray, pixelParam, view } from "./gles3-pixels.ts";
 import { CODECS, type Codec } from "./pixel-codecs.ts";
@@ -58,7 +59,7 @@ function scratchCanvas(w: number, h: number): OffscreenCanvasRenderingContext2D 
 
 let nextId = 1n;
 export class HardwareBuffer {
-  readonly at: number; readonly width: number; readonly height: number; readonly format: number; readonly usage: bigint;
+  at = 0; readonly width: number; readonly height: number; readonly format: number; readonly usage: bigint;
   readonly id = nextId++;
   refs = 1;
   /** the pixels in guest memory, rows of `width`: current while no GL holds them */
@@ -71,8 +72,8 @@ export class HardwareBuffer {
   private locked = 0;
   /** a producer's frame no GL has taken yet */
   private queued: Frame | null = null;
-  constructor(at: number, width: number, height: number, format: number, usage: bigint) {
-    this.at = at; this.width = width; this.height = height; this.format = format; this.usage = usage;
+  constructor(width: number, height: number, format: number, usage: bigint) {
+    this.width = width; this.height = height; this.format = format; this.usage = usage;
   }
   get bytes(): number { return this.width * this.height * FORMATS.get(this.format)!.bpp; }
   get levels(): number { return this.usage & BigInt(GPU_MIPMAP) ? Math.floor(Math.log2(Math.max(this.width, this.height))) + 1 : 1; }
@@ -168,7 +169,6 @@ export class HardwareBuffer {
     buffers.delete(this.at);
     this.queued?.close();
     if (this.bits) mem.free(this.bits);
-    mem.free(this.at);
     const gl = this.liveGl;
     if (gl) { gl.deleteFramebuffer(this.fbo); gl.deleteTexture(this.tex); }
   }
@@ -219,10 +219,10 @@ export class HardwareBuffer {
     if (codec) mem.write(this.bits, codec.pack(this.readRgba(gl), this.width * this.height));
   }
 }
-const buffers = new Map<number, HardwareBuffer>();
-export const bufferAt = (p: number): HardwareBuffer | undefined => buffers.get(p);
+const buffers = new Handles<HardwareBuffer>("AHardwareBuffer");
+export const bufferAt = (p: number): HardwareBuffer | undefined => buffers.find(p);
 /** the buffer behind EGL_NATIVE_BUFFER_ANDROID's client buffer (eglGetNativeClientBufferANDROID's answer) */
-export const clientBuffer = (p: number): HardwareBuffer | undefined => buffers.get(p - anwb());
+export const clientBuffer = (p: number): HardwareBuffer | undefined => buffers.find(p - anwb());
 export const nativeClientBuffer = (b: HardwareBuffer): number => b.at + anwb();
 
 /** AHardwareBuffer_isValidDescription's rules, for the formats and usage here: one layer, no protected, front or cube-map buffers */
@@ -234,15 +234,13 @@ function supported(width: number, height: number, layers: number, format: number
   return true;
 }
 export function allocate(width: number, height: number, format: number, usage: bigint): HardwareBuffer | null {
-  const size = graphicBufferSize(), at = mem.malloc(size);
+  const size = graphicBufferSize(), b = new HardwareBuffer(width, height, format, usage), at = b.at = buffers.alloc(b, size);
   if (!at) return null;
-  mem.memset(at, 0, size);
-  const b = new HardwareBuffer(at, width, height, format, usage), [incRef, decRef] = refFns();
+  const [incRef, decRef] = refFns();
   // ANDROID_NATIVE_BUFFER_MAGIC '_bfr', and the size from the ANativeWindowBuffer on
   GraphicBuffer.write(at, { magic: 0x5f626672, version: size - anwb(), incRef, decRef, width, height, stride: width, format,
     usageDeprecated: Number(usage & 0xffffffffn), layerCount: 1 });
   mem.st64(at + GraphicBuffer.off("usage"), usage);
-  buffers.set(at, b);
   return b;
 }
 let refs: [number, number] | null = null;
