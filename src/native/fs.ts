@@ -329,7 +329,7 @@ export const readlinkInto = (path: string, buf: number, size: number): number | 
   complete(linkTarget(path), (target) => {
     if (typeof target === "number") return target;
     const bytes = utf8.enc.encode(target).subarray(0, size);
-    mem.u8.set(bytes, buf);
+    mem.write(buf, bytes);
     return bytes.length;
   });
 export function faccessatPath(dirfd: number, name: string, mode: number, flags: number): number | Promise<number> {
