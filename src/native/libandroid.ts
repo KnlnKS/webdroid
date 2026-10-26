@@ -1,9 +1,9 @@
-// The NDK's closed host libraries: libandroid (windows over the shell's surfaces, per-thread
-// loopers, sensors, assets) and libOpenSLES (no engine, so audio takes the AudioTrack path).
-// A name they lack is NULL from dlsym, as on a device without it.
+// libandroid, a closed host library: windows over the shell's surfaces, per-thread loopers,
+// sensors and assets.
+// A name it lacks is NULL from dlsym, as on a device without it.
 
 import { mem, anchor } from "./mem.ts";
-import { hostLib, hostData, defineHost, lookupHost, cstr, stp, retF, PTR, complete, type HostFn, type ArgReader } from "./host.ts";
+import { hostLib, defineHost, lookupHost, cstr, stp, retF, PTR, complete, type HostFn, type ArgReader } from "./host.ts";
 import { deref, newLocal } from "./jni.ts";
 import { surfaceTarget, surfaceTextureOf, bufferHeight, bufferWidth, presentSurface, type GlSurface, type NativeSurfaceTexture } from "../android/glsurface.ts";
 import { producerSurface } from "../android/surfaceflinger.ts";
@@ -396,15 +396,4 @@ export function ndkInit(): void {
     AAsset_openFileDescriptor: () => -1, AAsset_openFileDescriptor64: () => -1,
     AAsset_close: (_c, a) => { const s = assets.delete(a.p()); if (s?.buf) mem.free(s.buf); },
   }, { closed: true });
-
-  hostLib("libOpenSLES.so", {
-    slCreateEngine: () => 0x0000000c,                                           // SL_RESULT_FEATURE_UNSUPPORTED: there is no engine here
-    slQueryNumSupportedEngineInterfaces: (_c, a) => { const p = a.p(); if (p) mem.st32(p, 0); return 0; },
-    slQuerySupportedEngineInterfaces: () => 0x00000007,                          // SL_RESULT_PARAMETER_INVALID
-  }, { closed: true });
-  for (const [i, n] of ["ENGINE", "PLAY", "RECORD", "BUFFERQUEUE", "VOLUME", "ANDROIDSIMPLEBUFFERQUEUE", "ANDROIDCONFIGURATION", "OUTPUTMIX", "OBJECT", "PLAYBACKRATE"].entries()) {
-    const p = mem.hostAlloc(16, 4);                                             // an SLInterfaceID is a pointer to a 16-byte GUID; distinct is all that matters
-    mem.st32(p, 0x1000 + i);
-    hostData("libOpenSLES.so", "SL_IID_" + n, p);
-  }
 }

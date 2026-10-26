@@ -13,6 +13,7 @@ import { aaudioInit } from "./aaudio.ts";
 import { hardwareBufferInit } from "./hardwarebuffer.ts";
 import { surfaceControlInit } from "./surfacecontrol.ts";
 import { imageReaderInit } from "./imagereader.ts";
+import { openslesInit } from "./opensles.ts";
 import { mediaInit } from "./media.ts";
 import { ndkInit } from "./libandroid.ts";
 import { bitmapInit } from "./bitmap.ts";
@@ -58,6 +59,7 @@ function nativeInit(wide: boolean): void {
   mediaInit();
   imageReaderInit();
   aaudioInit();
+  openslesInit();
   bitmapInit();
   vulkanInit();
   resolveByExport(resolveGlobalOrNull);
