@@ -12,7 +12,7 @@ import { NativeFault, BadAddress, core, jitDrain } from "./core.ts";
 import { Args, Args64, type ArgReader, onBadAddress, kernelEntry, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, wordsd, slowMs, hostTrace } from "./host.ts";
 import { E, RET_SENTINEL, TRAMP_BASE, TRAMP_END, STACK_SIZE, MAIN_STACK_SIZE, MEM_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi.ts";
 import { perf } from "../perf.ts";
-import { answeringFor, yieldToLoop } from "../jvm/yield.ts";
+import { answeringFor, promptPending, yieldToLoop } from "../jvm/yield.ts";
 import { procIdentity, processTid } from "../shell/procfs.ts";
 import { never, processExited } from "../process-exit.ts";
 import { SIGILL, SIGTRAP, SIGBUS, SIGSEGV, SA_SIGINFO, SA_ONSTACK, SA_RESETHAND, SA_NODEFER, SS_DISABLE, SS_AUTODISARM, BLOCKABLE, action, blocked, dispositions, sigbit, type Handler } from "./signals.ts";
@@ -35,6 +35,8 @@ interface HandlerFrame { lo: bigint; hi: bigint; exit: (() => void) | null; resu
 // enough that a 60 Hz frame loop on the JS thread keeps its cadence
 const SLICE_INSTR = 3_000_000;
 const RESPONSIVE_SLICE_INSTR = 300_000;
+/** while a thread awaits a prompt answer from another realm, which it takes only between slices */
+const PROMPT_SLICE_INSTR = 100_000;
 /** the run loop's instruction budget per slice; lowering it makes `profile` sample finely (debug) */
 export const slice = { instr: SLICE_INSTR };
 let lastPresentAt = -Infinity;
@@ -49,7 +51,7 @@ export function noteNativeFrame(cpu: Cpu): void {
 }
 
 function sliceBudget(): number {
-  return answeringFor() ? Math.min(slice.instr, RESPONSIVE_SLICE_INSTR) : slice.instr;
+  return Math.min(slice.instr, promptPending() ? PROMPT_SLICE_INSTR : answeringFor() ? RESPONSIVE_SLICE_INSTR : slice.instr);
 }
 
 /** an argument to a guest function: a float or double travels in a V register on AAPCS64 and as

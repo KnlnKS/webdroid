@@ -15,6 +15,7 @@ import { executePendingIntent, publishedProvider } from "../android/server/am.ts
 import { stopSettingsUpdates } from "../android/settings.ts";
 import { stopAccountUpdates } from "../android/accounts.ts";
 import { awaited, type Gen } from "../jvm/runtime.ts";
+import { awaitingPrompt } from "../jvm/yield.ts";
 import { cookiesChanged } from "../android/cookies.ts";
 import { useFocusedUid } from "../android/clipboard.ts";
 import { storageChanged } from "./device-storage.ts";
@@ -37,6 +38,8 @@ function attach(port: MessagePort, worker: boolean): BrokerCalls {
 /** a Worker's command port, behind which system_server's realm holds the stores */
 export function attachProcessBrokerPort(port: MessagePort): BrokerCalls {
   const broker = attach(port, true);
+  for (const domain of [broker.files, broker.descriptors] as Record<string, (...args: unknown[]) => Promise<unknown>>[])
+    for (const [name, call] of Object.entries(domain)) domain[name] = (...args) => awaitingPrompt(call(...args));
   releaseFiles = vfs.useOwner({ prepare: broker.files.filePrepare });
   return broker;
 }

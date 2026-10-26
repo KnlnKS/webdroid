@@ -48,6 +48,14 @@ export function noteInput(): void { lastInput = performance.now(); responsiveUnt
 export const sinceInput = (now = performance.now()): number => now - lastInput;
 /** how much longer input is being answered, 0 once it is not */
 export const answeringFor = (now = performance.now()): number => Math.max(0, responsiveUntil - now);
+/** Requests to a realm that answers them at once (the page kernel's file calls) still awaited: the
+ *  thread that made one runs again only between other threads' slices, which stay short meanwhile. */
+let promptWaits = 0;
+export function awaitingPrompt<T>(p: Promise<T>): Promise<T> {
+  promptWaits++;
+  return p.finally(() => { promptWaits--; });
+}
+export const promptPending = (): boolean => promptWaits > 0;
 /** a later turn, after what `queue` already holds */
 function turn(queue: (() => void)[]): Promise<void> {
   if (processExited()) return never();
