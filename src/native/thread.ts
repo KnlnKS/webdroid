@@ -41,9 +41,11 @@ export function callbackThread(name: string): (run: (cpu: Cpu) => Promise<unknow
 // ── futex: what libc++ and an engine's own primitives wait on when they bypass pthread
 export const futexStats = new Map<string, Record<string, number>>();
 const fstat = (cpu: Cpu, k: string) => { let r = futexStats.get(cpu.name); if (!r) futexStats.set(cpu.name, (r = {})); r[k] = (r[k] ?? 0) + 1; };
+/** FUTEX_WAIT (relative timeout) or FUTEX_WAIT_BITSET (absolute): the only commands whose fourth argument is a timeout */
+const isWait = (op: number) => (op & 0x7f) === 0 || (op & 0x7f) === 9;
 export function futex(cpu: Cpu, addr: number, op: number, val: number, ts: number): number | Promise<number> {
   const cmd = op & 0x7f;
-  if (cmd === 0 || cmd === 9) {                                                 // FUTEX_WAIT (relative timeout) / FUTEX_WAIT_BITSET (absolute)
+  if (isWait(op)) {
     if (mem.ld32(addr) !== val) { fstat(cpu, "eagain"); return -E.AGAIN; }
     const ms = waitLimit(!ts ? null : cmd === 0 ? readTs(ts) : readTs(ts) - clockTime(op & 256 ? 0 : 1));
     const q = queueAt(addr);
@@ -128,7 +130,8 @@ export const THREAD_SYSCALLS: Record<string, HostFn> = {
   nanosleep: (_c, a) => { const req = a.p(), rem = a.p(); if (rem) mem.memset(rem, 0, KLAYOUT.TS_SIZE); return sleepMs(readTs(req)); },
   // it completes before a pending signal is delivered
   sched_yield: (cpu) => { cpu.deferSignalsUntilResume(); return yieldToLoop().then(() => 0); },
-  futex: (cpu, a) => { const addr = a.p(), op = a.i(), val = a.i(), ts = a.p(); return futex(cpu, addr, op, val, ts); },
+  // a wake's fourth argument is whatever a variadic syscall(2) left in the register, so only a wait translates it
+  futex: (cpu, a) => { const addr = a.p(), op = a.i(), val = a.i(); return futex(cpu, addr, op, val, isWait(op) ? a.p() : 0); },
   clone: (cpu, a) => { const flags = a.u(), stack = a.va(), ptid = a.p(), tls = a.va(), ctid = a.p(); return cloneThread(cpu, flags, stack, ptid, tls, ctid); },
   set_tid_address: (cpu, a) => { cpu.clearChildTid = a.va(); return cpu.osTid; },
   // no process-shared robust mutexes to recover
