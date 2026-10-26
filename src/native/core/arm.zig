@@ -65,14 +65,11 @@ pub inline fn misaligned(c: *Cpu, a: u32, w: u32, pc: u32) Status {
     c.fault_addr = a;
     return badAddr(c, w, pc);
 }
-/// below LOW, or past the 2 GiB an ARM32 process's memory ends at, which as a signed compare
-/// costs no more than the null page's alone, unless the process maps the window there
-pub inline fn addr(c: *Cpu, a: u32) ?u32 {
-    if (@as(i32, @bitCast(a)) < abi.LOW and !mem.windowed(a, 1, false)) {
-        c.fault_addr = a;
-        return null;
-    }
-    return a;
+/// an access of n bytes at a, but below LOW, or past the 2 GiB an ARM32 process's memory ends at,
+/// which as a signed compare costs no more than the null page's alone, unless the process maps the
+/// window there
+pub inline fn addr(c: *Cpu, a: u32, n: u32) ?u32 {
+    return if (@as(i32, @bitCast(a)) < abi.LOW and !mem.windowAccess(c, a, n, false)) null else a;
 }
 /// LDREX of n bytes, a doubleword's second word high, opening the monitor
 fn loadExclusive(c: *Cpu, a: u32, n: u32) u64 {
@@ -92,10 +89,7 @@ fn loadExclusive(c: *Cpu, a: u32, n: u32) u64 {
 fn storeExclusive(c: *Cpu, a: u32, n: u32, lo: u32, hi: u32) ?bool {
     if (c.excl == 0) return false;
     const stored = if (a >= mem.window) stored: {
-        if (!mem.windowed(a, n, true)) {
-            c.fault_addr = a;
-            return null;
-        }
+        if (!mem.windowAccess(c, a, n, true)) return null;
         if (n == 8) break :stored mem.shm_cas64(a, c.excl_val, @as(u64, hi) << 32 | lo) != 0;
         const expected: u32 = @truncate(c.excl_val);
         break :stored mem.shm_cas(a, n, expected, lo) == expected;
@@ -262,7 +256,7 @@ fn execArm(c: *Cpu, pc: u32) Status {
             const off = if (top == 2) w & 0xfff else op2(c, w & ~@as(u32, 1 << 25), pc).v;
             const base = reg(c, rn, pc);
             const ea = if (U) base +% off else base -% off;
-            const a = addr(c, if (P) ea else base) orelse return badAddr(c, w, pc);
+            const a = addr(c, if (P) ea else base, if (B) 1 else 4) orelse return badAddr(c, w, pc);
             if (P and W) set(c, rn, ea);
             if (Ld) {
                 const t: u32 = if (B) ld(u8, a) else ld(u32, a);
@@ -286,7 +280,7 @@ fn execArm(c: *Cpu, pc: u32) Status {
             const base = reg(c, rn, pc);
             var a = if (U) (if (P) base +% 4 else base) else (if (P) base -% 4 * n else base -% (4 * n - 4));
             const wb = if (U) base +% 4 * n else base -% 4 * n;
-            if (addr(c, a) == null) return badAddr(c, w, pc);
+            if (addr(c, a, 4 * n) == null) return badAddr(c, w, pc);
             if (Ld) {
                 if (W) set(c, rn, wb);
                 var i: u5 = 0;
@@ -346,7 +340,7 @@ fn dataProcessing(c: *Cpu, w: u32, pc: u32, top: u32, rn: u32, rd: u32, rm: u32)
         if (multiply(c, w, pc)) |status| return status;
         if ((w & 0x0fb000f0) == 0x01000090) {
             const byte = w & (1 << 22) != 0;
-            const a = addr(c, reg(c, rn, pc)) orelse return badAddr(c, w, pc);
+            const a = addr(c, reg(c, rn, pc), if (byte) 1 else 4) orelse return badAddr(c, w, pc);
             const t: u32 = if (byte) ld(u8, a) else ld(u32, a);
             if (!(if (byte) st(u8, c, a, @truncate(reg(c, rm, pc))) else st(u32, c, a, reg(c, rm, pc)))) return badAddr(c, w, pc);
             set(c, rd, t);
@@ -359,7 +353,7 @@ fn dataProcessing(c: *Cpu, w: u32, pc: u32, top: u32, rn: u32, rd: u32, rm: u32)
                 2 => 1,
                 else => 2,
             };
-            const a = addr(c, reg(c, rn, pc)) orelse return badAddr(c, w, pc);
+            const a = addr(c, reg(c, rn, pc), n) orelse return badAddr(c, w, pc);
             if (w & (1 << 20) != 0) {
                 const v = loadExclusive(c, a, n);
                 set(c, rd, @truncate(v));
@@ -385,7 +379,8 @@ fn dataProcessing(c: *Cpu, w: u32, pc: u32, top: u32, rn: u32, rd: u32, rm: u32)
             const off = if (I) ((w >> 4) & 0xf0) | (w & 15) else reg(c, rm, pc);
             const base = reg(c, rn, pc);
             const ea = if (U) base +% off else base -% off;
-            const a = addr(c, if (P) ea else base) orelse return badAddr(c, w, pc);
+            // LDRH, LDRSB, LDRSH, or STRH, LDRD, STRD
+            const a = addr(c, if (P) ea else base, if (sh == 1 or Ld and sh == 3) 2 else if (Ld) 1 else 8) orelse return badAddr(c, w, pc);
             if (P and W) set(c, rn, ea);
             if (Ld) {
                 switch (sh) {
@@ -924,7 +919,7 @@ inline fn execThumb32Transfers(c: *Cpu, h: u32, h2: u32, pc: u32) ?Status {
             const half = h2 & 0x10 != 0;
             const base = if ((h & 15) == 15) pc + 4 else r(c, h & 15);
             const index = r(c, h2 & 15);
-            const a = addr(c, base +% if (half) index * 2 else index) orelse return badAddr(c, h << 16 | h2, pc);
+            const a = addr(c, base +% if (half) index * 2 else index, if (half) 2 else 1) orelse return badAddr(c, h << 16 | h2, pc);
             const off: u32 = if (half) ld(u16, a) else ld(u8, a);
             return jump(c, pc +% 4 +% off * 2);
         }
@@ -939,10 +934,10 @@ inline fn execThumb32Transfers(c: *Cpu, h: u32, h2: u32, pc: u32) ?Status {
         const n = h & 15;
         const status = if (extended) h2 & 15 else (h2 >> 8) & 15;
         if (extended and ((!double and !byte and !half) or (!double and bits(h2, 8, 4) != 15))) return fault(c, .undefined, h << 16 | h2, pc);
-        const a = addr(c, r(c, n) +% (if (extended) 0 else (h2 & 255) * 4)) orelse return badAddr(c, h << 16 | h2, pc);
+        const size: u32 = if (double) 8 else if (byte) 1 else if (half) 2 else 4;
+        const a = addr(c, r(c, n) +% (if (extended) 0 else (h2 & 255) * 4), size) orelse return badAddr(c, h << 16 | h2, pc);
         if ((load and status != 15) or (!load and status == 15)) return fault(c, .undefined, h << 16 | h2, pc);
         c.pc = pc + 4;
-        const size: u32 = if (double) 8 else if (byte) 1 else if (half) 2 else 4;
         if (load) {
             const v = loadExclusive(c, a, size);
             if (double) set(c, (h2 >> 8) & 15, @truncate(v >> 32));
@@ -964,7 +959,7 @@ inline fn execThumb32Transfers(c: *Cpu, h: u32, h2: u32, pc: u32) ?Status {
         const base = r(c, n);
         const off = (h2 & 255) * 4;
         const indexed = if (U) base +% off else base -% off;
-        const a = addr(c, if (P) indexed else base) orelse return badAddr(c, h << 16 | h2, pc);
+        const a = addr(c, if (P) indexed else base, 8) orelse return badAddr(c, h << 16 | h2, pc);
         const t = h2 >> 12;
         const t2 = (h2 >> 8) & 15;
         if (Ld) {
@@ -986,7 +981,7 @@ inline fn execThumb32Transfers(c: *Cpu, h: u32, h2: u32, pc: u32) ?Status {
         const count: u32 = @popCount(list);
         const base = r(c, n);
         var a = if (before) base -% count * 4 else base;
-        if (addr(c, a) == null) return badAddr(c, h << 16 | list, pc);
+        if (addr(c, a, count * 4) == null) return badAddr(c, h << 16 | list, pc);
         var t: u5 = 0;
         var loadedPc: u32 = 0;
         while (true) : (t += 1) {
@@ -1087,7 +1082,7 @@ inline fn execThumb32Late(c: *Cpu, h: u32, h2: u32, pc: u32) ?Status {
             effective = if (h2 & 0x400 != 0) indexed else base;
             writeback = h2 & 0x100 != 0;
         }
-        const a = addr(c, effective) orelse return badAddr(c, w, pc);
+        const a = addr(c, effective, @as(u32, 1) << @intCast(size)) orelse return badAddr(c, w, pc);
         if (load) {
             const value: u32 = switch (size) {
                 0 => if (signed) sxb(ld(u8, a)) else ld(u8, a),
@@ -1201,7 +1196,7 @@ inline fn execThumb16(c: *Cpu, h: u32, pc: u32, currentIt: u32) Status {
         },
         5 => {
             const o = (h >> 9) & 7;
-            const a = addr(c, r(c, rn) +% r(c, rm)) orelse return badAddr(c, h, pc);
+            const a = addr(c, r(c, rn) +% r(c, rm), ([_]u32{ 4, 2, 1, 1, 4, 2, 1, 2 })[o]) orelse return badAddr(c, h, pc);
             switch (o) {
                 0 => if (!st(u32, c, a, r(c, rd))) return badAddr(c, h, pc),
                 1 => if (!st(u16, c, a, @truncate(r(c, rd)))) return badAddr(c, h, pc),
@@ -1217,16 +1212,16 @@ inline fn execThumb16(c: *Cpu, h: u32, pc: u32, currentIt: u32) Status {
             const B = h & (1 << 12) != 0;
             const Ld = h & (1 << 11) != 0;
             const imm = (h >> 6) & 31;
-            const a = addr(c, r(c, rn) +% (if (B) imm else imm * 4)) orelse return badAddr(c, h, pc);
+            const a = addr(c, r(c, rn) +% (if (B) imm else imm * 4), if (B) 1 else 4) orelse return badAddr(c, h, pc);
             if (Ld) set(c, rd, if (B) ld(u8, a) else ld(u32, a)) else if (!(if (B) st(u8, c, a, @truncate(r(c, rd))) else st(u32, c, a, r(c, rd)))) return badAddr(c, h, pc);
         },
         8 => {
-            const a = addr(c, r(c, rn) +% ((h >> 6) & 31) * 2) orelse return badAddr(c, h, pc);
+            const a = addr(c, r(c, rn) +% ((h >> 6) & 31) * 2, 2) orelse return badAddr(c, h, pc);
             if (h & (1 << 11) != 0) set(c, rd, ld(u16, a)) else if (!st(u16, c, a, @truncate(r(c, rd)))) return badAddr(c, h, pc);
         },
         9 => {
             const rt = (h >> 8) & 7;
-            const a = addr(c, r(c, 13) +% (h & 255) * 4) orelse return badAddr(c, h, pc);
+            const a = addr(c, r(c, 13) +% (h & 255) * 4, 4) orelse return badAddr(c, h, pc);
             if (h & (1 << 11) != 0) set(c, rt, ld(u32, a)) else if (!st(u32, c, a, r(c, rt))) return badAddr(c, h, pc);
         },
         10 => {
@@ -1239,7 +1234,7 @@ inline fn execThumb16(c: *Cpu, h: u32, pc: u32, currentIt: u32) Status {
             const Ld = h & (1 << 11) != 0;
             const n8 = (h >> 8) & 7;
             const list = h & 255;
-            var a = addr(c, r(c, n8)) orelse return badAddr(c, h, pc);
+            var a = addr(c, r(c, n8), @as(u32, @popCount(list)) * 4) orelse return badAddr(c, h, pc);
             const end = a +% @as(u32, @popCount(list)) * 4;
             var i: u5 = 0;
             while (i < 8) : (i += 1) if (list & (@as(u32, 1) << i) != 0) {
@@ -1273,7 +1268,7 @@ fn thumbMisc(c: *Cpu, h: u32, pc: u32, rd: u32, rn: u32) Status {
     if ((h & 0xfe00) == 0xb400) {
         const list = (h & 255) | ((h & 0x100) << 6);
         const base = r(c, 13) -% @as(u32, @popCount(list)) * 4;
-        var a = addr(c, base) orelse return badAddr(c, h, pc);
+        var a = addr(c, base, @as(u32, @popCount(list)) * 4) orelse return badAddr(c, h, pc);
         set(c, 13, base);
         var i: u5 = 0;
         while (true) : (i += 1) {
@@ -1287,7 +1282,7 @@ fn thumbMisc(c: *Cpu, h: u32, pc: u32, rd: u32, rn: u32) Status {
     }
     if ((h & 0xfe00) == 0xbc00) {
         const list = (h & 255) | ((h & 0x100) << 7);
-        var a = addr(c, r(c, 13)) orelse return badAddr(c, h, pc);
+        var a = addr(c, r(c, 13), @as(u32, @popCount(list)) * 4) orelse return badAddr(c, h, pc);
         set(c, 13, a +% @as(u32, @popCount(list)) * 4);
         var i: u5 = 0;
         while (i < 15) : (i += 1) if (list & (@as(u32, 1) << i) != 0) {

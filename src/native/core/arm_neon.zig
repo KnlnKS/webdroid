@@ -39,7 +39,7 @@ pub fn neonStruct(c: *Cpu, w: u32, pc: u32) Status {
     const n = bits(w, 16, 4);
     const d = (bits(w, 22, 1) << 4) | bits(w, 12, 4);
     if (n == 15 or d + (structures - 1) * stride + regs > 32) return fault(c, .undefined, w, pc);
-    const a = addr(c, r(c, n)) orelse return badAddr(c, w, pc);
+    const a = addr(c, r(c, n), regs * structures * 8) orelse return badAddr(c, w, pc);
     if (alignment != 0 and a & ((@as(u32, 4) << @intCast(alignment)) - 1) != 0) return misaligned(c, a, w, pc);
     if (structures == 1) {
         var i: u32 = 0;
@@ -93,7 +93,7 @@ fn neonLane(c: *Cpu, w: u32, pc: u32) Status {
     const n = bits(w, 16, 4);
     const d = (bits(w, 22, 1) << 4) | bits(w, 12, 4);
     if (n == 15 or d + (elements - 1) * spacing + copies > 32) return fault(c, .undefined, w, pc);
-    const a = addr(c, r(c, n)) orelse return badAddr(c, w, pc);
+    const a = addr(c, r(c, n), elements * bytes) orelse return badAddr(c, w, pc);
     if (a & (alignment - 1) != 0) return misaligned(c, a, w, pc);
     const first = if (replicate) 0 else index_align >> @intCast(size + 1);
     const end = if (replicate) 8 / bytes else first + 1;

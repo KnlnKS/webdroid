@@ -135,6 +135,15 @@ inline fn arg(c: *Cpu, i: u32) u64 {
 inline fn ptr(c: *Cpu, i: u32) ?u32 {
     return a64.addr(c, arg(c, i));
 }
+const Miss = error{ Fault, Host };
+/// argument i as a pointer a scan reads directly: one in an ARM32 process's window the host's bodies serve
+fn scan(c: *Cpu, i: u32) Miss!u32 {
+    const p = ptr(c, i) orelse return error.Fault;
+    return if (p >= mem.window) error.Host else p;
+}
+inline fn miss(e: Miss) Result {
+    return if (e == error.Host) .host else .fault;
+}
 /// whether argument i points at n backed bytes, committing a plane's writable pages under them
 fn committed(c: *Cpu, i: u32, n: u32) bool {
     if (mem.commit_range(arg(c, i), n) != 0) return true;
@@ -248,7 +257,7 @@ fn checksum(c: *Cpu, id: Fn) Result {
         ret(c, if (id == .crc32) crc32(sum, mem.bytes(p)[0..n]) else std.hash.Adler32.permute(sum, mem.bytes(p)[0..n]));
         return .done;
     }
-    if (!reaches(c, p, n, false)) return .fault;
+    if (!mem.windowAccess(c, p, n, false)) return .fault;
     // the window's bytes come over a chunk at a time, which both sums continue across
     var chunk: [4096]u8 = undefined;
     var at: u32 = 0;
@@ -260,18 +269,12 @@ fn checksum(c: *Cpu, id: Fn) Result {
     ret(c, sum);
     return .done;
 }
-/// whether the n bytes at a are memory the call may read (or write): the core's own, or the window's pages this process maps
-fn reaches(c: *Cpu, a: u32, n: u32, write: bool) bool {
-    if (a < mem.window or mem.windowed(a, n, write)) return true;
-    c.fault_addr = a;
-    return false;
-}
 fn fill(c: *Cpu, n: u32, v: u8) Result {
     if (n == 0) return .done;
     if (!committed(c, 0, n)) return .fault;
     const d = ptr(c, 0) orelse return .fault;
     if (d >= mem.window) {
-        if (!reaches(c, d, n, true)) return .fault;
+        if (!mem.windowAccess(c, d, n, true)) return .fault;
         mem.shm_fill(d, v, n);
     } else @memset(mem.bytes(d)[0..n], v);
     wrote(d, n);
@@ -293,13 +296,6 @@ pub fn clockGettime(c: *Cpu) Result {
 }
 pub fn call(c: *Cpu, id: u8) Result {
     const f: Fn = @enumFromInt(id);
-    // the scans read the core's memory directly; with an argument in an ARM32 process's window, the host's bodies serve them
-    const scanned: u32 = if (c.a64 != 0) 0 else switch (f) {
-        .memcmp, .strcmp, .strncmp, .strcpy => 2,
-        .memchr, .strlen, .strnlen, .strchr, .strrchr, .__tls_get_addr => 1,
-        else => 0,
-    };
-    for (0..scanned) |i| if (arg(c, @intCast(i)) >= mem.window) return .host;
     switch (f) {
         .none => unreachable,
         .sincosf => return sincos(f32, c),
@@ -342,7 +338,7 @@ pub fn call(c: *Cpu, id: u8) Result {
                 const d = ptr(c, 0) orelse return .fault;
                 const s = ptr(c, 1) orelse return .fault;
                 if (d >= mem.window or s >= mem.window) {
-                    if (!reaches(c, d, n, true) or !reaches(c, s, n, false)) return .fault;
+                    if (!(d < mem.window or mem.windowAccess(c, d, n, true)) or !(s < mem.window or mem.windowAccess(c, s, n, false))) return .fault;
                     mem.shm_copy(d, s, n);
                 } else mem.move(d, s, n);
                 wrote(d, n);
@@ -352,15 +348,15 @@ pub fn call(c: *Cpu, id: u8) Result {
         .bzero => return fill(c, @truncate(arg(c, 1)), 0),
         .__aeabi_memset => return fill(c, @truncate(arg(c, 1)), @truncate(arg(c, 2))),
         .strcpy => {
-            const s = ptr(c, 1) orelse return .fault;
+            const d = scan(c, 0) catch |e| return miss(e);
+            const s = scan(c, 1) catch |e| return miss(e);
             const n: u32 = @intCast(std.mem.findSentinel(u8, 0, @as([*:0]const u8, @ptrFromInt(s))) + 1);
             if (!committed(c, 0, n)) return .fault;
-            const d = ptr(c, 0) orelse return .fault;
             mem.move(d, s, n);
             wrote(d, n);
         },
         .strchr, .strrchr => {
-            const p = ptr(c, 0) orelse return .fault;
+            const p = scan(c, 0) catch |e| return miss(e);
             const ch: u8 = @truncate(arg(c, 1));
             const s = std.mem.span(@as([*:0]const u8, @ptrFromInt(p)));
             const i = if (ch == 0) s.len else if (f == .strchr) std.mem.findScalar(u8, s, ch) else std.mem.findScalarLast(u8, s, ch);
@@ -378,8 +374,8 @@ pub fn call(c: *Cpu, id: u8) Result {
             const n: u32 = @truncate(arg(c, 2));
             var r: i32 = 0;
             if (n != 0) {
-                const x = ptr(c, 0) orelse return .fault;
-                const y = ptr(c, 1) orelse return .fault;
+                const x = scan(c, 0) catch |e| return miss(e);
+                const y = scan(c, 1) catch |e| return miss(e);
                 if (std.mem.findDiff(u8, mem.bytes(x)[0..n], mem.bytes(y)[0..n])) |i| r = @as(i32, mem.bytes(x)[i]) - @as(i32, mem.bytes(y)[i]);
             }
             ret(c, @bitCast(@as(i64, r)));
@@ -389,26 +385,26 @@ pub fn call(c: *Cpu, id: u8) Result {
             const ch: u8 = @truncate(arg(c, 1));
             var found: u64 = 0;
             if (n != 0) {
-                const p = ptr(c, 0) orelse return .fault;
+                const p = scan(c, 0) catch |e| return miss(e);
                 if (std.mem.findScalar(u8, mem.bytes(p)[0..n], ch)) |i| found = mem.va(p + @as(u32, @intCast(i)));
             }
             ret(c, found);
         },
         .strlen => {
-            const p = ptr(c, 0) orelse return .fault;
+            const p = scan(c, 0) catch |e| return miss(e);
             ret(c, std.mem.findSentinel(u8, 0, @as([*:0]const u8, @ptrFromInt(p))));
         },
         .strnlen => {
             const n: u32 = @truncate(arg(c, 1));
-            const p = ptr(c, 0) orelse return .fault;
+            const p = scan(c, 0) catch |e| return miss(e);
             ret(c, std.mem.findScalar(u8, mem.bytes(p)[0..n], 0) orelse n);
         },
         .strcmp, .strncmp => {
             const n: u32 = if (f == .strncmp) @truncate(arg(c, 2)) else 0x7fff_ffff;
             var r: i32 = 0;
             if (n != 0) {
-                const x = ptr(c, 0) orelse return .fault;
-                const y = ptr(c, 1) orelse return .fault;
+                const x = scan(c, 0) catch |e| return miss(e);
+                const y = scan(c, 1) catch |e| return miss(e);
                 var i: u32 = 0;
                 while (i < n) : (i += 1) {
                     const p = mem.bytes(x)[i];

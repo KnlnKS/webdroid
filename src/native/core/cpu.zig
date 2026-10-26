@@ -265,8 +265,7 @@ pub inline fn st(comptime T: type, c: *Cpu, a: u32, v: T) bool {
     return true;
 }
 fn windowStore(comptime T: type, c: *Cpu, a: u32, v: T) bool {
-    if (!mem.windowed(a, @sizeOf(T), true)) {
-        c.fault_addr = a;
+    if (!mem.windowAccess(c, a, @sizeOf(T), true)) {
         _ = raise(c, .bad_address, 0);
         return false;
     }
@@ -288,7 +287,7 @@ export fn on_store32(cp: u32, a: u32, n: u32, v: u32) u32 {
 export fn on_store(cp: u32, a: u32, n: u32) u32 {
     const c: *Cpu = @ptrFromInt(cp);
     const last = a +% (n - 1);
-    for ([_]u32{ a, last }) |at| if (mem.page_flags[at >> abi.PAGE_SHIFT] & (2 | abi.PAGE_READONLY) != 0) {
+    for ([_]u32{ a, last }) |at| if (mem.page_flags[at >> abi.PAGE_SHIFT] & (abi.PAGE_GUARD | abi.PAGE_READONLY) != 0) {
         c.fault_addr = at;
         _ = raise(c, .bad_address, 0);
         return 1;

@@ -57,7 +57,7 @@ pub fn vfp(c: *Cpu, w: u32, pc: u32) ?Status {
         }
         if (P and !W) {
             const base = if (rn == 15) (pc +% 8) & ~@as(u32, 3) else r(c, rn);
-            const a = addr(c, if (U) base +% imm8 * 4 else base -% imm8 * 4) orelse return badAddr(c, w, pc);
+            const a = addr(c, if (U) base +% imm8 * 4 else base -% imm8 * 4, if (dp) 8 else 4) orelse return badAddr(c, w, pc);
             if (Ld) {
                 if (dp) vreg(u32, c, d * 2).* = ld(u32, a) else vreg(u32, c, d).* = ld(u32, a);
                 if (dp) vreg(u32, c, d * 2 + 1).* = ld(u32, a + 4);
@@ -70,7 +70,7 @@ pub fn vfp(c: *Cpu, w: u32, pc: u32) ?Status {
         const count = if (dp) imm8 >> 1 else imm8;
         if (count == 0 or d + count > 32 or dp and count > 16) return fault(c, .undefined, w, pc);
         const nbytes = imm8 * 4;
-        var a = addr(c, if (U) r(c, rn) else r(c, rn) -% nbytes) orelse return badAddr(c, w, pc);
+        var a = addr(c, if (U) r(c, rn) else r(c, rn) -% nbytes, nbytes) orelse return badAddr(c, w, pc);
         var i: u32 = 0;
         while (i < count) : (i += 1) {
             const words: u32 = if (dp) 2 else 1;

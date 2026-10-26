@@ -60,7 +60,10 @@ const bits = bt.bits;
 const ones = bt.ones;
 const raise = cpu.raise;
 const st = cpu.st;
-const ld = mem.ld;
+/// an A64 process's loads: it has no window
+inline fn ld(comptime T: type, a: u32) T {
+    return mem.ptr(T, a).*;
+}
 fn op(kind: Kind, w: u32) Op {
     return .{ .kind = kind, .rd = @intCast(w & 31), .rn = @intCast((w >> 5) & 31), .rm = @intCast((w >> 16) & 31), .ra = @intCast((w >> 10) & 31), .a = 0, .b = 0, .imm = 0 };
 }
