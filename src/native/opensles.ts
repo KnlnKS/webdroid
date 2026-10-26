@@ -1,7 +1,7 @@
 // libOpenSLES: the engine, output mixes and buffer-queue audio players over the shared PCM output, as AAudio's streams are.
 // An interface is a guest pointer to its vtable pointer, followed here by the id of the object it belongs to. Players of other
 // sources (URIs, file descriptors) and recorders are features this device lacks.
-import { PcmOutput, newAudioSessionId } from "../android/audio-output.ts";
+import { PcmOutput, minFrames, newAudioSessionId } from "../android/audio-output.ts";
 import { JThread } from "../jvm/natives/jentry.ts";
 import { Cpu, bindCpu } from "./cpu.ts";
 import { hostLib, hostData, defineHost, stp, ldp, ptr, type HostFn } from "./host.ts";
@@ -27,10 +27,15 @@ class SlObject {
   readonly id: number; readonly kinds: readonly Iid[];
   constructor(id: number, kinds: readonly Iid[]) { this.id = id; this.kinds = kinds; }
 }
+type Samples = Int16Array | Int8Array | Float32Array;
+/** A buffer-queue player: AOSP's AudioPlayer copies the app's buffers into an AudioTrack of the minimum size, releasing each
+ *  (its callback) once the track has taken it rather than once it has played. */
 class Player extends SlObject {
   readonly track: PcmOutput;
   readonly capacity: number;
-  queued = 0; index = 0;
+  /** the app's buffers the track has not taken */
+  pending: { samples: Samples; frames: number }[] = [];
+  index = 0;
   playState = PLAYSTATE_STOPPED;
   callback = 0; context: number | bigint = 0;
   volume = 0; muted = false;
@@ -40,9 +45,18 @@ class Player extends SlObject {
     super(id, ["OBJECT", "PLAY", "BUFFERQUEUE", "ANDROIDSIMPLEBUFFERQUEUE", "VOLUME", "ANDROIDCONFIGURATION", "EFFECTSEND", "PLAYBACKRATE"]);
     this.track = track; this.capacity = capacity;
   }
+  /** move what the track has room for into it */
+  take(): void {
+    const t = this.track;
+    while (this.playState === PLAYSTATE_PLAYING && this.pending.length && t.queuedSec() * t.rate < minFrames(t.rate)) {
+      const { samples, frames } = this.pending.shift()!;
+      t.push(samples, frames, () => this.take());
+      this.released();
+    }
+  }
   /** the app's buffer-queue callback, on the player's callback thread, one at a time */
-  completed(): void {
-    this.queued--; this.index++;
+  released(): void {
+    this.index++;
     const cb = this.callback, bq = this.interfaces.get("ANDROIDSIMPLEBUFFERQUEUE") ?? this.interfaces.get("BUFFERQUEUE")!;
     if (!cb) return;
     const cpu = this.thread ??= (() => {
@@ -131,7 +145,7 @@ const METHODS: Record<Iid, HostFn[]> = {
       const p = self(a) as Player, state = a.u();
       if (state < PLAYSTATE_STOPPED || state > PLAYSTATE_PLAYING) return PARAMETER_INVALID;
       p.playState = state;
-      if (state === PLAYSTATE_PLAYING) p.track.play(); else p.track.pause();
+      if (state === PLAYSTATE_PLAYING) { p.track.play(); p.take(); } else p.track.pause();
       return SUCCESS;
     },
     (_c, a) => { const p = self(a) as Player; mem.st32(a.p(), p.playState); return SUCCESS; },
@@ -145,15 +159,15 @@ const METHODS: Record<Iid, HostFn[]> = {
     (_c, a) => {                                                                            // Enqueue
       const p = self(a) as Player, buf = a.p(), size = a.u(), t = p.track, frames = Math.floor(size / t.frameBytes());
       if (!buf || !size) return PARAMETER_INVALID;
-      if (p.queued >= p.capacity) return BUFFER_INSUFFICIENT;
+      if (p.pending.length >= p.capacity) return BUFFER_INSUFFICIENT;
       const bytes = mem.bytes(buf, frames * t.frameBytes()).slice();
       const samples = t.bytesPerSample === 2 ? new Int16Array(bytes.buffer) : t.bytesPerSample === 4 ? new Float32Array(bytes.buffer) : new Int8Array(bytes.buffer);
-      p.queued++;
-      t.push(samples, frames, () => p.completed());
+      p.pending.push({ samples, frames });
+      p.take();
       return SUCCESS;
     },
-    (_c, a) => { const p = self(a) as Player; p.track.flush(); p.queued = 0; if (p.playState === PLAYSTATE_PLAYING) p.track.play(); return SUCCESS; },  // Clear
-    (_c, a) => { const p = self(a) as Player, out = a.p(); mem.st32(out, p.queued); mem.st32(out + 4, p.index); return SUCCESS; },  // GetState
+    (_c, a) => { const p = self(a) as Player; p.track.flush(); p.pending = []; if (p.playState === PLAYSTATE_PLAYING) p.track.play(); return SUCCESS; },  // Clear
+    (_c, a) => { const p = self(a) as Player, out = a.p(); mem.st32(out, p.pending.length); mem.st32(out + 4, p.index); return SUCCESS; },  // GetState
     (_c, a) => { const p = self(a) as Player; p.callback = a.p(); p.context = ptr(a.p()); return SUCCESS; },               // RegisterCallback
   ],
   VOLUME: [
