@@ -52,7 +52,7 @@ function readbacks(dev: Device, enc: GPUCommandEncoder, buffers: Iterable<Buffer
 
 function submit(dev: Device, cbs: CommandBuffer[]): Promise<void> {
   const host = new Set<Buffer>(), written = new Set<Buffer>();
-  for (const cb of cbs) { for (const b of cb.host) host.add(b); for (const b of cb.written) written.add(b); }
+  for (const cb of cbs) for (const c of [cb, ...cb.secondaries]) { for (const b of c.host) host.add(b); for (const b of c.written) written.add(b); }
   upload(dev, host);
   const r = new Replay(dev);
   for (const cb of cbs) for (const op of cb.ops) op(r);

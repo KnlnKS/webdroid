@@ -21,9 +21,11 @@ export class CommandBuffer {
   /** the buffers in host-visible memory the commands use, and those of them they write */
   readonly host = new Set<Buffer>();
   readonly written = new Set<Buffer>();
+  /** the secondary command buffers it executes, whose commands are read when it runs */
+  readonly secondaries = new Set<CommandBuffer>();
   readonly dev: Device;
   constructor(dev: Device) { this.dev = dev; }
-  reset(): void { this.ops = []; this.host.clear(); this.written.clear(); }
+  reset(): void { this.ops = []; this.host.clear(); this.written.clear(); this.secondaries.clear(); }
   use(b: Buffer, write = false): void { if (!b.host) return; this.host.add(b); if (write) this.written.add(b); }
 }
 export const cbOf = (h: number): CommandBuffer => objects.get(h, CommandBuffer);
@@ -281,12 +283,10 @@ export const COMMANDS: Record<string, HostFn> = {
   vkEndCommandBuffer: () => R.SUCCESS,
   vkResetCommandBuffer: (_c, a) => { cbOf(a.p()).reset(); return R.SUCCESS; },
   vkCmdExecuteCommands: (_c, a) => {
-    const cb = cbOf(a.p()), n = a.u(), p = a.p();
-    for (let i = 0; i < n; i++) {
-      const s = cbOf(ldp(p + i * PTR));
-      cb.ops.push(...s.ops);
-      for (const b of s.host) cb.use(b, s.written.has(b));
-    }
+    // a secondary may still be recording when a thread records its execution, as Unity's graphics jobs do
+    const cb = cbOf(a.p()), n = a.u(), p = a.p(), list = Array.from({ length: n }, (_, i) => cbOf(ldp(p + i * PTR)));
+    for (const s of list) cb.secondaries.add(s);
+    cb.ops.push((r) => { for (const s of list) for (const op of s.ops) op(r); });
   },
 
   vkCmdPipelineBarrier: (_c, a) => {
