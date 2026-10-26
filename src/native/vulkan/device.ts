@@ -316,7 +316,9 @@ export const DEVICE: Record<string, HostFn> = {
     // an image of an external format has views of no format of their own
     const f = info.format ? textureFormat(info.format) : img.format;
     if (!f) return R.FORMAT_NOT_SUPPORTED;
-    const desc: GPUTextureViewDescriptor = { format: img.blocks ? img.texture.format : f.gpu, dimension: VIEW_DIMENSION[info.viewType], aspect: img.aspect(info.aspectMask), ...img.range(info) };
+    // a view of one aspect of a depth/stencil image has that aspect's format, which WebGPU names itself
+    const aspect = img.aspect(info.aspectMask), format = aspect !== "all" ? undefined : img.blocks ? img.texture.format : f.gpu;
+    const desc: GPUTextureViewDescriptor = { format, dimension: VIEW_DIMENSION[info.viewType], aspect, ...img.range(info) };
     const swizzle = [info.r, info.g, info.b, info.a].map((c, i) => "rgba01"[c === 0 ? i : c === 1 ? 4 : c === 2 ? 5 : c - 3]).join("");
     if (swizzle !== "rgba") {
       if (!dev.physical.features.has("texture-component-swizzle")) return R.FEATURE_NOT_PRESENT;
