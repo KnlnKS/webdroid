@@ -195,13 +195,13 @@ test("mprotect accepts mapped ELF image pages", () => {
 
 test("a page mprotect leaves without PROT_WRITE refuses stores until made writable or unmapped", () => {
   const p = mem.mapPages(4096);
-  mem.protectVa(BigInt(p), 4096, false);
+  mem.protectVa(BigInt(p), 4096, 1);
   expect(() => mem.st32(p, 1)).toThrow(BadAddress);
   expect(mem.writeProtected(p)).toBe(true);
-  mem.protectVa(BigInt(p), 4096, true);
+  mem.protectVa(BigInt(p), 4096, 3);
   mem.st32(p, 7);
   expect(mem.ld32(p)).toBe(7);
-  mem.protectVa(BigInt(p), 4096, false);
+  mem.protectVa(BigInt(p), 4096, 1);
   mem.unmapPages(p, 4096);
   expect(mem.writeProtected(p)).toBe(false);
 });

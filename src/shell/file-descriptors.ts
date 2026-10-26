@@ -1,8 +1,7 @@
 import { E, O_ACCMODE, O_CREAT, O_TRUNC, S_IFMT, S_IFREG } from "../native/abi.ts";
 import { closeFd, crossingOf, dupFd, fcntlFd, ioctlIntFd, localFdStat, preadFd, pwriteFd, readFd, seekFd, syncFd,
   truncateFd, allocateFd, writeFd, openFd, changeFdAttributes, type FdStat, type OpenFile } from "../native/fd.ts";
-import { regionFd, localOpen } from "../native/fs.ts";
-import { ashmemContent } from "../native/shm.ts";
+import { regionFd, regionOf, localOpen } from "../native/fs.ts";
 import { closeCrossing, isPorted, portedFd, type CrossingSocket } from "../native/socket/bridge.ts";
 import { importSocket } from "../native/socket/unix.ts";
 import { detachFdScope } from "../android/fd-scope.ts";
@@ -241,10 +240,10 @@ export class FileDescriptors {
       ashmemCreate: async size => {
         if (s.dead) return -E.BADF;
         if (!Number.isSafeInteger(size) || size <= 0 || size > 0x7fffffff) return -E.INVAL;
-        let content: VfsFile;
-        try { content = ashmemContent(size); }
+        let fd: number;
+        try { fd = regionFd(size); }
         catch { return -E.NOMEM; }
-        return this.put(s,regionFd(content));
+        return this.put(s,fd);
       },
       open: async (requested, flags) => {
         if (s.dead) return -E.BADF;
@@ -289,7 +288,8 @@ export class FileDescriptors {
         const mode = file.statusFlags & O_ACCMODE;
         if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0 || !Number.isSafeInteger(offset + length) || !Number.isInteger(prot) || prot < 0 || prot > 7) return -E.INVAL;
         if (mode === 1 || prot & 2 && mode !== 2) return -E.ACCES;
-        if (prot & ~(file.content.ashmem?.prot ?? 7)) return -E.PERM;
+        const ashmem = regionOf(file);
+        if (ashmem && prot & ~ashmem.prot) return -E.PERM;
         if (offset + length > file.content.len) return -E.NOTSUP;
         const retained = dupFd(local,true);
         if (retained < 0) return retained;
@@ -299,7 +299,7 @@ export class FileDescriptors {
         let region = this.regions.get(file.content);
         if (region === undefined) this.regions.set(file.content,region = this.nextRegion++);
         // what the file holds cannot change, so the process may page it in once (jmemory.ts Region)
-        return {lease,region,immutable:!(prot & 2) && !file.content.ashmem && !!file.content.source && !writable(file.content.source),pool:file.content.ashmem?.pool};
+        return {lease,region,immutable:!(prot & 2) && !ashmem && !!file.content.source && !writable(file.content.source),pool:ashmem?.pool};
       }),
       mappingRead: async (lease, offset, length) => this.inOrder(s, s.mappings.get(lease), async mapping => {
         const error = rangeError(mapping, offset, length, 1);

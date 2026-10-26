@@ -10,19 +10,19 @@ import { E, AT_FDCWD, O_ACCMODE, O_APPEND, O_CLOEXEC, O_CREAT, O_DIRECTORY, O_EX
 import type { Cpu } from "./cpu.ts";
 import { DIRENT64, fillStat, fullStat, logLine, offArg, putDirent, randomBytes, readTs, KLAYOUT, type Stat } from "./kernel.ts";
 import { vfs, EMPTY, storageEstimate, type VfsFile } from "../shell/vfs.ts";
-import { ASHMEM_DEVICE, filePaths, changeOpenFile, isCharDevice, openFileStat, type AttributeChange, type CharDevice } from "../shell/file-path.ts";
+import { ASHMEM_DEVICE, deviceStat, filePaths, changeOpenFile, isCharDevice, openFileStat, type AttributeChange, type CharDevice } from "../shell/file-path.ts";
 import { procIdentity, procMemory, procText, procWritable, procWrite } from "../shell/procfs.ts";
 import { is64BitProcess } from "../jvm/natives/jvmruntime.ts";
 import { readAt, writable, type FileSource } from "../shell/lazyfile.ts";
 import { utf8 } from "../jvm/abi.ts";
-import { ANON, FIONREAD, installFile, newFile, openFd, placeFile, readFd, preadFd, pwriteFd, writeFd, allocateFd, changeFdAttributes, closeFd, dup2Fd,
+import { ANON, FIONREAD, installFile, isKind, newFile, openFd, placeFile, readFd, preadFd, pwriteFd, writeFd, allocateFd, changeFdAttributes, closeFd, dup2Fd,
   dupFd, fcntlFd, ioctlIntFd, seekFd, syncFd, truncateFd, type FdStat, type FileOps, type OpenFile } from "./fd.ts";
 import { fifoOf, holdFifo, pipeFds, openFifo } from "./pipe.ts";
 import { closedWrite, hookInotify } from "./inotify.ts";
 import { gather, MSG_NOSIGNAL } from "./socket/abi.ts";
 import { SIGPIPE } from "./signals.ts";
 import { processOpenFd } from "./process-fd.ts";
-import { releaseRegion } from "./shm.ts";
+import { ashmemContent, releaseRegion, type Region } from "./shm.ts";
 
 /** up to `n` bytes of a file at `off`, fewer only at its end as a regular file reads: a view of its data, or what its lazy source reads */
 export function contentAt(content: VfsFile, off: number, n: number): Uint8Array | Promise<Uint8Array> {
@@ -112,16 +112,15 @@ export const ASHMEM_IOCTL = { GET_SIZE: 0x7704, SET_PROT_MASK: 0x7705, GET_PROT_
 /** An ashmem region: a file without a name, of the size it was made with, whose protection mask only narrows. fstat
  *  reports the driver's device, as libcutils and Chromium tell regions apart by. No region is purged, so a pin finds
  *  its pages as they were left (ASHMEM_NOT_PURGED). */
-const REGION: FileOps = {
+const REGION: FileOps<Region> = {
   ...FILE,
   write: (f, bytes, off) => (off < 0 ? f.pos : off) + bytes.length > f.content.len ? -E.INVAL : writeContent(f, bytes, off),
   truncate: (f, length) => length === f.content.len ? 0 : -E.INVAL,
   allocate: (f, off, length) => off + length <= f.content.len ? 0 : -E.INVAL,
   stat: (f) => ({ ...contentStat(f), device: ASHMEM_DEVICE }),
-  ioctl(f, request, arg) {
-    const region = f.content.ashmem!;
+  ioctl({ content, state: region }, request, arg) {
     switch (request & 0xffff) {
-      case ASHMEM_IOCTL.GET_SIZE: return f.content.len;
+      case ASHMEM_IOCTL.GET_SIZE: return content.len;
       case ASHMEM_IOCTL.GET_PROT_MASK: return region.prot;
       case ASHMEM_IOCTL.SET_PROT_MASK:
         if (arg & ~region.prot) return -E.INVAL;
@@ -131,8 +130,10 @@ const REGION: FileOps = {
       default: return -E.NOTTY;
     }
   },
-  close: (f) => releaseRegion(f.content),
+  close: (f) => releaseRegion(f.content, f.state),
 };
+/** the ashmem region `f` is open on */
+export const regionOf = (f: OpenFile | undefined): Region | undefined => isKind(f, REGION) ? f.state : undefined;
 const DIR: FileOps = {
   ...ANON,
   mode: S_IFDIR,
@@ -168,6 +169,7 @@ const charDevice = (read: (target: Uint8Array) => number): FileOps => ({
   read: (_f, target, at, n) => read(target.subarray(at, at + n)),
   write: (_f, bytes) => bytes.length,
   seek: (f) => f.pos,                                                             // noop_llseek
+  stat: (f) => deviceStat(f.path),
   available: () => -E.INVAL,
 });
 const RANDOM = charDevice((target) => { randomBytes(target); return target.length; });
@@ -199,12 +201,16 @@ export function localOpen(name: string, flags: number): number {
 }
 /** a Java-side open of `bytes` into the descriptor table native code reads, so a fd handed across JNI is live */
 export const bytesFd = (bytes: Uint8Array): number => installFile(newFile(SNAPSHOT, "", O_RDONLY, undefined, { path: null, data: bytes, len: bytes.length }));
-/** a descriptor, close-on-exec, on the ashmem region `content` */
-export const regionFd = (content: VfsFile): number => installFile(newFile(REGION, "", O_RDWR, undefined, content), true);
+/** a descriptor, close-on-exec, on a new ashmem region of `size` zeroed bytes under protection mask `prot` */
+export function regionFd(size: number, prot = 7): number {
+  const { content, region } = ashmemContent(size);
+  region.prot = prot;
+  return installFile(newFile(REGION, "", O_RDWR, region, content), true);
+}
 /** the file a descriptor reads and writes, which a shared mapping of it shares */
 export function fdFile(fd: number): VfsFile | null {
   const f = openFd(fd);
-  return f?.ops === FILE || f?.ops === REGION ? f.content : null;
+  return isKind(f, FILE) || isKind(f, REGION) ? f.content : null;
 }
 
 /** EPIPE's signal: a write to a pipe or stream socket no one reads any more raises SIGPIPE in the
@@ -244,8 +250,7 @@ function readWouldWait(fd: number): boolean {
 /** fstat(2): the descriptor's record, or its device node's, or -errno */
 export function statFd(fd: number): Stat | number | Promise<Stat | number> {
   const f = openFd(fd);
-  return f ? complete(f.ops.stat(f), (s) => !s ? -E.BADF : s.device ? fullStat(s.device, { ...s, mode: S_IFCHR | 0o666, size: 0 })
-    : fullStat(s.path ?? f.path, s)) : -E.BADF;
+  return f ? complete(f.ops.stat(f), (s) => !s ? -E.BADF : s.device ? fullStat(s.device, deviceStat(s.device)) : fullStat(s.path ?? f.path, s)) : -E.BADF;
 }
 /** a stat call's record into the struct stat at `buf` */
 export function putStat(buf: number, stat: Stat | number | Promise<Stat | number>): number | Promise<number> {

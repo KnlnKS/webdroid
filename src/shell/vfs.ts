@@ -15,9 +15,7 @@ export type FileAttributes = { uid: number; gid: number; mode: number };
 /** an open file: its bytes in `data`, or behind `source` for a lazy or disk-backed file;
  *  `sharedMaps` are MAP_SHARED copies of its pages (Java and native), told of every
  *  write and flushed before a read */
-export interface VfsFile { path: string | null; data: Uint8Array; len: number; source?: FileSource; sharedMaps?: SharedMaps; attributes?: FileAttributes;
-  /** an ashmem region's protection mask, and its offset in the shared pool (shm.ts) when it is a run of it */
-  ashmem?: { prot: number; pool?: number } }
+export interface VfsFile { path: string | null; data: Uint8Array; len: number; source?: FileSource; sharedMaps?: SharedMaps; attributes?: FileAttributes }
 /** one path of the tree: a file's bytes or lazy source, or (content null) a directory. A directory
  *  without a node is implicit: it has entries under it. */
 interface VfsNode {

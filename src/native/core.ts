@@ -39,7 +39,7 @@ interface Core {
   commit_va(va: bigint, n: bigint): number;
   drop_va(va: bigint, n: bigint): number;
   decommit_va(va: bigint, n: bigint): void;
-  protect_va(va: bigint, n: bigint, writable: number): void;
+  protect_va(va: bigint, n: bigint, prot: number): void;
   reserve(size: number, align: number): number;
   release_image(base: number, size: number): void;
   alloc_stack(size: number): number;

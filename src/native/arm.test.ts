@@ -2,10 +2,9 @@ import { beforeAll, describe, expect, test } from "vite-plus/test";
 import { mem } from "./mem.ts";
 import { Cpu, setA64 } from "./cpu.ts";
 import { core, jitStats, JIT_HEAT } from "./core.ts";
-import { execute, pattern, place, run, sweep } from "./a64.testkit.ts";
+import { execute, pattern, run, sweep } from "./a64.testkit.ts";
 import { RET_SENTINEL } from "./abi.ts";
 import { LOOP_BODY, placeLoop } from "./loop.testkit.ts";
-import { ashmemContent, mapWindow, unmapWindow } from "./shm.ts";
 
 function runThumb(half: number[], setup: (c: Cpu) => void = () => {}): Cpu {
   const at = mem.reserve((half.length * 2 + 0xfff) & ~0xfff, 0x1000);
@@ -1555,30 +1554,5 @@ describe("arm block coverage", () => {
     mem.u32[(at + 0x1000) >>> 2] = bxLr;
     execute(at + 0xff0, () => {});
     expect(core.code_write(at + 0xff0, 4)).toBe(1);
-  });
-});
-
-describe("shared memory window", () => {
-  test("stores, exclusives and host accesses reach a pooled region in both tiers, until it is unmapped", () => {
-    const region = ashmemContent(0x1000), va = mapWindow(region.ashmem!.pool!, 0, 0x1000, 3, () => {})!;
-    const word = () => new DataView(region.data.buffer, region.data.byteOffset, 4).getInt32(0, true);
-    // ldr r1, [r0]; add r1, #1; str r1, [r0]; ldrex r2, [r0]; add r2, #1; strex r3, r2, [r0]
-    const at = place([0xe5901000, 0xe2811001, 0xe5801000, 0xe1902f9f, 0xe2822001, 0xe1803f92, BXLR]);
-    const compiled = jitStats.regions;
-    for (let i = 1; i <= JIT_HEAT + 2; i++) {
-      const c = execute(at, (cpu) => { cpu.w[0] = va; });
-      expect([word(), c.w[6]]).toEqual([2 * i, 0]);
-    }
-    expect(jitStats.regions).toBeGreaterThan(compiled);
-    mem.st32(va + 4, 7);
-    expect([mem.ld32(va), mem.cstr(va + 4)]).toEqual([word(), "\x07"]);
-    // a second mapping of the region has an address of its own onto the same bytes
-    const again = mapWindow(region.ashmem!.pool!, 0, 0x1000, 3, () => {})!;
-    expect(again).not.toBe(va);
-    unmapWindow(va, 0x1000);
-    mem.st32(again, 9);
-    expect(word()).toBe(9);
-    expect(() => mem.ld32(va)).toThrow();
-    expect(() => execute(at, (cpu) => { cpu.w[0] = va; })).toThrow();
   });
 });

@@ -85,7 +85,7 @@ describe("file-descriptor", () => {
       const alias = await call.mappingAcquire(duplicate,1,4095,1);
       if (typeof alias === "number") throw new Error(`mappingAcquire: ${alias}`);
       const b = alias.lease;
-      expect(alias).toEqual({lease:b,region:acquired.region,immutable:false});
+      expect(alias).toEqual({lease:b,region:acquired.region,immutable:false,pool:acquired.pool});
       await vcall(shared,"close","()V");
       await call.close(token);
       await call.close(duplicate);

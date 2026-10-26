@@ -17,7 +17,7 @@ let rateKnown!: (hz: number) => void;
 const rate = new Promise<number>((resolve) => { rateKnown = resolve; });
 async function prepare({ clock, jars, tier: ports, pool }: Extract<ProcessWorkerMessage, { kind: "prestart" }>) {
   (await import("./guest-clock.ts")).attachGuestClockPort(clock);
-  if (pool) (await import("./native/shm.ts")).joinPool(pool);
+  if (pool) (await import("./native/window.ts")).attachPool(pool);
   await import("./natives.ts");
   (await import("./android/framework.ts")).receivePlatformJars(jars);
   const [control, rpc, core, apex, cacerts, packages, device, skia, tier, config, jvmruntime, vsync] = await Promise.all([

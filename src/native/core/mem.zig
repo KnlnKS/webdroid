@@ -12,6 +12,7 @@ pub inline fn ptr(comptime T: type, a: u32) *align(1) T {
 pub inline fn bytes(a: u32) [*]u8 {
     return @ptrFromInt(a);
 }
+/// a load, which in an ARM32 process may be from its window (at an address the caller checked is mapped)
 pub inline fn ld(comptime T: type, a: u32) T {
     if (a >= window) return windowLoad(T, a);
     return ptr(T, a).*;
@@ -30,14 +31,20 @@ pub extern "env" fn shm_copy(d: u32, s: u32, n: u32) void;
 pub extern "env" fn shm_fill(d: u32, v: u32, n: u32) void;
 /// where this process's window starts: past every address in a 64-bit process, whose memory goes on there
 pub var window: u32 = 0xffff_ffff;
-/// whether this process maps the n bytes at window address a (for storing, when `write`)
+/// whether this process maps the n bytes at window address a, with the access (storing, when `write`)
 pub fn windowed(a: u32, n: u32, write: bool) bool {
     if (a < window) return false;
-    const need: u8 = @intCast(abi.PAGE_MAPPED | (if (write) abi.PAGE_WRITABLE else 0));
+    const mask: u8 = @intCast(abi.PAGE_MAPPED | abi.PAGE_NOACCESS | (if (write) abi.PAGE_READONLY else 0));
     const last = @as(u64, a) + @max(n, 1) - 1;
     if (last > 0xffff_ffff) return false;
-    for (pageOf(a)..@as(usize, @intCast(last >> PAGE_SHIFT)) + 1) |pg| if (page_flags[pg] & need != need) return false;
+    for (pageOf(a)..@as(usize, @intCast(last >> PAGE_SHIFT)) + 1) |pg| if (page_flags[pg] & mask != abi.PAGE_MAPPED) return false;
     return true;
+}
+/// windowed, or the fault an access there takes
+pub fn windowAccess(c: *cpu.Cpu, a: u32, n: u32, write: bool) bool {
+    if (windowed(a, n, write)) return true;
+    c.fault_addr = a;
+    return false;
 }
 fn windowLoad(comptime T: type, a: u32) T {
     const n = @sizeOf(T);
@@ -52,12 +59,15 @@ pub fn windowStore(comptime T: type, a: u32, v: T) void {
     var copy = v;
     shm_copy(a, @intFromPtr(&copy), n);
 }
-/// mmap's placement of a mapping at [a, a + n) of the window, as PROT_READ or PROT_WRITE allow, or
-/// munmap's (prot 0); false outside the window
-export fn window_map(a: u32, n: u32, prot: u32) u32 {
+/// page_flags of a mapped window page under protection `prot`
+fn windowProt(prot: u32) u8 {
+    return @intCast(abi.PAGE_GUARD | abi.PAGE_MAPPED | (if (prot & 3 == 0) abi.PAGE_NOACCESS else 0) | (if (prot & 2 == 0) abi.PAGE_READONLY else 0));
+}
+/// mmap's placement of a mapping at [a, a + n) of the window under protection `prot`, or munmap's
+/// (prot < 0); false outside the window
+export fn window_map(a: u32, n: u32, prot: i32) u32 {
     if (a < window or n == 0 or @as(u64, a) + n > @as(u64, abi.WINDOW) + abi.WINDOW_SIZE) return 0;
-    const flags: u8 = 2 | @as(u8, if (prot & 3 != 0) abi.PAGE_MAPPED else 0) | @as(u8, if (prot & 2 != 0) abi.PAGE_WRITABLE else 0);
-    @memset(page_flags[pageOf(a)..pageOf(a + (n - 1)) + 1], flags);
+    @memset(page_flags[pageOf(a)..pageOf(a + (n - 1)) + 1], if (prot < 0) abi.PAGE_GUARD else windowProt(@intCast(prot)));
     return 1;
 }
 fn fill(a: u32, v: u8, n: u32) void {
@@ -118,7 +128,7 @@ fn back(end: u64) bool {
     if (end > mem_size) return false;
     const want = @min((end + COMMIT_STEP - 1) & ~(COMMIT_STEP - 1), mem_size);
     if (@wasmMemoryGrow(0, @intCast((want - have) >> 16)) < 0) return false;
-    for (page_flags[@intCast(have >> PAGE_SHIFT)..@intCast(want >> PAGE_SHIFT)]) |*f| f.* &= ~@as(u8, 2);
+    for (page_flags[@intCast(have >> PAGE_SHIFT)..@intCast(want >> PAGE_SHIFT)]) |*f| f.* &= ~@as(u8, abi.PAGE_GUARD);
     mem_grown();
     return true;
 }
@@ -126,7 +136,7 @@ fn back(end: u64) bool {
 /// (the store path tests these flags already), and a load past ARM32's 2 GiB fails its address
 /// test. A load below that into space not yet backed still traps in wasm.
 fn protectUnbacked() void {
-    @memset(page_flags[@intCast(@as(u64, @wasmMemorySize(0)) << 16 >> PAGE_SHIFT)..abi.PAGE_INDEX_MAX], 2);
+    @memset(page_flags[@intCast(@as(u64, @wasmMemorySize(0)) << 16 >> PAGE_SHIFT)..abi.PAGE_INDEX_MAX], abi.PAGE_GUARD);
 }
 
 fn classSize(n: u32) u32 {
@@ -756,6 +766,11 @@ export fn resident_va(v: u64) i32 {
 export fn commit_va(v: u64, n: u64) u32 {
     const h = hi(v);
     const l = lo(v);
+    if (h == 0 and l >= window) {
+        // mprotect's ENOMEM where the window has no mapping
+        for (pageOf(l)..@intCast(@min((@as(u64, l) + n + PAGE_SIZE - 1) >> PAGE_SHIFT, abi.PAGE_INDEX_MAX))) |i| if (page_flags[i] & abi.PAGE_MAPPED == 0) return 0;
+        return 1;
+    }
     if (h == 0) return commit_pages(l, @intCast(@min(n, 0xffff_ffff)));
     if (h >= PLANES or l < L[h]) return 0;
     const end: u64 = @as(u64, l - L[h]) + n;
@@ -769,6 +784,8 @@ export fn drop_va(v: u64, n: u64) u32 {
     const h = hi(v);
     const l = lo(v);
     if (h == 0) {
+        // a window mapping is its region's pages, which keep their contents
+        if (l >= window) return 1;
         if (l < abi.ARENA_BASE or @as(u64, l) + n > mem_size) return 0;
         _ = cpu.code_write(l, @intCast(n));
         // what is committed of plane 0's pages: another plane's units are not this mapping
@@ -789,14 +806,22 @@ export fn drop_va(v: u64, n: u64) u32 {
     }
     return 1;
 }
-/// mprotect's PROT_WRITE over [v, v + n) of plane 0, where a guest store faults without it; a
-/// plane's pages keep no protection
-export fn protect_va(v: u64, n: u64, writable: u32) void {
+/// mprotect over [v, v + n): without PROT_WRITE a guest store faults in plane 0 and on the window's
+/// mapped pages, where an access without PROT_READ or PROT_WRITE faults too; a plane's pages keep no protection
+export fn protect_va(v: u64, n: u64, prot: u32) void {
     if (hi(v) != 0) return;
-    const a = @max(pageOf(lo(v)), pageOf(abi.ARENA_BASE));
-    const b: u32 = @intCast(@min((@as(u64, lo(v)) + n + PAGE_SIZE - 1) >> PAGE_SHIFT, pageOf(mem_size)));
+    const l = lo(v);
+    const last: u64 = (@as(u64, l) + n + PAGE_SIZE - 1) >> PAGE_SHIFT;
+    if (l >= window) {
+        for (pageOf(l)..@intCast(@min(last, abi.PAGE_INDEX_MAX))) |i| if (page_flags[i] & abi.PAGE_MAPPED != 0) {
+            page_flags[i] = windowProt(prot);
+        };
+        return;
+    }
+    const a = @max(pageOf(l), pageOf(abi.ARENA_BASE));
+    const b: u32 = @intCast(@min(last, pageOf(mem_size)));
     for (a..@max(a, b)) |i| {
-        if (writable != 0) page_flags[i] &= ~@as(u8, abi.PAGE_READONLY) else page_flags[i] |= abi.PAGE_READONLY;
+        if (prot & 2 != 0) page_flags[i] &= ~@as(u8, abi.PAGE_READONLY) else page_flags[i] |= abi.PAGE_READONLY;
     }
 }
 export fn decommit_va(v: u64, n: u64) void {
@@ -859,17 +884,17 @@ export fn alloc_stack(size: u32) u32 {
         // image pools alone pass sixty threads)
         const p = map_pages(size +% abi.STACK_GUARD, 0, PAGE_SIZE);
         if (p == 0) return 0;
-        guard(p + abi.STACK_GUARD, 2);
+        guard(p + abi.STACK_GUARD, abi.PAGE_GUARD);
         return p + abi.STACK_GUARD;
     }
     stack_top = @intCast(top);
-    guard(base, 2);
+    guard(base, abi.PAGE_GUARD);
     return base;
 }
 /// the guard gap below a stack: an overflowing store faults there rather than landing below it
 fn guard(base: u32, flag: u8) void {
     const g = pageOf(base - abi.STACK_GUARD);
-    for (g..pageOf(base)) |pg| page_flags[pg] = (page_flags[pg] & ~@as(u8, 2)) | flag;
+    for (g..pageOf(base)) |pg| page_flags[pg] = (page_flags[pg] & ~@as(u8, abi.PAGE_GUARD)) | flag;
 }
 export fn free_stack(base: u32, size: u32) void {
     if (free_stack_count < free_stacks.len) {
@@ -905,7 +930,7 @@ export fn mem_init(size: u32) void {
     @memset(pages[0..pageOf(abi.ARENA_BASE)], USED);
     cpu.reset(planes);
     // the core's own data lies below the stacks: a guest store there faults, as below LOW
-    @memset(page_flags[0..pageOf(abi.STACK_BASE)], 2);
+    @memset(page_flags[0..pageOf(abi.STACK_BASE)], abi.PAGE_GUARD);
     protectUnbacked();
 }
 export fn flags_ptr() u32 {

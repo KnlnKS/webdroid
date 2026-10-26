@@ -36,10 +36,13 @@ pub const MEM_SIZE_A64: u32 = 0xffff_0000;
 /// share (src/native/shm.ts): each shared mapping there shows a run of a region's pool pages.
 pub const WINDOW: u32 = MEM_SIZE_A32;
 pub const WINDOW_SIZE: u32 = MEM_SIZE_A64 - WINDOW;
-/// page_flags of the window's pages a process maps, and of those it may store to
+/// page_flags of a page no guest store lands on directly: the core's own data, a stack's guard gap,
+/// pages not yet backed, and every page of the window, whose bytes the host serves
+pub const PAGE_GUARD: u32 = 2;
+/// page_flags of a window page a mapping shows, and of one mprotect left without access
 pub const PAGE_MAPPED: u32 = 4;
-pub const PAGE_WRITABLE: u32 = 8;
-/// page_flags of a page mprotect left without PROT_WRITE, in a process's own memory
+pub const PAGE_NOACCESS: u32 = 8;
+/// page_flags of a page mprotect left without PROT_WRITE, in a process's own memory or the window
 pub const PAGE_READONLY: u32 = 16;
 pub const STACK_SIZE: u32 = 0x10_0000;
 pub const STACK_GUARD: u32 = 0x1_0000;

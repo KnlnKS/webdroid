@@ -122,9 +122,7 @@ export async function bootBionic(cpu: Cpu): Promise<void> {
   // after libc's own init, which zeroes __libc_globals and leaves it read-only, so the store is
   // WriteProtected::mutate's; what scudo allocated before is never freed
   const dispatch = libc.locals.get("__libc_globals")! + GLOBALS_DISPATCH;
-  mem.protectVa(BigInt(dispatch), PTR, true);
-  stp(dispatch, heap);
-  mem.protectVa(BigInt(dispatch), PTR, false);
+  mem.writeThrough(dispatch, new Uint8Array(BigUint64Array.of(BigInt(mem.va(heap))).buffer, 0, PTR));
 }
 
 function heapDispatch(): number {

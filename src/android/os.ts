@@ -18,11 +18,10 @@ import { logUncaught } from "../jvm/natives/jthrowable.ts";
 import { processLife } from "../shell/broker-access.ts";
 import { fdInt, mkFd } from "../jvm/natives/jio.ts";
 import { FD, sys, threadTid } from "../jvm/natives/linux.ts";
-import { vfs, type VfsFile } from "../shell/vfs.ts";
+import { vfs } from "../shell/vfs.ts";
 import { processAshmemCreate } from "../native/process-fd.ts";
 import { localOpen, bytesFd, regionFd, ASHMEM_IOCTL } from "../native/fs.ts";
-import { ashmemContent } from "../native/shm.ts";
-import { whenLastClosed, fdSource, ioctlIntFd, readFd } from "../native/fd.ts";
+import { whenLastClosed, fdSource, ioctlIntFd, openFd, readFd } from "../native/fd.ts";
 import { inotifyAddWatch, inotifyInit, inotifyRmWatch } from "../native/inotify.ts";
 import { uptimeMillis, uptimeNanos, wallMillis } from "../guest-clock.ts";
 
@@ -200,13 +199,15 @@ export function fdOverBytes(bytes: Uint8Array, sink: ((b: Uint8Array) => unknown
 }
 /** a descriptor on a new region holding `bytes`, which hands them to `sink` once the last descriptor closes */
 export function ashmemFd(bytes: Uint8Array, prot = 7, sink: ((b: Uint8Array) => unknown) | null = null): number {
-  const content: VfsFile = { path: null, data: bytes, len: bytes.length, ashmem: { prot } }, fd = regionFd(content);
-  if (sink) whenLastClosed(fd, () => { void (async () => sink(content.data.subarray(0, content.len)))().catch(logUncaught); });
+  const fd = regionFd(bytes.length, prot), { content } = openFd(fd)!;
+  content.data.set(bytes);
+  // the region's pool run is zeroed for reuse once closed
+  if (sink) whenLastClosed(fd, () => { const kept = content.data.slice(0, content.len); void (async () => sink(kept))().catch(logUncaught); });
   return fd;
 }
 // libcutils' ashmem calls, which SharedMemory's natives and libandroid's ASharedMemory both make
 /** ashmem_create_region: a descriptor on a new region of zeros, or -errno */
-export const ashmemCreate = (size: number): number | Promise<number> => processAshmemCreate(size) ?? regionFd(ashmemContent(size));
+export const ashmemCreate = (size: number): number | Promise<number> => processAshmemCreate(size) ?? regionFd(size);
 /** ashmem_get_size_region: -1 for a descriptor on anything else */
 export const ashmemSize = (fd: number): number | Promise<number> => after(ioctlIntFd(fd, ASHMEM_IOCTL.GET_SIZE), (n) => n < 0 ? -1 : n);
 /** an ashmem region's protection, undefined for a descriptor on anything else */

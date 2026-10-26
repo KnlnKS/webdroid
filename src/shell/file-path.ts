@@ -76,12 +76,15 @@ function localStat(path: string, type: number, size: number, mtime: number, file
 const CHAR_DEVICES = ["/dev/null", "/dev/urandom", "/dev/random"] as const;
 export type CharDevice = typeof CHAR_DEVICES[number];
 export const isCharDevice = (path: string): path is CharDevice => (CHAR_DEVICES as readonly string[]).includes(path);
-/** the ashmem driver's node, root's, whose device an ashmem region's fstat reports */
+/** the ashmem driver's node, whose device an ashmem region's fstat reports */
 export const ASHMEM_DEVICE = "/dev/ashmem";
+/** the device nodes, each root's and crw-rw-rw- */
+const DEVICES = new Set<string>([...CHAR_DEVICES, ASHMEM_DEVICE]);
+/** stat(2) of device node `path` */
+export const deviceStat = (path: string): FdStat => ({ mode: S_IFCHR | 0o666, size: 0, mtime: 0, uid: 0, gid: 0, path });
 /** stat(2) of normalized `p`: a directory, a file (procfs included) or a device */
 function pathStat(p: string): PathReply<FileStat | null> {
-  if (p === ASHMEM_DEVICE) return { errno: 0, value: { mode: S_IFCHR | 0o666, size: 0, mtime: 0, uid: 0, gid: 0 } };
-  if (isCharDevice(p)) return { errno: 0, value: localStat(p, S_IFCHR, 0, Date.now()) };
+  if (DEVICES.has(p)) return { errno: 0, value: deviceStat(p) };
   const s = procText(p);
   if (s !== null) return { errno: 0, value: localStat(p, S_IFREG, utf8.enc.encode(s).length, Date.now()) };
   const directory = vfs.isDir(p), file = directory ? null : vfs.stat(p);
@@ -90,7 +93,7 @@ function pathStat(p: string): PathReply<FileStat | null> {
 function accessPath(path: string, mode: number): number {
   if (mode & ~7) return -E.INVAL;
   const p = vfs.norm(path);
-  return vfs.exists(p) || vfs.isDir(p) || procText(p) !== null || isCharDevice(p) || p === ASHMEM_DEVICE ? 0 : -E.NOENT;
+  return vfs.exists(p) || vfs.isDir(p) || procText(p) !== null || DEVICES.has(p) ? 0 : -E.NOENT;
 }
 /** rename(2) over the vfs: a file keeps its lazy source, a directory carries its entries along */
 export function renamePath(fromPath: string, toPath: string): number {
