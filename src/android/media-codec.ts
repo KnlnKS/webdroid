@@ -169,8 +169,10 @@ rt.registerJnis("android/media/MediaCodecList", {
 
 // ── a codec
 export type Info = { offset: number; size: number; time: bigint; flags: number };
-/** a raw frame's visible size and, per plane, MediaImage2's offset, column and row increments and subsampling */
-type Layout = { width: number; height: number; planes: number[][] };
+/** a plane as MediaImage2 describes it */
+type Plane = [offset: number, colInc: number, rowInc: number, horizSubsampling: number, vertSubsampling: number];
+/** a raw frame's visible size and YUV planes */
+type Layout = { width: number; height: number; planes: Plane[] };
 type Output = { kind: "video"; frame: VideoFrame; info: Info } | { kind: "video-buffer"; buffer: JBuffer; info: Info; layout: Layout }
   | { kind: "audio"; buffer: JBuffer; info: Info } | { kind: "end"; info: Info };
 const CB_INPUT_AVAILABLE = 1, CB_OUTPUT_AVAILABLE = 2, CB_ERROR = 3, CB_OUTPUT_FORMAT_CHANGE = 4;
@@ -248,8 +250,9 @@ class Run {
         const stride = layout[0].stride, current = this.codec.outputFormat;
         if (current.number("color-format", 0) !== color || current.number("stride", 0) !== stride || current.number("slice-height", 0) !== height)
           this.changed(new NativeFormat(current).set("color-format", TYPE_INTEGER, color).set("stride", TYPE_INTEGER, stride).set("slice-height", TYPE_INTEGER, height));
-        const [y, u, v] = layout, chroma = color === 19 ? [[u.offset, 1, u.stride], [v.offset, 1, v.stride]] : [[u.offset, 2, u.stride], [u.offset + 1, 2, u.stride]];
-        const planes = [[y.offset, 1, y.stride, 1, 1], ...chroma.map((p) => [...p, 2, 2])];
+        const [y, u, v] = layout;
+        const chroma: Plane[] = color === 19 ? [[u.offset, 1, u.stride, 2, 2], [v.offset, 1, v.stride, 2, 2]] : [[u.offset, 2, u.stride, 2, 2], [u.offset + 1, 2, u.stride, 2, 2]];
+        const planes: Plane[] = [[y.offset, 1, y.stride, 1, 1], ...chroma];
         out.size = pixels.length; this.output({ kind: "video-buffer", buffer, info: out, layout: { width, height, planes } });
       }).catch(e => { frame.close(); if (this.live()) this.fail(e); });
     } catch (e) { frame.close(); this.fail(e); }
@@ -420,10 +423,10 @@ export const createCodec = (name: string, nameIsType: boolean, owner: JObj | nul
 const MC = "android/media/MediaCodec";
 const peers = nativePeer<Codec>(MC, null, (c) => c.release());
 const C = peers.on;
-/** a codec buffer as JMediaCodec hands one out: a new buffer over the codec's memory each call, since MediaCodec
- *  invalidates and frees the ones it gave the app; read-only for output, native order, over [offset, offset + size) */
 /** MediaImage2: type, plane count, width, height, bit depth and allocated depth, then four planes of five fields */
 const MEDIA_IMAGE2_SIZE = 104;
+/** a codec buffer as JMediaCodec hands one out: a new buffer over the codec's memory each call, since MediaCodec
+ *  invalidates and frees the ones it gave the app; read-only for output, native order, over [offset, offset + size) */
 const handOut = (b: JBuffer, input: boolean, offset: number, size: number) =>
   after(directView(b, !input), (v) => { nativeOrder(v); setLimit(v, offset + size); setPosition(v, offset); return v; });
 rt.registerJnis(MC, {
@@ -472,7 +475,7 @@ rt.registerJnis(MC, {
     const o = input ? undefined : c.run?.outputs.get(index);
     if (o?.kind !== "video-buffer") return null;
     const { width, height, planes } = o.layout, description = nativeOrder(allocateDirectNow(MEDIA_IMAGE2_SIZE));
-    const view = new DataView(bufferBytes(description).buffer, bufferBytes(description).byteOffset, MEDIA_IMAGE2_SIZE);
+    const bytes = bufferBytes(description), view = new DataView(bytes.buffer, bytes.byteOffset, MEDIA_IMAGE2_SIZE);
     [1, 3, width, height, 8, 8, ...planes.flat()].forEach((v, i) => view.setInt32(4 * i, v, true));
     return after(handOut(o.buffer, false, o.info.offset, o.info.size), (data) => after(newObj("android/graphics/Rect", "(IIII)V", 0, 0, width, height),
       (crop) => newObj("android/media/MediaCodec$MediaImage", "(Ljava/nio/ByteBuffer;Ljava/nio/ByteBuffer;ZJIILandroid/graphics/Rect;)V",
