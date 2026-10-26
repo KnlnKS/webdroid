@@ -210,7 +210,9 @@ function bufferImage(img: Image, c: BufferImageRegion, buffer: GPUBuffer) {
 function copyBufferImage(enc: GPUCommandEncoder, img: Image, c: BufferImageRegion, buffer: GPUBuffer, toImage: boolean): void {
   const { texture, size, layout, rowBytes, rows } = bufferImage(img, c, buffer);
   const copy = (l: GPUTexelCopyBufferInfo, t: GPUTexelCopyTextureInfo, s: GPUExtent3DDict) => toImage ? enc.copyBufferToTexture(l, t, s) : enc.copyTextureToBuffer(t, l, s);
-  if (rowBytes % 256 === 0 || (size.height <= img.format.bh && size.depthOrArrayLayers === 1)) return copy(layout, texture, size);
+  if (rowBytes % 256 === 0) return copy(layout, texture, size);
+  // one row of blocks has no pitch, and WebGPU takes one only as a multiple of 256
+  if (size.height <= img.format.bh && size.depthOrArrayLayers === 1) return copy({ buffer, offset: layout.offset }, texture, size);
   const o = texture.origin as GPUOrigin3DDict;
   for (let z = 0; z < size.depthOrArrayLayers; z++)
     for (let y = 0; y < Math.ceil(size.height / img.format.bh); y++)
