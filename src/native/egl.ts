@@ -12,12 +12,53 @@ import { noteNativeFrame } from "./cpu.ts";
 import { acquire, clientBuffer, nativeClientBuffer, bufferAt, release, type HardwareBuffer } from "./hardwarebuffer.ts";
 import { Handles } from "./handles.ts";
 import { closeFd } from "./fd.ts";
+import { after } from "../jvm/natives/jentry.ts";
 import { fence, fenceOf, syncFileFd, type Fence } from "./syncfile.ts";
 
-/** EGL_KHR_fence_sync's fences, each a GL fence in the context current where it was made, and native fences */
-const syncs = new Map<number, { gl: WebGL2RenderingContext; sync: WebGLSync } | { native: Fence }>();
 const NATIVE = 0x3144, NATIVE_FD = 0x3145, FOREVER = 0xffffffffffffffffn;
-let lastSync = 0;
+const SATISFIED = 0x30f6, TIMEOUT = 0x30f5;
+/** an EGLSync: its EGL_SYNC_TYPE and EGL_SYNC_CONDITION, and its waits; a client wait's result is SATISFIED, TIMEOUT or null for a failure */
+interface Sync {
+  readonly type: number; readonly condition: number;
+  signaled(): boolean;
+  clientWait(flush: number, timeout: bigint): number | null | Promise<number | null>;
+  /** the current context's later commands wait for it */
+  serverWait(gl: WebGL2RenderingContext): number | Promise<number>;
+  destroy(): void;
+  /** the native fence a sync_file can carry */
+  readonly fence: Fence | null;
+}
+/** EGL_SYNC_FENCE_KHR: a GL fence in the context current where it was made */
+class GlSync implements Sync {
+  readonly type = 0x30f9; readonly condition = 0x30f0; readonly fence = null;
+  private readonly gl: WebGL2RenderingContext; private readonly sync: WebGLSync;
+  constructor(gl: WebGL2RenderingContext, sync: WebGLSync) { this.gl = gl; this.sync = sync; }
+  signaled(): boolean { return this.gl.getSyncParameter(this.sync, this.gl.SYNC_STATUS) === this.gl.SIGNALED; }
+  clientWait(flush: number, timeout: bigint): Promise<number | null> {
+    return clientWait(this.gl, this.sync, flush, timeout).then((r) => r === 0x911b ? TIMEOUT : r === 0x911d ? null : SATISFIED);
+  }
+  // WebGL waits for no other context's fence, so the calling thread does
+  serverWait(gl: WebGL2RenderingContext): number | Promise<number> {
+    if (this.gl !== gl) return clientWait(this.gl, this.sync, this.gl.SYNC_FLUSH_COMMANDS_BIT, FOREVER).then(() => 1);
+    gl.waitSync(this.sync, 0, gl.TIMEOUT_IGNORED);
+    return 1;
+  }
+  destroy(): void { this.gl.deleteSync(this.sync); }
+}
+/** EGL_SYNC_NATIVE_FENCE_ANDROID: a sync_file's fence, which the calling thread waits for */
+class NativeSync implements Sync {
+  readonly type = NATIVE; readonly condition = 0x3146;
+  readonly fence: Fence;
+  constructor(fence: Fence) { this.fence = fence; }
+  signaled(): boolean { return this.fence.signaled; }
+  clientWait(_flush: number, timeout: bigint): number | Promise<number> {
+    if (this.fence.signaled) return SATISFIED;
+    return timeout ? this.fence.wake.wait(timeout >= FOREVER ? -1 : Number(timeout / 1000000n)).then((done) => done ? SATISFIED : TIMEOUT) : TIMEOUT;
+  }
+  serverWait(): number | Promise<number> { return this.fence.signaled ? 1 : this.fence.done.then(() => 1); }
+  destroy(): void {}
+}
+const syncs = new Handles<Sync>("EGLSync");
 const procs = new Map<string, number>();
 const attrs = (p: number): egl.Attribs => (p ? egl.attribList((i) => mem.ld32(p + i * 4)) : new Map());
 /** an EGL 1.5 list of EGLAttribs */
@@ -38,14 +79,10 @@ function configs(t: object, found: number[] | null, out: number, size: number, n
 function syncAttrib(t: object, display: number, h: number, attribute: number, out: number, store: (p: number, v: number) => void): number {
   egl.begin(t);
   if (!egl.ready(t, display)) return 0;
-  const s = syncs.get(h);
+  const s = syncs.find(h);
   if (!s) return egl.fail(t, egl.BAD_PARAMETER, 0);
-  // EGL_SYNC_TYPE_KHR: EGL_SYNC_FENCE_KHR or EGL_SYNC_NATIVE_FENCE_ANDROID; EGL_SYNC_CONDITION_KHR: EGL_SYNC_PRIOR_COMMANDS_COMPLETE_KHR
-  // or EGL_SYNC_NATIVE_FENCE_SIGNALED_ANDROID; EGL_SYNC_STATUS_KHR: EGL_SIGNALED_KHR or EGL_UNSIGNALED_KHR
-  const native = "native" in s;
-  const signaled = () => native ? s.native.signaled : s.gl.getSyncParameter(s.sync, s.gl.SYNC_STATUS) === s.gl.SIGNALED;
-  const value = attribute === 0x30f7 ? native ? NATIVE : 0x30f9 : attribute === 0x30f8 ? native ? 0x3146 : 0x30f0
-    : attribute === 0x30f1 ? signaled() ? 0x30f2 : 0x30f3 : null;
+  // EGL_SYNC_TYPE_KHR, EGL_SYNC_CONDITION_KHR, EGL_SYNC_STATUS_KHR: EGL_SIGNALED_KHR or EGL_UNSIGNALED_KHR
+  const value = attribute === 0x30f7 ? s.type : attribute === 0x30f8 ? s.condition : attribute === 0x30f1 ? s.signaled() ? 0x30f2 : 0x30f3 : null;
   if (value === null) return egl.fail(t, egl.BAD_ATTRIBUTE, 0);
   if (!out) return egl.fail(t, egl.BAD_PARAMETER, 0);
   store(out, value);
@@ -63,27 +100,22 @@ function createSync(t: object, display: number, type: number, want: egl.Attribs)
     const passed = fenceOf(fd);
     if (!passed) return egl.fail(t, egl.BAD_ATTRIBUTE, 0);
     void closeFd(fd);
-    syncs.set(++lastSync, { native: passed });
-    return lastSync;
+    return syncs.add(new NativeSync(passed));
   }
   const gl = activate(t)?.gl, sync = gl?.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
   if (!gl || !sync) return egl.fail(t, egl.BAD_MATCH, 0);
   // a native fence's GL fence lives until it signals, past eglDestroySync
-  syncs.set(++lastSync, type === NATIVE ? { native: fence(clientWait(gl, sync, gl.SYNC_FLUSH_COMMANDS_BIT, FOREVER).finally(() => gl.deleteSync(sync))) } : { gl, sync });
-  return lastSync;
+  return syncs.add(type === NATIVE ? new NativeSync(fence(clientWait(gl, sync, gl.SYNC_FLUSH_COMMANDS_BIT, FOREVER).finally(() => gl.deleteSync(sync))))
+    : new GlSync(gl, sync));
 }
-/** EGL_KHR_wait_sync's and EGL 1.5's wait: the current context's later commands wait for the fence. One of its own GL
- *  fences it waits for in GL; WebGL waits for no other context's, nor for a native fence, so the calling thread does. */
+/** EGL_KHR_wait_sync's and EGL 1.5's wait: the current context's later commands wait for the fence */
 function waitSync(t: object, display: number, h: number, flags: number): number | Promise<number> {
   egl.begin(t);
   if (!egl.ready(t, display)) return 0;
-  const s = syncs.get(h), gl = activate(t)?.gl;
+  const s = syncs.find(h), gl = activate(t)?.gl;
   if (!s || flags) return egl.fail(t, egl.BAD_PARAMETER, 0);
   if (!gl) return egl.fail(t, egl.BAD_MATCH, 0);
-  if ("native" in s) return s.native.signaled ? 1 : s.native.done.then(() => 1);
-  if (s.gl !== gl) return clientWait(s.gl, s.sync, s.gl.SYNC_FLUSH_COMMANDS_BIT, FOREVER).then(() => 1);
-  gl.waitSync(s.sync, 0, gl.TIMEOUT_IGNORED);
-  return 1;
+  return s.serverWait(gl);
 }
 /** EGL_KHR_image_base's images of buffers (EGL_ANDROID_image_native_buffer), each holding a reference to its buffer */
 const images = new Handles<HardwareBuffer>("EGLImage");
@@ -169,10 +201,9 @@ export function eglInit(): void {
       const t = cpu.jthread;
       egl.begin(t);
       if (!egl.ready(t, a.i())) return 0;
-      const h = a.i(), s = syncs.get(h);
+      const s = syncs.delete(a.i());
       if (!s) return egl.fail(t, egl.BAD_PARAMETER, 0);
-      if (!("native" in s)) s.gl.deleteSync(s.sync);
-      syncs.delete(h);
+      s.destroy();
       return 1;
     },
     // EGL_CONDITION_SATISFIED or EGL_TIMEOUT_EXPIRED; the flush bit is GL's
@@ -180,13 +211,9 @@ export function eglInit(): void {
       const t = cpu.jthread;
       egl.begin(t);
       if (!egl.ready(t, a.i())) return 0;
-      const s = syncs.get(a.i()), flags = a.i(), timeout = a.ul();
+      const s = syncs.find(a.i()), flags = a.i(), timeout = a.ul();
       if (!s) return egl.fail(t, egl.BAD_PARAMETER, 0);
-      if ("native" in s) {
-        if (s.native.signaled) return 0x30f6;
-        return timeout ? s.native.wake.wait(timeout >= FOREVER ? -1 : Number(timeout / 1000000n)).then((done) => done ? 0x30f6 : 0x30f5) : 0x30f5;
-      }
-      return clientWait(s.gl, s.sync, flags & 1, timeout).then((r) => r === 0x911b ? 0x30f5 : r === 0x911d ? egl.fail(t, egl.BAD_PARAMETER, 0) : 0x30f6);
+      return after(s.clientWait(flags & 1, timeout), (r) => r ?? egl.fail(t, egl.BAD_PARAMETER, 0));
     },
     eglCreateImageKHR: (cpu, a) => createImageOf(cpu.jthread, a.i(), a.i(), a.i(), a.p(), attrs(a.p())),
     eglCreateImage: (cpu, a) => {
@@ -214,8 +241,8 @@ export function eglInit(): void {
       const t = cpu.jthread;
       egl.begin(t);
       if (!egl.ready(t, a.i())) return -1;
-      const s = syncs.get(a.i());
-      return s && "native" in s ? syncFileFd(s.native) : egl.fail(t, egl.BAD_PARAMETER, -1);
+      const fence = syncs.find(a.i())?.fence;
+      return fence ? syncFileFd(fence) : egl.fail(t, egl.BAD_PARAMETER, -1);
     },
     eglGetSyncAttribKHR: (cpu, a) => syncAttrib(cpu.jthread, a.i(), a.i(), a.i(), a.p(), (p, v) => mem.st32(p, v)),
     eglGetSyncAttrib: (cpu, a) => syncAttrib(cpu.jthread, a.i(), a.i(), a.i(), a.p(), stp),
