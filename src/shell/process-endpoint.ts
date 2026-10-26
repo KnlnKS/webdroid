@@ -24,7 +24,7 @@ import { connectBroker, processLife } from "./broker-access.ts";
 import type { ProcessBroker } from "./processes.ts";
 import { callProxy, closePort } from "./rpc.ts";
 import { procIdentity } from "./procfs.ts";
-import { connectSurface } from "../android/surfaceflinger.ts";
+import { connectSurface } from "../android/surface-transport.ts";
 
 
 let calls: ReturnType<typeof callProxy<BrokerCalls>> | undefined, releaseFiles = () => {};

@@ -7,7 +7,7 @@ import { uptimeNanos } from "../guest-clock.ts";
 import { gl, tables, activate, currentContext } from "../native/gl-context.ts";
 import { bindTexture, texImageSource } from "../native/gles3.ts";
 import { perf } from "../perf.ts";
-import { nativeSurface, glSurfaceOf, type Surface } from "./surfaceflinger.ts";
+import { nativeSurface, glSurfaceOf, producerSurface } from "./surfaceflinger.ts";
 import { detached } from "../jvm/natives/jthrowable.ts";
 import type { EglContext } from "./egl.ts";
 
@@ -207,6 +207,6 @@ rt.registerJnis("android/view/Surface", {
   "nativeCreateFromSurfaceTexture(Landroid/graphics/SurfaceTexture;)J": (texture: object) => {
     const producer = liveSurface(nst(texture));
     if (!producer) throw rt.mkThrowable("java/lang/IllegalArgumentException", "SurfaceTexture has already been released");
-    return handle({ queue: null, layer: null, producer } satisfies Surface);
+    return handle(producerSurface(producer));
   },
 });
