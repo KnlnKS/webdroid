@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vite-plus/test";
 import { NODE_ARGS, run } from "../../scripts/node.ts";
 import { curThread, JThread, mainThread, setCurThread } from "../jvm/natives/jentry.ts";
-import { Cpu, setA64, slice } from "./cpu.ts";
+import { Cpu, setA64, setRawSyscall, slice } from "./cpu.ts";
 import { dispositions, sigHandler } from "./signals.ts";
 import { defineHost, lookupHost, markKernelEntries } from "./host.ts";
 import { libcInit } from "./libc32/libc.ts";
@@ -233,6 +233,23 @@ test("an ARM64 signal context is restored before the interrupted frame runs on",
     expect(seconds).toBe(1);
   } finally {
     restore();
+    cpu.dispose(); setA64(false);
+  }
+});
+
+test("a parked ARM64 system call's result survives a handler running when it arrives", async () => {
+  setA64(true);
+  const cpu = new Cpu(new JThread(), "syscall-signal"), at = mem.reserve(4096, 4096), answer = Promise.withResolvers<number>();
+  mem.u32.set([0xd2803e88, 0xd4000001, 0xd65f03c0], at >>> 2);                         // svc 500, ret
+  setRawSyscall((c, nr, a) => nr === 500 ? answer.promise : rawSyscall(c, nr, a));
+  const handler = defineHost("test.signal.syscall.handler", () => { answer.resolve(42); return new Promise((r) => setTimeout(() => r(0), 0)); });
+  const restore = install(30, sigHandler(handler, 4, 0n));
+  try {
+    const result = cpu.call(at, [7]);
+    cpu.kill(30);
+    expect(await result).toBe(42);
+  } finally {
+    restore(); setRawSyscall(rawSyscall);
     cpu.dispose(); setA64(false);
   }
 });

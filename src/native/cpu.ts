@@ -9,7 +9,7 @@ import { rt } from "../jvm/runtime.ts";
 import type { Strand } from "../jvm/suspend.ts";
 import { mem } from "./mem.ts";
 import { NativeFault, BadAddress, core, jitDrain } from "./core.ts";
-import { Args, Args64, type ArgReader, onBadAddress, kernelEntry, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, wordsd, slowMs, NORET, hostTrace } from "./host.ts";
+import { Args, Args64, type ArgReader, onBadAddress, kernelEntry, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, wordsd, slowMs, hostTrace } from "./host.ts";
 import { E, RET_SENTINEL, TRAMP_BASE, TRAMP_END, STACK_SIZE, MAIN_STACK_SIZE, MEM_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi.ts";
 import { perf } from "../perf.ts";
 import { answeringFor, yieldToLoop } from "../jvm/yield.ts";
@@ -104,6 +104,8 @@ export function isA64(): boolean { return A64; }
 /** the register file at the first native fault, as the faulting block found it (debug) */
 export const lastFault: { regs: { cpu: string; r: number[]; h: number[]; bt: string[]; frames: string[] } | null; msg: string } = { regs: null, msg: "" };
 export const watchPcs = new Set<number>(((globalThis as { __wdWatch?: number[] }).__wdWatch ?? []).map((p) => p >>> 0));
+/** a parked system call's result, which its thread's registers take when it resumes */
+class SyscallResult { readonly ret: HostRet; constructor(ret: HostRet) { this.ret = ret; } }
 /** a run loop taking its thread for a turn it resumes in, and handing it back where it parks */
 interface LoopTurn { own(): void; release(): void }
 
@@ -620,7 +622,7 @@ export class Cpu {
           turn.own();
           if (this.finished) return;
           this.deferredSignalDepths.delete(myDepth);
-          if (!this.raised) { hostReturn(this, v as HostRet); continue; }
+          if (!this.raised) { if (v instanceof SyscallResult) this.syscallReturn(v.ret); else hostReturn(this, v as HostRet); continue; }
           ex = SliceExit.Signal;
         }
         if (ex === SliceExit.Signal) {
@@ -704,9 +706,10 @@ export class Cpu {
     a.reset(this);
     let ret: HostRet | Promise<HostRet>;
     try { ret = rawSyscall(this, nr, a); } catch (e) { ret = this.copyFault(e); }
-    // the core has already stepped past the svc: a parked syscall resumes by writing x0 alone
+    // the core has already stepped past the svc: a parked syscall resumes by writing x0 alone, once
+    // any signal handler delivered meanwhile has given the register file back
     if (ret instanceof Promise) {
-      this.pending = ret.then((r) => { this.syscallReturn(r); return NORET; }, (e) => { this.syscallReturn(this.copyFault(e)); return NORET; });
+      this.pending = ret.then((r) => new SyscallResult(r), (e) => new SyscallResult(this.copyFault(e)));
       return;
     }
     this.syscallReturn(ret);
