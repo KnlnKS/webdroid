@@ -742,7 +742,7 @@ fn threeSameI(comptime T: type, x: Ctx) Status {
             16 => O[i] = if (x.U) n -% m else n +% m,
             17 => OS[i] = if (if (x.U) n == m else (n & m) != 0) -1 else 0,
             18 => O[i] = if (x.U) d -% (n *% m) else d +% (n *% m),
-            19 => O[i] = if (x.U) (if (T == u8) @truncate(fp.pmul8(@bitCast(n), @bitCast(m))) else return fault(c, x.w)) else n *% m,
+            19 => O[i] = if (x.U) (if (T == u8) @truncate(fp.pmul(u8, @bitCast(n), @bitCast(m))) else return fault(c, x.w)) else n *% m,
             20, 21 => {
                 const p = pair(T, x, i);
                 O[i] = if (opcode == 20) @max(p[0], p[1]) else @min(p[0], p[1]);
@@ -1209,11 +1209,7 @@ fn threeDifferent(x: Ctx) Status {
 /// PMULL{2} .1Q: the 128-bit carry-less product of one doubleword of each source
 fn pmull64(x: Ctx) Status {
     const h: usize = @intFromBool(bits(x.w, 30, 1) != 0);
-    const a: u128 = get(u64, x.c, x.rn, h);
-    const b = get(u64, x.c, x.rm, h);
-    var r: u128 = 0;
-    for (0..64) |i| r ^= (a << @intCast(i)) & (@as(u128, 0) -% ((b >> @intCast(i)) & 1));
-    L(u128, &x.c.v[x.rd])[0] = r;
+    L(u128, &x.c.v[x.rd])[0] = fp.pmul(u64, get(u64, x.c, x.rn, h), get(u64, x.c, x.rm, h));
     return .next;
 }
 fn threeDifferentT(comptime T: type, x: Ctx) Status {
@@ -1258,7 +1254,7 @@ fn threeDifferentT(comptime T: type, x: Ctx) Status {
                 const p = sat(W, c, 2 * @as(Wide(W), n) * m);
                 break :sq if (opcode == 13) p else sat(W, c, @as(Wide(W), d) + (if (opcode == 9) p else -@as(Wide(W), p)));
             },
-            14 => if (x.U or bitsT != 8) return fault(c, x.w) else @bitCast(fp.pmul8(@truncate(@as(Unsigned(W), @bitCast(n))), @truncate(@as(Unsigned(W), @bitCast(m))))),
+            14 => if (x.U or bitsT != 8) return fault(c, x.w) else @bitCast(fp.pmul(u8, @truncate(@as(Unsigned(W), @bitCast(n))), @truncate(@as(Unsigned(W), @bitCast(m))))),
             else => return fault(c, x.w),
         };
     }

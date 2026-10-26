@@ -206,11 +206,10 @@ pub fn fcmp(a: anytype, b: @TypeOf(a)) u32 {
     if (a == b) return 0x6000_0000;
     return 0x2000_0000;
 }
-pub fn pmul8(a: u8, b: u8) u16 {
-    var r: u16 = 0;
-    var i: u4 = 0;
-    while (i < 8) : (i += 1) if ((b >> @intCast(i)) & 1 != 0) {
-        r ^= @as(u16, a) << i;
-    };
+/// the carry-less product of two unsigned values, twice their width
+pub fn pmul(comptime T: type, a: T, b: T) std.meta.Int(.unsigned, 2 * @bitSizeOf(T)) {
+    const R = std.meta.Int(.unsigned, 2 * @bitSizeOf(T));
+    var r: R = 0;
+    for (0..@bitSizeOf(T)) |i| r ^= (@as(R, a) << @intCast(i)) & (@as(R, 0) -% ((b >> @intCast(i)) & 1));
     return r;
 }
