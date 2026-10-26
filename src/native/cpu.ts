@@ -3,7 +3,7 @@
 // signals and yields between slices. The core executes; this decides what happens at its exits.
 
 import type { JniClass } from "./jnivm.ts";
-import { type JThread, mainThread, releaseThread, resumeAs } from "../jvm/natives/jentry.ts";
+import { JThread, mainThread, releaseThread, resumeAs } from "../jvm/natives/jentry.ts";
 import { java } from "../jvm/javahost.ts";
 import { rt } from "../jvm/runtime.ts";
 import type { Strand } from "../jvm/suspend.ts";
@@ -858,6 +858,12 @@ export const cpuOf = (t: JThread): Cpu | undefined => byThread.get(t);
 /** sets a thread's native name: what prctl(PR_SET_NAME), pthread_setname_np and a /proc comm write set, and what pthread_getname_np and comm read */
 export function nameThread(t: JThread, name: string): void { t.jname = name; const c = byThread.get(t); if (c) c.name = name; }
 export function bindCpu(t: JThread, c: Cpu): void { byThread.set(t, c); }
+/** a thread of the host's that calls the app back, as an audio callback thread: it never takes the background share */
+export function callbackCpu(name: string): Cpu {
+  const t = new JThread(); t.jname = name;
+  const c = new Cpu(t, name); c.lastFrameAt = Infinity; bindCpu(t, c);
+  return c;
+}
 export function cpuByTid(tid: number): Cpu | undefined { for (const c of cpus) if (c.tid === tid) return c; return undefined; }
 export function cpuByOsTid(tid: number): Cpu | undefined { for (const c of cpus) if (c.osTid === tid) return c; return undefined; }
 let symbolizeHook: (pc: number) => string = (pc) => "0x" + pc.toString(16);

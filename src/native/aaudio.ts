@@ -1,6 +1,5 @@
 import { PcmOutput, outputSampleRate, newAudioSessionId, burstFrames } from "../android/audio-output.ts";
-import { JThread } from "../jvm/natives/jentry.ts";
-import { Cpu, bindCpu } from "./cpu.ts";
+import { Cpu, callbackCpu } from "./cpu.ts";
 import { processExited } from "../process-exit.ts";
 import { hostLib, stp, ptr, type HostFn } from "./host.ts";
 import { mem, anchor } from "./mem.ts";
@@ -37,10 +36,7 @@ class Stream {
     this.capacity = Math.max(config.BufferCapacityInFrames, this.frames * 4);
     this.size = this.capacity;
     this.buffer = mem.malloc(this.frames * track.frameBytes());
-    const thread = new JThread(); thread.jname = "AAudio callback";
-    this.cpu = new Cpu(thread, thread.jname);
-    this.cpu.lastFrameAt = Infinity;
-    bindCpu(thread, this.cpu);
+    this.cpu = callbackCpu("AAudio callback");
   }
   change(state: number): void { this.state = state; for (const wake of this.waiters) wake(); }
   pump(): void {
