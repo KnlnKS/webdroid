@@ -1,4 +1,4 @@
-# Webdroid status — 2026-10-25
+# Webdroid status — 2026-10-26
 
 This file tracks where the work stands and what is open. [AGENTS.md](AGENTS.md) defines the working and
 verification rules, [docs/architecture.md](docs/architecture.md) the design, [docs/performance.md](docs/performance.md)
@@ -55,7 +55,8 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
   View. The `apks/new` XAPKs run on the Wasm tier (2026-10-16): Snapseed edits and exports, Yelp's onboarding, home,
   search, map and business page work, Walmart's flows and cart work, McDonald's reaches home, menu and the store
   locator, and Tubi plays non-DRM titles. APKPure (2026-10-25) searches, downloads and installs Pokémon TCG Pocket's
-  split XAPK; the installed game's launch is unexamined. Google Chrome (2026-10-25) searches Google and loads pages such as vgpu.sh
+  split XAPK, and the game (2026-10-26, Unity 6 over Vulkan) reaches its title screen; the terms, the 3.2 GB asset
+  download and pack opening were reached before its driver was merged into Chrome's (history, Pokémon TCG Pocket). Google Chrome (2026-10-25) searches Google and loads pages such as vgpu.sh
   across its browser, GPU and sandboxed renderer processes; YouTube's watch page plays (360p, about half of 60 fps frames dropped),
   and vgpu.sh's WebGPU prism draws through the Vulkan driver over WebGPU (with chrome://flags#enable-unsafe-webgpu, about 3.6 frames/s).
 - **Deployment:** one Workers Builds build deploys the page to Pages and the backend, which is also the isolated
