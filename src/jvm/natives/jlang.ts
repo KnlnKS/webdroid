@@ -7,8 +7,7 @@ import { HEAP_LIMIT } from "../abi.ts";
 import { jarray } from "../abi.ts";
 import { uptimeMillis, wallMillis } from "../../guest-clock.ts";
 import { vfs } from "../../shell/vfs.ts";
-import { centralDirOfSource } from "../../zip.ts";
-import { entryBytesOf } from "../../shell/install.ts";
+import { archiveEntry, centralDirOfSource, entryBytesOf } from "../../zip.ts";
 import { processFileBytes } from "../../native/process-fd.ts";
 import { processEnv } from "../../shell/environment.ts";
 import { curThread, iof, vcall, type JThread } from "./jentry.ts";
@@ -37,9 +36,9 @@ const E_MACHINE: Record<number, string> = { 0xb7: "arm64-v8a", 0x28: "armeabi-v7
 const elfAbi = (bytes: Uint8Array): string => E_MACHINE[bytes[18] | (bytes[19] << 8)] ?? "unknown";
 /** a library file, or an archive's entry ("base.apk!/lib/arm64-v8a/libx.so") the linker maps from the archive */
 function* libraryFile(path: string): Gen<Uint8Array | null> {
-  const bang = path.indexOf("!/");
-  if (bang < 0) return yield processFileBytes(path);
-  const archive = path.slice(0, bang), entry = path.slice(bang + 2);
+  const at = archiveEntry(path);
+  if (!at) return yield processFileBytes(path);
+  const { archive, entry } = at;
   const { packedArchives } = yield* awaited(import("../../shell/packedarchive.ts"));
   const packed = packedArchives.get(archive);
   if (packed) return yield packed.entry(entry);

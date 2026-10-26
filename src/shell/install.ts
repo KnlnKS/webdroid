@@ -3,7 +3,7 @@
 
 import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml.ts";
 import { isDexEntry } from "../jvm/dex.ts";
-import { centralDirOfSource, inflateEntry, localDataOffset, zipTree, type ZEntry } from "../zip.ts";
+import { centralDirOfSource, entryBytesOf, inflateEntry, localDataOffset, zipTree, type ZEntry } from "../zip.ts";
 import { BlobFile, BytesFile, RangeFile, SliceFile, readFully, type FileSource } from "./lazyfile.ts";
 
 /** A split install (.xapk, .apks, an App Bundle's output) is a zip of apks rather than an
@@ -86,8 +86,6 @@ async function entrySource(source: FileSource, entry: ZEntry): Promise<FileSourc
   if (entry.method === 0) return new SliceFile(source, offset, entry.size);
   return new BytesFile(inflateEntry(await readFully(source, offset, entry.csize), entry));
 }
-/** an entry's bytes, reading only that entry of the archive */
-export const entryBytesOf = async (source: FileSource, entry: ZEntry): Promise<Uint8Array> => readFully(await entrySource(source, entry));
 export class ZipEntryFile implements FileSource {
   private readonly archive: FileSource; private readonly entry: ZEntry;
   readonly size: number;
@@ -106,14 +104,13 @@ export class ZipEntryFile implements FileSource {
 /** `lazy`: every entry stays in the apk, read when opened, its resource table aside */
 async function openedApk(source: FileSource, entries: Map<string, ZEntry>, lazy: boolean): Promise<OpenedApk> {
   const manifestEntry = entries.get("AndroidManifest.xml");
-  const manifestSource = manifestEntry ? await entrySource(source, manifestEntry) : null;
-  const manifest = manifestSource ? await readFully(manifestSource) : null;
+  const manifest = manifestEntry ? await entryBytesOf(source, manifestEntry) : null;
   const xml = manifest ? parseAXML(manifest) : null;
   const assetPack = xml?.children.some((node) => node.name === "module" && attrStr(node, "type") === "asset-pack") ?? false;
   const split = parseSplit(xml), resident = !lazy && (!assetPack || !split || [...entries.keys()].some((name) =>
     isDexEntry(name) || name === "resources.arsc" || name.startsWith("lib/")));
   if (!resident) {
-    const table = entries.get("resources.arsc"), resources = table ? await readFully(await entrySource(source, table)) : null;
+    const table = entries.get("resources.arsc"), resources = table ? await entryBytesOf(source, table) : null;
     return { kind: "lazy", source, bytes: null, zip: null, entries, resources, manifest: xml, split };
   }
   const bytes = await readFully(source);

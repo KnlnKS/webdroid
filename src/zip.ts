@@ -93,6 +93,18 @@ export async function localDataOffset(source: FileSource, e: ZEntry): Promise<nu
   if (header.length !== 30 || view.getUint32(0, true) !== 0x04034b50) throw new Error("Invalid local header: " + e.name);
   return e.off + 30 + view.getUint16(26, true) + view.getUint16(28, true);
 }
+/** an entry's bytes, reading only that entry of the archive */
+export async function entryBytesOf(source: FileSource, e: ZEntry): Promise<Uint8Array> {
+  const raw = await readFully(source, await localDataOffset(source, e), e.csize);
+  return e.method === 0 ? raw : inflateEntry(raw, e);
+}
+/** the path of an archive's entry, "base.apk!/lib/arm64-v8a/libx.so", as the linker and class loaders name it */
+export const archivePath = (archive: string, entry: string): string => `${archive}!/${entry}`;
+/** an archivePath's archive and entry, null for a path of a file of its own */
+export function archiveEntry(path: string): { archive: string; entry: string } | null {
+  const bang = path.indexOf("!/");
+  return bang < 0 ? null : { archive: path.slice(0, bang), entry: path.slice(bang + 2) };
+}
 export function entryBytes(z: Uint8Array, e: ZEntry): Uint8Array {
   const start = localStart(z, e);
   return inflateEntry(z.subarray(start, start + e.csize), e);

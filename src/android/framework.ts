@@ -8,7 +8,7 @@
 
 import { Arsc } from "./arsc.ts";
 import { DEVICE_OVERLAYS } from "./device-overlays.ts";
-import { centralDir, centralDirOfSource, entryBytes } from "../zip.ts";
+import { centralDir, centralDirOfSource, entryBytes, entryBytesOf } from "../zip.ts";
 import { rt } from "../jvm/runtime.ts";
 import { dexesIn, dexEntryNames, isDexEntry, type DexFile } from "../jvm/dex.ts";
 import { PLATFORM_JARS } from "../jvm/provenance.ts";
@@ -16,7 +16,6 @@ import { loadDex } from "../jvm/tier.ts";
 import { BOOT_JAR_PATHS } from "../jvm/bootclasspath.ts";
 import { vfs } from "../shell/vfs.ts";
 import { BytesFile, readFully, type FileSource } from "../shell/lazyfile.ts";
-import { entryBytesOf } from "../shell/install.ts";
 import { parseAXML } from "./axml.ts";
 import { registerPackage } from "./installpackage.ts";
 import { apkCertificates } from "./packagearchive.ts";
