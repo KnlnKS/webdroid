@@ -197,7 +197,7 @@ export function emitInst(c: Ctx, i: Inst): void {
     case O.Any: return define(c, id, `any(${value(c, w[2])})`);
     case O.All: return define(c, id, `all(${value(c, w[2])})`);
     case O.IsNan: { const v = value(c, w[2]); return define(c, id, `(${v} != ${v})`); }
-    case O.IsInf: return define(c, id, `(abs(${value(c, w[2])}) > ${t.wgsl(t.resultType.get(w[2])!)}(3.40282347e+38))`);
+    case O.IsInf: return define(c, id, `(abs(${value(c, w[2])}) > ${t.wgsl(t.resultType.get(w[2])!)}(0x1.fffffep+127))`);
     case O.Select: return define(c, id, `select(${as(c, w[4], ty)}, ${as(c, w[3], ty)}, ${value(c, w[2])})`);
     case O.SMod: {
       // the remainder with the divisor's sign
