@@ -38,7 +38,12 @@ pub fn asArm(pc: u32, h: u32, h2: u32) ?Arm {
         if (n == 15 or h2 == 0 or h2 & 0x2000 != 0 or (!ld and h2 & 0x8000 != 0) or (ld and h & 0x20 != 0 and h2 & (@as(u32, 1) << @intCast(n)) != 0)) return null;
         return .{ .w = (h << 16) | h2 };
     }
-    if (h & 0xff00 == 0xfb00) return .{ .w = multiply(h, h2) orelse return null };
+    if (h & 0xff00 == 0xfb00) {
+        // the media multiplies (ARM's 0x07xxxxxx) are not compiled: their fallback needs a wide
+        // Thumb fallback's flag state (rwThumb), which their ARM word's flag use would not give
+        const w = multiply(h, h2) orelse return null;
+        return if (w & 0x0e00_0000 != 0) null else .{ .w = w };
+    }
     if (h & 0xffd0 == 0xfa90 and h2 & 0xf0c0 == 0xf080 and n == m and n < 15 and d < 15) {
         // CLZ, or REV/REV16/RBIT/REVSH as ARM's media reversal
         if (h & 0x20 != 0) return if (h2 & 0x30 == 0) .{ .w = 0xe16f_0f10 | (d << 12) | m } else null;
