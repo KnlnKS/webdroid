@@ -193,7 +193,7 @@ export function dexOpen(w: World, path: unknown, loaderObject: object | null): o
   }
   const dexes = w.opts.dexes(file);
   return chain(dexes, open);
-  function open(dexes: DexFile[] | undefined): object {
+  function open(dexes: DexFile[] | null): object {
     if (!dexes) w.raise("java/io/IOException", `Unable to open DEX file '${file}'`);
     return openDexes(w, dexes, loaderObject);
   }

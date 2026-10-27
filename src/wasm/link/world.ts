@@ -69,9 +69,9 @@ export interface WorldOptions {
   loop?: HostLoop;
   /** marks a moment on the host's timeline (src/timeline.ts: Ev) */
   note?: (ev: number, arg?: number) => void;
-  /** the dex files of the archive at `path`, for the DexFile natives of class loaders (loaders.ts); undefined for a file that does not exist. Dex files it answers twice
+  /** the dex files of the archive at `path`, for the DexFile natives of class loaders (loaders.ts); null for a file that does not exist. Dex files it answers twice
    *  that are the same objects stay in one namespace. Without it a loader cannot open dex files. */
-  dexes?: (path: string) => DexFile[] | undefined | Promise<DexFile[] | undefined>;
+  dexes?: (path: string) => DexFile[] | null | Promise<DexFile[] | null>;
   /** whether the second tier waits, inline or in the worker: the host is starting an app, and what is hot now is mostly code that runs once */
   holdUpgrades?: () => boolean;
   /** whether the host is answering input, when work that lengthens a collection's pause waits */

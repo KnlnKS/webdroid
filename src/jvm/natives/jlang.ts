@@ -6,9 +6,8 @@ import { java } from "../javahost.ts";
 import { HEAP_LIMIT } from "../abi.ts";
 import { jarray } from "../abi.ts";
 import { uptimeMillis, wallMillis } from "../../guest-clock.ts";
-import { vfs } from "../../shell/vfs.ts";
 import { archiveEntry, centralDirOfSource, entryBytesOf } from "../../zip.ts";
-import { processFileBytes } from "../../native/process-fd.ts";
+import { processFileBytes, withProcessSource } from "../../native/process-fd.ts";
 import { processEnv } from "../../shell/environment.ts";
 import { curThread, iof, vcall, type JThread } from "./jentry.ts";
 import type { JThrowable } from "./jthrowable.ts";
@@ -42,8 +41,7 @@ function* libraryFile(path: string): Gen<Uint8Array | null> {
   const { packedArchives } = yield* awaited(import("../../shell/packedarchive.ts"));
   const packed = packedArchives.get(archive);
   if (packed) return yield packed.entry(entry);
-  const source = vfs.source(archive), found = source && (yield centralDirOfSource(source)).get(entry);
-  return found ? yield entryBytesOf(source, found) : null;
+  return yield withProcessSource(archive, async source => { const found = (await centralDirOfSource(source)).get(entry); return found ? entryBytesOf(source, found) : null; });
 }
 /** a library in the native library path of a dex class loader (BaseDexClassLoader.getLdLibraryPath), which the linker namespace ART makes for the
  *  loader searches: directories, and archive directories ("base.apk!/lib/arm64-v8a") */

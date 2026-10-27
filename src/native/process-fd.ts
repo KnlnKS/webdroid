@@ -1,7 +1,7 @@
 // The open files another realm owns: a process Worker's descriptors on the page's mutable files,
 // whose position, flags and bytes live with their owner, so every operation is a request to it.
 import { E, O_CLOEXEC, S_IFMT, S_IFREG } from "./abi.ts";
-import { ANON, crossingOf, installFile, isKind, newFile, openFd, closeFd, readRest, type FdStat, type FileOps } from "./fd.ts";
+import { ANON, crossingOf, fdSource, installFile, isKind, newFile, openFd, closeFd, readRest, type FdStat, type FileOps } from "./fd.ts";
 import { localOpen, listAt } from "./fs.ts";
 import { openRemoteFifo } from "./pipe.ts";
 import type { FileSource } from "../shell/lazyfile.ts";
@@ -147,12 +147,18 @@ export function processOpenFd(path: string, flags: number): number | Promise<num
     typeof reply === "number" ? reply : reply === "fifo" ? openRemoteFifo(normalized,flags) : installRemote(reply.token,calls,normalized,flags,reply.dir));
 }
 
-/** a file's bytes, from the realm that owns its path */
-export async function processFileBytes(path: string): Promise<Uint8Array | null> {
-  if (!pathOwner(path)) return vfs.readFile(path);
+/** `use` of `path` open for reading in the realm that owns it; null when it does not open */
+async function withProcessFile<T>(path: string, use: (fd: number) => T | Promise<T>): Promise<T | null> {
   const fd = await processOpenFd(path, 0);
   if (fd < 0) return null;
-  try { return await readRest(fd); } finally { await closeFd(fd); }
+  try { return await use(fd); } finally { await closeFd(fd); }
+}
+/** a file's bytes, from the realm that owns its path */
+export const processFileBytes = async (path: string): Promise<Uint8Array | null> => pathOwner(path) ? withProcessFile(path, readRest) : vfs.readFile(path);
+/** `use` of a regular file's source, from the realm that owns its path; null when there is none */
+export async function withProcessSource<T>(path: string, use: (source: FileSource) => Promise<T>): Promise<T | null> {
+  if (!pathOwner(path)) { const source = vfs.source(path); return source ? use(source) : null; }
+  return withProcessFile(path, async fd => { const source = await fdSource(fd); return source ? use(source) : null; });
 }
 
 /** An owner's lease on a range of a file, which outlives the descriptor that took it. */

@@ -10,6 +10,7 @@ import { java, useJavaHost, type JavaHost } from "../../jvm/javahost.ts";
 import type { TierBackend, TierPorts } from "../../jvm/tier.ts";
 import { dexesOfZip, type DexFile } from "../../jvm/dex.ts";
 import { vfs } from "../../shell/vfs.ts";
+import { withProcessSource } from "../../native/process-fd.ts";
 import { appArchives, packedArchives } from "../../shell/packedarchive.ts";
 import { Program } from "../compiler/program.ts";
 import { fetchPlatformJars, jarDexes, sourceDexes } from "../../android/framework.ts";
@@ -98,7 +99,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
   if (processExited()) close();
   // the page's end ends its waits as well, which the engine would otherwise keep, with all they reach, past the page
   if (typeof window !== "undefined") window.addEventListener("pagehide", () => { close(); endWaits(new Error("the page closed")); }, { once: true });
-  const appDexes: DexFile[] = [], opened = new Map<string, DexFile[] | undefined | Promise<DexFile[] | undefined>>();
+  const appDexes: DexFile[] = [], opened = new Map<string, Promise<DexFile[] | null>>();
   const dexes = (path: string) => openDexes(path, appDexes, opened);
   const install = (made: World) => {
     world = made;
@@ -252,20 +253,19 @@ const objectsIn = (world: () => World): Pick<JavaHost, "throwable" | "make" | "c
   box: (desc, v) => world().bridge.toHost(boxRef(world(), desc, v)),
 });
 
-/** the dex files of the archive at `path`, for the DexFile natives of class loaders: the app's own are the ones the World holds already, any other archive is read from the file system
- *  reading only its directory and dex entries */
-export function openDexes(path: string, app: DexFile[], opened: Map<string, DexFile[] | undefined | Promise<DexFile[] | undefined>>): DexFile[] | undefined | Promise<DexFile[] | undefined> {
+/** the dex files of the archive at `path`, for the DexFile natives of class loaders: the app's own are the ones the World holds already, any other archive is read
+ *  from the realm that owns it, reading only its directory and dex entries. An archive missing now may be written later, so only what opened is kept. */
+export function openDexes(path: string, app: DexFile[], opened: Map<string, Promise<DexFile[] | null>>): DexFile[] | Promise<DexFile[] | null> {
   path = vfs.norm(path);
-  if (!opened.has(path)) {
-    const own = appArchives.has(path) && app.length > 0;
-    const packed = own ? undefined : packedArchives.get(path);
-    const source = own || packed ? null : vfs.source(path);
-    const dexes = packed ? packed.prepare(true).then(() => dexesOfZip(packed.zip, path))
-      : !source ? (own ? app : undefined)
-      : sourceDexes(source, path).catch((e: unknown) => { throw rt.mkThrowable("java/io/IOException", `Failed to open dex files from ${path} because: ${e instanceof Error ? e.message : e}`); });
-    opened.set(path, dexes instanceof Promise ? dexes.catch(error => { opened.delete(path); throw error; }) : dexes);
-  }
-  return opened.get(path);
+  if (appArchives.has(path) && app.length > 0) return app;
+  let dexes = opened.get(path);
+  if (dexes) return dexes;
+  const packed = packedArchives.get(path);
+  const reading: Promise<DexFile[] | null> = packed ? packed.prepare(true).then(() => dexesOfZip(packed.zip, path)) : withProcessSource(path, source => sourceDexes(source, path).catch((e: unknown) => {
+    throw rt.mkThrowable("java/io/IOException", `Failed to open dex files from ${path} because: ${e instanceof Error ? e.message : e}`);
+  }));
+  opened.set(path, dexes = reading.then(d => { if (!d) opened.delete(path); return d; }, (error: unknown) => { opened.delete(path); throw error; }));
+  return dexes;
 }
 
 let aotPort: MessagePort | undefined, compileHost: MessagePort | undefined, warmPort: MessagePort | undefined;

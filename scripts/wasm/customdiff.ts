@@ -331,7 +331,7 @@ async function checkDeferredSignatures(): Promise<void> {
   {
     let loads = 0;
     const tier = world(new Program(loadDexes(dex), program(jars)), { dexes: async path => {
-      if (path !== signaturePath) return undefined;
+      if (path !== signaturePath) return null;
       loads++; await new Promise<void>(resolve => queueMicrotask(resolve)); return loadDexes(dex);
     } });
     try { await startProcess(tier); }

@@ -192,7 +192,7 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
   const client = new CompileClient(() => spawnWithEnv({ ...env, platform: async () => { await initializing.promise; return env.platform(); } }, received));
   const path = "/data/local/tmp/persist-proxy.dex";
   vfs.mount(path, new BytesFile(new Uint8Array(readFileSync(join(out, "classes.dex")))));
-  const w = world(app, { compiler: client, holdUpgrades: () => true, dexes: name => name === path ? app : undefined });
+  const w = world(app, { compiler: client, holdUpgrades: () => true, dexes: name => name === path ? app : null });
   await startProcess(w);
   await w.entryAsync("Pst", "setupLoader", "(Ljava/lang/String;)V")(path);
   const make = w.entryAsync("Pst", "makeProxy", "(I)I");

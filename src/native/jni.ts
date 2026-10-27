@@ -49,8 +49,15 @@ function add(table: unknown[], free: number[], o: unknown, bit: number): number 
   table.push(o);
   return bit | (table.length - 1);
 }
+const weakly = (o: unknown): unknown => typeof o === "object" && o !== null ? new WeakRef(o) : o;
+/** points reference `h` at `o` */
+function setRef(h: number, o: unknown, cpu: Cpu): void {
+  if (h & GLOBAL_BIT) globals[h & ~GLOBAL_BIT] = o;
+  else if (h & WEAK_BIT) weaks[h & ~WEAK_BIT] = weakly(o);
+  else if (h) locals(cpu).refs[h] = o;
+}
 const newGlobalRef = (o: unknown): number => (o === null || o === undefined ? 0 : add(globals, freeGlobals, o, GLOBAL_BIT));
-const newWeakRef = (o: unknown): number => (o === null || o === undefined ? 0 : add(weaks, freeWeaks, typeof o === "object" ? new WeakRef(o) : o, WEAK_BIT));
+const newWeakRef = (o: unknown): number => (o === null || o === undefined ? 0 : add(weaks, freeWeaks, weakly(o), WEAK_BIT));
 /** the Java object a reference stands for, as the tier holds it; null for 0, a deleted reference and a collected weak one */
 function object(h: number, cpu: Cpu): unknown {
   if (h === 0) return null;
@@ -73,7 +80,8 @@ export const newLocal = (cpu: Cpu, name: string, desc: string, args: unknown[]):
 export function pushFrame(cpu: Cpu): void { const l = locals(cpu); l.frames.push(l.refs.length); }
 export function popFrame(cpu: Cpu): void { const l = locals(cpu); const m = l.frames.pop(); if (m !== undefined) l.refs.length = m; }
 
-interface MethodRec { cls: JniClass; name: string; desc: string; isStatic: boolean; args: Codec[]; out: Codec }
+/** `stringInit`: a String constructor, which ART's InvokeWithVarArgs runs as its StringFactory method, pointing the receiver's reference at the result */
+interface MethodRec { cls: JniClass; name: string; desc: string; isStatic: boolean; args: Codec[]; out: Codec; stringInit: boolean }
 const methods: MethodRec[] = [null as unknown as MethodRec];
 const methodIds = new WeakMap<JniClass, Map<string, number>>();
 // A jmethodID/jfieldID is an ArtMethod*/ArtField* on a device, and an image may read the bytes
@@ -98,7 +106,7 @@ function methodId(cls: JniClass, name: string, desc: string, isStatic: boolean):
   let id = ids.get(key);
   if (id === undefined) {
     const { params, ret } = parseMethodDesc(desc);
-    methods.push({ cls, name, desc, isStatic, args: params.map(codec), out: codec(ret) });
+    methods.push({ cls, name, desc, isStatic, args: params.map(codec), out: codec(ret), stringInit: name === "<init>" && cls.name === "java/lang/String" });
     ids.set(key, (id = mintId(methodIdx, methods.length - 1)));
   }
   return id;
@@ -176,13 +184,15 @@ function syncPinned(args: unknown[], toJava: boolean): void {
   }
 }
 
-function invoke(cpu: Cpu, m: MethodRec, self: unknown, args: unknown[], nonvirtual: boolean): HostRet | Promise<HostRet> {
+/** `m` on the object reference `h` names */
+function invoke(cpu: Cpu, m: MethodRec, h: number, args: unknown[], nonvirtual: boolean): HostRet | Promise<HostRet> {
   const synced = pinned.size > 0;
   if (synced) syncPinned(args, true);
   let pending = false;
   try {
     const p = m.isStatic ? java.jni.init(m.cls) : null;
-    const r = after(p, () => java.jni.invoke(m.cls, m.name, m.desc, m.isStatic, self, args, nonvirtual));
+    const r = after(p, () => m.stringInit && h ? after(java.jni.construct(m.cls, m.desc, args), (s) => setRef(h, s, cpu))
+      : java.jni.invoke(m.cls, m.name, m.desc, m.isStatic, object(h, cpu), args, nonvirtual));
     if (r instanceof Promise) {
       pending = true;
       return r.then(value => m.out.ret(value, cpu)).catch(e => {
@@ -346,13 +356,13 @@ export function jniInit(): void {
   for (const kind of ["", "Nonvirtual", "Static"]) for (const P of PRIM) for (const [form, read] of Object.entries(FORMS)) {
     def(`Call${kind}${P}Method${form}`, (cpu, a) => {
       a.p();
-      const self = kind === "Static" ? null : object(a.p(), cpu);
+      const h = kind === "Static" ? 0 : a.p();
       if (kind) a.p(); // jclass
       const m = methodOf(a.p());
       if (!m) { pend(cpu, java.jni.throwable("java/lang/NoSuchMethodError", "bad methodID")); return 0; }
       const args = read(m, a, cpu);
       if (jniTrace.on) console.log("[jni] ←", m.cls.name, m.name, m.desc, args.map((v) => typeof v === "string" ? JSON.stringify(v.slice(0, 200)) : Array.isArray(v) ? `[${v.length}]` : v !== null && typeof v === "object" ? "<reference>" : String(v)).join(" "));
-      return invoke(cpu, m, self, args, kind === "Nonvirtual");
+      return invoke(cpu, m, h, args, kind === "Nonvirtual");
     });
   }
   const getFieldID = (isStatic: boolean) => (cpu: Cpu, a: ArgReader) => {

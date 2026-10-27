@@ -64,7 +64,7 @@ await archives(suite, out, app, a, b);
 const files = new Map([["/data/local/tmp/a.dex", a], ["/data/local/tmp/b.dex", b]]);
 for (const [path, file] of files) vfs.mount(path, new BytesFile(new Uint8Array(readFileSync(file))));
 await mountPlatform(ROOT);
-const w = world([app, ...PLATFORM_PATHS], { dexes: (path) => (files.has(path) ? loadDexes(files.get(path)!) : undefined) });
+const w = world([app, ...PLATFORM_PATHS], { dexes: (path) => (files.has(path) ? loadDexes(files.get(path)!) : null) });
 
 const CHECKS = ["the loaders define distinct Shared classes", "getClassLoader", "loadClass finds the class again", "statics are separate", "isInstance does not cross", "both implement the app's Tag",
   "cast across loaders fails", "Class.forName with a loader", "a class only the other loader defines, and its superclass", "the parent's classes are found through the loader", "signatures name the loader's class",
@@ -83,7 +83,7 @@ for (const [bit, what] of CHECKS.entries()) if (got & (1 << bit)) fail(what);
 // Lazy platform archives wait for their bytes before defining the loader's classes.
 w.opts.dexes = async (path) => {
   await new Promise<void>(resolve => queueMicrotask(resolve));
-  return files.has(path) ? loadDexes(files.get(path)!) : undefined;
+  return files.has(path) ? loadDexes(files.get(path)!) : null;
 };
 const deferred = await w.entryAsync("Ldr", "check", "(Ljava/lang/String;Ljava/lang/String;)I")("/data/local/tmp/a.dex", "/data/local/tmp/b.dex") as number;
 if (deferred) fail(`deferred archive checks: ${deferred}`);
@@ -349,7 +349,7 @@ check("actual delegate-last initiation and ordinary parent-first control", wasmD
 for (const asynchronous of [false, true]) {
   const appDexes = loadDexes(a), base = program([...PLATFORM_PATHS, common]);
   const p = new Program([...loadDexes(layeredApp), ...appDexes], base), layered = world(p, { dexes: path => {
-    const dexes = path === paths[0] ? appDexes : files.has(path) ? loadDexes(files.get(path)!) : undefined;
+    const dexes = path === paths[0] ? appDexes : files.has(path) ? loadDexes(files.get(path)!) : null;
     return asynchronous ? Promise.resolve().then(() => dexes) : dexes;
   } });
   const cls = p.get("Shared")!, self = cls.byKey.get("self()LShared;")!, peer = cls.fields.find(f => f.name === "peer")!;
@@ -419,7 +419,7 @@ for (const asynchronous of [false, true]) {
   if (!platform.dex || derived.loaderOf("Shared") !== derived.boot || derived.loaderOf("[[LShared;") !== derived.boot || ["[I", "#I", "#V"].some(name => derived.loaderOf(name) !== derived.boot) || derived.loaderOf("Ldr") !== derived.root || derived.loaderOf(base.definedBy(custom, "Sub")!) !== custom || derived.loaderOfDex(platform.dex) !== base.root || derived.lookup(derived.boot, "Shared") !== "Shared") fail("inherited DEX defining loader identity changed class path or confused app and bootstrap");
 }
 {
-  const resolver = world([app, ...PLATFORM_PATHS], { dexes: path => files.has(path) ? loadDexes(files.get(path)!) : undefined });
+  const resolver = world([app, ...PLATFORM_PATHS], { dexes: path => files.has(path) ? loadDexes(files.get(path)!) : null });
   let forName: unknown;
   try { forName = await resolver.entryAsync("Ldr", "resolverForName", "(Ljava/lang/String;)I")(paths[0]); }
   catch (error) {

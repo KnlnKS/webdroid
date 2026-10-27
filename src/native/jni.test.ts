@@ -199,6 +199,12 @@ for (const a64 of abis) test(`${abi(a64)} strings cross as Java strings: UTF-8 a
   const strings = await j.cls("java/lang/String"), builders = await j.cls("java/lang/StringBuilder");
   const builder = await j.call(S.NewObjectA, builders, await j.method(builders, "<init>", "(Ljava/lang/String;)V"), j.values(s));
   expect(await j.utf(await j.call(S.NewObjectA, strings, await j.method(strings, "<init>", "(Ljava/lang/StringBuilder;)V"), j.values(builder)))).toBe(text);
+  // as in ART, a String constructor through Call*Method points its receiver's reference at the new String, read from a pinned char[] as native code left it
+  const charArray = await j.call(array("New", "Char"), 2), pinnedChars = await j.call(array("Get", "Char"), charArray, 0), allocated = await j.call(S.AllocObject, strings);
+  mem.write(pinnedChars, new Uint8Array(new Uint16Array([0x68, 0x69]).buffer));
+  await j.call(call("Nonvirtual", "Void", "A"), allocated, strings, await j.method(strings, "<init>", "([C)V"), j.values(charArray));
+  expect(await j.utf(allocated)).toBe("hi");
+  await j.call(array("Release", "Char"), charArray, pinnedChars, 2);
   // Java gets the string it is given, and a string Java makes comes back as one
   const probe = await j.cls("JniProbe");
   const cat = await j.call(call("Static", "Object"), probe, await j.staticMethod(probe, "cat", "(Ljava/lang/String;I)Ljava/lang/String;"), s, 1);

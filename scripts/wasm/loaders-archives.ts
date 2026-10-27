@@ -7,6 +7,7 @@ import { BytesFile } from "../../src/shell/lazyfile.ts";
 import { vfs } from "../../src/shell/vfs.ts";
 import { PackedArchive, appArchives, packedArchives, sha256 } from "../../src/shell/packedarchive.ts";
 import { openDexes } from "../../src/wasm/host/boot.ts";
+import type { DexFile } from "../../src/jvm/dex.ts";
 import { world } from "./lib.ts";
 import { loadDexes } from "../dexes.ts";
 import { PLATFORM_PATHS } from "../aosp.ts";
@@ -20,8 +21,9 @@ export async function archives({ check, fail }: Suite, out: string, app: string,
   check("APK secondary DEX precedence", ordered.entry("Shared", "tag", "()I")(ordered.entry("Shared", "make", "()LShared;")()), 1);
 
   const ownPath = "/data/app/loader-own/base.apk", otherPath = "/data/app/loader-other/base.apk", ownDexes = loadDexes(a);
-  const opened = new Map<string, ReturnType<typeof openDexes>>();
+  const opened = new Map<string, Promise<DexFile[] | null>>();
   appArchives.add(ownPath);
+  if (await openDexes(otherPath, ownDexes, opened) !== null) fail("a missing archive opened");
   vfs.mount(otherPath, new BytesFile(zipSync({ "classes.dex": bytes(b) })));
   try {
     if (openDexes(ownPath, ownDexes, opened) !== ownDexes) fail("own archive lost DEX identity");

@@ -38,11 +38,11 @@ export const platformDexes = (jars: readonly string[] = PLATFORM_JARS, aosp = AO
 export const platform = (aosp = AOSP): Program => platformProgram(() => platformDexes(PLATFORM_JARS, aosp));
 
 /** the dex files of the jar or dex file the VFS holds at `path`, for DexFile.openDexFileNative; none for a file without any (a jar of resources) */
-function vfsDexes(path: string): DexFile[] | undefined {
+function vfsDexes(path: string): DexFile[] | null {
   const bytes = vfs.readFile(path);
-  if (!(bytes instanceof Uint8Array)) return undefined;
+  if (!(bytes instanceof Uint8Array)) return null;
   const dexes = path.endsWith(".dex") ? dexesIn(bytes, path) : dexesOfZip(zipTree(bytes));
-  return dexes.length ? dexes : undefined;
+  return dexes.length ? dexes : null;
 }
 /** `w` made the realm's Java now and whenever its entries are called: the objects natives make are the current World's. A harness that makes Worlds one
  *  after another closes each it is done with (World.close), whose Cleaners would otherwise make it the realm's Java while a later World's natives wait. */
