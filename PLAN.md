@@ -82,6 +82,9 @@ in 134 s and `--corpus` in 213 s, with 2,551 unit tests. In matched `lat` runs e
 After the Chrome work (2026-10-26; history, Google Chrome): `pnpm check` passes in 141 s with the flows' content
 diffs unchanged (Calculator M 0.65%, FitNotes 2.94%, Mihon 22.08% and 10.95%).
 
+After the fourth code-quality pass (2026-10-26; history, "Fourth code-quality pass (2026-10-26)"): `pnpm check` passes in 81 s with
+the flows' content diffs within their usual range (Calculator M 0.65%, FitNotes 2.94%, Mihon 23.99% and 10.95%).
+
 `pnpm check` (2026-10-24) runs the typecheck, three unit-test shards, each part of `wasm all` and the seven
 deterministic flows as one pool in 83–89 s on an M4 Pro beside other sessions' load (three runs); `--corpus` adds a
 launch of each corpus APK no flow launches (221 s). Each flow runs once. Calculator M, FitNotes and both Mihon flows
