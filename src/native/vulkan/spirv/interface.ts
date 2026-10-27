@@ -136,6 +136,9 @@ export function entryWrapper(t: Translator, stage: Stage, epFn: number, inputs: 
     params.push(`@location(${loc})${stage === "fragment" ? interp(id, type) : ""} p_${id}: ${t.wgsl(type)}`);
     pre.push(`x_${id} = p_${id};`);
   }
+  // WGSL takes @blend_src only as a pair, where SPIR-V may give a lone output Index 0
+  const dual = stage === "fragment" && outputs.some(({ id }) => t.dec(id, D.Index)?.[0] === 1);
+  if (dual) enables.add("dual_source_blending");
   for (const { id, type } of outputs) {
     const st = t.type(type);
     // a block of builtins, as glslang writes gl_PerVertex
@@ -159,10 +162,9 @@ export function entryWrapper(t: Translator, stage: Stage, epFn: number, inputs: 
       if (b === 0 && stage === "vertex") { usesFlip = true; post.push(`if (webdroid_flip_y) { out.o_${id}.y = -out.o_${id}.y; }`); }
       continue;
     }
-    const loc = t.dec(id, D.Location)?.[0], index = t.dec(id, D.Index)?.[0];
+    const loc = t.dec(id, D.Location)?.[0];
     if (loc === undefined) throw new Error("SPIR-V: an output without a location");
-    if (index) enables.add("dual_source_blending");
-    fields.push(`@location(${loc})${index !== undefined && stage === "fragment" ? ` @blend_src(${index})` : ""}${stage === "vertex" ? interp(id, type) : ""} o_${id}: ${t.wgsl(type)},`);
+    fields.push(`@location(${loc})${dual ? ` @blend_src(${t.dec(id, D.Index)?.[0] ?? 0})` : ""}${stage === "vertex" ? interp(id, type) : ""} o_${id}: ${t.wgsl(type)},`);
     post.push(`out.o_${id} = x_${id};`);
   }
   if (stage === "vertex" && !usesFlip) pre.push("_ = webdroid_flip_y;");
