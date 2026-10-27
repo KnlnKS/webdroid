@@ -216,7 +216,9 @@ export async function captureFlow(flow: ExecutionFlow, drv: WebdroidDriver, {
         for await (const [name, handle] of dir.entries()) {
           const path = prefix + name;
           if (handle.kind === "directory") files.push(...await scan(handle as FileSystemDirectoryHandle, path + "/"));
-          else files.push({ path, size: (await (handle as FileSystemFileHandle).getFile()).size });
+          // the app may still be writing: a file listed here (a journal, say) can be gone by its read
+          else try { files.push({ path, size: (await (handle as FileSystemFileHandle).getFile()).size }); }
+          catch (e) { if ((e as DOMException).name !== "NotFoundError") throw e; }
         }
         return files;
       };
