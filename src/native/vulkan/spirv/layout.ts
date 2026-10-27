@@ -82,8 +82,11 @@ export class Translator extends Module {
   }
   /** a composite of type `ty` from its parts, a padded array's each wrapped */
   construct(ty: number, parts: string[]): string {
-    return `${this.wgsl(ty)}(${(this.padded(ty) !== undefined ? parts.map((p) => `P${ty}(${p})`) : parts).join(", ")})`;
+    const ps = this.padded(ty) !== undefined ? parts.map((p) => `P${ty}(${p})`) : parts;
+    return `${this.wgsl(ty)}(${(this.lead(ty) ? ["0u", ...ps] : ps).join(", ")})`;
   }
+  /** the bytes before struct `id`'s first member, which a block one stage shares with another may leave to the other */
+  private lead(id: number): number { return this.type(id).k === "struct" ? this.memberDec(id, 0, D.Offset)?.[0] ?? 0 : 0; }
   /** how struct `s`'s member `i`, a matrix or an array of them, lays out matrices WGSL's matCxR does not: row-major or
    *  with a MatrixStride other than its columns' own. Such a member is an array of its rows or columns, each wrapped
    *  as Q<s>_<i>'s v where the stride is not the vector's own; null for a member WGSL lays out as SPIR-V does. */
@@ -207,6 +210,8 @@ export class Translator extends Module {
         return `  ${attrs}m${i}: ${ty},`;
       });
       if (!lines.length) lines.push("  m_unused: u32,");
+      const lead = this.lead(id);
+      if (lead) lines.unshift(`  @size(${lead}) m_lead: u32,`);
       ss.push(`struct S${id} {\n${lines.join("\n")}\n}`);
     };
     for (const [id, t] of this.types) if (t.k === "struct") emit(id);
