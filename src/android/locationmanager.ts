@@ -20,7 +20,7 @@ import { BrowserLocation, type LocationEvent, type LocationFix } from "../shell/
 /** the browser's geolocation, which system_server's realm shares with the broker */
 export const geolocation = new BrowserLocation();
 /** LocationManager.isLocationEnabled, as a service in any process asks system_server's */
-export const locationEnabled = (): boolean | Promise<boolean> => after(hostedService("location"), binder =>
+export const locationEnabled = (): PromiseOrVal<boolean> => after(hostedService("location"), binder =>
   after(scall("android/location/ILocationManager$Stub", "asInterface", "(Landroid/os/IBinder;)Landroid/location/ILocationManager;", binder),
     service => after(vcall(service, "isLocationEnabledForUser", "(I)Z", 0), (enabled: number) => enabled !== 0)));
 const PASSIVE_INTERVAL = 0x7fffffffffffffffn;
@@ -47,7 +47,7 @@ const providerProperties = (provider: string) => properties[provider]();
 const permitted = (uid: number) => after(checkUidPermission("android.permission.ACCESS_FINE_LOCATION", uid), fine =>
   fine === 0 || after(checkUidPermission("android.permission.ACCESS_COARSE_LOCATION", uid), coarse => coarse === 0));
 /** CallerIdentity.fromBinder, and the location access its call needs */
-function enforce(pkg: string | null): Caller | Promise<Caller> {
+function enforce(pkg: string | null): PromiseOrVal<Caller> {
   const caller = callingIdentity();
   if (!ownedBy(pkg, caller.uid)) throw rt.mkThrowable("java/lang/SecurityException", `invalid package "${pkg}" for uid ${caller.uid}`);
   return after(permitted(caller.uid), allowed => {

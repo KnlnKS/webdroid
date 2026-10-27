@@ -87,7 +87,7 @@ export const uriBundle = driven(function* uriBundle$(key: string, uri: string | 
   return out;
 });
 
-type Maybe<T> = T | Promise<T>;
+type Maybe<T> = PromiseOrVal<T>;
 /** the IContentProvider calls a hosted provider answers, over uri strings, ContentValues' entries
  *  and the Bundle's selection; ContentProvider's defaults stand for those it leaves out */
 interface ProviderOps {
@@ -131,7 +131,7 @@ interface SystemProvider {
   action?: string;
   /** its state (files, index) lives in system_server's realm, which another realm's process reaches over the broker */
   systemRealm?: boolean;
-  binder: () => JObj | Promise<JObj>;
+  binder: () => PromiseOrVal<JObj>;
 }
 /** DocumentsContract.PROVIDER_INTERFACE: the action a documents provider's intent filter answers */
 export const DOCUMENTS_PROVIDER = "android.content.action.DOCUMENTS_PROVIDER";
@@ -154,7 +154,7 @@ function* providerBinder$(authority: string, p: SystemProvider): Gen<JObj> {
 }
 
 /** a system provider's IContentProvider by its authority */
-export const systemProvider = (authority: string | null): JObj | Promise<JObj> | null =>
+export const systemProvider = (authority: string | null): PromiseOrVal<JObj> | null =>
   authority === null ? null : providers.get(authority)?.binder() ?? null;
 
 /** a system provider's ProviderInfo, as the package manager and getContentProvider report it */

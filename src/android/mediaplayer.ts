@@ -71,7 +71,7 @@ class Player {
     if (el) { el.pause(); if (el.src.startsWith("blob:")) URL.revokeObjectURL(el.src); }
     this.media = null; this.rendering = false; this.prepared?.(1); this.prepared = null;
   }
-  load(src: string | Promise<string>): void {
+  load(src: PromiseOrVal<string>): void {
     this.require(IDLE);
     const el = this.media = createElement();
     el.preload = "none"; el.loop = this.looping; el.volume = this.volume;
@@ -130,7 +130,7 @@ const loadFrom = (p: Player, source: FileSource | null) => {
 /** where the media element reads `request`: through the proxy (the element sends no headers of its own,
  *  so the request's travel in the URL), or for a URL the device serves itself, read whole from the app's
  *  loopback server as the media server reads it, after its redirects */
-function mediaSource(request: ProxyRequest, hops = 0): string | Promise<string> {
+function mediaSource(request: ProxyRequest, hops = 0): PromiseOrVal<string> {
   if (!guestEndpoint(request.url)) return proxyPath({ url: request.url, headers: [...fromProxyHeaders(request.headers)] });
   return deviceFetch(request.url, request).then(async (response) => {
     const next = hops < 20 ? nextHop(response, request) : null;

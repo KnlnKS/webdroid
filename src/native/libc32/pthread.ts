@@ -31,7 +31,7 @@ function rwTry(cpu: Cpu, a: number, write: boolean): boolean {
   if (write) { mem.st32(a, RW_WRITER); mem.st32(a + RW_TID, cpu.tid); } else mem.st32(a, state + 1);
   return true;
 }
-function rwAcquire(cpu: Cpu, a: number, write: boolean, ms = -1): number | Promise<number> {
+function rwAcquire(cpu: Cpu, a: number, write: boolean, ms = -1): PromiseOrVal<number> {
   if (rwTry(cpu, a, write)) return 0;
   const deadline = guestNow() + ms;
   return (async () => {
@@ -116,7 +116,7 @@ export async function endThread(cpu: Cpu): Promise<void> {
   await exitThread(cpu);
   mem.free(cpu.tlsBase);
 }
-function lock(cpu: Cpu, a: number, tryOnly = false, ms = -1): number | Promise<number> {
+function lock(cpu: Cpu, a: number, tryOnly = false, ms = -1): PromiseOrVal<number> {
   const w = mem.ld32(a);
   const kind = w & TYPE, constants = w & (TYPE | SHARED);
   if ((w & STATE) === 0) {
@@ -163,7 +163,7 @@ function condWait(cpu: Cpu, cond: number, mutex: number, timeoutMs: number | nul
 
 const condUntil = (clk: number): HostFn => (cpu, a) => { const c = a.p(), m = a.p(), ts = a.p(); return condWait(cpu, c, m, readTs(ts) - clockTime(clk)); };
 /** sem_wait for `ms` (-1: no limit): sem_post hands its count to the waiter it wakes */
-function semWait(cpu: Cpu, sem: number, ms: number): number | Promise<number> {
+function semWait(cpu: Cpu, sem: number, ms: number): PromiseOrVal<number> {
   const s = semOf(sem);
   if (s.count > 0) { s.count--; return 0; }
   return queueAt(sem).wait(ms).then((woken) => woken ? 0 : fail(cpu, E.TIMEDOUT));

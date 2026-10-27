@@ -63,7 +63,7 @@ function download(files: File[]): void {
 
 /** A modal sheet with one button per choice and Cancel. Resolves with the chosen choice's
  *  result, or null when dismissed; a choice the browser aborted counts as dismissed. */
-function choose<T>(title: string, choices: { label: string; run: () => T | Promise<T> }[]): Promise<T | null> {
+function choose<T>(title: string, choices: { label: string; run: () => PromiseOrVal<T> }[]): Promise<T | null> {
   const dialog = document.createElement("dialog");
   dialog.dataset.webdroidShare = "";
   dialog.style.cssText = "border:0;border-radius:12px;padding:20px;min-width:260px;max-width:90vw;color:#222;background:#fff;box-shadow:0 12px 40px #0005;font:16px sans-serif";

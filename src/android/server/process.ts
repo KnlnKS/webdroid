@@ -11,7 +11,7 @@ import { GET_SHARED_LIBRARY_FILES, packages } from "../packages.ts";
 /** ActivityManagerService.STOCK_PM_FLAGS, what its package queries ask for */
 export const STOCK_PM_FLAGS = BigInt(GET_SHARED_LIBRARY_FILES);
 /** the package manager, as system_server's services reach it */
-export const pms = (): JObj | Promise<JObj> => hostedService("package")!;
+export const pms = (): PromiseOrVal<JObj> => hostedService("package")!;
 /** a component of `pkg` in `process` runs in this process */
 export const runsHere = (pkg: string, process: string): boolean => pkg === appHost?.pkg && process === processName();
 /** the process an instance of the isolated service `cls` runs in, each its own, named as a device lists it */

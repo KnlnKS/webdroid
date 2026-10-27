@@ -88,7 +88,7 @@ function signature(m: MethodInfo): string[] {
   return [p.ret, ...p.params].map(type => m.dex.rawType(type));
 }
 
-export function validateSignatures(w: World, cls: string, owner: Strand): void | Promise<void> {
+export function validateSignatures(w: World, cls: string, owner: Strand): PromiseOrVal<void> {
   const states = validations.get(w);
   const prior = states.get(cls);
   if (prior) {
@@ -106,7 +106,7 @@ export function validateSignatures(w: World, cls: string, owner: Strand): void |
     if (error !== undefined && !cause) throw error;
     throw w.exception(cause ? causedThrowable(w, "java/lang/LinkageError", message, cause) : w.helpers.makeThrowable("java/lang/LinkageError", message));
   };
-  const type = (m: MethodInfo, descriptor: string): string | Promise<string> => {
+  const type = (m: MethodInfo, descriptor: string): PromiseOrVal<string> => {
     if (descriptor[0] !== "L" && descriptor[0] !== "[") return descriptor;
     // Generated methods already carry the exact Class identities supplied by their creator.
     if (!m.dex || m.methodIdx < 0) return descToName(descriptor);
@@ -116,12 +116,12 @@ export function validateSignatures(w: World, cls: string, owner: Strand): void |
     const at = d.key.indexOf("(");
     return symbolicMethod(w.prog.require(d.cls), d.key.slice(0, at), d.key.slice(at))!;
   };
-  const pair = ([targetDecl, baseDecl]: Pair): void | Promise<void> => {
+  const pair = ([targetDecl, baseDecl]: Pair): PromiseOrVal<void> => {
     const target = hydrate(targetDecl), base = hydrate(baseDecl);
     const a = signature(target), b = signature(base);
     const message = `Class ${javaName(cls)} method ${javaName(target.key)} signature against ${javaName(base.cls)}`;
     const failed = (error: unknown): never => linkage(`${message}: failed to resolve signature type`, error);
-    const resolved = (m: MethodInfo, descriptor: string): string | Promise<string> => {
+    const resolved = (m: MethodInfo, descriptor: string): PromiseOrVal<string> => {
       try { return caught(type(m, descriptor), failed); }
       catch (error) { return failed(error); }
     };

@@ -55,7 +55,7 @@ export function connectSurface(token: number, port: MessagePort, reader: number)
   return true;
 }
 /** the producer drawing to process `owner`'s surface parceled under `token`, one per surface while its port is open */
-export function importedProducer(owner: number, token: number): GlSurface | null | Promise<GlSurface | null> {
+export function importedProducer(owner: number, token: number): PromiseOrVal<GlSurface | null> {
   const key = `${owner}:${token}`;
   return imported.get(key) ?? (async () => {
     const port = await broker().surfaceConnect(owner, token);

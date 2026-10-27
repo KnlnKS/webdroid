@@ -13,8 +13,8 @@ export type JComponentName = JObj;
 const S = "Ljava/lang/String;", I = "Landroid/content/Intent;";
 
 /** `new Intent(action)` */
-export const newIntent = (action: string | null = null): JIntent | Promise<JIntent> => newObj("android/content/Intent", `(${S})V`, action);
-export const mkComponentName = (pkg: string, cls: string): JComponentName | Promise<JComponentName> =>
+export const newIntent = (action: string | null = null): PromiseOrVal<JIntent> => newObj("android/content/Intent", `(${S})V`, action);
+export const mkComponentName = (pkg: string, cls: string): PromiseOrVal<JComponentName> =>
   newObj("android/content/ComponentName", `(${S}${S})V`, pkg, cls);
 /** a component by its package and class name */
 export type ComponentRef = { pkg: string; cls: string };
@@ -60,7 +60,7 @@ export const putExtra = (intent: JIntent, key: string, value: unknown, desc: str
  */
 /** a system activity's result: its data as RESULT_OK, null as RESULT_CANCELED, or an explicit code */
 export type SystemResult = JIntent | null | { resultCode: number; data: JIntent | null };
-export type SystemHandler = (intent: JIntent) => SystemResult | Promise<SystemResult>;
+export type SystemHandler = (intent: JIntent) => PromiseOrVal<SystemResult>;
 const systemActivities = new Map<string, { run: SystemHandler; schemes?: string[] }[]>();
 /** `schemes` scopes a handler to intents whose data has one of them; such a handler yields to
  *  any installed activity that matches, as a default browser does to an app's own links. */

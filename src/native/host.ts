@@ -9,7 +9,7 @@ import { perf } from "../perf.ts";
 import { core, CORE_LIBC } from "./core.ts";
 
 /** `done` of `value`, now or once it settles */
-export function complete<V, T>(value: V | Promise<V>, done: (value: V) => T | Promise<T>): T | Promise<T> {
+export function complete<V, T>(value: PromiseOrVal<V>, done: (value: V) => PromiseOrVal<T>): PromiseOrVal<T> {
   return value instanceof Promise ? value.then(done) : done(value);
 }
 
@@ -21,7 +21,7 @@ export const SERVED: HostFn = (cpu) => cpu.fault("a core-served call reached the
 /** the result is already in its return registers (see retF/retD); only the return itself is left to do */
 const VRET: unique symbol = Symbol("vret");
 export type HostRet = number | bigint | void | typeof NORET | typeof VRET | typeof ARG0;
-export type HostFn = (cpu: Cpu, a: ArgReader) => HostRet | Promise<HostRet>;
+export type HostFn = (cpu: Cpu, a: ArgReader) => PromiseOrVal<HostRet>;
 
 export interface ArgReader {
   i(): number; u(): number; p(): number; l(): bigint; ul(): bigint; f(): number; d(): number; str(): string;
@@ -236,7 +236,7 @@ export function hostDispatch(cpu: Cpu, slot: number): void {
   const t0 = slowMs ? performance.now() : 0;
   const served = hostTrace.on && bound[slot] ? core.libc_call(cpu.base, bound[slot]) : 2;
   if (served === 1) cpu.fault("bad address in a core-served call");
-  let ret: HostRet | Promise<HostRet>;
+  let ret: PromiseOrVal<HostRet>;
   try { ret = served === 0 ? ARG0 : fn(cpu, a); }
   catch (e) {
     if (e instanceof BadAddress) ret = onBadAddress(cpu, e, kernelSlots[slot] === 1);

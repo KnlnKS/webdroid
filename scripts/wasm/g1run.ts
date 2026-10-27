@@ -28,7 +28,7 @@ if (appDir) {
   appFiles = new Map(await Promise.all(names.map(async (n) => [n, inPage ? new Uint8Array(await (await fetch(`/app/${n}`)).arrayBuffer()) : new Uint8Array(readFileSync(`${appDir}/${n}`))] as [string, Uint8Array])));
   appReadMs = performance.now() - t0;
 }
-const startupList = async (read: (f: string) => Uint8Array | Promise<Uint8Array>): Promise<string[]> => JSON.parse(new TextDecoder().decode(appFiles?.get("startup.json") ?? await read("startup.json"))) as string[];
+const startupList = async (read: (f: string) => PromiseOrVal<Uint8Array>): Promise<string[]> => JSON.parse(new TextDecoder().decode(appFiles?.get("startup.json") ?? await read("startup.json"))) as string[];
 let aot: AotStore | undefined, ahead: number | undefined;
 if (aotDir) {
   const t0 = performance.now();

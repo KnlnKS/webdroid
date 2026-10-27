@@ -71,7 +71,7 @@ export interface WorldOptions {
   note?: (ev: number, arg?: number) => void;
   /** the dex files of the archive at `path`, for the DexFile natives of class loaders (loaders.ts); null for a file that does not exist. Dex files it answers twice
    *  that are the same objects stay in one namespace. Without it a loader cannot open dex files. */
-  dexes?: (path: string) => DexFile[] | null | Promise<DexFile[] | null>;
+  dexes?: (path: string) => PromiseOrVal<DexFile[] | null>;
   /** whether the second tier waits, inline or in the worker: the host is starting an app, and what is hot now is mostly code that runs once */
   holdUpgrades?: () => boolean;
   /** whether the host is answering input, when work that lengthens a collection's pause waits */
@@ -340,7 +340,7 @@ export class World {
   /** classes some compiled code allocates: the ones a virtual call is likely to find */
   allocated = new Set<string>();
   // ---------- open world
-  resolveClass(loader: Loader, name: string, owner: Strand): string | Promise<string> {
+  resolveClass(loader: Loader, name: string, owner: Strand): PromiseOrVal<string> {
     return resolveClass(this, loader, name, owner);
   }
   /** load more dexes. A CHA decision that one of their classes falsifies is undone: its callers go back to lazy-link stubs, so the next call

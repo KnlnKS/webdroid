@@ -37,7 +37,7 @@ class Track extends PcmOutput {
   close(): void { this.stopTimer(); this.release(); }
   /** a blocking write waits while the buffer is full, which is what paces a writer loop; a
    *  non-blocking one takes what fits */
-  write(blocking: boolean, frames: number, take: (frames: number) => void): number | Promise<number> {
+  write(blocking: boolean, frames: number, take: (frames: number) => void): PromiseOrVal<number> {
     const room = () => Math.max(0, Math.floor(this.bufBytes / this.frameBytes() - this.queuedSec() * this.rate));
     if (!blocking) { const n = Math.min(frames, room()); take(n); return n; }
     take(frames);

@@ -26,7 +26,7 @@ const cacheBytes = (pkgs: string[]) =>
 const packagesOf = (uid: number) => uidPackages(uid).map((record) => record.pkg);
 /** the cache bytes queryStatsForUid reports for `uid` */
 export const uidCacheBytes = (uid: number): bigint => cacheBytes(packagesOf(uid));
-function storageStats(pkgs: string[]): JObj | Promise<JObj> {
+function storageStats(pkgs: string[]): PromiseOrVal<JObj> {
   const own = (sub: string) => pkgs.flatMap((pkg) => [`/data/data/${pkg}/${sub}`, `/sdcard/Android/data/${pkg}/${sub}`]);
   return after(newObj("android/app/usage/StorageStats"), (stats) => setDeclared(stats, "android/app/usage/StorageStats", {
     codeBytes: apkBytes(pkgs), dataBytes: bytesUnder(own("")), cacheBytes: cacheBytes(pkgs),
@@ -34,7 +34,7 @@ function storageStats(pkgs: string[]): JObj | Promise<JObj> {
   }));
 }
 const media = (kind: string) => (path: string) => mimeOf(path)?.startsWith(kind) ?? false;
-function externalStats(): JObj | Promise<JObj> {
+function externalStats(): PromiseOrVal<JObj> {
   return after(newObj("android/app/usage/ExternalStorageStats"), (stats) => setDeclared(stats, "android/app/usage/ExternalStorageStats", {
     totalBytes: bytesUnder(["/sdcard/"]), audioBytes: bytesUnder(["/sdcard/"], media("audio/")), videoBytes: bytesUnder(["/sdcard/"], media("video/")),
     imageBytes: bytesUnder(["/sdcard/"], media("image/")), appBytes: bytesUnder(["/sdcard/Android/data/"]), obbBytes: bytesUnder(["/sdcard/Android/obb/"]),

@@ -56,7 +56,7 @@ function* fromLibraryPath(loader: unknown, lib: string): Gen<{ path: string; byt
 }
 /** Runtime.nativeLoad: `file` is a path (ClassLoader.findLibrary's, System.load's) or a bare name
  *  from the class path or the loader's native library path; null once the library is loaded, else the linker's error. `caller` is the class loading it. */
-function nativeLoad(file: string, loader: unknown, caller: unknown = null): string | null | Promise<string | null> {
+function nativeLoad(file: string, loader: unknown, caller: unknown = null): PromiseOrVal<string | null> {
   const lib = file.slice(file.lastIndexOf("/") + 1);
   if (rt.nativeLibs.has(lib.replace(/^lib|\.so$/g, ""))) return null;
   const have = loadedLibs.get(lib);

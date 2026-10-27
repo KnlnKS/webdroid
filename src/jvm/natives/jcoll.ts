@@ -13,12 +13,12 @@ const newCollection = driven(function* newCollection(cls: string, items: unknown
   return c;
 });
 /** A java.util.ArrayList containing `items` in order. */
-export const newArrayList = (items: unknown[] = []): Obj | Promise<Obj> => newCollection("java/util/ArrayList", items, true);
+export const newArrayList = (items: unknown[] = []): PromiseOrVal<Obj> => newCollection("java/util/ArrayList", items, true);
 export const newLinkedHashSet = (items: Iterable<unknown>) => newCollection("java/util/LinkedHashSet", [...items], false);
 
 /** a Java Collection's elements, in its iteration order; their type, which Java's generics erase,
  *  is the caller's to assert */
-export function toJsArray(c: unknown): unknown[] | Promise<unknown[]> {
+export function toJsArray(c: unknown): PromiseOrVal<unknown[]> {
   return c === null || c === undefined ? [] : iterateAll(c);
 }
 const iterateAll = driven(function* iterateAll(c: unknown): Gen<unknown[]> {

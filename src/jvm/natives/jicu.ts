@@ -90,7 +90,7 @@ export function uchar(name: string, desc: string): (...args: unknown[]) => unkno
     (ucharacter) => (fn = ucharacter.call(name, desc))(...args));
 }
 /** u_getIntPropertyValue */
-export const intProperty = uchar("getIntPropertyValue", "(II)I") as (c: number, property: number) => number | Promise<number>;
+export const intProperty = uchar("getIntPropertyValue", "(II)I") as (c: number, property: number) => PromiseOrVal<number>;
 
 const natives: Record<string, Record<string, (...args: never[]) => unknown>> = {
   "libcore/icu/ICU": {

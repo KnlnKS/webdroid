@@ -23,7 +23,7 @@ import { type NinePatchChunk, drawNinePatch } from "./ninepatch.ts";
 import { applyMatrix, canvasLocalBounds, matrixAt } from "./matrix.ts";
 import { type NativeCanvas, type DrawPlan, MASK, IMAGE, drawingCanvas, beginPaint, endPaint, saveLayer, unsupported } from "./canvas.ts";
 
-export function drawPath(nc: NativeCanvas, path: NativePath, p: NativePaint): void | Promise<void> {
+export function drawPath(nc: NativeCanvas, path: NativePath, p: NativePaint): PromiseOrVal<void> {
   const plan = nc.planDraw(p);
   if (!path.inverseFill) return nc.drawShape(p, path, plan);
   if (plan.raster && tryBitmapPath(nc, p, plan.raster, path)) return;

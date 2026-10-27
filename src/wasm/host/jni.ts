@@ -123,7 +123,7 @@ export function wasmJni(w: World): JniVm {
         if (!make) return noSuchMethod("<init>", sig);
         const mark = bridge.begin();
         try {
-          const made = make.fn(...args.map((a) => bridge.toHost(a))) as string | Promise<string>;
+          const made = make.fn(...args.map((a) => bridge.toHost(a))) as PromiseOrVal<string>;
           return made instanceof Promise ? made.then((s) => w.javaString(s)) : w.javaString(made);
         } finally { bridge.end(mark); }
       }

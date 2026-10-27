@@ -15,7 +15,7 @@ const DNS_NAME = /^[A-Za-z0-9.-]{1,253}$/;
 
 export interface ServeHost {
   /** bridge `id`'s session answering a renderer's /webview-call */
-  bridge(request: Request, id: string): Response | Promise<Response>;
+  bridge(request: Request, id: string): PromiseOrVal<Response>;
   /** whether `name` has an address, as getaddrinfo finds one; null when the resolver cannot say */
   nameExists(name: string): Promise<boolean | null>;
   /** the WebView renderer origin, a "*" label standing for each partition (webrenderer.ts), for a
@@ -26,7 +26,7 @@ export interface ServeHost {
   isApp(origin: string, url: URL): boolean;
   proxy?: Omit<ProxyOptions, "bridgeCall">;
 }
-type Route = (request: Request) => Response | Promise<Response>;
+type Route = (request: Request) => PromiseOrVal<Response>;
 
 /** what the app's page asks of its backend, which Pages forwards to the Worker (scripts/build-prod.ts) */
 export const BACKEND_PATHS = ["/proxy", "/dns", "/dns-query", "/webview-origin", "/tcp", "/webview-socket"];

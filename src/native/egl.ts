@@ -21,9 +21,9 @@ const SATISFIED = 0x30f6, TIMEOUT = 0x30f5;
 interface Sync {
   readonly type: number; readonly condition: number;
   signaled(): boolean;
-  clientWait(flush: number, timeout: bigint): number | null | Promise<number | null>;
+  clientWait(flush: number, timeout: bigint): PromiseOrVal<number | null>;
   /** the current context's later commands wait for it */
-  serverWait(gl: WebGL2RenderingContext): number | Promise<number>;
+  serverWait(gl: WebGL2RenderingContext): PromiseOrVal<number>;
   destroy(): void;
   /** the native fence a sync_file can carry */
   readonly fence: Fence | null;
@@ -38,7 +38,7 @@ class GlSync implements Sync {
     return clientWait(this.gl, this.sync, flush, timeout).then((r) => r === 0x911b ? TIMEOUT : r === 0x911d ? null : SATISFIED);
   }
   // WebGL waits for no other context's fence, so the calling thread does
-  serverWait(gl: WebGL2RenderingContext): number | Promise<number> {
+  serverWait(gl: WebGL2RenderingContext): PromiseOrVal<number> {
     if (this.gl !== gl) return clientWait(this.gl, this.sync, this.gl.SYNC_FLUSH_COMMANDS_BIT, FOREVER).then(() => 1);
     gl.waitSync(this.sync, 0, gl.TIMEOUT_IGNORED);
     return 1;
@@ -51,11 +51,11 @@ class NativeSync implements Sync {
   readonly fence: Fence;
   constructor(fence: Fence) { this.fence = fence; }
   signaled(): boolean { return this.fence.signaled; }
-  clientWait(_flush: number, timeout: bigint): number | Promise<number> {
+  clientWait(_flush: number, timeout: bigint): PromiseOrVal<number> {
     if (this.fence.signaled) return SATISFIED;
     return timeout ? this.fence.wake.wait(timeout >= FOREVER ? -1 : Number(timeout / 1000000n)).then((done) => done ? SATISFIED : TIMEOUT) : TIMEOUT;
   }
-  serverWait(): number | Promise<number> { return this.fence.signaled ? 1 : this.fence.done.then(() => 1); }
+  serverWait(): PromiseOrVal<number> { return this.fence.signaled ? 1 : this.fence.done.then(() => 1); }
   destroy(): void {}
 }
 const syncs = new Handles<Sync>("EGLSync");
@@ -109,7 +109,7 @@ function createSync(t: object, display: number, type: number, want: egl.Attribs)
     : new GlSync(gl, sync));
 }
 /** EGL_KHR_wait_sync's and EGL 1.5's wait: the current context's later commands wait for the fence */
-function waitSync(t: object, display: number, h: number, flags: number): number | Promise<number> {
+function waitSync(t: object, display: number, h: number, flags: number): PromiseOrVal<number> {
   egl.begin(t);
   if (!egl.ready(t, display)) return 0;
   const s = syncs.find(h), gl = activate(t)?.gl;

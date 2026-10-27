@@ -29,7 +29,7 @@ export const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme"
 /** the directional formatting characters, which have no advance of their own */
 export const isBidiControl = (c: number) => c === 0x200e || c === 0x200f || c >= 0x202a && c <= 0x202e || c >= 0x2066 && c <= 0x2069;
 /** `f` over the tab's HarfBuzz, again once any font it reached has loaded */
-const shaped = <T>(f: (hb: HarfBuzz) => T): T | Promise<T> => after(harfBuzz(), (hb) => withFonts(() => f(hb)));
+const shaped = <T>(f: (hb: HarfBuzz) => T): PromiseOrVal<T> => after(harfBuzz(), (hb) => withFonts(() => f(hb)));
 
 const breakAfter = (c: number) => c === 0x20 || c >= 0x2000 && c <= 0x200a || c === 0x3000 || isBidiControl(c);
 const breakBefore = (c: number) => breakAfter(c) || c >= 0x3400 && c <= 0x9fff;
@@ -167,7 +167,7 @@ const colorText = new WeakMap<Font, Map<number, string>>();
 
 /** Layout for text[start, start + count) in one direction, context around it (TextShaper's
  *  shapeTextRun) */
-export function shapeTextRun(text: string, start: number, count: number, ctxStart: number, ctxCount: number, rtl: boolean, p: NativePaint): Layout | Promise<Layout> {
+export function shapeTextRun(text: string, start: number, count: number, ctxStart: number, ctxCount: number, rtl: boolean, p: NativePaint): PromiseOrVal<Layout> {
   return shaped(() => layout(text, start, start + count, ctxStart, ctxStart + ctxCount, rtl, p));
 }
 /** Layout::doLayoutRun: each LayoutSplitter piece in its context, the paint's hyphen edits on the
@@ -358,7 +358,7 @@ function glyphBounds(font: NativeFont, glyph: number, p: NativePaint): [advance:
   });
 }
 /** Layout::getBounds: the union of the laid-out glyphs' bounds at their positions, null for none */
-export function layoutBounds(text: string, rtl: boolean, p: NativePaint): [number, number, number, number] | null | Promise<[number, number, number, number] | null> {
+export function layoutBounds(text: string, rtl: boolean, p: NativePaint): PromiseOrVal<[number, number, number, number] | null> {
   return shaped((hb) => {
     const l = layout(text, 0, text.length, 0, text.length, rtl, p);
     let out: [number, number, number, number] | null = null;
@@ -376,7 +376,7 @@ export function layoutBounds(text: string, rtl: boolean, p: NativePaint): [numbe
 // ── Paint.hasGlyph and Paint.getTextPath
 /** android_graphics_Paint's hasGlyph: well-formed UTF-16 whose variation sequences a family supports,
  *  laid out without .notdef and, for more than one character, as one glyph (a ligature) */
-export function hasGlyph(text: string, rtl: boolean, p: NativePaint): boolean | Promise<boolean> {
+export function hasGlyph(text: string, rtl: boolean, p: NativePaint): PromiseOrVal<boolean> {
   return shaped((hb) => {
     const families = resolveDefault(p.tf).collection.families;
     let chars = 0, prev = -1;
@@ -417,7 +417,7 @@ class PathSink {
 }
 /** SkFont::getPaths over a layout's glyphs, each at (x, y) plus its position, appended to `dst`: the
  *  paint's size, scale and skew, a fake italic's skew added (fake bold's emboldening is not) */
-export function layoutOutlines(l: Layout, p: NativePaint, x: number, y: number, dst: NativePath): void | Promise<void> {
+export function layoutOutlines(l: Layout, p: NativePaint, x: number, y: number, dst: NativePath): PromiseOrVal<void> {
   return shaped((hb) => {
     const sink = new PathSink(dst);
     for (let i = 0; i < l.ids.length; i++) {
@@ -435,7 +435,7 @@ let glyphMatrix: DOMMatrix | null = null;
  *  paint's size, scale and skew. `draw` draws the run with the paint as the canvas draws any shape.
  *  The glyphs are copied first: the arrays are the native's, which a wait for the font must not hold. */
 export function drawGlyphs(draw: (run: Outline) => void, ids: Int32Array, idOffset: number,
-  positions: Float32Array, positionOffset: number, count: number, fontHandle: bigint, p: NativePaint): void | Promise<void> {
+  positions: Float32Array, positionOffset: number, count: number, fontHandle: bigint, p: NativePaint): PromiseOrVal<void> {
   if (count <= 0) return;
   const font = fontOf(fontHandle), glyphs = ids.slice(idOffset, idOffset + count), at = positions.slice(positionOffset, positionOffset + count * 2);
   return shaped((hb) => {

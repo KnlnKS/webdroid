@@ -14,10 +14,10 @@ type Record = { key: string; operation: PendingOperation; cancellations: Set<() 
 /** PendingIntentController's records, keyed as PendingIntentRecord.Key: creator, kind, request code,
  *  flags and an intent equal under filterEquals */
 export class PendingIntents {
-  private codec: IntentCodec; private dispatch: (operation: PendingOperation, fill: ParcelData | null, alarmCount: number) => void | Promise<void>;
+  private codec: IntentCodec; private dispatch: (operation: PendingOperation, fill: ParcelData | null, alarmCount: number) => PromiseOrVal<void>;
   private records = new Map<number, Record>();
   private nextId = 1;
-  constructor(codec: IntentCodec, dispatch: (operation: PendingOperation, fill: ParcelData | null, alarmCount: number) => void | Promise<void>) { this.codec = codec; this.dispatch = dispatch; }
+  constructor(codec: IntentCodec, dispatch: (operation: PendingOperation, fill: ParcelData | null, alarmCount: number) => PromiseOrVal<void>) { this.codec = codec; this.dispatch = dispatch; }
   private async find(key: string, intent: ParcelData, codec: IntentCodec): Promise<number | undefined> {
     for (const [id, record] of this.records) if (record.key === key && await codec.filterEquals(record.operation.intent, intent)) return id;
     return undefined;

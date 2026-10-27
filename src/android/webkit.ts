@@ -327,7 +327,7 @@ export class WebViewChromium extends JObj {
     }));
   }
   /** Chromium JSON-encodes the completion value; undefined, functions and throws all read as null */
-  evalJs(js: string): string | Promise<string> {
+  evalJs(js: string): PromiseOrVal<string> {
     if (!this.host.bridge) return "null";
     return this.ask({ kind: "eval", script: js }, 30_000).catch(() => "null");
   }

@@ -108,7 +108,7 @@ function sigaltstack(cpu: Cpu, a: ArgReader): number {
 
 /** sigtimedwait: the first signal of `set` pending or queued within `ms` (-1: forever), its siginfo
  *  written to `info`; -EAGAIN when none comes */
-export function sigtimedwait(cpu: Cpu, set: bigint, info: () => number, ms: number): number | Promise<number> {
+export function sigtimedwait(cpu: Cpu, set: bigint, info: () => number, ms: number): PromiseOrVal<number> {
   const take = (): number => {
     const taken = cpu.takePending((sig) => blocked(set, sig));
     if (!taken) return 0;

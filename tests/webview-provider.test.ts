@@ -14,7 +14,7 @@ beforeAll(startMainLooper);
 describe("webfragment", () => {
   class FragmentClient extends JObj {
     events: unknown[][] = [];
-    visited: (() => void | Promise<void>) | null = null;
+    visited: (() => PromiseOrVal<void>) | null = null;
     provider: WebViewChromium | null = null;
   }
   /** a WebView's provider without its view: these exercise the provider's navigation alone */

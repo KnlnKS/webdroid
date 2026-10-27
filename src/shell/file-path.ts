@@ -22,7 +22,7 @@ export type FilePathCalls = {
   fileSetAttributes(path: string, change: AttributeChange): Promise<number>;
 }
 type Operations = Omit<FilePathCalls, "filePrepare">;
-type Answering<T, Sync extends boolean> = { [K in keyof T]: T[K] extends (...args: infer A) => Promise<infer R> ? (...args: A) => Sync extends true ? R : R | Promise<R> : never };
+type Answering<T, Sync extends boolean> = { [K in keyof T]: T[K] extends (...args: infer A) => Promise<infer R> ? (...args: A) => Sync extends true ? R : PromiseOrVal<R> : never };
 /** the path operations, each answering -errno or 0 (fileStat and fileList an errno beside the value) */
 export type FilePaths = Answering<Operations, false>;
 /** The package a path belongs to, as Android 11+ scopes them: its internal data directories and its

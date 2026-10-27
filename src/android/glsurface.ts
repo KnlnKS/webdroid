@@ -55,7 +55,7 @@ export function surfaceTarget(win: unknown): GlSurface | null {
 }
 /** EGLImpl's native window: a Surface or SurfaceTexture, or the Surface of a SurfaceView's or a
  *  SurfaceHolder's, which AOSP's own classes answer through Java */
-export function windowSurface(win: unknown): GlSurface | null | Promise<GlSurface | null> {
+export function windowSurface(win: unknown): PromiseOrVal<GlSurface | null> {
   const s = surfaceTarget(win);
   if (s || !(win instanceof JObj)) return s;
   const holder = iof(win, "android/view/SurfaceView") ? vcall(win, "getHolder", "()Landroid/view/SurfaceHolder;") : win;

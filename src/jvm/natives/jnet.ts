@@ -214,7 +214,7 @@ rt.register({
 // server for a loopback URL): a page cannot speak raw HTTP to another origin. The proxy forwards `x-wd-*` request headers with the prefix
 // stripped and, with manual=1, hands a redirect back with its status in x-wd-status.
 /** a URL's external form, through its Java API */
-const urlText = (url: unknown) => vcall(url, "toExternalForm", "()Ljava/lang/String;") as string | Promise<string>;
+const urlText = (url: unknown) => vcall(url, "toExternalForm", "()Ljava/lang/String;") as PromiseOrVal<string>;
 // URL.createBuiltinHandler instantiates these by name for http and https, as OkHttp's are on a
 // device; their connections are the fetch-backed ones below.
 class JHttpHandler extends JObj {}
@@ -587,7 +587,7 @@ rt.register({
       return after(vcall(this, "getLocalCertificates", "()[Ljava/security/cert/Certificate;") as unknown[] | null, (certs) => certs === null ? null : subjectOf(certs));
     }),
     "getServerCertificates()[Ljava/security/cert/Certificate;": waits(function (this: JHttpsURLConnection) {
-      return after(vcall(this.url, "getHost", "()Ljava/lang/String;") as string | Promise<string>, relayChain);
+      return after(vcall(this.url, "getHost", "()Ljava/lang/String;") as PromiseOrVal<string>, relayChain);
     }),
     "getPeerPrincipal()Ljava/security/Principal;": waits(function (this: JHttpsURLConnection) {
       return after(vcall(this, "getServerCertificates", "()[Ljava/security/cert/Certificate;") as unknown[], subjectOf);

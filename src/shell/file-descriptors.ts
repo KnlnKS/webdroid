@@ -56,11 +56,11 @@ export type TakenRight = CrossingSocket | { token: number; path: string; flags: 
  *  page's kernel cannot hold), takes a right sent to it as a descriptor of its own, and discards one it staged
  *  (`staged`) or received and will not take. A socket passes its rights parked, for whichever process claims them. */
 export type DescriptorRights = {
-  stage(fd: number): number | Promise<number> | null;
-  take(token: number): number | Promise<number>;
+  stage(fd: number): PromiseOrVal<number> | null;
+  take(token: number): PromiseOrVal<number>;
   discard(token: number, staged: boolean): Promise<number>;
-  park(fd: number): number | Promise<number> | null;
-  claim(ticket: number): number | Promise<number>;
+  park(fd: number): PromiseOrVal<number> | null;
+  claim(ticket: number): PromiseOrVal<number>;
 };
 /** a session's open file: its own, staged for another process, or received and not yet taken */
 type Descriptor = { fd: number; file: OpenFile; state: "open" | "staged" | "incoming" };
@@ -78,7 +78,7 @@ function rangeError(mapping: Mapping, offset: number, length: number, access: nu
 type ParcelObject = ParcelData["objects"][number][1];
 /** a copy of `data` whose objects are what `map` makes of them; on failure `undo` gets the copy as far as it got,
  *  to release the rights it holds */
-export async function mapRights(data: ParcelData, map: (object: ParcelObject, at: number) => ParcelObject | Promise<ParcelObject>,
+export async function mapRights(data: ParcelData, map: (object: ParcelObject, at: number) => PromiseOrVal<ParcelObject>,
   undo: (partial: ParcelData) => Promise<void>): Promise<ParcelData> {
   const mapped: ParcelData = { bytes: data.bytes.slice(), objects: [] };
   try {
@@ -160,13 +160,13 @@ export class FileDescriptors {
     return token;
   }
 
-  private ordered<T>(file: OpenFile, operation: () => T | Promise<T>): Promise<T> {
+  private ordered<T>(file: OpenFile, operation: () => PromiseOrVal<T>): Promise<T> {
     const pending = (this.queues.get(file.content) ?? Promise.resolve()).then(operation);
     this.queues.set(file.content, pending.then(() => {}, () => {}));
     return pending;
   }
   /** `operation` on a session's descriptor or lease, after the operations already queued on its open file */
-  private inOrder<T extends { file: OpenFile }, R>(session: Session, entry: T | undefined, operation: (entry: T) => R | Promise<R>): number | Promise<number | R> {
+  private inOrder<T extends { file: OpenFile }, R>(session: Session, entry: T | undefined, operation: (entry: T) => PromiseOrVal<R>): number | Promise<number | R> {
     if (!entry) return -E.BADF;
     return this.ordered(entry.file, async () => {
       if (session.dead) return -E.BADF;
@@ -176,7 +176,7 @@ export class FileDescriptors {
   }
   /** Retire the public token at dispatch. Already-dispatched operations still own their
    *  descriptor until the ordered close, preventing reuse during an async read. */
-  private retire(session: Session, token: number, staged: boolean): number | Promise<number> {
+  private retire(session: Session, token: number, staged: boolean): PromiseOrVal<number> {
     const descriptor = session.descriptors.get(token);
     if (!descriptor || staged && descriptor.state !== "staged") return -E.BADF;
     session.descriptors.delete(token);
@@ -194,7 +194,7 @@ export class FileDescriptors {
     return -E.BADF;
   }
   /** a staged right parked for whichever process claims its ticket */
-  private async park(session: Session, staged: number | Promise<number>): Promise<number> {
+  private async park(session: Session, staged: PromiseOrVal<number>): Promise<number> {
     const token = await staged;
     if (token < 0) return token;
     const right = await this.retain(session.pid, token);
@@ -231,7 +231,7 @@ export class FileDescriptors {
   /** a session's requests; once it ends its tables are empty, and nothing new enters them */
   private calls(s: Session): DescriptorCalls {
     /** `operation` on the session's descriptor `fd`, after those queued on its open file */
-    const on = <R>(fd: number, operation: (descriptor: Descriptor) => R | Promise<R>) => this.inOrder(s, s.descriptors.get(fd), operation);
+    const on = <R>(fd: number, operation: (descriptor: Descriptor) => PromiseOrVal<R>) => this.inOrder(s, s.descriptors.get(fd), operation);
     const stage = (right: number | CrossingSocket) => typeof right === "number" ? on(right, descriptor => this.stageFd(s, descriptor.fd)) : this.adopt(s, right);
     /** what the process takes: an open file the kernel keeps, named by its token */
     const taken = (token: number, right: Descriptor | CrossingSocket | number): number | TakenRight => typeof right === "number" || "port" in right ? right :

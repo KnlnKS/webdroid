@@ -21,14 +21,14 @@ export function vcallOn(thread: JThread, obj: unknown, name: string, desc: strin
 export const vcall = (obj: any, name: string, desc: string, ...args: unknown[]): any => java.vcall(obj, name, desc, ...args);
 export const scall = (cls: string, name: string, desc: string, ...args: unknown[]): any => java.scall(cls, name, desc, ...args);
 export const newObj = (cls: string, desc?: string, ...args: unknown[]): any => java.newObj(cls, desc, ...args);
-export const staticField = <T = unknown>(cls: string, field: string): T | Promise<T> => java.staticField<T>(cls, field);
-export const linkInit = (cls: string): JavaClass | Promise<JavaClass> => java.linkInit(cls);
+export const staticField = <T = unknown>(cls: string, field: string): PromiseOrVal<T> => java.staticField<T>(cls, field);
+export const linkInit = (cls: string): PromiseOrVal<JavaClass> => java.linkInit(cls);
 export const linkClass = (cls: string): JavaClass => java.linkClass(cls);
 export const initClass = (cls: string): Promise<void> | null => java.initClass(cls);
 export const iof = (o: unknown, cls: string): boolean => java.iof(o, cls);
 export const classNameOf = (o: unknown): string | undefined => java.classNameOf(o);
 export const callOn = <T>(thread: JThread, call: () => T): T => java.callOn(thread, call);
-export const after = <R, T>(r: R | Promise<R>, f: (v: R) => T | Promise<T>): T | Promise<T> => java.after(r, f);
+export const after = <R, T>(r: PromiseOrVal<R>, f: (v: R) => PromiseOrVal<T>): PromiseOrVal<T> => java.after(r, f);
 
 /** a thread as host code knows it: the identity natives key per-thread state by (EGL bindings, native Cpus, Loopers) */
 export class JThread extends JObj {

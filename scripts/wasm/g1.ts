@@ -154,7 +154,7 @@ const checkSource = (where: string) => {
 };
 
 for (const engine of engines) {
-  let run: (c: G1Config) => G1Result | Promise<G1Result>, label = `node ${process.version} (V8 ${process.versions.v8})`, close = async () => {};
+  let run: (c: G1Config) => PromiseOrVal<G1Result>, label = `node ${process.version} (V8 ${process.versions.v8})`, close = async () => {};
   checkSource(`before ${engine} setup`);
   if (guardFailures.length) run = c => ({ workload: c.workload, result: "", times: [], error: guardFailures.join("; ") });
   else if (engine === "node") { const file = join(out, "g1run.mjs"); writeFileSync(file, await bundleFor("node", join(here, "g1run.ts"))); run = nodeRun(file); }

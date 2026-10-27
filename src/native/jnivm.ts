@@ -13,7 +13,7 @@ export interface JniVm {
   /** FindClass: the class `name` of the loader of `from`, the class of the native method that asks, linked but not initialized; null when there is none */
   find(name: string, from?: JniClass | null): JniClass | null;
   /** Executed FindClass may enter a Java loader and suspend; export binding uses the known-class lookup above. */
-  resolve(name: string, from?: JniClass | null): JniClass | null | Promise<JniClass | null>;
+  resolve(name: string, from?: JniClass | null): PromiseOrVal<JniClass | null>;
   /** a class name or descriptor in the binary names JNI's short names spell */
   binaryName(name: string): string;
   /** the java.lang.Class of a class */
@@ -76,8 +76,8 @@ export interface JniVm {
   caught(e: unknown): unknown;
   /** what to throw so that Java sees throwable `t` raised by a native */
   raise(t: unknown): unknown;
-  describe(t: unknown): Promise<string> | string;
-  monitor(o: unknown, enter: boolean): Promise<void> | void;
+  describe(t: unknown): PromiseOrVal<string>;
+  monitor(o: unknown, enter: boolean): PromiseOrVal<void>;
   /** a direct buffer over native memory, its address and capacity; the address is a native address, 0 for a buffer that has none */
   newBuffer(address: number | bigint, capacity: number): unknown;
   bufferAddress(o: unknown): bigint | null;

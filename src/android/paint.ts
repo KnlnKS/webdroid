@@ -141,7 +141,7 @@ export const defaultPaint = new NativePaint();
 // ── the bridge
 /** A Java Paint's native state, as a draw sees it: Paint.getNativeInstance first hands the native
  *  paint its shader's and colour filter's current native instances (a Promise while that call waits) */
-export const paintOf = (p: object): NativePaint | Promise<NativePaint> =>
+export const paintOf = (p: object): PromiseOrVal<NativePaint> =>
   after(vcall(p, "getNativeInstance", "()J"), (h: bigint) => deref<NativePaint>(h));
 const TEXT_PAINT = "android/text/TextPaint";
 /** `new Paint(ANTI_ALIAS_FLAG)` or `new TextPaint(ANTI_ALIAS_FLAG)` from host code, which waits when a call it makes links code */
@@ -223,7 +223,7 @@ export function beginPaintShadow(ctx: Ctx2D, p: NativePaint): boolean {
 
 /** skpathutils::FillPathWithPaint: the path effect, then SkStroke (stroke-and-fill adds the source
  *  to the outline, as SkStroke's fill does); false for a hairline */
-function fillPath(p: NativePaint, src: NativePath, dst: NativePath): boolean | Promise<boolean> {
+function fillPath(p: NativePaint, src: NativePath, dst: NativePath): PromiseOrVal<boolean> {
   const rec = strokeRec(p), tmp = new NativePath();
   const path = p.pathEffect?.filter(tmp, src, rec) ? tmp : src;
   if (rec.fill || rec.width === 0) { dst.set(path); return rec.fill; }
@@ -263,7 +263,7 @@ function isRtl(bidi: number, text: string): boolean {
 }
 /** Paint::getTextPath: the run shaped as minikin lays it out, aligned, its glyph outlines at their
  *  positions (fake bold's outline emboldening is not applied) */
-function textPath(p: NativePaint, bidi: number, text: string, x: number, y: number, path: bigint): void | Promise<void> {
+function textPath(p: NativePaint, bidi: number, text: string, x: number, y: number, path: bigint): PromiseOrVal<void> {
   const dst = pathAt(path);
   dst.reset();
   return after(shapeTextRun(text, 0, text.length, 0, text.length, isRtl(bidi, text), p), (layout) =>

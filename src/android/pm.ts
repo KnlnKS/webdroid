@@ -250,11 +250,11 @@ function* buildApplicationInfo$(record: PackageRecord, flags: number): Gen<JObj>
 }
 export const longVersionCode = (root: XmlNode) => BigInt((attr(root, "versionCode")?.data ?? 0) >>> 0) | BigInt(attr(root, "versionCodeMajor")?.data ?? 0) << 32n;
 
-const appInfos = new WeakMap<PackageRecord, Map<number, () => JObj | Promise<JObj>>>();
+const appInfos = new WeakMap<PackageRecord, Map<number, () => PromiseOrVal<JObj>>>();
 /** the package's ApplicationInfo for these flags; equal answers share one, which each caller gets a
  *  copy of. A build in flight is shared through `once`: its pending drive is a suspension that
  *  another caller's frames would join, resuming inside the first caller's stack. */
-function applicationInfoOf(record: PackageRecord, flags: number): JObj | Promise<JObj> {
+function applicationInfoOf(record: PackageRecord, flags: number): PromiseOrVal<JObj> {
   const key = flags & (GET_META_DATA | GET_SHARED_LIBRARY_FILES);
   let cache = appInfos.get(record);
   if (!cache) appInfos.set(record, cache = new Map());
@@ -599,7 +599,7 @@ const unknownPackage = (pkg: string) => rt.mkThrowable("java/lang/IllegalArgumen
 // PackageManager.Property: a manifest <property> of the application or a component, as the package
 // parser reads it (a resource reference, else a boolean, integer, float or string value)
 const COMPONENT_TYPES: [number, ComponentKind | null][] = [[1, null], [2, "activity"], [3, "provider"], [4, "receiver"], [5, "service"]];
-function propertyOf(owner: PackageRecord, node: XmlNode, cls: string | null): JObj | Promise<JObj> | null {
+function propertyOf(owner: PackageRecord, node: XmlNode, cls: string | null): PromiseOrVal<JObj> | null {
   const name = attrStr(node, "name");
   if (!name) return null;
   const P = PKG + "PackageManager$Property", resource = attr(node, "resource"), value = attr(node, "value");

@@ -64,8 +64,8 @@ export async function performAction(input: { a: Act; screen: Screen; deadlineMs:
     a.type,
   );
   // queries need the main loop too: a wedged loop must fail the step, not hold the run
-  const query = <T>(p: T | Promise<T>, what: string) => withDeadline(Promise.resolve(p), deadlineMs, what);
-  const ready = async <T>(read: () => T | Promise<T>, what: string): Promise<NonNullable<T>> => {
+  const query = <T>(p: PromiseOrVal<T>, what: string) => withDeadline(Promise.resolve(p), deadlineMs, what);
+  const ready = async <T>(read: () => PromiseOrVal<T>, what: string): Promise<NonNullable<T>> => {
     const end = performance.now() + deadlineMs;
     for (;;) {
       const remaining = end - performance.now();

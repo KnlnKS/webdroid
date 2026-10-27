@@ -63,7 +63,7 @@ class UnixSocket extends Socket {
     this.backlog ??= [];
     return 0;
   }
-  accept(fd: number, flags: number): Accepted | number | Promise<Accepted | number> {
+  accept(fd: number, flags: number): PromiseOrVal<Accepted | number> {
     if (!this.backlog) return -E.INVAL;
     // the peer is unnamed
     const attempt = (): Accepted | null => { const c = this.backlog!.shift(); return c ? { fd: installSocket(c, flags), peer: unixAddress("") } : null; };
@@ -164,7 +164,7 @@ class UnixSocket extends Socket {
   }
   /** the bytes queued for it, or a message socket's next message (cut to the target, MSG_TRUNC's
    *  length its whole); a stream read stops after bytes that passed open files */
-  receive(fd: number, target: Uint8Array, flags: number): Received | number | Promise<Received | number> {
+  receive(fd: number, target: Uint8Array, flags: number): PromiseOrVal<Received | number> {
     const rx = this.rx;
     if (!rx) return this.type === SOCK_STREAM ? -E.INVAL : -E.NOTCONN;
     const credentials = this.option(SOL_SOCKET, SO_PASSCRED) ? processCredentials() : null;

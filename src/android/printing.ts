@@ -23,7 +23,7 @@ const PRINT_DIALOG = "android.print.PRINT_DIALOG";
 const STATE_CREATED = 1, STATE_STARTED = 3, STATE_COMPLETED = 5, STATE_FAILED = 6, STATE_CANCELED = 7;
 type Job = { info: JObj; adapter: JObj };
 const jobs = new Map<string, Job>();
-const jobKey = (id: JObj): string | Promise<string> => vcall(id, "flattenToString", `()${S}`);
+const jobKey = (id: JObj): PromiseOrVal<string> => vcall(id, "flattenToString", `()${S}`);
 const setState = (job: Job, state: number) => vcall(job.info, "setState", "(I)V", state);
 
 hostService("print", "webdroid/PrintManagerService", "android/print/IPrintManager$Stub", {

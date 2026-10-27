@@ -52,8 +52,8 @@ export class PermissionStore {
   }
 }
 export type PermissionAccess = {
-  permissionCheck(pkg: string, names: string[]): boolean[] | Promise<boolean[]>;
-  permissionGrant(pkg: string, names: string[]): void | Promise<void>;
+  permissionCheck(pkg: string, names: string[]): PromiseOrVal<boolean[]>;
+  permissionGrant(pkg: string, names: string[]): PromiseOrVal<void>;
 };
 export function canonicalPermissionCommands(store: PermissionStore, authorize: (pkg: string) => void): PermissionAccess {
   return {
@@ -77,9 +77,9 @@ function permissionHeld(store: PermissionStore, pkg: string, name: string): bool
   if (SPECIAL_ACCESS.has(name)) return specialAtInstall(record, name) || !!record?.requested.has(name) && store.get(pkg).has(name);
   return !RUNTIME_PERMISSIONS.has(name) || store.get(pkg).has(name) || !!record?.grants.has(name);
 }
-const permissionsGranted = (pkg: string, names: string[]): boolean[] | Promise<boolean[]> => permissionAccess().permissionCheck(pkg, names);
+const permissionsGranted = (pkg: string, names: string[]): PromiseOrVal<boolean[]> => permissionAccess().permissionCheck(pkg, names);
 /** a permission a user grants (runtime, or special access) is read from the store; any other is held */
-export const permissionGranted = (pkg: string, name: string): boolean | Promise<boolean> =>
+export const permissionGranted = (pkg: string, name: string): PromiseOrVal<boolean> =>
   RUNTIME_PERMISSIONS.has(name) || SPECIAL_ACCESS.has(name) ? after(permissionsGranted(pkg, [name]), values => values[0]) : true;
 /** whether a package holds a platform permission no third-party app is granted at install: it is a
  *  system package that requests it (privileged or preinstalled), or special access held without its screen */
@@ -88,7 +88,7 @@ export const holdsPlatformPermission = (pkg: string, name: string): boolean => {
   if (SPECIAL_ACCESS.has(name)) return specialAtInstall(record, name);
   return !!record && (record.grants.has(name) || record.system && record.requested.has(name));
 };
-export function grantPermissions(names: string[]): Int32Array | Promise<Int32Array> {
+export function grantPermissions(names: string[]): PromiseOrVal<Int32Array> {
   const pkg = appHost?.pkg ?? "", record = packages.get(pkg);
   // only runtime permissions are asked for; any other name answers as it is held. An app targeting below
   // Android 13 cannot ask for POST_NOTIFICATIONS: the system prompts for it (notification.ts)
@@ -98,7 +98,7 @@ export function grantPermissions(names: string[]): Int32Array | Promise<Int32Arr
     after(permissionsGranted(pkg, names), values => Int32Array.from(values, value => value ? 0 : -1)));
 }
 /** a permission the system's own prompt asked for, answered by the same policy */
-export const grantPrompted = (pkg: string, name: string): void | Promise<void> => permissionAccess().permissionGrant(pkg, [name]);
+export const grantPrompted = (pkg: string, name: string): PromiseOrVal<void> => permissionAccess().permissionGrant(pkg, [name]);
 // GrantPermissionsActivity, which Activity.requestPermissions starts: asking grants, and the
 // answer is the names with their results
 const PERMISSIONS = "android.content.pm.extra.REQUEST_PERMISSIONS_";
@@ -133,7 +133,7 @@ export const notHeld = (uid: number, permission: string, message?: string): Erro
   rt.mkThrowable("java/lang/SecurityException", `${message ? message + ": " : ""}Neither user ${uid} nor current process has ${permission}.`);
 /** PERMISSION_GRANTED (0) or PERMISSION_DENIED (-1) for a package: one granted by signature is held by
  *  a system package that requests it, as holdsPlatformPermission answers, or one signed as its declarer */
-export function checkPermission(permission: string, pkg: string): number | Promise<number> {
+export function checkPermission(permission: string, pkg: string): PromiseOrVal<number> {
   const record = packages.get(pkg);
   if (record?.grants.has(permission)) return 0;
   if (!record?.requested.has(permission)) return -1;
@@ -159,7 +159,7 @@ export const protectionLevel = (name: string): number | null => {
 
 /** PermissionManagerService.checkUidPermission: root and system hold every permission; an app's uid
  *  holds one a package with that uid holds */
-export function checkUidPermission(name: string, uid: number): number | Promise<number> {
+export function checkUidPermission(name: string, uid: number): PromiseOrVal<number> {
   if (uid === 0 || uid === 1000) return 0;
   const pending: Promise<number>[] = [];
   for (const record of packages.values()) if (record.uid === uid) {

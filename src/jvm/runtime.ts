@@ -32,7 +32,7 @@ export interface NativeSpec {
 /** A native written as a generator yields each Java result, value or Promise (Runtime.drive). */
 export type Gen<T = any> = Generator<unknown, T, any>;
 /** the value of `v` once it settles, typed: `yield* awaited(x)` where `yield x` is any */
-export function* awaited<T>(v: T | Promise<T>): Gen<T> { return yield v; }
+export function* awaited<T>(v: PromiseOrVal<T>): Gen<T> { return yield v; }
 
 /** what an authoring helper (driven, waits, retries, javaValues, ranged, stubs) declares of a native function, which its registration reads */
 type Declared = Omit<NativeImpl, "fn"> & { body?: Function };
@@ -69,7 +69,7 @@ export class Runtime {
   bootResources = new Map<string, { jar: string; read(): Uint8Array }>();
   hasClasspath(name: string): boolean { return this.bootResources.has(name) || Object.hasOwn(this.classpath, name) || !!this.classpathSource?.has(name); }
   classpathNames(): string[] { return [...Object.keys(this.classpath), ...this.classpathSource?.names() ?? []]; }
-  readClasspath(name: string): Uint8Array | null | Promise<Uint8Array | null> {
+  readClasspath(name: string): PromiseOrVal<Uint8Array | null> {
     const boot = this.bootResources.get(name);
     if (boot) return boot.read();
     return Object.hasOwn(this.classpath, name) ? this.classpath[name] : this.classpathSource?.entry(name) ?? null;
@@ -101,8 +101,8 @@ export class Runtime {
    * resumed native runs as the strand that entered it and releases it when it finishes or
    * suspends again; nothing resumes once the process has exited.
    */
-  drive<T>(g: Gen<T>): T | Promise<T> { return this.driveStep(g, undefined, false, this.cur, false); }
-  private driveStep<T>(g: Gen<T>, input: unknown, threw: boolean, strand: Strand, resumed: boolean): T | Promise<T> {
+  drive<T>(g: Gen<T>): PromiseOrVal<T> { return this.driveStep(g, undefined, false, this.cur, false); }
+  private driveStep<T>(g: Gen<T>, input: unknown, threw: boolean, strand: Strand, resumed: boolean): PromiseOrVal<T> {
     for (;;) {
       let step: IteratorResult<unknown, T>;
       try { step = threw ? g.throw(input) : g.next(input); }
@@ -116,7 +116,7 @@ export class Runtime {
       input = value; threw = false;
     }
   }
-  private resumeStep<T>(g: Gen<T>, input: unknown, threw: boolean, strand: Strand): T | Promise<T> {
+  private resumeStep<T>(g: Gen<T>, input: unknown, threw: boolean, strand: Strand): PromiseOrVal<T> {
     if (processExited()) return never();
     this.st(strand);
     return this.driveStep(g, input, threw, strand, true);
@@ -290,7 +290,7 @@ export function driven<A extends unknown[], T>(g: (this: any, ...a: A) => Gen<T>
   return declare(function (this: unknown) { return rt.drive(g.apply(this, arguments as unknown as A)) as Driven<T>; }, { wait: "maybe", body: g });
 }
 /** A driven generator's result: its value or a Promise of it (unknown for an untyped `Gen`). */
-type Driven<T> = unknown extends T ? unknown : T | Promise<T>;
+type Driven<T> = unknown extends T ? unknown : PromiseOrVal<T>;
 /** Marks native `fn`, which answers a Promise for some calls though it is neither `driven` nor async (it hands on an `after`
  *  or `awaited` result): the Wasm tier imports it as Suspending rather than parking the strand that called it. */
 export const waits = <F extends Function>(fn: F): F => declare(fn, { wait: "maybe" });

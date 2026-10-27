@@ -131,10 +131,10 @@ function* annotation(w: World, s: ReturnType<typeof make>, strand: Strand, a: En
 
 /** host.annotation(kind, a, b, arg): the objects ART's annotation natives answer; `arg` is the call's object argument, if it has one: the
  *  annotation Class asked for, or the Executable whose Parameters are asked for */
-export function hostObject(w: World, kind: number, a: number, b: number, arg: object | null): object | null | Promise<object | null> {
+export function hostObject(w: World, kind: number, a: number, b: number, arg: object | null): PromiseOrVal<object | null> {
   const strand = w.sched.current(), materialize = objects(w, strand, kind, a, b, arg);
   // Keep immediate reflection immediate; only an actual Java wait switches stacks.
-  const advance = (value?: unknown, failed = false): object | null | Promise<object | null> => {
+  const advance = (value?: unknown, failed = false): PromiseOrVal<object | null> => {
     let step = failed ? materialize.throw(value) : materialize.next(value);
     while (!step.done) {
       if (step.value instanceof Promise) return step.value.then(v => advance(v), e => advance(e, true));

@@ -27,7 +27,7 @@ const dynamicOf = (pkg: string) => {
   return shortcuts;
 };
 const idOf = (si: JObj): Promise<string> => vcall(si, "getId", "()Ljava/lang/String;");
-function mainActivity(pkg: string): JObj | Promise<JObj> {
+function mainActivity(pkg: string): PromiseOrVal<JObj> {
   const launcher = launcherActivity(pkg);
   if (!launcher) throw rt.mkThrowable("java/lang/IllegalStateException", "Launcher activity not found for package " + pkg);
   return mkComponentName(pkg, launcher.name);

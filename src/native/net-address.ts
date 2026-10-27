@@ -75,7 +75,7 @@ export const addressText = (a: ArrayLike<number>): string => a.length === 4 ? ip
 
 // ── the resolver: names the dev server confirms exist get the synthetic address relay.ts allots
 /** getaddrinfo's addresses for `node`, or an EAI_* code; `family` is AF_UNSPEC, AF_INET or AF_INET6 */
-export function resolveHost(node: string, family: number, flags: number): number[][] | number | Promise<number[][] | number> {
+export function resolveHost(node: string, family: number, flags: number): PromiseOrVal<number[][] | number> {
   const v4 = parseIpv4(node), v6 = v4 ? null : parseIpv6(node);
   if (v4) return family === AF_INET6 ? EAI_ADDRFAMILY : [v4];
   if (v6) return family === AF_INET ? EAI_ADDRFAMILY : [v6];

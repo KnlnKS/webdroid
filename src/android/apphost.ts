@@ -5,9 +5,9 @@ export interface AppHost {
   pkg: string;
   assetKey: string;
   zip: Record<string, Uint8Array>;
-  setApplicationNightMode: (mode: number) => void | Promise<void>;
+  setApplicationNightMode: (mode: number) => PromiseOrVal<void>;
   /** LocaleManager.setApplicationLocales: persist the list and deliver the configuration change */
-  setApplicationLocales: (locales: Locales) => void | Promise<void>;
+  setApplicationLocales: (locales: Locales) => PromiseOrVal<void>;
 }
 export let appHost: AppHost | null = null;
 export function setAppHost(h: AppHost | null) { appHost = h; }

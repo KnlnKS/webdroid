@@ -26,7 +26,7 @@ export class FontPending { readonly wait: Promise<unknown>; constructor(wait: Pr
 /** `f()`, again once any font it reached has loaded; `f` must have no effect before it reads fonts.
  *  A native over a primitive array reads it into a value before it gets here, so a wait holds no view
  *  of linear memory; one that writes an array after the fonts takes `fontsOrRetry` and `retries`. */
-export function withFonts<T>(f: () => T): T | Promise<T> {
+export function withFonts<T>(f: () => T): PromiseOrVal<T> {
   try { return f(); } catch (e) {
     if (e instanceof FontPending) return e.wait.then(() => withFonts(f));
     throw e;
@@ -73,7 +73,7 @@ export async function platformFontBytes(path: string): Promise<Uint8Array> {
   return file.bytes;
 }
 /** Typeface's nativeWarmUpCache: a system font read ahead, as the device pages its file in */
-const warmUpCache = (path: string): Promise<void> | void => isPlatformFont(path) ? platformFile(path).load() : undefined;
+const warmUpCache = (path: string): PromiseOrVal<void> => isPlatformFont(path) ? platformFile(path).load() : undefined;
 
 // The device's system server hands apps a serialized font map holding each font's style and
 // coverage, so a process finds a family for a character without reading its fonts or parsing the
@@ -247,7 +247,7 @@ function createFromFamilies(families: NativeFamily[], weight: number, italic: nu
 }
 /** Typeface::createFromTypefaceWithVariation: the style kept, each family supporting one of the
  *  axes rebuilt with them, the same collection when none does */
-function createWithVariation(src: NativeTypeface, list: object): NativeTypeface | Promise<NativeTypeface> {
+function createWithVariation(src: NativeTypeface, list: object): PromiseOrVal<NativeTypeface> {
   return after(vcall(list, "toArray", "()[Ljava/lang/Object;"), (array: object[]) => {
     const axes = axesOf(array), families = src.collection.families;
     const varies = (tags: readonly number[]) => axes.some((a) => tags.includes(a.tag));
@@ -390,7 +390,7 @@ rt.registerJnis("android/graphics/Typeface", {
 // minikin's Font and FontFamily are NativeFont and NativeFamily.
 /** a direct buffer's bytes, as GetDirectBufferAddress and GetDirectBufferCapacity see them;
  *  guest memory can move, so bytes there are copied */
-function directBytes<T>(b: JBuffer | null, then: (bytes: Uint8Array) => T): T | Promise<T> {
+function directBytes<T>(b: JBuffer | null, then: (bytes: Uint8Array) => T): PromiseOrVal<T> {
   if (!b) rt.npe();
   const address = addressOf(b!);
   if (!address) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Not a direct buffer");

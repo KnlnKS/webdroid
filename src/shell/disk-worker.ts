@@ -25,7 +25,7 @@ function open(id: string, create: boolean): Promise<SyncHandle> {
 }
 let queue: Promise<unknown> = Promise.resolve();
 /** `f`, run once every request that arrived before it has */
-const queued = <A extends unknown[], R>(f: (...args: A) => R | Promise<R>) => (...args: A): Promise<R> => {
+const queued = <A extends unknown[], R>(f: (...args: A) => PromiseOrVal<R>) => (...args: A): Promise<R> => {
   const run = queue.then(() => f(...args));
   queue = run.catch(() => {});
   return run;

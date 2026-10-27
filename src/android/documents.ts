@@ -245,7 +245,7 @@ const S = "Ljava/lang/String;";
 /** DocumentsProvider.call's document methods, as DocumentsContract sends them: the document in
  *  EXTRA_URI, and a created or renamed one's uri back in it; failures throw as ExternalStorageProvider's do */
 const docCall = driven(function* (method: string, _arg: string | null, extras: JObj | null): Gen<JObj | null> {
-  const get = (key: string): string | null | Promise<string | null> => vcall(extras, "getString", `(${S})${S}`, key);
+  const get = (key: string): PromiseOrVal<string | null> => vcall(extras, "getString", `(${S})${S}`, key);
   const uri = yield* awaited(uriText(yield vcall(extras, "getParcelable", `(${S})Landroid/os/Parcelable;`, "uri"))), id = documentId(uri);
   let result: string | null;
   if (method === "android:createDocument") {

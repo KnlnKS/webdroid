@@ -56,7 +56,7 @@ class Reply {
 }
 const failed = (error: number) => new Reply().code(OPERATION_FAILED).be32(error).done();
 /** getaddrinfo's answers, every address for each socket type its hints allow */
-function addrinfo(node: string, service: string, flags: number, family: number, socktype: number, protocol: number): Uint8Array | Promise<Uint8Array> {
+function addrinfo(node: string, service: string, flags: number, family: number, socktype: number, protocol: number): PromiseOrVal<Uint8Array> {
   // the client sends -1 for hints it has none of, and "^" for no service
   const hints = addrinfoCandidates(Math.max(flags, 0), Math.max(family, 0), Math.max(socktype, 0), Math.max(protocol, 0), service === "^" ? null : service);
   if (typeof hints === "number") return failed(hints);
@@ -79,7 +79,7 @@ function hostent(name: string, addresses: number[][]): Uint8Array {
   for (const a of addresses) r.be32(length).bytes(a);
   return r.be32(0).done();
 }
-function query(line: string): Uint8Array | Promise<Uint8Array> {
+function query(line: string): PromiseOrVal<Uint8Array> {
   const [command, ...args] = line.split(" ");
   if (command === "getaddrinfo") {
     const [host, service, flags, family, socktype, protocol] = args;

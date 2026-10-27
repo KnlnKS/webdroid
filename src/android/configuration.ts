@@ -21,13 +21,13 @@ export type Locales = { values: JLocale[]; tags: string[] };
 const emptyLocales: Locales = { values: [], tags: [] };
 /** the device's languages, from boot (initDeviceLocales); until libcore can build its Locale, its tag */
 let localeList: Locales = { values: [], tags: [device.locale] };
-function withTags(values: JLocale[]): Locales | Promise<Locales> {
+function withTags(values: JLocale[]): PromiseOrVal<Locales> {
   const tags = values.map(localeTag), list = (tags: string[]) => ({ values, tags });
   return tags.some((tag) => tag instanceof Promise) ? Promise.all(tags).then(list) : list(tags as string[]);
 }
 const sameTags = (a: Locales, b: Locales) => a.tags.length === b.tags.length && a.tags.every((tag, i) => tag === b.tags[i]);
 /** an android.os.LocaleList of them */
-export const javaLocales = (l: Locales): JObj | Promise<JObj> => newObj("android/os/LocaleList", "([Ljava/util/Locale;)V", jarray(l.values, "Ljava/util/Locale;"));
+export const javaLocales = (l: Locales): PromiseOrVal<JObj> => newObj("android/os/LocaleList", "([Ljava/util/Locale;)V", jarray(l.values, "Ljava/util/Locale;"));
 /** the Locales of an android.os.LocaleList */
 export const localesOf = driven(function* localesOf(list: JObj): Gen<Locales> {
   const values: JLocale[] = [];

@@ -34,9 +34,9 @@ export function fail(cpu: Cpu, e: number): number {
 }
 /** a kernel result (-errno on failure) as libc returns it: -1 (of the result's width) with errno set */
 export function kernelResult(cpu: Cpu, value: number): number;
-export function kernelResult(cpu: Cpu, value: number | Promise<number>): number | Promise<number>;
-export function kernelResult(cpu: Cpu, value: HostRet | Promise<HostRet>): HostRet | Promise<HostRet>;
-export function kernelResult(cpu: Cpu, value: HostRet | Promise<HostRet>): HostRet | Promise<HostRet> {
+export function kernelResult(cpu: Cpu, value: PromiseOrVal<number>): PromiseOrVal<number>;
+export function kernelResult(cpu: Cpu, value: PromiseOrVal<HostRet>): PromiseOrVal<HostRet>;
+export function kernelResult(cpu: Cpu, value: PromiseOrVal<HostRet>): PromiseOrVal<HostRet> {
   if (value instanceof Promise) return value.then((r) => kernelResult(cpu, r));
   return typeof value === "number" ? value < 0 ? fail(cpu, -value) : value : typeof value === "bigint" && value < 0n ? BigInt(fail(cpu, Number(-value))) : value;
 }

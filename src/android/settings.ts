@@ -39,7 +39,7 @@ function settingsChanged(table: SettingsTable, name: string): void {
 
 /** UiModeManagerService persists the device's night mode as Secure.UI_NIGHT_MODE once it is set:
  *  MODE_NIGHT_YES (2) while dark, MODE_NIGHT_NO (1) after it was dark */
-export function deviceNightMode(night: boolean): void | Promise<void> {
+export function deviceNightMode(night: boolean): PromiseOrVal<void> {
   return after(night ? "2" : settingsAccess().get("secure", "ui_night_mode"), value =>
     value === null ? undefined : after(settingsAccess().put("secure", "ui_night_mode", night ? "2" : "1"), () => {}));
 }
@@ -65,10 +65,10 @@ const keySets = Object.fromEntries(TABLES.map((table) => [table, once(driven(fun
   yield scall("android/provider/Settings", "getPublicSettingsForClass", "(Ljava/lang/Class;Ljava/util/Set;Ljava/util/Set;Landroid/util/ArrayMap;)V", cls, all, readable, max);
   return { all: yield* javaStrings(all), readable: yield* javaStrings(readable),
     maxTarget: new Map(arrayMapEntries(max).map(([k, v]) => [k as string, Number(unbox(v))])) };
-}))])) as Record<Table, () => KeySets | Promise<KeySets>>;
+}))])) as Record<Table, () => PromiseOrVal<KeySets>>;
 /** every key the Settings class declares, those @Readable, and the target ceilings of the restricted
  *  ones (Settings.X.getPublicSettings; Global's adds Global.Wearable on a watch, which this is not) */
-export const publicSettings = (table: Table): KeySets | Promise<KeySets> => keySets[table]();
+export const publicSettings = (table: Table): PromiseOrVal<KeySets> => keySets[table]();
 const MOVES: [Table, Table][] = [["system", "secure"], ["system", "global"], ["secure", "global"], ["global", "secure"], ["global", "system"]];
 const movedSets = new Map(MOVES.map(([from, to]) => [from + ">" + to, once(driven(function* moved$(): Gen<Set<string>> {
   const out = yield newObj("java/util/HashSet", "()V");
@@ -128,7 +128,7 @@ const valueOf = (table: Table, name: string): unknown => {
   return after(settingsAccess().get(table, name), stored => derive ? derive(stored) : stored);
 };
 /** the table's settings in SettingsState order, with the derived ones */
-function namesOf(table: Table): string[] | Promise<string[]> {
+function namesOf(table: Table): PromiseOrVal<string[]> {
   return after(settingsAccess().entries(table), entries => {
     const names = entries.map(([name]) => name);
     for (const name of Object.keys(DERIVED[table] ?? {})) if (!names.includes(name)) names.push(name);

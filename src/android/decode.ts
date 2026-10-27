@@ -456,7 +456,7 @@ const SOURCE_EXCEPTION = 1, SOURCE_INCOMPLETE = 2, SOURCE_MALFORMED_DATA = 3;
 const decodeException = (error: number, message: string, cause: unknown, source: unknown) =>
   newObj(`${DECODER}$DecodeException`, "(ILjava/lang/String;Ljava/lang/Throwable;Landroid/graphics/ImageDecoder$Source;)V", error, message, cause, source);
 /** ImageDecoder.cpp's native_create: the decoder, sized as EXIF orientation leaves the image */
-const createDecoder = driven(function* createDecoder(read: () => Uint8Array | Promise<Uint8Array>, source: unknown): Gen {
+const createDecoder = driven(function* createDecoder(read: () => PromiseOrVal<Uint8Array>, source: unknown): Gen {
   let bytes: Uint8Array;
   try { bytes = yield* awaited(read()); }
   catch (e) {

@@ -89,7 +89,7 @@ class NotificationStore {
     const scope = brokerScope();
     return data.readLocal(procIdentity.pid, (data, rights) => unparcelled(N, data, rights, scope));
   }
-  decode(data: ParcelData): JObj | Promise<JObj> { return unparcelled(N, data, this.kernel.rights(procIdentity.pid), brokerScope()); }
+  decode(data: ParcelData): PromiseOrVal<JObj> { return unparcelled(N, data, this.kernel.rights(procIdentity.pid), brokerScope()); }
   readonly posted: PostedNotification[] = [];
   readonly enqueueRates = new Map<string, { interarrival: number; last: number | null }>();
   /** userId|pkg → its autogroup summary's key (mAutobundledSummaries) */
@@ -146,7 +146,7 @@ function enforceSystemOrSystemUI(message: string): void {
 function denyPolicyAccess(): never { return fail("java/lang/SecurityException", "Notification policy access denied"); }
 const targetSdk = (pkg: string) => packages.get(pkg)?.sdk.target ?? 10000;
 /** PermissionHelper.hasPermission: the uid holds POST_NOTIFICATIONS */
-const hasPermission = (uid: number): boolean | Promise<boolean> =>
+const hasPermission = (uid: number): PromiseOrVal<boolean> =>
   SYSTEM_UIDS.has(uid) || after(checkUidPermission(POST_NOTIFICATIONS, uid), (result) => result === 0);
 /** the system's view of packages: the application's PackageManager over the hosted service */
 function* getPM(): Gen<JObj> { return yield vcall(yield* awaited(serviceContext()), "getPackageManager", "()Landroid/content/pm/PackageManager;"); }
@@ -285,7 +285,7 @@ function enforceNoForegroundService(pkg: string, userId: number, channel: string
 /** PermissionPolicyService's notification prompt for an app targeting 6.0 to 12L, which cannot ask
  *  for POST_NOTIFICATIONS itself: once it has a channel, the system asks when a launcher task is in
  *  front. The dialog's answer follows the grant policy runtime permissions follow. */
-function promptNeeded(pkg: string): boolean | Promise<boolean> {
+function promptNeeded(pkg: string): PromiseOrVal<boolean> {
   const record = packages.get(pkg), target = targetSdk(pkg);
   return !!record && target >= 23 && target < 33 && pkg === appHost?.pkg && record.requested.has(POST_NOTIFICATIONS)
     && new Preferences(pkg).ids(CHANNEL_KEY).length > 0 && after(permissionGranted(pkg, POST_NOTIFICATIONS), granted => !granted);
@@ -875,7 +875,7 @@ hostService("notification", "webdroid/NotificationManagerService", "android/app/
   },
 }, { system: true, scopedDescriptors: true });
 
-function areNotificationsEnabledForPackage(pkg: string, uid: number): number | Promise<number> {
+function areNotificationsEnabledForPackage(pkg: string, uid: number): PromiseOrVal<number> {
   enforceSystemOrSystemUIOrSamePackage(pkg, "Caller not system or systemui or same package");
   return after(hasPermission(uid), granted => +granted);
 }

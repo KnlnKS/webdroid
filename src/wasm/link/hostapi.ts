@@ -73,7 +73,7 @@ export interface HostBridge {
   arrayLength(a: object): number;
   element(a: object, i: number): unknown;
   setElement(a: object, i: number, v: unknown): void;
-  readBuffer(b: object, at: number, n: number): Uint8Array | Promise<Uint8Array>;
+  readBuffer(b: object, at: number, n: number): PromiseOrVal<Uint8Array>;
   copyFields(o: Record<string, unknown>, j: object, cls: string): void;
   /** sets `s`, the scope of the call in progress, aside while its strand waits (`end` leaves it open), until `resume` takes it up again */
   hold(s: BridgeScope): void;

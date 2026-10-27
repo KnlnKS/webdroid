@@ -7,10 +7,10 @@ import { persisted, storedText, storeText } from "./device-storage.ts";
 
 export type SettingsTable = "system" | "secure" | "global" | "config";
 export type SettingsAccess = {
-  get(table: SettingsTable, name: string): string | null | Promise<string | null>;
-  entries(table: SettingsTable): [string, string][] | Promise<[string, string][]>;
-  put(table: SettingsTable, name: string, value: string | null): boolean | Promise<boolean>;
-  ssaidKey(): string | Promise<string>;
+  get(table: SettingsTable, name: string): PromiseOrVal<string | null>;
+  entries(table: SettingsTable): PromiseOrVal<[string, string][]>;
+  put(table: SettingsTable, name: string, value: string | null): PromiseOrVal<boolean>;
+  ssaidKey(): PromiseOrVal<string>;
 };
 type Written = Partial<Record<SettingsTable, Record<string, string | null>>>;
 const KEY = "wd:settings";

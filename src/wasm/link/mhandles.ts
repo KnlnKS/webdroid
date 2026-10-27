@@ -24,7 +24,7 @@ import { chain } from "./maybe.ts";
 import { fieldClass, fieldIndex } from "../compiler/fieldid.ts";
 
 /** what a handle invocation answers: the boxed result, or the Promise of it when the call waited */
-type Answer = object | null | Promise<object | null>;
+type Answer = PromiseOrVal<object | null>;
 
 export interface SignatureType { owner: string; descriptor: string }
 
@@ -98,7 +98,7 @@ export function mhInvoke(w: World, mh: object | null, args: object, siteId: stri
     const adapted = handleThunk(w, `mh:asType:${w.classNameOf(mh!)}:${siteId}`, ["L"], "L", (cx, c, arg) => {
       arg(0); emitMethodType(cx, c, sr, sp);
       const m = cx.prog.implFor(w.classNameOf(mh!), "asType", `(L${MT};)L${MH};`)!; cx.callMethod(c, m);
-    }, parent)(mh!) as object | Promise<object>;
+    }, parent)(mh!) as PromiseOrVal<object>;
     return chain(adapted, adapted => mhInvoke(w, adapted, args, siteId, InvokeMode.Exact, parent));
   }
   const kind = s.handleKind(mh!), K = s.kinds, art = s.art(mh!);
@@ -161,13 +161,13 @@ function invokeVarHandle(w: World, args: object, art: bigint, exact: boolean, pa
   };
   const type = handleThunk(w, `mh:varHandleType:${mode}`, ["L"], "L", (cx, c, arg) => {
     arg(0); accessMode(cx, c); cx.callNamed(c, VH, "accessModeType", `(L${AM};)L${MT};`);
-  }, parent)(handle) as object | Promise<object>;
+  }, parent)(handle) as PromiseOrVal<object>;
   return chain(type, type => {
     const actual = signatureOf(w, type), match = ret === actual.ret && params.length === actual.params.length + 1 && actual.params.every((p, i) => p === params[i + 1]);
     if (exact && !match) w.raise("java/lang/invoke/WrongMethodTypeException", `Expected ${prettySig(actual.params, actual.ret)} but was ${prettySig(params.slice(1), ret)}`);
     const supported = handleThunk(w, `mh:varHandleSupported:${mode}`, ["L"], "I", (cx, c, arg) => {
       arg(0); accessMode(cx, c); cx.callNamed(c, VH, "isAccessModeSupported", `(L${AM};)Z`);
-    }, parent)(handle) as number | Promise<number>;
+    }, parent)(handle) as PromiseOrVal<number>;
     return chain(supported, supported => {
       if (!supported) w.raise("java/lang/UnsupportedOperationException", null);
       if (!match) {
@@ -176,7 +176,7 @@ function invokeVarHandle(w: World, args: object, art: bigint, exact: boolean, pa
           cx.emitEnsure(c, impl); cx.emitNew(c, impl); c.ltee(local).i64(art).i32(s.kinds.INVOKE_VAR_HANDLE_EXACT);
           emitMethodType(cx, c, actual.ret, [`L${VH};`, ...actual.params]);
           cx.callNamed(c, impl, "<init>", `(JIL${MT};)V`); c.lget(local);
-        }, parent)() as object | Promise<object>;
+        }, parent)() as PromiseOrVal<object>;
         return chain(normalized, normalized => mhInvoke(w, normalized, args, `(${params.join("")})${ret}`, InvokeMode.Invoke, parent));
       }
       // View handles need byte addressing and alignment, not the element-array lowering.
@@ -240,7 +240,7 @@ function signatureOf(w: World, type: object): { params: string[]; ret: string } 
   const s = states.get(w), p = s.ptypes(type), desc = (cls: object) => descOf(w.nameOf(s.classId(cls)));
   return { params: Array.from({ length: w.bridge.arrayLength(p) }, (_, i) => desc(w.bridge.element(p, i) as object)), ret: desc(s.rtype(type)) };
 }
-function frameArgs(w: World, frame: object, params: string[], parent: Strand): object | Promise<object> {
+function frameArgs(w: World, frame: object, params: string[], parent: Strand): PromiseOrVal<object> {
   return handleThunk(w, `mh:frameArgs:(${params.join("")})`, ["L"], "L", (cx, c, arg) => {
     const reader = accessor(cx, c, () => arg(0), false, false), arr = c.newLocal(T.anyref);
     cx.emitNewArray(c, OBJECTS, () => c.i32(params.length)); c.lset(arr);
@@ -248,7 +248,7 @@ function frameArgs(w: World, frame: object, params: string[], parent: Strand): o
       c.lget(arr); cx.arrayData(c).i32(i); readFrame(cx, c, reader, p); c.arraySet(cx.tData.ref);
     });
     c.lget(arr);
-  }, parent)(frame) as object | Promise<object>;
+  }, parent)(frame) as PromiseOrVal<object>;
 }
 function invokeFrame(w: World, mh: object, frame: object, parent: Strand): Answer {
   const type = w.helpers.fieldReader<object>(FRAME, "type", `L${MT};`)(frame), { params, ret } = signatureOf(w, type);
@@ -268,14 +268,14 @@ function transform(w: World, mh: object, args: object, params: string[], ret: st
     const writer = accessor(cx, c, () => c.lget(local), true, false);
     params.forEach((p, i) => writeFrame(cx, c, writer, p, () => { arg(0); cx.arrayData(c).i32(i).arrayGet(cx.tData.ref); }));
     c.lget(local);
-  }, parent)(args) as object | Promise<object>;
+  }, parent)(args) as PromiseOrVal<object>;
   return chain(frame, frame => {
     const m = w.prog.implFor(w.classNameOf(mh), "transform", `(L${FRAME};)V`)!;
     return chain(handleThunk(w, `mh:transform:${m.cls}`, ["L", "L"], "V", (cx, c, arg) => { arg(0); arg(1); cx.callMethod(c, m); }, parent)(mh, frame), () => {
       if (ret === "V") return null;
       return handleThunk(w, `mh:readReturn:${ret}`, ["L"], "L", (cx, c, arg) => {
         const reader = accessor(cx, c, () => arg(0), false, true); readFrame(cx, c, reader, ret);
-      }, parent)(frame) as object | Promise<object>;
+      }, parent)(frame) as PromiseOrVal<object>;
     });
   });
 }

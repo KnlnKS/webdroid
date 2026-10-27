@@ -247,7 +247,7 @@ export class Sched {
     return (...a) => { this.synchronousEntries++; try { return fn(...a); } finally { this.synchronousEntries--; } };
   }
   /** `fn` as the two imports a call site chooses between by whether it can wait: plain, and Suspending */
-  importPair<A extends unknown[], R>(fn: (...a: A) => Promise<R> | R): [plain: (...a: A) => Promise<R> | R, wait: (...a: A) => R] {
+  importPair<A extends unknown[], R>(fn: (...a: A) => PromiseOrVal<R>): [plain: (...a: A) => PromiseOrVal<R>, wait: (...a: A) => R] {
     return [this.plain(fn), this.suspending(fn)];
   }
   /** a native answered a Promise: the call site that called it settles it, waiting on this strand's stack */
@@ -255,7 +255,7 @@ export class Sched {
   /** gives up the turn for `reason`. A collection waits for a turn of the timer queue, between which the engine runs its finalizers; a yield (a loop's fuel,
    *  Thread.yield) and a lazy link wait for the event loop once the turn is due. Before then the main thread runs on, and another thread's yield lets the strands
    *  that became ready run first */
-  turn(reason: "yield" | "collect" | "link"): St | Promise<St> {
+  turn(reason: "yield" | "collect" | "link"): PromiseOrVal<St> {
     if (reason === "collect") return new Promise<St>((r) => { this.loop.after(0, () => r(St.Ok)); });
     const main = this.current().thread === this.main;
     if (this.loop.due()) return this.loop.yield(main).then(() => St.Ok);
@@ -263,7 +263,7 @@ export class Sched {
   }
   /** Lazy links share the turn budget: many short methods can compile without reaching a loop fuel check.
    * Delivery preparation may wait before the turn expires. Restore the caller before compilation and again in the resumed stub. */
-  admitLink(run: () => void, prepare?: () => Promise<void> | undefined): void | Promise<void> {
+  admitLink(run: () => void, prepare?: () => Promise<void> | undefined): PromiseOrVal<void> {
     const s = this.current();
     if (!this.canWait(s)) return run();
     const thr = this.g.thr.value, depth = this.g.depth.value;
@@ -334,10 +334,10 @@ export class Sched {
   }
   /** wraps `fn` as a Suspending import. What `fn` does before it first waits is on the calling strand; when it returns the stack switches away,
    *  so the globals go back to the host's top level then, and the strand sets its own when it resumes (emitBlock) */
-  suspending<A extends unknown[], R>(fn: (...a: A) => Promise<R> | R): (...a: A) => R {
+  suspending<A extends unknown[], R>(fn: (...a: A) => PromiseOrVal<R>): (...a: A) => R {
     return suspending((...a: A) => {
       const s = this.current(), depth = this.g.depth.value;
-      let r: Promise<R> | R;
+      let r: PromiseOrVal<R>;
       try { r = fn(...a); }
       // No stack switch occurred: Wasm may catch the import's throw on this strand.
       catch (e) { this.become(s, depth); throw e; }
@@ -436,7 +436,7 @@ export class Sched {
   }
 
   // ---------- host.block
-  block(op: number, obj: object | null, a: number, b: number): Promise<number> | number {
+  block(op: number, obj: object | null, a: number, b: number): PromiseOrVal<number> {
     const s = this.current();
     switch (op as Block) {
       case Block.Enter: return this.monitors.enter(obj!, s).then(() => St.Ok);
@@ -450,7 +450,7 @@ export class Sched {
     }
   }
   /** LockSupport.park: returns on a permit, the deadline or an interrupt (which stays set) */
-  private park(s: Strand, time: number, absolute: boolean): Promise<St> | St {
+  private park(s: Strand, time: number, absolute: boolean): PromiseOrVal<St> {
     const th = s.thread;
     if (th.permit) { th.permit = false; return St.Ok; }
     if (th.interrupted) return St.Ok;
@@ -512,7 +512,7 @@ export class Sched {
   // ---------- class initialization
   /** a strand waits for the initialization of class `id` that another strand runs; a request the initializer itself waits on (through classes and locks) proceeds
    *  with the statics as they are, as a cycle on one thread would */
-  private initWait(s: Strand, id: number): Promise<St> | St {
+  private initWait(s: Strand, id: number): PromiseOrVal<St> {
     const holder = this.strands[this.w.initWord(id) >>> 2];
     if (!holder || holder === s) return St.Ok;
     // a strand a native of the initializing thread entered Java on (JNI_OnLoad finding the class its library is loaded by) is that thread: it sees the statics as they are

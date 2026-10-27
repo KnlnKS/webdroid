@@ -301,7 +301,7 @@ export function surfaceAttrib(t: object, dpy: number, h: number, attr: number, v
 }
 /** a window's frame goes to its consumer, after which the caller waits for vsync unless its swap interval is 0; a pbuffer has no
  *  front buffer, so its swap does nothing */
-export function swapBuffers(t: object, dpy: number, h: number): boolean | Promise<boolean> {
+export function swapBuffers(t: object, dpy: number, h: number): PromiseOrVal<boolean> {
   begin(t);
   if (!ready(t, dpy)) return false;
   const s = surfaces.get(h), c = currentContext(t);
@@ -339,7 +339,7 @@ export function waitNative(t: object, engine: number): boolean { begin(t); retur
 const iae = (message?: string) => rt.mkThrowable("java/lang/IllegalArgumentException", message ?? null);
 const uoe = (message: string) => rt.mkThrowable("java/lang/UnsupportedOperationException", message);
 const answer = (out: Int32Array, at: number, value: number | null): number => { if (value === null) return 0; out[at] = value; return 1; };
-const settled = (r: boolean | Promise<boolean>): number | Promise<number> => (r instanceof Promise ? r.then(Number) : +r);
+const settled = (r: PromiseOrVal<boolean>): PromiseOrVal<number> => (r instanceof Promise ? r.then(Number) : +r);
 /** the GL surface a window surface draws to: a Surface's, or a SurfaceTexture's (null once abandoned); undefined for an object with
  *  no native window, which the JNI refuses */
 function windowOf(win: unknown): GlSurface | null | undefined {

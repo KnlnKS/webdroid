@@ -54,7 +54,7 @@ export function fdsanExchangeOwnerTag(fd: number, expected: bigint, tag: bigint,
   setFdsanOwnerTag(fd, tag);
 }
 /** android_fdsan_close_with_tag */
-export function fdsanClose(fd: number, expected: bigint, cpu?: Cpu): number | Promise<number> {
+export function fdsanClose(fd: number, expected: bigint, cpu?: Cpu): PromiseOrVal<number> {
   const actual = fdsanOwnerTag(fd);
   const aborting = fd >= 0 && actual !== expected
     ? violation(`attempted to close file descriptor ${fd}, expected to be ${owner(expected)}, actually ${owner(actual)}`, cpu) : undefined;

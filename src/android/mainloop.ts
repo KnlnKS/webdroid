@@ -50,7 +50,7 @@ export class NativeLooper {
    *  Another looper yields between messages, so a busy background thread does not hold off the
    *  main thread (a device runs them on other cores); the main looper's own yield goes ahead of
    *  theirs, as its core would keep it going. */
-  pollOnce(timeout: number): void | Promise<void> {
+  pollOnce(timeout: number): PromiseOrVal<void> {
     if (!this.callbacks.length) {
       if (this.woken) { this.woken = false; return; }
       if (timeout === 0 && this === mainLooper && turnElapsed() <= SLICE_MS) return;
@@ -142,7 +142,7 @@ export function fnRunnable(fn: () => unknown): JFnRunnable {
 
 /** Run `job` on the main thread after what is already queued there, once the zygote has started
  *  the main looper. A failed job rejects its own promise and leaves the looper running. */
-export function onMain<T>(job: () => Promise<T> | T): Promise<T> {
+export function onMain<T>(job: () => PromiseOrVal<T>): Promise<T> {
   const site = mainDbg.trace ? new Error().stack ?? "" : "";
   mainDbg.queued++; perf.mainJobs++;
   return new Promise<T>((resolve, reject) => {
@@ -158,7 +158,7 @@ export function onMain<T>(job: () => Promise<T> | T): Promise<T> {
 }
 
 /** onMain for the Java looper `thread` loops on: `job` runs there between its messages */
-export function onLooper<T>(thread: JThread, job: () => Promise<T> | T): Promise<T> {
+export function onLooper<T>(thread: JThread, job: () => PromiseOrVal<T>): Promise<T> {
   if (thread === mainThread) return onMain(job);
   return new Promise<T>((resolve, reject) => (thread.looper as NativeLooper).post(async () => { try { resolve(await job()); } catch (error) { reject(error); } }));
 }

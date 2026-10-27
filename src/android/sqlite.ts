@@ -321,7 +321,7 @@ type WindowData = Pick<NativeWindow, "rows" | "cols" | "used" | "types" | "value
 export type SQLiteRequest = { family: SQLiteFamily; method: string; args: SQLiteValue[];
   window?: Pick<NativeWindow, "name" | "size" | "readOnly"> };
 export type SQLiteReply = { value: SQLiteValue; window?: WindowData; error?: CallFailure };
-type NativeCall = (...args: never[]) => SQLiteValue | Promise<SQLiteValue>;
+type NativeCall = (...args: never[]) => PromiseOrVal<SQLiteValue>;
 type Handle = "connection" | "statement" | "window";
 /** what a native does to the handles a session keeps: opens a connection, prepares a statement, or ends either */
 type Lifecycle = "open" | "prepare" | "close" | "finalize";

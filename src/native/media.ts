@@ -16,7 +16,7 @@ import type { Cpu } from "./cpu.ts";
 const INVALID = -10004, BAD_OBJECT = -10003, UNSUPPORTED = -10002, IO = -10007;
 const formats = new Handles<{ value: NativeFormat; strings: Map<string, number> }>("AMediaFormat");
 const codecs = new Handles<Codec>("AMediaCodec");
-const extractors = new Handles<{ value: MediaExtractor; source: ((cpu: Cpu) => FileSource) | null; close: ((cpu: Cpu) => void | Promise<void>) | null }>("AMediaExtractor");
+const extractors = new Handles<{ value: MediaExtractor; source: ((cpu: Cpu) => FileSource) | null; close: ((cpu: Cpu) => PromiseOrVal<void>) | null }>("AMediaExtractor");
 class DataSource {
   userdata = 0; readAt = 0; getSize = 0; closeAt = 0; closed = false;
   async close(cpu: Cpu): Promise<void> {
@@ -42,7 +42,7 @@ function sizeOut(address: number, size: number): void { if (address) stLong(addr
 function codecStatus(action: (codec: Codec) => void): HostFn {
   return (_cpu, args) => { const codec = codecs.find(args.p()); if (!codec) return BAD_OBJECT; try { action(codec); return 0; } catch { return INVALID; } };
 }
-async function openExtractor(cpu: Cpu, handle: number, source: (cpu: Cpu) => FileSource, close: (cpu: Cpu) => void | Promise<void>): Promise<number> {
+async function openExtractor(cpu: Cpu, handle: number, source: (cpu: Cpu) => FileSource, close: (cpu: Cpu) => PromiseOrVal<void>): Promise<number> {
   const extractor = extractors.find(handle);
   if (!extractor) { await close(cpu); return BAD_OBJECT; }
   if (extractor.source) { await close(cpu); return INVALID; }

@@ -180,6 +180,6 @@ rt.register({ name: "webdroid/PackageInstallerService", ctor: class extends JObj
   "registerCallback(Landroid/content/pm/IPackageInstallerCallback;I)V": (callback: JObj) => { callbacks.add(callback); },
   "unregisterCallback(Landroid/content/pm/IPackageInstallerCallback;)V": (callback: JObj) => { callbacks.delete(callback); },
 } });
-let installer: JObj | Promise<JObj> | null = null;
+let installer: PromiseOrVal<JObj> | null = null;
 /** IPackageManager.getPackageInstaller's answer, which servicemanager does not list */
 export const installerService = () => installer ??= newStub("webdroid/PackageInstallerService");

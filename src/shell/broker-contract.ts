@@ -32,7 +32,7 @@ import { callError, callProxy, methodsOf, qualified, type ByArgs, type ByResult,
 /** an access interface's methods, called across a port */
 export type Calls<T> = { [K in keyof T]: T[K] extends (...args: infer A) => infer R ? (...args: A) => Promise<Awaited<R>> : never };
 /** what serves a contract: each method answers its result or a promise of it */
-export type Answers<C> = { [K in keyof C]: C[K] extends (...args: infer A) => Promise<infer R> ? (...args: A) => R | Promise<R> :
+export type Answers<C> = { [K in keyof C]: C[K] extends (...args: infer A) => Promise<infer R> ? (...args: A) => PromiseOrVal<R> :
   C[K] extends (...args: never[]) => unknown ? C[K] : Answers<C[K]> };
 
 /** a package as a process registers it, its archive served by the broker */

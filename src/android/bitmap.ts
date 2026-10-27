@@ -347,7 +347,7 @@ const nativePtr = peerField<bigint>(BITMAP, "mNativePtr");
 /** the native state behind a Java Bitmap */
 export const bitmapOf = (b: object): NativeBitmap => deref<NativeBitmap>(nativePtr(b));
 /** bitmap::createBitmap: the Java Bitmap around `b`; a density below 0 is Bitmap.getDefaultDensity */
-export function javaBitmap(b: NativeBitmap, density = -1, chunk: Int8Array | null = null, insets: unknown = null, requestPremultiplied = b.alphaType !== UNPREMUL): object | Promise<object> {
+export function javaBitmap(b: NativeBitmap, density = -1, chunk: Int8Array | null = null, insets: unknown = null, requestPremultiplied = b.alphaType !== UNPREMUL): PromiseOrVal<object> {
   return newObj(BITMAP, "(JIIIZ[BLandroid/graphics/NinePatch$InsetStruct;Z)V", handle(b), b.w, b.h, density, +requestPremultiplied, chunk, insets, 1);
 }
 /** Bitmap.reinit: a reused Java Bitmap takes the geometry its native bitmap was reconfigured to */

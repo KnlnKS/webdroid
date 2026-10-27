@@ -25,14 +25,14 @@ import { processOpenFd } from "./process-fd.ts";
 import { ashmemContent, releaseRegion, type Region } from "./shm.ts";
 
 /** up to `n` bytes of a file at `off`, fewer only at its end as a regular file reads: a view of its data, or what its lazy source reads */
-export function contentAt(content: VfsFile, off: number, n: number): Uint8Array | Promise<Uint8Array> {
+export function contentAt(content: VfsFile, off: number, n: number): PromiseOrVal<Uint8Array> {
   vfs.sync(content);
   const k = Math.max(0, Math.min(n, content.len - off));
   if (!k) return EMPTY;
   return content.source ? readAt(content.source, off, k) : content.data.subarray(off, off + k);
 }
 function contentInto(content: VfsFile, target: Uint8Array, at: number, n: number, off: number): number | Promise<Uint8Array | number> {
-  let value: Uint8Array | Promise<Uint8Array>;
+  let value: PromiseOrVal<Uint8Array>;
   try { value = contentAt(content, off, n); }
   catch { return -E.IO; }
   if (value instanceof Promise) return value.catch(() => -E.IO);
@@ -220,16 +220,16 @@ export function written(cpu: Cpu | null, f: OpenFile, r: number, flags = 0): num
   return r;
 }
 /** write(2) of `n` bytes of guest memory at `p` */
-export function fdWrite(cpu: Cpu | null, fd: number, p: number, n: number): number | Promise<number> {
+export function fdWrite(cpu: Cpu | null, fd: number, p: number, n: number): PromiseOrVal<number> {
   const r = writeFd(fd, mem.bytes(p, n));
   return r === -E.PIPE ? written(cpu, openFd(fd)!, r) : r;
 }
 /** readv/writev: each iovec in turn until a transfer comes up short, as the kernel does. `op` is
  *  told what the call has moved so far: a read that would then have to wait moves nothing. */
-function vectored(iov: number, count: number, op: (p: number, n: number, moved: number) => number | Promise<number>): number | Promise<number> {
+function vectored(iov: number, count: number, op: (p: number, n: number, moved: number) => PromiseOrVal<number>): PromiseOrVal<number> {
   if (count < 0 || count > 1024) return -E.INVAL;
   const at = anchor(iov);
-  const from = (i: number, done: number): number | Promise<number> => {
+  const from = (i: number, done: number): PromiseOrVal<number> => {
     for (; i < count; i++) {
       const entry = at(i * 2 * PTR), len = mem.ld32(entry + PTR) >>> 0;
       if (!len) continue;
@@ -248,18 +248,18 @@ function readWouldWait(fd: number): boolean {
   return !!f && !(f.ops.poll(f, POLLIN) & (POLLIN | POLLHUP | POLLERR));
 }
 /** fstat(2): the descriptor's record, or its device node's, or -errno */
-export function statFd(fd: number): Stat | number | Promise<Stat | number> {
+export function statFd(fd: number): PromiseOrVal<Stat | number> {
   const f = openFd(fd);
   return f ? complete(f.ops.stat(f), (s) => !s ? -E.BADF : s.device ? fullStat(s.device, deviceStat(s.device)) : fullStat(s.path ?? f.path, s)) : -E.BADF;
 }
 /** a stat call's record into the struct stat at `buf` */
-export function putStat(buf: number, stat: Stat | number | Promise<Stat | number>): number | Promise<number> {
+export function putStat(buf: number, stat: PromiseOrVal<Stat | number>): PromiseOrVal<number> {
   if (!(stat instanceof Promise)) { if (typeof stat !== "number") { fillStat(buf, stat); return 0; } return stat; }
   const at = anchor(buf);
   return stat.then((s) => { if (typeof s === "number") return s; fillStat(at(), s); return 0; });
 }
 /** getdents64: linux_dirent64 records from the fd's position on */
-export function getdents64(fd: number, buf: number, size: number): number | Promise<number> {
+export function getdents64(fd: number, buf: number, size: number): PromiseOrVal<number> {
   const f = openFd(fd);
   if (!f) return -E.BADF;
   const entries = f.ops.entries(f);
@@ -278,7 +278,7 @@ function dirents(f: OpenFile, entries: string[], buf: number, size: number): num
   return at || f.pos >= entries.length ? at : -E.INVAL;
 }
 /** fallocate(2): mode 0 allocates; punching holes and collapsing ranges are not supported */
-export const fallocate = (fd: number, mode: number, off: number, length: number): number | Promise<number> => mode ? -E.NOTSUP : allocateFd(fd, off, length);
+export const fallocate = (fd: number, mode: number, off: number, length: number): PromiseOrVal<number> => mode ? -E.NOTSUP : allocateFd(fd, off, length);
 export function makePipe(out: number, flags: number): number {
   const [read, write] = pipeFds(flags);
   mem.st32(out, read); mem.st32(out + 4, write);
@@ -312,40 +312,40 @@ export function resolveAt(dirfd: number, name: string): string | number {
   return dir.dir ? dir.path + "/" + name : -E.NOTDIR;
 }
 /** stat(2) of a path: its record, or -errno */
-export function statAt(path: string): Stat | number | Promise<Stat | number> {
+export function statAt(path: string): PromiseOrVal<Stat | number> {
   const p = vfs.norm(path);
   return complete(filePaths(p).fileStat(p), ({ errno, value }) => value ? fullStat(p, value) : -(errno || E.NOENT));
 }
 const PROC_EXE = /^\/proc\/(?:self|thread-self|(\d+))\/exe$/;
 /** readlink(2)'s target, or -errno: /proc's exe is the app_process the zygote of the process's width runs;
  *  no other path here is a symbolic link */
-export function linkTarget(path: string): string | number | Promise<string | number> {
+export function linkTarget(path: string): PromiseOrVal<string | number> {
   const p = vfs.norm(path), exe = PROC_EXE.exec(p);
   if (exe && (!exe[1] || +exe[1] === procIdentity.pid)) return `/system/bin/app_process${is64BitProcess() ? 64 : 32}`;
   return complete(statAt(p), (s) => typeof s === "number" ? s : -E.INVAL);
 }
 /** readlink's copy of the target into `buf`: as much as fits, with no NUL */
-export const readlinkInto = (path: string, buf: number, size: number): number | Promise<number> => size <= 0 ? -E.INVAL :
+export const readlinkInto = (path: string, buf: number, size: number): PromiseOrVal<number> => size <= 0 ? -E.INVAL :
   complete(linkTarget(path), (target) => {
     if (typeof target === "number") return target;
     const bytes = utf8.enc.encode(target).subarray(0, size);
     mem.write(buf, bytes);
     return bytes.length;
   });
-export function faccessatPath(dirfd: number, name: string, mode: number, flags: number): number | Promise<number> {
+export function faccessatPath(dirfd: number, name: string, mode: number, flags: number): PromiseOrVal<number> {
   const path = resolveAt(dirfd, name);
   if (flags & ~(0x100 | 0x200) || mode & ~7) return -E.INVAL;
   return typeof path === "string" ? filePaths(path).fileAccess(path, mode) : path;
 }
 /** mknod(2) unprivileged: a fifo or an empty regular file; device nodes need CAP_MKNOD */
-export function mknodAt(path: string, mode: number): number | Promise<number> {
+export function mknodAt(path: string, mode: number): PromiseOrVal<number> {
   const type = mode & 0xf000;
   if (type === S_IFIFO) return filePaths(path).fileFifo(path);
   if (type === 0 || type === S_IFREG) return filePaths(path).fileCreate(path);
   return -(type === S_IFCHR || type === 0x6000 ? E.PERM : E.INVAL);
 }
 /** a directory's entries as readdir lists them, or -errno */
-export const listAt = (path: string): string[] | number | Promise<string[] | number> =>
+export const listAt = (path: string): PromiseOrVal<string[] | number> =>
   complete(filePaths(path).fileList(path), ({ errno, value }) => value ? [".", "..", ...value] : -(errno || E.NOENT));
 /** the *at calls' path, resolved: `op`'s answer, or the resolution's -errno */
 const inDir = <T>(dirfd: number, name: string, op: (path: string) => T): T | number => {

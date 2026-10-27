@@ -27,7 +27,7 @@ export type DataClear = { fromApp: boolean; keepState: boolean };
 export type PackageState = {
   clear?(pkg: string, uid: number | undefined, how: DataClear): unknown;
   remove?(pkg: string): unknown;
-  packages?(): Iterable<string> | Promise<Iterable<string>>;
+  packages?(): PromiseOrVal<Iterable<string>>;
 };
 /** started in this order and running together: what is keyed by uid first, files and web data last */
 const owners = (broker: Broker): PackageState[] => [

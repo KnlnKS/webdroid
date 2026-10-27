@@ -52,7 +52,7 @@ function formatFromJava(keys: string[] | null, values: unknown[] | null): Native
   return format;
 }
 /** ConvertKeyValueArraysToMessage owns a copy of each ByteBuffer's remaining bytes. */
-export function copiedFormatFromJava(keys: string[] | null, values: unknown[] | null): NativeFormat | Promise<NativeFormat> {
+export function copiedFormatFromJava(keys: string[] | null, values: unknown[] | null): PromiseOrVal<NativeFormat> {
   const format = formatFromJava(keys,values);
   let pending: Promise<unknown>[] | undefined;
   for (const [key,{type,value}] of format.values) if (type === TYPE_BYTE_BUFFER) {

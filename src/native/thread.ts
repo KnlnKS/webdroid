@@ -43,7 +43,7 @@ export const futexStats = new Map<string, Record<string, number>>();
 const fstat = (cpu: Cpu, k: string) => { let r = futexStats.get(cpu.name); if (!r) futexStats.set(cpu.name, (r = {})); r[k] = (r[k] ?? 0) + 1; };
 /** FUTEX_WAIT (relative timeout) or FUTEX_WAIT_BITSET (absolute): the only commands whose fourth argument is a timeout */
 const isWait = (op: number) => (op & 0x7f) === 0 || (op & 0x7f) === 9;
-export function futex(cpu: Cpu, addr: number, op: number, val: number, ts: number): number | Promise<number> {
+export function futex(cpu: Cpu, addr: number, op: number, val: number, ts: number): PromiseOrVal<number> {
   const cmd = op & 0x7f;
   if (isWait(op)) {
     if (mem.ld32(addr) !== val) { fstat(cpu, "eagain"); return -E.AGAIN; }

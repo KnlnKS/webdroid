@@ -13,7 +13,7 @@ export class Strand {
 
 /** a value computed by its first asker and kept. Askers meanwhile wait for the same computation; a
  *  failure is not kept, so the next asker computes again. */
-export function once<T>(make: () => T | Promise<T>): () => T | Promise<T> {
+export function once<T>(make: () => PromiseOrVal<T>): () => PromiseOrVal<T> {
   let value: { v: T } | null = null, pending: Promise<T> | null = null;
   return () => {
     if (value) return value.v;

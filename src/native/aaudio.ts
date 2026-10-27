@@ -73,7 +73,7 @@ class Stream {
   }
   /** AAudioStream_waitForStateChange: the timeout is the app's, on the guest clock; the changes
    *  come at the audio clock's pace, a drain's STOPPED once the output has played its queue */
-  wait(input: number, out: () => number, nanos: bigint): number | Promise<number> {
+  wait(input: number, out: () => number, nanos: bigint): PromiseOrVal<number> {
     const done = () => { const at = out(); if (at) mem.st32(at, this.state); return this.state === input ? -885 : 0; };
     if (this.state !== input || nanos <= 0n) return done();
     const timeout = Number(nanos / 1000000n), deadline = guestNow() + timeout;

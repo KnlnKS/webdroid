@@ -49,7 +49,7 @@ export const exitRecordData: PackageState = { remove: (pkg) => savedRecords.remo
 /** a package's records, newest first */
 export const exitRecords = (pkg: string): ExitRecord[] => savedRecords.get(pkg) ?? [];
 /** a Worker queries and publishes through the page owner; no localStorage replica is authoritative */
-export const queryExitRecords = (pkg: string): ExitRecord[] | Promise<ExitRecord[]> =>
+export const queryExitRecords = (pkg: string): PromiseOrVal<ExitRecord[]> =>
   remoteSystem() ? broker().exitRecords(pkg) : exitRecords(pkg);
 /** The owner computes crash repetition against its current history, then persists before death. */
 export function recordRemoteExit(record: ExitRecord): ExitRecord {

@@ -84,7 +84,7 @@ const lp = <T>(attrs: JObj, name: string) => getDeclared<T>(attrs, LP, name);
 
 const rect = (l: number, t: number, r: number, b: number) => newObj("android/graphics/Rect", "(IIII)V", l, t, r, b);
 const displayRect = () => rect(0, 0, device.width, device.height);
-const insetsType = (name: string): number | Promise<number> => scall("android/view/WindowInsets$Type", name, "()I");
+const insetsType = (name: string): PromiseOrVal<number> => scall("android/view/WindowInsets$Type", name, "()I");
 
 /** SystemUI's NavigationBar: its bar suppresses the scrim behind it unless config_navBarNeedsScrim asks for one */
 let navBarFlags: number | undefined;

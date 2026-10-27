@@ -13,5 +13,5 @@
     "skipLibCheck": true,
     "types": ["@cloudflare/workers-types", "node"]
   },
-  "include": ["worker", "functions", "worker-configuration.d.ts", "src/base64.d.ts"]
+  "include": ["worker", "functions", "worker-configuration.d.ts", "src/base64.d.ts", "src/promise-or-value.d.ts"]
 }

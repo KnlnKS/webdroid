@@ -358,14 +358,14 @@ class Run {
     }
     this.pump();
   }
-  dequeueInput(timeout: bigint): number | Promise<number> {
+  dequeueInput(timeout: bigint): PromiseOrVal<number> {
     if (timeout > 0n && !this.ending && (!this.available.size || this.busy())) return this.wait(timeout).then(() => this.codec.running().dequeueInput(0n));
     if (this.ending || !this.available.size || this.busy()) return -1;
     const index = this.available.values().next().value;
     if (index === undefined) return -1; this.available.delete(index); this.announced.add(index); return index;
   }
   /** an output index and its info, or INFO_TRY_AGAIN_LATER (-1) or INFO_OUTPUT_FORMAT_CHANGED (-2) */
-  dequeueOutput(timeout: bigint): [number, Info | null] | Promise<[number, Info | null]> {
+  dequeueOutput(timeout: bigint): PromiseOrVal<[number, Info | null]> {
     if (timeout > 0n && !this.formatChanged && !this.outputQueue.length) return this.wait(timeout).then(() => this.codec.running().dequeueOutput(0n));
     if (this.formatChanged) { this.formatChanged = false; return [-2, null]; }
     const index = this.outputQueue.shift(); if (index === undefined) return [-1, null];

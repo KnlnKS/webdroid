@@ -128,7 +128,7 @@ export class Monitors {
   }
   /** Object.wait (and Thread.sleep, which waits on its thread's lock and is never notified): releases the monitor, waits for a notification, the
    *  timeout (`ms` of 0 is none unless `timed`) or an interrupt, and gets the monitor back with its count */
-  wait(obj: object, s: Strand, ms: number, timed: boolean): Promise<St> | St {
+  wait(obj: object, s: Strand, ms: number, timed: boolean): PromiseOrVal<St> {
     const m = this.held(obj, s);
     if (!m) return St.Imse;
     const th: ThreadRec = s.thread;

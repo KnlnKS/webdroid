@@ -69,7 +69,7 @@ function object(h: number, cpu: Cpu): unknown {
 export const deref = (h: number, cpu: Cpu): unknown => java.jni.host(object(h, cpu));
 /** a local reference to a new `name` its constructor `desc` made of `args`, as NewObject makes one; 0 with the
  *  exception pending when it threw */
-export const newLocal = (cpu: Cpu, name: string, desc: string, args: unknown[]): number | Promise<number> => rt.drive(function* (): Gen<number> {
+export const newLocal = (cpu: Cpu, name: string, desc: string, args: unknown[]): PromiseOrVal<number> => rt.drive(function* (): Gen<number> {
   try {
     const c: JniClass | null = yield java.jni.resolve(name, cpu.nativeClass);
     if (!c) { pend(cpu, java.jni.noClass(name)); return 0; }
@@ -139,7 +139,7 @@ function pend(cpu: Cpu, e: unknown): void {
 /** the exception a failed call leaves pending */
 const failed = (cpu: Cpu, e: unknown): void => pend(cpu, java.jni.caught(e));
 /** `body`'s answer once `c` is initialized, as ART's EnsureInitialized before an ID or an instance; 0 with any failure pending */
-const initialized = (cpu: Cpu, c: JniClass, body: () => Gen<number>): number | Promise<number> => rt.drive(function* (): Gen<number> {
+const initialized = (cpu: Cpu, c: JniClass, body: () => Gen<number>): PromiseOrVal<number> => rt.drive(function* (): Gen<number> {
   try { yield java.jni.init(c); return yield* body(); } catch (e) { failed(cpu, e); return 0; }
 }());
 
@@ -185,7 +185,7 @@ function syncPinned(args: unknown[], toJava: boolean): void {
 }
 
 /** `m` on the object reference `h` names */
-function invoke(cpu: Cpu, m: MethodRec, h: number, args: unknown[], nonvirtual: boolean): HostRet | Promise<HostRet> {
+function invoke(cpu: Cpu, m: MethodRec, h: number, args: unknown[], nonvirtual: boolean): PromiseOrVal<HostRet> {
   const synced = pinned.size > 0;
   if (synced) syncPinned(args, true);
   let pending = false;

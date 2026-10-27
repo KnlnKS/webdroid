@@ -31,7 +31,7 @@ export function bridge(end: Loopback, port: MessagePort, done: () => void = () =
   const finish = () => { if (phase >= OVER) return; phase = OVER; done(); };
   const reclaim = () => { for (const ticket of unclaimed.splice(0).flat()) void unpark(ticket).then((f) => { if (f) void dropFile(f); }).catch(failed); };
   const shutdown = () => { finish(); if (phase < SHUT) { phase = SHUT; port.close(); reclaim(); } };
-  const send = (wire: () => Wire | Promise<Wire>) => {
+  const send = (wire: () => PromiseOrVal<Wire>) => {
     out = out.then(async () => { const w = await wire(); if (phase < SHUT) port.postMessage(w); else reclaim(); }).catch(failed);
   };
   const sendClose = () => { if (phase < CLOSING) { phase = CLOSING; send(() => ({ closed: true })); } };

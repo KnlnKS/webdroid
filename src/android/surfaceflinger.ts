@@ -227,7 +227,7 @@ const controlField = peerField<bigint>("android/view/SurfaceControl", "mNativeOb
 /** the layer of a Java SurfaceControl, which ASurfaceControl_fromJava hangs a native tree from */
 export const javaLayer = (sc: JObj | null): Layer | null => { const h = sc ? controlField(sc) : 0n; return h ? layerOf(h) : null; };
 /** a Java SurfaceControl over `layer` */
-export const javaSurfaceControl = (layer: Layer, callsite: string): JObj | Promise<JObj> => after(newObj("android/view/SurfaceControl"),
+export const javaSurfaceControl = (layer: Layer, callsite: string): PromiseOrVal<JObj> => after(newObj("android/view/SurfaceControl"),
   (sc) => after(vcall(sc, "assignNativeObject", "(JLjava/lang/String;)V", handle({ layer } satisfies Control), callsite), () => sc));
 /** a root layer on the display: what a window's surface hangs from */
 export function displayLayer(name: string, z: number): Layer {

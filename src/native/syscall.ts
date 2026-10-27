@@ -70,7 +70,7 @@ export function kernelInit(): void {
 }
 
 /** syscall(2): what a raw svc/swi and libc's wrapper both reach, the cursor at the first argument */
-export function rawSyscall(cpu: Cpu, nr: number, a: ArgReader): HostRet | Promise<HostRet> {
+export function rawSyscall(cpu: Cpu, nr: number, a: ArgReader): PromiseOrVal<HostRet> {
   const fn = (cpu.a64 ? TABLE64 : TABLE32)[nr];
   if (fn) return fn(cpu, a);
   calledMissing.add("syscall " + nr);

@@ -443,9 +443,9 @@ export class Cpu {
   call(fn: number, args: CallArg[] = [], label = "call"): Promise<number> { return Promise.resolve(this.enter(fn, args, { label })); }
   /** call(), but a number when the guest returns within its first slice without parking: a Java
    *  caller then keeps its frames instead of suspending every one of them */
-  callSync(fn: number, args: CallArg[] = [], label = "call"): number | Promise<number> { return this.enter(fn, args, { label }); }
+  callSync(fn: number, args: CallArg[] = [], label = "call"): PromiseOrVal<number> { return this.enter(fn, args, { label }); }
   /** `fn` as `frame`: a signal handler's on `stackTop` (its alternate stack) when given */
-  private enter(fn: number, args: CallArg[], frame: Frame, stackTop?: bigint, strand = rt.cur): number | Promise<number> {
+  private enter(fn: number, args: CallArg[], frame: Frame, stackTop?: bigint, strand = rt.cur): PromiseOrVal<number> {
     // host code calling back into the guest (a comparator, a JNI entry) while a signal handler owns the
     // register file above the frame it belongs to waits for that handler, as the kernel would hold the
     // thread; a handler's own delivery never waits
@@ -524,7 +524,7 @@ export class Cpu {
       if (this.idle.length) for (const w2 of this.idle.splice(0)) w2();
       this.pump();                                                          // a signal that arrived while this frame owned the register file reaches the frame below now
     };
-    let ran: void | Promise<void>;
+    let ran: PromiseOrVal<void>;
     try { ran = this.run(strand); } catch (e) { leave(); throw e; }
     if (!ran) { try { return finish(); } finally { leave(); } }
     return ran.then(finish).finally(leave);
@@ -539,15 +539,15 @@ export class Cpu {
 
   /** the slice driver: run until the frame returns (pc = RET_SENTINEL) or the thread finishes;
    *  synchronous when it returns within its first slice */
-  run(strand = rt.cur): void | Promise<void> {
+  run(strand = rt.cur): PromiseOrVal<void> {
     const bound = this.libc === "none" && threadHooks ? threadHooks.start(this) : undefined;
     return bound ? bound.then(() => this.runLoop(strand)) : this.runLoop(strand);
   }
-  private runLoop(strand: Strand): void | Promise<void> {
+  private runLoop(strand: Strand): PromiseOrVal<void> {
     this.loops++;
     // the caller's strand when it is this thread's (a JNI call), else the thread as no chain (its own start)
     const sync = { on: true };
-    let loop: void | Promise<void>;
+    let loop: PromiseOrVal<void>;
     try { loop = this.loop(sync, strand.thread === this.jthread ? strand : this.jthread.root); }
     catch (e) { this.loops--; throw e; }
     sync.on = false;
@@ -557,7 +557,7 @@ export class Cpu {
   /** The first slice runs before any await, so a guest function that returns within it (most JNI
    *  natives) completes on the caller's stack. `sync.on` while the caller is still on the stack: a
    *  frame that never parked leaves it its thread. */
-  private loop(sync: { on: boolean }, strand: Strand): void | Promise<void> {
+  private loop(sync: { on: boolean }, strand: Strand): PromiseOrVal<void> {
     const caller = rt.cur;
     // each turn the loop resumes in runs as the strand that entered it
     const turn: LoopTurn = { own: () => resumeAs(strand), release: releaseThread };
@@ -704,7 +704,7 @@ export class Cpu {
     if (!rawSyscall) this.fault(`syscall ${nr}`);
     const a = this.svcArgs;
     a.reset(this);
-    let ret: HostRet | Promise<HostRet>;
+    let ret: PromiseOrVal<HostRet>;
     try { ret = rawSyscall(this, nr, a); } catch (e) { ret = this.copyFault(e); }
     // the core has already stepped past the svc: a parked syscall resumes by writing x0 alone, once
     // any signal handler delivered meanwhile has given the register file back
@@ -827,7 +827,7 @@ export class Cpu {
 }
 
 /** the kernel's syscall dispatcher, installed by kernelInit: raw svc/swi numbers the core leaves to the host */
-let rawSyscall: ((cpu: Cpu, nr: number, a: ArgReader) => HostRet | Promise<HostRet>) | null = null;
+let rawSyscall: ((cpu: Cpu, nr: number, a: ArgReader) => PromiseOrVal<HostRet>) | null = null;
 /** a data access fault at `addr`: no mapping, or one without the access; a plane-0 address
  *  past both is a misaligned access */
 function memoryFault(addr: bigint): { sig: number; info: SigInfo } {
@@ -837,12 +837,12 @@ function memoryFault(addr: bigint): { sig: number; info: SigInfo } {
   if (mem.writeProtected(lo)) return { sig: SIGSEGV, info: { code: SEGV_ACCERR, addr } };
   return { sig: SIGBUS, info: { code: BUS_ADRALN, addr } };
 }
-export function setRawSyscall(fn: (cpu: Cpu, nr: number, a: ArgReader) => HostRet | Promise<HostRet>): void { rawSyscall = fn; }
+export function setRawSyscall(fn: (cpu: Cpu, nr: number, a: ArgReader) => PromiseOrVal<HostRet>): void { rawSyscall = fn; }
 let tidSeq = 0;
 /** the libc's state for a thread the host created: `start` binds it (bindThread) before its first
  *  instruction, `end` tears it down when its Java thread ends; `cloned` finds a thread's the guest
  *  libc created */
-let threadHooks: { start: (cpu: Cpu) => void | Promise<void>; end: (cpu: Cpu) => Promise<void>; cloned?: (cpu: Cpu) => void } | null = null;
+let threadHooks: { start: (cpu: Cpu) => PromiseOrVal<void>; end: (cpu: Cpu) => Promise<void>; cloned?: (cpu: Cpu) => void } | null = null;
 export function setThreadHooks(hooks: NonNullable<typeof threadHooks>): void { threadHooks = hooks; }
 export const cpus = new Set<Cpu>();
 const byThread = new WeakMap<JThread, Cpu>();

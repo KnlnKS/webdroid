@@ -205,7 +205,7 @@ function sameMap(a: KeyMap, b: KeyMap): boolean {
 class NativeKeyCharacterMap { readonly deviceId: number; readonly map: KeyMap | null; constructor(deviceId: number, map: KeyMap | null) { this.deviceId = deviceId; this.map = map; } }
 const kcmAt = (h: bigint) => deref<NativeKeyCharacterMap>(h);
 /** a Java KeyCharacterMap over `map` for device `deviceId` */
-export const javaKeyCharacterMap = (deviceId: number, map: KeyMap | null): JObj | Promise<JObj> =>
+export const javaKeyCharacterMap = (deviceId: number, map: KeyMap | null): PromiseOrVal<JObj> =>
   newObj(KCM, "(J)V", ownedHandle(new NativeKeyCharacterMap(deviceId, map)));
 
 /** KeyCharacterMap::writeToParcel */
@@ -281,7 +281,7 @@ rt.registerJnis(KCM, {
     const now = BigInt(Math.round(uptimeMillis() * 1e6)), events: JObj[] = [];
     const next = (i: number): unknown => i === list.length ? jarray(events, `L${KE};`)
       : after(scall(KE, "obtain", `(IJJIIIIIIIII[BLjava/lang/String;)L${KE};`, nextId(), now, now, list[i].down ? KEY_ACTION_DOWN : KEY_ACTION_UP, list[i].code, 0,
-        list[i].meta, k.deviceId, 0, 0, SOURCE_KEYBOARD, -1, new Int8Array(32), null) as JObj | Promise<JObj>, (ev: JObj) => { events.push(ev); return next(i + 1); });
+        list[i].meta, k.deviceId, 0, 0, SOURCE_KEYBOARD, -1, new Int8Array(32), null) as PromiseOrVal<JObj>, (ev: JObj) => { events.push(ev); return next(i + 1); });
     return next(0);
   }),
   "nativeObtainEmptyKeyCharacterMap(I)Landroid/view/KeyCharacterMap;": (deviceId: number) => javaKeyCharacterMap(deviceId, null),

@@ -157,7 +157,7 @@ export const vfs = {
     flushMapped(node);
     return node?.content instanceof Uint8Array ? node.content : procBytes(path);
   },
-  readFile(p: string): Uint8Array | Promise<Uint8Array> | null {
+  readFile(p: string): PromiseOrVal<Uint8Array> | null {
     const path = this.norm(p), node = nodes.get(path), content = node?.content;
     flushMapped(node);
     return content instanceof Uint8Array ? content : content ? readFully(content) : procBytes(path);

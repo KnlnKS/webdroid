@@ -18,9 +18,9 @@ import { procIdentity } from "../../shell/procfs.ts";
 
 type BroadcastResult = { code: number; data: string | null; extras: JObj | null; aborted: boolean };
 /** a result as it crosses processes, its extras parcelled */
-export const resultData = (result: BroadcastResult): BroadcastData | Promise<BroadcastData> =>
+export const resultData = (result: BroadcastResult): PromiseOrVal<BroadcastData> =>
   after(result.extras && parcelled(result.extras), (extras) => ({ ...result, extras }));
-export const broadcastResult = (data: BroadcastData): BroadcastResult | Promise<BroadcastResult> =>
+export const broadcastResult = (data: BroadcastData): PromiseOrVal<BroadcastResult> =>
   after(data.extras && unparcelled("android/os/Bundle", data.extras), (extras) => ({ ...data, extras }));
 /** a broadcast to every process, through the broker: `permissions` are those a receiver must hold; it answers the final result */
 function* send$(intent: JIntent, permissions: string[], ordered: boolean, initial?: BroadcastResult): Gen<BroadcastResult> {
@@ -29,7 +29,7 @@ function* send$(intent: JIntent, permissions: string[], ordered: boolean, initia
 }
 /** broadcasts the system keeps current (BatteryService's BATTERY_CHANGED), by action. As in
  *  ActivityManagerService, a registration matching one gets it back and its receiver hears it at once. */
-export const stickyBroadcasts = new Map<string, () => JIntent | Promise<JIntent>>();
+export const stickyBroadcasts = new Map<string, () => PromiseOrVal<JIntent>>();
 /** IntentFilter.match(ContentResolver, Intent, boolean, String), as the broadcast queue matches a registration */
 function* filterMatches(filter: JObj, intent: JIntent): Gen<boolean> {
   return (yield vcall(filter, "match", "(Landroid/content/ContentResolver;Landroid/content/Intent;ZLjava/lang/String;)I", null, intent, 0, "ActivityManager")) >= 0;

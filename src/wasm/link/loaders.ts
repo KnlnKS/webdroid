@@ -185,7 +185,7 @@ export function classByName(w: World, name: string, scope: unknown, mode: number
 }
 
 /** host.dexOpen(path, loader): the cookie of the dex files at `path`, whose classes are defined in the namespace of the ClassLoader object `loader` */
-export function dexOpen(w: World, path: unknown, loaderObject: object | null): object | Promise<object> {
+export function dexOpen(w: World, path: unknown, loaderObject: object | null): PromiseOrVal<object> {
   const file = w.hostString(path) as string;
   if (!w.opts.dexes) {
     w.onGap("DexFile.openDexFileNative: the host has no dex files to open");
@@ -235,8 +235,8 @@ function openDexes(w: World, dexes: DexFile[], loaderObject: object | null): obj
   } finally { w.bridge.end(mark); }
 }
 
-export function dexOpenMemory(w: World, buffers: object, arrays: object, starts: object, ends: object, loader: object | null): object | Promise<object> {
-  const mark = w.bridge.begin(), bytes: (Uint8Array | Promise<Uint8Array>)[] = [];
+export function dexOpenMemory(w: World, buffers: object, arrays: object, starts: object, ends: object, loader: object | null): PromiseOrVal<object> {
+  const mark = w.bridge.begin(), bytes: (PromiseOrVal<Uint8Array>)[] = [];
   try {
     const from = w.bridge.toHost(starts, "[I") as Int32Array, to = w.bridge.toHost(ends, "[I") as Int32Array;
     for (let i = 0; i < w.bridge.arrayLength(buffers); i++) {

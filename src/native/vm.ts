@@ -20,7 +20,7 @@ const pages = (n: number) => Math.ceil(n / PAGE_SIZE) * PAGE_SIZE;
 /** mmap(2): the mapping's address, or -errno. Native code's (`native`) shared mappings of a pooled region
  *  are in the window; Java's direct memory is the core's own. A descriptor's mapping is refused beyond an
  *  ashmem region's protection, and a writable shared one of a file whose stores could not reach it. */
-export function mmap(hint: bigint, n: number, prot: number, flags: number, fd: number, off: number, native = false): number | bigint | Promise<number | bigint> {
+export function mmap(hint: bigint, n: number, prot: number, flags: number, fd: number, off: number, native = false): PromiseOrVal<number | bigint> {
   const type = flags & 3, file = flags & MAP_ANONYMOUS ? null : openFd(fd);
   if (!Number.isSafeInteger(n) || n <= 0 || !Number.isSafeInteger(off) || off < 0 || off & (PAGE_SIZE - 1) || !type || (flags & MAP_FIXED && (hint & 4095n))) return -E.INVAL;
   if (file === undefined) return -E.BADF;

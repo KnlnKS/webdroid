@@ -14,11 +14,11 @@ import { THROWERS } from "../compiler/exc.ts";
 import { resolveHandleMember } from "../compiler/handles.ts";
 import { caught, chain, each } from "./maybe.ts";
 
-export function resolveSignatureTypes(w: World, types: SignatureType[], owner: Strand): void | Promise<void> {
+export function resolveSignatureTypes(w: World, types: SignatureType[], owner: Strand): PromiseOrVal<void> {
   return each(types, ({ descriptor, owner: cls }) => descriptor[0] === "L" || descriptor[0] === "[" ? resolveType(w, w.prog.loaderOf(cls), descToName(descriptor), owner) : undefined);
 }
 
-export function resolveHandleReference(w: World, method: MethodInfo, index: number, owner: Strand): void | Promise<void> {
+export function resolveHandleReference(w: World, method: MethodInfo, index: number, owner: Strand): PromiseOrVal<void> {
   const ready = resolveType(w, w.prog.loaderOf(method.cls), handleMemberOwner(method, index), owner);
   const signature = () => {
     const member = resolveHandleMember(w.prog, method, index);
@@ -40,7 +40,7 @@ export function causedThrowable(w: World, cls: string, message: string, cause: o
   return throwable;
 }
 
-export function resolveType(w: World, loader: Loader, name: string, owner: Strand): string | Promise<string> {
+export function resolveType(w: World, loader: Loader, name: string, owner: Strand): PromiseOrVal<string> {
   const symbolic = name[0] === "[" ? name : `L${name};`, component = symbolic.replace(/^\[+/, "");
   const message = `Failed resolution of: ${symbolic}`;
   if (!objectOfLoader(w, loader) && component[0] === "L" && !w.prog.lookup(loader, descToName(component))) {
@@ -78,7 +78,7 @@ export function initiatedType(w: World, referrer: string, symbolic: string): { n
 }
 
 /** Resolve only references used by this executed instruction. */
-export function resolveInstruction(w: World, method: MethodInfo, ins: PreparedInstruction, owner: Strand): void | Promise<void> {
+export function resolveInstruction(w: World, method: MethodInfo, ins: PreparedInstruction, owner: Strand): PromiseOrVal<void> {
   if (ins.name === "const-method-type") return resolveSignatureTypes(w, methodTypeSignatureTypes(method, ins.b), owner);
   if (ins.name === "const-method-handle") return resolveHandleReference(w, method, ins.b, owner);
   if (ins.name.startsWith("invoke-polymorphic")) return resolveSignatureTypes(w, methodTypeSignatureTypes(method, ins.c), owner);
@@ -89,15 +89,15 @@ export function resolveInstruction(w: World, method: MethodInfo, ins: PreparedIn
 }
 
 /** ART FindCatchBlock preserves the original exception and skips unresolved catch types. */
-export function resolveCatch(w: World, method: MethodInfo, pc: number, throwable: object, owner: Strand): number | Promise<number> {
+export function resolveCatch(w: World, method: MethodInfo, pc: number, throwable: object, owner: Strand): PromiseOrVal<number> {
   const range = method.dex.code(method.codeOff).tries.find(t => pc >= t.start && pc < t.end);
   if (!range) return -1;
   const loader = w.prog.loaderOf(method.cls), thrown = w.classNameOf(throwable);
-  const next = (at: number): number | Promise<number> => {
+  const next = (at: number): PromiseOrVal<number> => {
     if (at === range.handlers.length) return range.catchAllAddr;
     const [type, target] = range.handlers[at];
     const matched = (key: string) => w.prog.isSubclass(thrown, key) ? target : next(at + 1);
-    const failed = (error: unknown): number | Promise<number> => {
+    const failed = (error: unknown): PromiseOrVal<number> => {
       if (!w.throwable(error)) throw error;
       return next(at + 1);
     };
@@ -113,7 +113,7 @@ export function resolveForName(w: World, name: string, object: object | null, ow
   const valid = name[0] === "[" && /^[ZBCSIJFD]$/.test(element)
     || (!/[\/;\[\u0000]/.test(binary) && binary.split(".").every(part => part.length > 0) && (name[0] !== "[" || element === `L${binary};`));
   if (!valid) w.raise("java/lang/ClassNotFoundException", `Invalid name: ${name}`);
-  const wrap = (error: unknown): never | Promise<never> => {
+  const wrap = (error: unknown): PromiseOrVal<never> => {
     const cause = w.throwable(error);
     if (!cause) throw error;
     const cls = "java/lang/ClassNotFoundException", ctor = w.prog.resolve(cls, "<init>", "(Ljava/lang/String;Ljava/lang/Throwable;)V");
@@ -139,7 +139,7 @@ export function definitionReady(w: World, key: string): boolean {
 }
 
 /** Resolve only declaration hierarchy before a definition publishes layout or its mirror. */
-export function prepareDefinition(w: World, key: string, owner: Strand): string | Promise<string> {
+export function prepareDefinition(w: World, key: string, owner: Strand): PromiseOrVal<string> {
   const cls = w.prog.get(key), loader = w.prog.loaderOf(key);
   if (!cls?.dex || !cls.def || w.prog.linksStatically(loader) || !objectOfLoader(w, loader)) return key;
   const states = definitions.get(w);
@@ -163,12 +163,12 @@ export function prepareDefinition(w: World, key: string, owner: Strand): string 
   catch (error) { return fail(error); }
 }
 
-export function resolvedMirror(w: World, key: string, owner: Strand): object | Promise<object> {
-  return handleThunk(w, "resolve:mirror", ["I"], "L", (cx, c, arg) => { arg(0); cx.callRt(c, "classOf"); }, owner)(w.idOf(key)) as object | Promise<object>;
+export function resolvedMirror(w: World, key: string, owner: Strand): PromiseOrVal<object> {
+  return handleThunk(w, "resolve:mirror", ["I"], "L", (cx, c, arg) => { arg(0); cx.callRt(c, "classOf"); }, owner)(w.idOf(key)) as PromiseOrVal<object>;
 }
 
 /** Resolve one executed symbolic request without linking its class module. */
-export function resolveClass(w: World, loader: Loader, name: string, owner: Strand): string | Promise<string> {
+export function resolveClass(w: World, loader: Loader, name: string, owner: Strand): PromiseOrVal<string> {
   const missing = (): never => w.raise("java/lang/ClassNotFoundException", name.replace(/\//g, "."));
   if (name.startsWith("[")) {
     const component = name.replace(/^\[+/, "");
@@ -199,7 +199,7 @@ export function resolveClass(w: World, loader: Loader, name: string, owner: Stra
   const body: Parameters<World["helpers"]["callFn"]>[3] = (cx, c, arg) => {
     arg(0); arg(1); cx.callMethod(c, method);
   };
-  const accept = (mirror: unknown): string | Promise<string> => {
+  const accept = (mirror: unknown): PromiseOrVal<string> => {
     if (!mirror) w.raise("java/lang/NullPointerException", `ClassLoader.loadClass returned null for ${name.replace(/\//g, ".")}`);
     const id = w.helpers.hostFn("resolve:classId", ["L"], "I", (cx, c) => { c.lget(0); idOfClass(cx, c); })(mirror) as number;
     const key = w.nameOf(id);
@@ -209,7 +209,7 @@ export function resolveClass(w: World, loader: Loader, name: string, owner: Stra
     w.namespaces.initiateClass(loader, name, key);
     return prepareDefinition(w, key, owner);
   };
-  const failed = (error: unknown): string | Promise<string> => {
+  const failed = (error: unknown): PromiseOrVal<string> => {
     const winner = w.prog.initiatedBy(loader, name);
     if (winner) return prepareDefinition(w, winner, owner);
     throw error;

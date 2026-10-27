@@ -1,6 +1,6 @@
 export interface FileSource {
   readonly size: number;
-  read(offset: number, length: number): Uint8Array | Promise<Uint8Array>;
+  read(offset: number, length: number): PromiseOrVal<Uint8Array>;
 }
 
 /** a source that also takes writes; they are ordered with its later reads */
@@ -90,14 +90,14 @@ export class SliceFile implements FileSource {
     this.size = size;
   }
 
-  read(offset: number, length: number): Uint8Array | Promise<Uint8Array> {
+  read(offset: number, length: number): PromiseOrVal<Uint8Array> {
     const [start, end] = clampRange(this.size, offset, length);
     return this.source.read(this.offset + start, end - start);
   }
 }
 
 /** `length` bytes at `offset`, fewer only at the end: a source may answer one read in chunks */
-export function readAt(source: FileSource, offset: number, length: number): Uint8Array | Promise<Uint8Array> {
+export function readAt(source: FileSource, offset: number, length: number): PromiseOrVal<Uint8Array> {
   const assemble = async (first: Uint8Array): Promise<Uint8Array> => {
     const out = new Uint8Array(length);
     out.set(first);

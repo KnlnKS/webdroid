@@ -20,12 +20,12 @@ type PendingInfo = Pick<PendingOperation, "pkg" | "uid" | "kind" | "flags">;
 /** ActivityManagerService's PendingIntentController: the broker's records, which every process asks */
 export type PendingAccess = {
   create(pkg: string, kind: PendingOperation["kind"], code: number, flags: number, intent: ParcelData, intents?: ParcelData[]): Promise<number | null>;
-  cancel(id: number): void | Promise<void>;
+  cancel(id: number): PromiseOrVal<void>;
   send(id: number, fill: ParcelData | null): Promise<boolean>;
   /** the operation a start on the creator's behalf runs, which consumes a one-shot sender */
-  take(id: number): PendingOperation | null | Promise<PendingOperation | null>;
+  take(id: number): PromiseOrVal<PendingOperation | null>;
   /** the sender's record, left in place */
-  peek(id: number): PendingInfo | null | Promise<PendingInfo | null>;
+  peek(id: number): PromiseOrVal<PendingInfo | null>;
 };
 /** a record's IIntentSender: a binder of system_server's, numbered apart from those it exports */
 const senderHandle = (id: number): BinderHandle => ({ pid: SYSTEM_SERVER_PID, id: -id });

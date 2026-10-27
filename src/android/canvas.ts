@@ -409,7 +409,7 @@ export class NativeCanvas {
     return !this.clipEmpty;
   }
   /** SkCanvas::clipPath: intersect (anti-aliased, so the bounds round out) or take the path out */
-  clipPath(path: NativePath, out: boolean): boolean | Promise<boolean> {
+  clipPath(path: NativePath, out: boolean): PromiseOrVal<boolean> {
     if (path.inverseFill === out) {
       this.clipTo(path.path(), path.fillRule);
       if (!out) { const b = path.bounds(); this.narrowOut(b.left, b.top, b.right, b.bottom); }

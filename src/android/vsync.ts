@@ -58,7 +58,7 @@ function fill(data: Record<string, unknown>): void {
   timeline[F.vsyncId] = BigInt(latest.frame);
   timeline[F.present] = timeline[F.deadline] = presentedAt(latest);
 }
-const ref = (weak: JObj): JObj | null | Promise<JObj | null> => vcall(weak, "get", "()Ljava/lang/Object;");
+const ref = (weak: JObj): PromiseOrVal<JObj | null> => vcall(weak, "get", "()Ljava/lang/Object;");
 
 /** The host's frame period: the mean of its recent frame spacings, which cancels jitter (an early frame shortens one
  *  gap by what it lengthens the next), leaving out the spacings of skipped frames, longer than 1.5 times the median. */

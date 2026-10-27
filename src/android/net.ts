@@ -5,9 +5,9 @@ import { scall, vcall } from "../jvm/natives/jentry.ts";
 
 export type JUri = JObj;
 /** Uri.parse */
-export const mkUri = (s: string): JUri | Promise<JUri> => scall("android/net/Uri", "parse", "(Ljava/lang/String;)Landroid/net/Uri;", s);
+export const mkUri = (s: string): PromiseOrVal<JUri> => scall("android/net/Uri", "parse", "(Ljava/lang/String;)Landroid/net/Uri;", s);
 /** Uri.toString; a null uri is a NullPointerException */
-export const uriText = (u: JUri | null): string | Promise<string> => vcall(u ?? rt.npe(), "toString", "()Ljava/lang/String;");
+export const uriText = (u: JUri | null): PromiseOrVal<string> => vcall(u ?? rt.npe(), "toString", "()Ljava/lang/String;");
 /** a hierarchical uri string's authority and decoded path segments, as getAuthority and getPathSegments answer them */
 export function uriParts(s: string): { authority: string; segments: string[] } {
   const i = s.indexOf("://");

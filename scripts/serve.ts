@@ -9,7 +9,7 @@ import { mimeOf } from "../src/mime.ts";
 /** `stream` as the web stream a Response takes: node and the DOM declare ReadableStream apart */
 export const toWeb = (stream: Readable): ReadableStream<Uint8Array> => Readable.toWeb(stream) as unknown as ReadableStream<Uint8Array>;
 
-export type Handler = (req: Request) => Response | Promise<Response>;
+export type Handler = (req: Request) => PromiseOrVal<Response>;
 export interface Served { url: URL; port: number; stop(force?: boolean): void }
 
 /** answers `req` through `fetch`: the Request aborts when the client goes away, and a throw answers 500 */

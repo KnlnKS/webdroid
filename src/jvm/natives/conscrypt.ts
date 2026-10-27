@@ -400,7 +400,7 @@ function unpadded(k: Rsa, pad: RsaPad, em: Uint8Array): Uint8Array {
 }
 /** the four raw RSA natives: (flen, from, to, key, padding) → bytes written */
 function rsaRaw(op: "pubenc" | "privdec" | "privenc" | "pubdec") {
-  return waits((flen: number, from: Int8Array, to: Int8Array, ref: JObj, padding: number): number | Promise<number> => {
+  return waits((flen: number, from: Int8Array, to: Int8Array, ref: JObj, padding: number): PromiseOrVal<number> => {
     const k = keyOf(ref), input = region(from, 0, flen).slice();
     const finish = (r: Uint8Array) => { region(to, 0, r.length).set(r); return r.length; };
     if ("wrapper" in k && (op === "privdec" || op === "privenc")) {

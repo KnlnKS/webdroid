@@ -142,7 +142,7 @@ export class Subframes {
   }
   /** a client's response for a subframe: an HTML document on the opaque renderer, which carries the
    *  page script, or the bytes as they are */
-  private intercepted(url: string, response: WebResponse): Promise<string> | string {
+  private intercepted(url: string, response: WebResponse): PromiseOrVal<string> {
     const type = Object.entries(response.headers).find(([name]) => name.toLowerCase() === "content-type")?.[1] ?? "text/html";
     if (!/^\s*text\/html\b/i.test(type)) return "data:" + type.replace(/\s+/g, "") + ";base64," + response.body;
     const bytes = Uint8Array.fromBase64(response.body), charset = /charset=([^;\s]+)/i.exec(type)?.[1] ?? "utf-8";

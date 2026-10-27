@@ -246,7 +246,7 @@ export class HarfBuzz {
 
 let ready: HarfBuzz | null = null, loading: Promise<HarfBuzz> | undefined;
 /** the tab's HarfBuzz, loading it on first use */
-export function harfBuzz(): HarfBuzz | Promise<HarfBuzz> {
+export function harfBuzz(): PromiseOrVal<HarfBuzz> {
   return ready ?? (loading ??= load().then((hb) => ready = hb));
 }
 /** the tab's HarfBuzz, which preloadFonts loaded with the realm's fonts: text is measured

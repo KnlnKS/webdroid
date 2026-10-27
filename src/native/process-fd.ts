@@ -102,7 +102,7 @@ function installRemote(token: number, calls: DescriptorCalls, path: string, flag
 const owner = () => pathOwner()?.descriptors;
 /** `send` of what the page's kernel can hold of this realm's `fd`: a remote descriptor's token, or a socket end crossing to
  *  another realm; null for an open file the kernel cannot hold */
-function handOver(fd: number, send: (calls: DescriptorCalls, right: number | CrossingSocket) => Promise<number>): number | Promise<number> | null {
+function handOver(fd: number, send: (calls: DescriptorCalls, right: number | CrossingSocket) => Promise<number>): PromiseOrVal<number> | null {
   const remote = remoteOf(fd);
   if (remote) {
     // the receiver reads the file from its owner, which has only the stores of this process's mappings that reached it
@@ -140,7 +140,7 @@ export const processRights: DescriptorRights = {
   },
 };
 
-export function processOpenFd(path: string, flags: number): number | Promise<number> {
+export function processOpenFd(path: string, flags: number): PromiseOrVal<number> {
   const normalized = vfs.norm(path), calls = pathOwner(normalized)?.descriptors;
   if (!calls) return localOpen(normalized,flags);
   return calls.open(normalized, flags).then(reply =>
@@ -148,7 +148,7 @@ export function processOpenFd(path: string, flags: number): number | Promise<num
 }
 
 /** `use` of `path` open for reading in the realm that owns it; null when it does not open */
-async function withProcessFile<T>(path: string, use: (fd: number) => T | Promise<T>): Promise<T | null> {
+async function withProcessFile<T>(path: string, use: (fd: number) => PromiseOrVal<T>): Promise<T | null> {
   const fd = await processOpenFd(path, 0);
   if (fd < 0) return null;
   try { return await use(fd); } finally { await closeFd(fd); }

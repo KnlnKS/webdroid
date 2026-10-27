@@ -60,14 +60,14 @@ function checkedByteLength(b: JBuffer, at: number, n?: number): number {
   return length;
 }
 /** A host operation reads owner-backed memory once; it does not receive a live byte view. */
-export function readBufferBytes(b: JBuffer, at = 0, n?: number): Uint8Array | Promise<Uint8Array> {
+export function readBufferBytes(b: JBuffer, at = 0, n?: number): PromiseOrVal<Uint8Array> {
   const length = checkedByteLength(b,at,n), address = addressOf(b);
   if (address) return memoryAt(address + BigInt(at),length);
   const layout = layoutOf(b), o = b as Fields;
   if (layout.bb && !(layout.hb && o[layout.hb])) return readBufferBytes(o[layout.bb],o[layout.byteOffset!] + at,length);
   return bufferBytes(b).subarray(at,at + length);
 }
-export function writeBufferBytes(b: JBuffer, bytes: Uint8Array, at = 0): void | Promise<void> {
+export function writeBufferBytes(b: JBuffer, bytes: Uint8Array, at = 0): PromiseOrVal<void> {
   checkedByteLength(b,at,bytes.length);
   const address = addressOf(b);
   if (address) return writeAt(address + BigInt(at),bytes);
@@ -80,34 +80,34 @@ export function remainingBytes(b: JBuffer): Uint8Array<ArrayBuffer> {
   const shift = elementShift(b);
   return bufferBytes(b).subarray(position(b) << shift, limit(b) << shift);
 }
-export function readRemainingBytes(b: JBuffer, n?: number): Uint8Array | Promise<Uint8Array> {
+export function readRemainingBytes(b: JBuffer, n?: number): PromiseOrVal<Uint8Array> {
   const scale = 2 ** elementShift(b), remaining = (limit(b) - position(b)) * scale;
   return readBufferBytes(b,position(b) * scale,n === undefined ? remaining : Math.min(n,remaining));
 }
 /** writes `bytes` at the position, checked against the limit before anything is written */
-export function writeRemainingBytes(b: JBuffer, bytes: Uint8Array): void | Promise<void> {
+export function writeRemainingBytes(b: JBuffer, bytes: Uint8Array): PromiseOrVal<void> {
   const scale = 2 ** elementShift(b), at = position(b) * scale;
   if (bytes.length > (limit(b) - position(b)) * scale) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", "buffer limit exceeded");
   checkedByteLength(b,at,bytes.length);
   return writeBufferBytes(b,bytes,at);
 }
 /** GetDirectBufferAddress: 0 for a heap buffer or a host array; an external mapping moves into guest memory */
-export function directAddress(b: JBuffer): number | bigint | Promise<number | bigint> {
+export function directAddress(b: JBuffer): PromiseOrVal<number | bigint> {
   const address = addressOf(b);
   if (isExternal(address)) return guestAddress(address);
   return address <= 0xffffffffn ? Number(address) : address;
 }
 
 /** ByteBuffer.allocateDirect(n): guest memory, owned by the buffer */
-export const allocateDirect = (n: number): JBuffer | Promise<JBuffer> => scall("java/nio/ByteBuffer", "allocateDirect", "(I)Ljava/nio/ByteBuffer;", n);
+export const allocateDirect = (n: number): PromiseOrVal<JBuffer> => scall("java/nio/ByteBuffer", "allocateDirect", "(I)Ljava/nio/ByteBuffer;", n);
 /** NewDirectByteBuffer over a direct buffer's memory, as a native hands out memory it owns: freeing the view frees
  *  only its own MemoryRef. Read-only as asReadOnlyBuffer() makes it. */
-export const directView = (b: JBuffer, readOnly = false): JBuffer | Promise<JBuffer> =>
+export const directView = (b: JBuffer, readOnly = false): PromiseOrVal<JBuffer> =>
   after(newObj("java/nio/DirectByteBuffer", "(JI)V", addressOf(b), capacity(b)), (v: JBuffer) => readOnly ? vcall(v, "asReadOnlyBuffer", "()Ljava/nio/ByteBuffer;") : v);
 /** ByteBuffer.order(nativeOrder()) */
 export const nativeOrder = (b: JBuffer): JBuffer => setDeclared(b, "java/nio/ByteBuffer", { bigEndian: 0, nativeByteOrder: 1 });
 /** a direct buffer holding a copy of `bytes` */
-export const directCopy = (bytes: Uint8Array): JBuffer | Promise<JBuffer> =>
+export const directCopy = (bytes: Uint8Array): PromiseOrVal<JBuffer> =>
   after(allocateDirect(bytes.length), (b) => { bufferBytes(b).set(bytes); return b; });
 let directPrepared = false;
 /** prepares allocateDirectNow: a first allocation initializes the classes it reaches and compiles its code, either of which may wait */
@@ -122,9 +122,9 @@ export function allocateDirectNow(n: number): JBuffer {
   if (b instanceof Promise) throw new Error("allocateDirectNow before directReady");
   return b;
 }
-const unmappers = new FinalizationRegistry<() => void | Promise<void>>((unmap) => { const pending = unmap(); if (pending) void pending.catch(console.error); });
+const unmappers = new FinalizationRegistry<() => PromiseOrVal<void>>((unmap) => { const pending = unmap(); if (pending) void pending.catch(console.error); });
 /** a MappedByteBuffer over a mapping at `address`, which `unmap` releases once no buffer shares it */
-function mappedBuffer(address: number | bigint, size: number, fd: JObj | null, readOnly: boolean, unmap: () => void | Promise<void>): JBuffer | Promise<JBuffer> {
+function mappedBuffer(address: number | bigint, size: number, fd: JObj | null, readOnly: boolean, unmap: () => PromiseOrVal<void>): PromiseOrVal<JBuffer> {
   return after(newObj("java/nio/DirectByteBuffer", "(IJLjava/io/FileDescriptor;Ljava/lang/Runnable;Z)V", size, BigInt(address), fd, null, +readOnly), (b) => {
     unmappers.register(getDeclared<object>(b, "java/nio/DirectByteBuffer", "memoryRef"), unmap);
     return b;
@@ -132,11 +132,11 @@ function mappedBuffer(address: number | bigint, size: number, fd: JObj | null, r
 }
 
 /** a read-only MappedByteBuffer over an immutable source, paged in as it is read */
-function readOnlyMapping(source: FileSource, offset: number, size: number, fd: JObj | null = null): JBuffer | Promise<JBuffer> {
+function readOnlyMapping(source: FileSource, offset: number, size: number, fd: JObj | null = null): PromiseOrVal<JBuffer> {
   const address = mapExternal(source, offset, size);
   return mappedBuffer(address, size, fd, true, () => unmapExternal(address));
 }
-export const readOnlyBuffer = (bytes: Uint8Array): JBuffer | Promise<JBuffer> => readOnlyMapping(new BytesFile(bytes), 0, bytes.length);
+export const readOnlyBuffer = (bytes: Uint8Array): PromiseOrVal<JBuffer> => readOnlyMapping(new BytesFile(bytes), 0, bytes.length);
 
 rt.registerJnis("java/nio/MappedByteBuffer", {
   "isLoaded0(JJJ)Z": function (address: bigint, length: bigint) { return +(!isExternal(address) || isResident(address, Number(length))); },

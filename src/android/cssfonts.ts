@@ -13,7 +13,7 @@ import { PLATFORM_DATA } from "../jvm/bootclasspath.ts";
 /** the value Chrome gives an axis on a canvas with a normal stretch and style */
 const chromeAxis = (a: FvarAxis) => a.tag === WDTH ? 100 : a.tag === SLNT ? 0 : a.tag === OPSZ ? NaN : a.def;
 const SLNT = 0x736c6e74, OPSZ = 0x6f70737a;
-const cssFaces = new WeakMap<NativeFont, Map<number, string | Promise<string>>>();
+const cssFaces = new WeakMap<NativeFont, Map<number, PromiseOrVal<string>>>();
 let cssFaceIds = 0;
 /** the CSS family that draws `f` as minikin draws it, once registered */
 export function cssFace(f: FakedFont): string {

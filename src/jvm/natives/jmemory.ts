@@ -77,7 +77,7 @@ class Region {
     return run;
   }
   /** a read of `width` bytes at `at` */
-  read<T>(at: number, width: number, get: Get<T>): T | Promise<T> {
+  read<T>(at: number, width: number, get: Get<T>): PromiseOrVal<T> {
     const page = this.pages[at >>> PAGE_SHIFT], from = at & (PAGE - 1);
     if (page && from + width <= page.length) return get(new DataView(page.buffer, page.byteOffset + from, width), 0);
     return after(this.load(at, width), () => get(new DataView(this.bytes(at, width).slice().buffer), 0));
@@ -111,7 +111,7 @@ export async function mapRemote(remote: RemoteDescriptor, offset: number, size: 
   await mapLease(BigInt(va), lease, offset, prot);
   return BigInt(va);
 }
-export function unmapExternal(address: bigint): void | Promise<void> {
+export function unmapExternal(address: bigint): PromiseOrVal<void> {
   const n = regionNumber(address), region = regions[n];
   if (region?.guest) mem.unmapVa(region.guest, region.size);
   regions[n] = undefined;
@@ -132,7 +132,7 @@ export const isResident = (address: bigint, n: number): boolean => regionAt(addr
 /** resident external bytes as one run */
 export const externalBytes = (address: bigint, n: number): Uint8Array => regionAt(address).bytes(offsetIn(address), n);
 /** where native code reads an external mapping: the whole mapping, loaded into guest memory once */
-export function guestAddress(address: bigint): number | bigint | Promise<number | bigint> {
+export function guestAddress(address: bigint): PromiseOrVal<number | bigint> {
   const region = regionAt(address), offset = offsetIn(address);
   return after(region.load(0, region.size), () => {
     if (!region.guest) {
@@ -155,7 +155,7 @@ export function physical(address: bigint): number {
 }
 /** n bytes at a native address, as a zlib or checksum native reads or writes them (an external
  *  mapping's once resident, read only) */
-export function memoryAt(address: bigint, n: number): Uint8Array | Promise<Uint8Array> {
+export function memoryAt(address: bigint, n: number): PromiseOrVal<Uint8Array> {
   if (!isExternal(address)) return mem.bytes(physical(address),n);
   const region = regionAt(address), at = offsetIn(address);
   return after(region.load(at,n),() => region.bytes(at,n));
@@ -207,7 +207,7 @@ function arrayBytes(o: ArrayBufferView | null, at: number, n: number): Uint8Arra
   return new Uint8Array(o.buffer, o.byteOffset + at, n);
 }
 /** a primitive array's bytes, or a direct buffer's from its address, as memmove takes them (ScopedBytes) */
-const objectBytes = (o: Elements | object | null, at: number, n: number): Uint8Array | Promise<Uint8Array> =>
+const objectBytes = (o: Elements | object | null, at: number, n: number): PromiseOrVal<Uint8Array> =>
   o === null || ArrayBuffer.isView(o) ? arrayBytes(o, at, n) : memoryAt(addressOf(o as JObj) + BigInt(at), n);
 /** each primitive's load and store in guest memory, and its read from an external mapping's page */
 const ACCESS: Record<string, { ld(p: number): any; st(p: number, v: any): void; get: Get<any> }> = {

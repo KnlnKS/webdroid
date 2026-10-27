@@ -65,7 +65,7 @@ const apkAssets = memo(async (apk) => openInstall(new Uint8Array(await readFile(
 const workerBuild = memo((entry) => bundle(entry, { define: { "process.env.NODE_ENV": '"development"' } }));
 const workerScript = async (entry: string) => new Response(await workerBuild(entry), { headers: { "content-type": "text/javascript", "cache-control": "no-cache", ...ISOLATION } });
 
-type Route = (req: Request, url: URL, params: string[]) => Response | Promise<Response>;
+type Route = (req: Request, url: URL, params: string[]) => PromiseOrVal<Response>;
 const ROUTES: [RegExp, Route][] = [
   // as written: Vite's HTML transform would only add its HMR client, which this server leaves out
   [/^\/$/, (req) => fileResponse("index.html", req, { "cache-control": "no-cache", ...ISOLATION })],

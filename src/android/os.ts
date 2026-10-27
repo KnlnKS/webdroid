@@ -67,7 +67,7 @@ rt.registerJni("java/lang/Runtime", "nativeExit(I)V", (code: number) => { exitPr
 const SIGNAL_KILL = 9;
 /** Process.sendSignal: SIGKILL ends this process, as killProcess(myPid()) does; another
  *  process's pid goes to the broker */
-function sendSignal(pid: number, signal: number): void | Promise<void> {
+function sendSignal(pid: number, signal: number): PromiseOrVal<void> {
   if (pid !== procIdentity.pid) return processLife.signal(pid, signal);
   if (signal !== SIGNAL_KILL) return;
   exitProcess({ signal });
@@ -207,14 +207,14 @@ export function ashmemFd(bytes: Uint8Array, prot = 7, sink: ((b: Uint8Array) => 
 }
 // libcutils' ashmem calls, which SharedMemory's natives and libandroid's ASharedMemory both make
 /** ashmem_create_region: a descriptor on a new region of zeros, or -errno */
-export const ashmemCreate = (size: number): number | Promise<number> => processAshmemCreate(size) ?? regionFd(size);
+export const ashmemCreate = (size: number): PromiseOrVal<number> => processAshmemCreate(size) ?? regionFd(size);
 /** ashmem_get_size_region: -1 for a descriptor on anything else */
-export const ashmemSize = (fd: number): number | Promise<number> => after(ioctlIntFd(fd, ASHMEM_IOCTL.GET_SIZE), (n) => n < 0 ? -1 : n);
+export const ashmemSize = (fd: number): PromiseOrVal<number> => after(ioctlIntFd(fd, ASHMEM_IOCTL.GET_SIZE), (n) => n < 0 ? -1 : n);
 /** an ashmem region's protection, undefined for a descriptor on anything else */
-export const ashmemProt = (fd: number): number | undefined | Promise<number | undefined> =>
+export const ashmemProt = (fd: number): PromiseOrVal<number | undefined> =>
   after(ioctlIntFd(fd, ASHMEM_IOCTL.GET_PROT_MASK), (n) => n < 0 ? undefined : n);
 /** ashmem_set_prot_region: 0 or -errno; a region's protection only narrows */
-export const ashmemSetProt = (fd: number, prot: number): number | Promise<number> => ioctlIntFd(fd, ASHMEM_IOCTL.SET_PROT_MASK, prot);
+export const ashmemSetProt = (fd: number, prot: number): PromiseOrVal<number> => ioctlIntFd(fd, ASHMEM_IOCTL.SET_PROT_MASK, prot);
 rt.registerJnis("android/os/SharedMemory", {
   "nCreate(Ljava/lang/String;I)Ljava/io/FileDescriptor;": waits((_name: string | null, size: number) => after(ashmemCreate(size), fd => { sys("ashmem_create_region", fd); return mkFd(fd); })),
   "nGetSize(Ljava/io/FileDescriptor;)I": waits((d: JObj | null) => ashmemSize(fdInt(d))),
@@ -242,10 +242,10 @@ rt.registerJnis("android/os/FileObserver$ObserverThread", {
   "stopWatching(I[I)V": (fd: number, wfds: Int32Array) => { for (const wd of wfds) if (wd >= 0) inotifyRmWatch(fd, wd); },
 });
 /** a ParcelFileDescriptor over bytes, as fdOverBytes opens them */
-export const mkPfd = (bytes: Uint8Array, sink: ((b: Uint8Array) => unknown) | null = null, key?: string): JObj | Promise<JObj> =>
+export const mkPfd = (bytes: Uint8Array, sink: ((b: Uint8Array) => unknown) | null = null, key?: string): PromiseOrVal<JObj> =>
   after(mkFd(fdOverBytes(bytes, sink, key)), (fd) => newObj("android/os/ParcelFileDescriptor", `(${FD})V`, fd));
 /** what a descriptor's file holds, whatever its offset; null for one with no file (a pipe, a socket) */
-export const fdContents = (fd: number): Uint8Array | null | Promise<Uint8Array | null> =>
+export const fdContents = (fd: number): PromiseOrVal<Uint8Array | null> =>
   after(fdSource(fd), source => source && source.read(0, source.size));
 /** the bytes a ParcelFileDescriptor's file holds */
 export const pfdContents = driven(function* pfdContents(pfd: JObj): Gen<Uint8Array | null> {

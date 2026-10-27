@@ -74,13 +74,13 @@ function bootstrapFailure(prog: Program, target: MethodInfo, values: ReturnType<
   if (supplied.length !== target.params.length) return fail("java/lang/invoke/WrongMethodTypeException", "Bootstrap argument count does not match method type");
   if (supplied.some((from, i) => from && !convertible(prog, from, target.params[i])) || target.ret !== "V" && !convertible(prog, `L${CS};`, target.ret)) return fail("java/lang/ClassCastException", "Bootstrap argument or return type is not convertible");
 }
-function resolveBootstrapArguments(w: World, referrer: MethodInfo, index: number, parent: Strand): void | Promise<void> {
+function resolveBootstrapArguments(w: World, referrer: MethodInfo, index: number, parent: Strand): PromiseOrVal<void> {
   const invalid = referrer.dex.callSiteValues(index).findIndex(v => !scalarType[v.type]);
   const references = bootstrapReferences(referrer, index).filter(r => r.argument !== 0 && (invalid < 0 || r.argument < invalid));
   return each(references, (ref) => ref.kind === "handle" ? resolveHandleReference(w, referrer, ref.index, parent)
     : resolveSignatureTypes(w, ref.kind === "methodType" ? methodTypeSignatureTypes(referrer, ref.index) : [ref], parent));
 }
-function bootstrap(w: World, referrer: MethodInfo, index: number, parent: Strand): object | Promise<object> {
+function bootstrap(w: World, referrer: MethodInfo, index: number, parent: Strand): PromiseOrVal<object> {
   const values = referrer.dex.callSiteValues(index), first = values[0]?.value as { kind?: string; idx: number };
   const fail = (message: string): never => w.raise("java/lang/BootstrapMethodError", message);
   if (values.length < 3) fail(`Truncated bootstrap arguments (${values.length} < 3)`);
@@ -108,19 +108,19 @@ function bootstrap(w: World, referrer: MethodInfo, index: number, parent: Strand
         if (!argument(cx, c, referrer, type, value)) return; c.arraySet(cx.tData.ref); params.push(scalarType[type]);
       }
       emitInvokeImport(cx, c, () => c.lget(handle), () => c.lget(args), `(${params.join("")})L${CS};`, InvokeMode.Invoke);
-    }, parent)() as object | Promise<object>;
+    }, parent)() as PromiseOrVal<object>;
     return !target || invalid ? emit() : chain(resolveBootstrapArguments(w, referrer, index, parent), emit);
   });
 }
-function wrap(w: World, e: unknown, index: number, parent: Strand): never | Promise<never> {
+function wrap(w: World, e: unknown, index: number, parent: Strand): PromiseOrVal<never> {
   const throwable = w.throwable(w.boundary(e));
   if (!throwable || w.prog.isSubclass(w.classNameOf(throwable), "java/lang/Error")) throw e;
   return chain(handleThunk(w, `custom:bootstrapError:${index}`, ["L"], "L", (cx, c, arg) => {
     const ctor = cx.prog.resolve("java/lang/BootstrapMethodError", "<init>", "(Ljava/lang/String;Ljava/lang/Throwable;)V")!;
     cx.construct(c, ctor, () => { cx.str.literal(c, `Exception from call site #${index} bootstrap method`); arg(0); });
-  }, parent)(throwable) as object | Promise<object>, wrapped => { throw w.exception(wrapped); });
+  }, parent)(throwable) as PromiseOrVal<object>, wrapped => { throw w.exception(wrapped); });
 }
-export function invokeCustom(w: World, site: string, args: object, parent: Strand): object | null | Promise<object | null> {
+export function invokeCustom(w: World, site: string, args: object, parent: Strand): PromiseOrVal<object | null> {
   const split = site.lastIndexOf("#"), index = Number(site.slice(split + 1)), referrer = methodOf(w.prog, site.slice(0, split))!;
   const dexes = linked.get(w);
   let sites = dexes.get(referrer.dex); if (!sites) dexes.set(referrer.dex, sites = new Map());
@@ -128,7 +128,7 @@ export function invokeCustom(w: World, site: string, args: object, parent: Stran
   const targetOf = w.helpers.fieldReader<object | null>(CS, "target", `L${MH};`);
   const invoke = (callSite: object) => mhInvoke(w, targetOf(callSite), args, signature(), InvokeMode.Exact, parent);
   const cached = sites.get(index); if (cached) return invoke(cached);
-  const validate = (candidate: object | null): object | Promise<object> => {
+  const validate = (candidate: object | null): PromiseOrVal<object> => {
     const sig = signature();
     return handleThunk(w, `custom:validate:${sig}:${w.epoch}`, ["L"], "L", (cx, c, arg) => {
       arg(0); c.refIsNull().if_(); cx.throwNew(c, "java/lang/ClassCastException", "Bootstrap method returned null"); c.end();
@@ -140,9 +140,9 @@ export function invokeCustom(w: World, site: string, args: object, parent: Stran
       if (!emitTypeValue(cx, c, referrer.dex, referrer.dex.callSiteProto(index))) return;
       cx.callNamed(c, MT, "equals", "(Ljava/lang/Object;)Z");
       c.raw(OP.i32_eqz).if_(); cx.throwNew(c, "java/lang/invoke/WrongMethodTypeException", "Bootstrap target is not of the requested type"); c.end().lget(local);
-    }, parent)(candidate) as object | Promise<object>;
+    }, parent)(candidate) as PromiseOrVal<object>;
   };
-  let resolved: object | Promise<object>;
+  let resolved: PromiseOrVal<object>;
   try { resolved = caught(chain(bootstrap(w, referrer, index, parent), validate), e => wrap(w, e, index, parent)); }
   catch (e) { return wrap(w, e, index, parent); }
   return chain(resolved, candidate => {

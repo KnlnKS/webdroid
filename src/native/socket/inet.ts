@@ -155,7 +155,7 @@ class TcpSocket extends InetSocket {
     this.backlog ??= [];
     return 0;
   }
-  connect(addr: SocketAddress | null): number | Promise<number> {
+  connect(addr: SocketAddress | null): PromiseOrVal<number> {
     if (!addr) return -E.AFNOSUPPORT;
     const ep = endpoint(addr);
     if (typeof ep === "number") return ep;
@@ -215,7 +215,7 @@ class TcpSocket extends InetSocket {
     listener.wake();
     return this.nonblock ? -E.INPROGRESS : 0;
   }
-  accept(fd: number, flags: number): Accepted | number | Promise<Accepted | number> {
+  accept(fd: number, flags: number): PromiseOrVal<Accepted | number> {
     if (!this.backlog) return -E.INVAL;
     const attempt = (): Accepted | null => {
       const accepted = this.backlog!.shift();
@@ -245,7 +245,7 @@ class TcpSocket extends InetSocket {
     if (!bytes.length) return 0;
     return this.stream.write(bytes) ? bytes.length : -E.PIPE;
   }
-  receive(fd: number, target: Uint8Array, flags: number): Received | number | Promise<Received | number> {
+  receive(fd: number, target: Uint8Array, flags: number): PromiseOrVal<Received | number> {
     if (this.readShut) return received(0);
     if (!this.stream) return -(this.error || E.NOTCONN);
     const stream = this.stream;
@@ -280,7 +280,7 @@ class TcpSocket extends InetSocket {
   /** TLS on this connection: the relay terminates it (a page cannot handshake), so it dials
    *  `host:port` again with TLS, and that connection takes the place of the plain one, which has
    *  carried nothing yet. A failed one leaves the stream at its end. */
-  startTls(host: string, port: number, alpn: string[]): TlsResult | Promise<TlsResult> {
+  startTls(host: string, port: number, alpn: string[]): PromiseOrVal<TlsResult> {
     if (!this.connected) return { errno: E.NOTCONN, reason: "" };
     if (!(this.stream instanceof Relay)) return { errno: 0, reason: "no TLS to a listener in this process" };
     this.stream.close();
@@ -401,7 +401,7 @@ class UdpSocket extends InetSocket {
     }
     return bytes.length;
   }
-  receive(fd: number, target: Uint8Array, flags: number): Received | number | Promise<Received | number> {
+  receive(fd: number, target: Uint8Array, flags: number): PromiseOrVal<Received | number> {
     if (this.readShut) return received(0);
     const attempt = (): Received | number | null => {
       const datagram = this.queue[0];
@@ -465,7 +465,7 @@ export function loopbackConnection(ep: Endpoint): { stream: Stream; close(): voi
 }
 
 /** TLS on stream socket `fd` (TcpSocket.startTls) */
-export function startTls(fd: number, host: string, port: number, alpn: string[]): TlsResult | Promise<TlsResult> {
+export function startTls(fd: number, host: string, port: number, alpn: string[]): PromiseOrVal<TlsResult> {
   const s = socketOf(fd);
   return s instanceof TcpSocket ? s.startTls(host, port, alpn) : { errno: typeof s === "number" ? -s : E.NOTSOCK, reason: "" };
 }

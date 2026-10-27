@@ -29,11 +29,11 @@ const DIR_BUFFER = 4096;
 const dirs = new Map<number, DirStream>();
 
 /** mkstemp's contract: the six trailing X's become the name in place, and the file is created exclusively */
-function fdTemp(tpl: number, flags: number, dir: boolean): number | Promise<number> {
+function fdTemp(tpl: number, flags: number, dir: boolean): PromiseOrVal<number> {
   const t = mem.cstr(tpl), destination = anchor(tpl);
   if (!t.endsWith("XXXXXX")) return -E.INVAL;
   const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  const attempt = (count: number): number | Promise<number> => {
+  const attempt = (count: number): PromiseOrVal<number> => {
     if (count === 100) return -E.EXIST;
     let name = t.slice(0,-6);
     for (let i=0;i<6;i++) name += chars[(Math.random()*chars.length)|0];
@@ -66,13 +66,13 @@ function newFile(fd: number, flags: number): number {
   return fp;
 }
 function fileFd(fp: number): number { return files.get(fp) ?? mem.ld16s(fp + FILE.file); }
-function fileSeek(cpu: Cpu, fp: number, off: number, whence: number): number | Promise<number> {
+function fileSeek(cpu: Cpu, fp: number, off: number, whence: number): PromiseOrVal<number> {
   return complete(kernelResult(cpu,seekFd(fileFd(fp),off-(whence===1 ? pushback.get(fp)?.length??0 : 0),whence)),result => {
     if(result<0)return -1;
     pushback.delete(fp);mem.st16(fp+FILE.flags,mem.ld16u(fp+FILE.flags)&~F_EOF);return 0;
   });
 }
-function fileTell(cpu: Cpu, fp: number): number | Promise<number> {
+function fileTell(cpu: Cpu, fp: number): PromiseOrVal<number> {
   return complete(kernelResult(cpu,seekFd(fileFd(fp),0,1)),position => position<0 ? -1 : position-(pushback.get(fp)?.length??0));
 }
 function setFlag(fp: number, f: number): void { mem.st16(fp + FILE.flags, mem.ld16u(fp + FILE.flags) | f); }
@@ -83,7 +83,7 @@ function modeFlags(mode: string): { o: number; f: number } {
   return { o: (plus ? 2 : 1) | O_CREAT | O_APPEND, f: plus ? F_RW : F_WR };
 }
 let scratch = 0;
-function fgetc(cpu: Cpu, fp: number): number | Promise<number> {
+function fgetc(cpu: Cpu, fp: number): PromiseOrVal<number> {
   const pending = pushback.get(fp), c = pending?.pop();
   if (c !== undefined) { if (!pending?.length) pushback.delete(fp); return c; }
   const byte = new Uint8Array(1);
@@ -92,10 +92,10 @@ function fgetc(cpu: Cpu, fp: number): number | Promise<number> {
     return byte[0];
   });
 }
-function fwriteBytes(cpu: Cpu, fp: number, p: number, n: number): number | Promise<number> {
+function fwriteBytes(cpu: Cpu, fp: number, p: number, n: number): PromiseOrVal<number> {
   return complete(kernelResult(cpu, fdWrite(cpu, fileFd(fp), p, n)), written => { if (written < 0) { setFlag(fp,F_ERR); return 0; } return written; });
 }
-function fwriteStr(cpu: Cpu, fp: number, s: string): number | Promise<number> {
+function fwriteStr(cpu: Cpu, fp: number, s: string): PromiseOrVal<number> {
   const b = utf8(s);
   const tmp = mem.malloc(b.length + 1);
   mem.u8.set(b, tmp);
@@ -104,7 +104,7 @@ function fwriteStr(cpu: Cpu, fp: number, s: string): number | Promise<number> {
   return complete(r, written => written < b.length ? -1 : b.length);
 }
 /** a stream over the directory descriptor `fd` (or -errno), which closedir closes */
-function openDir(cpu: Cpu, fd: number | Promise<number>): number | Promise<number> {
+function openDir(cpu: Cpu, fd: PromiseOrVal<number>): PromiseOrVal<number> {
   return complete(fd, (n) => {
     if (n < 0) { fail(cpu, -n); return 0; }
     const h = mem.malloc(16);
@@ -113,7 +113,7 @@ function openDir(cpu: Cpu, fd: number | Promise<number>): number | Promise<numbe
   });
 }
 /** the next record, 0 at the end, or -errno */
-function readDir(d: DirStream): number | Promise<number> {
+function readDir(d: DirStream): PromiseOrVal<number> {
   if (d.next < d.available) { const de = d.buffer + d.next; d.next += mem.ld16u(de + DIRENT64.reclen); return de; }
   return complete(getdents64(d.fd, d.buffer, DIR_BUFFER), (n) => {
     if (n <= 0) return n;
@@ -121,7 +121,7 @@ function readDir(d: DirStream): number | Promise<number> {
     return readDir(d);
   });
 }
-function closeDir(h: number): number | Promise<number> {
+function closeDir(h: number): PromiseOrVal<number> {
   const d = dirs.get(h);
   if (!d) return -E.BADF;
   dirs.delete(h); mem.free(d.buffer); mem.free(h);

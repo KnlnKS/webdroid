@@ -196,14 +196,14 @@ function ioRegion(buffer: Int8Array | null, offset: number, count: number): Uint
   return new Uint8Array(buffer.buffer, buffer.byteOffset + offset, count);
 }
 /** Read a buffer's bytes through its canonical owner before writing them. */
-export function writeBytes<T>(buffer: IoBuffer, offset: number, count: number, write: (bytes: Uint8Array) => T): T | Promise<T> {
+export function writeBytes<T>(buffer: IoBuffer, offset: number, count: number, write: (bytes: Uint8Array) => T): PromiseOrVal<T> {
   if (!isBuffer(buffer)) return write(ioRegion(buffer, offset, count));
   checkFromIndexSize(offset,count,capacity(buffer) * 2 ** elementShift(buffer),"java/lang/ArrayIndexOutOfBoundsException");
   return after(readBufferBytes(buffer,offset,count),write);
 }
 /** A direct buffer may live in guest memory, which can move while a read waits: it takes the
  *  bytes once they have arrived. */
-export function readBytes(fn: string, buffer: IoBuffer, offset: number, count: number, read: (target: Uint8Array) => number | Promise<number>) {
+export function readBytes(fn: string, buffer: IoBuffer, offset: number, count: number, read: (target: Uint8Array) => PromiseOrVal<number>) {
   if (!isBuffer(buffer)) return after(read(ioRegion(buffer, offset, count)), (n) => ioResult(fn, n));
   checkFromIndexSize(offset,count,capacity(buffer) * 2 ** elementShift(buffer),"java/lang/ArrayIndexOutOfBoundsException");
   const scratch = new Uint8Array(count);
@@ -240,7 +240,7 @@ const socketClosed = () => rt.mkThrowable("java/net/SocketException", "Socket cl
 /** the descriptor a call waited on closed under it: libcore's AsynchronousCloseMonitor answer */
 const closedUnder = (fn: string, r: number) => { if (r === -E.BADF) throw socketClosed(); sys(fn, r); return r; };
 /** a result that may come after waiting */
-const waited = <T>(fn: string, r: T | number | Promise<T | number>, done: (v: T) => unknown = (v) => v) =>
+const waited = <T>(fn: string, r: PromiseOrVal<T | number>, done: (v: T) => unknown = (v) => v) =>
   r instanceof Promise ? r.then((v) => typeof v === "number" && v < 0 ? closedUnder(fn, v) : done(v as T))
     : typeof r === "number" && r < 0 ? sys(fn, r) : done(r as T);
 /** the socket a FileDescriptor names, else the call's ErrnoException */
@@ -251,13 +251,13 @@ function socket(fn: string, d: JObj | null): Socket {
 }
 
 /** an InetAddress's endpoint, as libcore's inetAddressToSockaddr reads it */
-function endpoint(address: JObj | null, port: number): Endpoint | Promise<Endpoint> {
+function endpoint(address: JObj | null, port: number): PromiseOrVal<Endpoint> {
   if (address === null) return rt.npe();
-  return after(vcall(address, "getAddress", "()[B") as Int8Array | Promise<Int8Array>, (bytes) => endpointOf(Uint8Array.from(bytes), port));
+  return after(vcall(address, "getAddress", "()[B") as PromiseOrVal<Int8Array>, (bytes) => endpointOf(Uint8Array.from(bytes), port));
 }
 const inet = (ep: Endpoint): SocketAddress => ({ family: ep.address.length === 4 ? AF_INET : AF_INET6, ep });
 /** a SocketAddress's sockaddr: an InetSocketAddress's endpoint, or a UnixSocketAddress's sun_path */
-function socketAddress(fn: string, address: JObj | null): SocketAddress | Promise<SocketAddress> {
+function socketAddress(fn: string, address: JObj | null): PromiseOrVal<SocketAddress> {
   if (address === null) return rt.npe();
   if (iof(address, UNIX_ADDRESS)) return unixAddress(sunPath(u8(getDeclared<Int8Array>(address, UNIX_ADDRESS, "sun_path"))));
   if (!iof(address, ISA)) throw errno(fn, E.AFNOSUPPORT);
@@ -267,14 +267,14 @@ function socketAddress(fn: string, address: JObj | null): SocketAddress | Promis
   return after(endpoint(addr, getDeclared(holder, ISA_HOLDER, "port") as number), inet);
 }
 /** sockaddrToInetAddress: InetAddress.getByAddress(null, bytes, scope) */
-const inetAddress = (ep: { address: number[]; scope?: number }): JObj | Promise<JObj> =>
+const inetAddress = (ep: { address: number[]; scope?: number }): PromiseOrVal<JObj> =>
   scall("java/net/InetAddress", "getByAddress", "(Ljava/lang/String;[BI)Ljava/net/InetAddress;", null, Int8Array.from(ep.address), ep.scope ?? 0);
 /** a sockaddr as libcore's SocketAddress: an InetSocketAddress, or a UnixSocketAddress over its sun_path */
-const javaSocketAddress = (addr: SocketAddress): JObj | Promise<JObj> => addr.family === AF_UNIX
+const javaSocketAddress = (addr: SocketAddress): PromiseOrVal<JObj> => addr.family === AF_UNIX
   ? newObj(UNIX_ADDRESS, "([B)V", new Int8Array(sunPathBytes(addr.path).buffer))
   : after(inetAddress(addr.ep), (a) => newObj(ISA, `(${INET}I)V`, a, addr.ep.port));
 /** fillInetSocketAddress: a caller's InetSocketAddress takes an internet sender's address and port */
-function fillSocketAddress(target: JObj | null, from: SocketAddress | null): void | Promise<void> {
+function fillSocketAddress(target: JObj | null, from: SocketAddress | null): PromiseOrVal<void> {
   if (target === null || from === null || from.family === AF_UNIX || !iof(target, ISA)) return;
   return after(inetAddress(from.ep), (a) => {
     const holder = getDeclared(target, ISA, "holder") as JObj;

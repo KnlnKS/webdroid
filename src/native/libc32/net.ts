@@ -45,7 +45,7 @@ function getifaddrs(cpu: Cpu, result: number): number {
 const ADDRINFO = { size: 32, flags: 0, family: 4, socktype: 8, protocol: 12, addrlen: 16, canon: 20, addr: 24, next: 28 };
 /** getaddrinfo(3): one allocation holding the list, every address for each socket type, the
  *  canonical name on the first */
-function getaddrinfo(cpu: Cpu, nodePtr: number, servicePtr: number, hints: number, result: number): number | Promise<number> {
+function getaddrinfo(cpu: Cpu, nodePtr: number, servicePtr: number, hints: number, result: number): PromiseOrVal<number> {
   if (!result) { fail(cpu, E.FAULT); return EAI_SYSTEM; }
   const flags = hints ? mem.ld32(hints + ADDRINFO.flags) : 0;
   const family = hints ? mem.ld32(hints + ADDRINFO.family) : AF_UNSPEC;

@@ -14,7 +14,7 @@ import { toJsArray } from "../jvm/natives/jcoll.ts";
 import { pickTree, pickDocument, pickDocuments } from "./documents.ts";
 
 const S = "Ljava/lang/String;";
-const typeOf = (intent: JIntent): string | null | Promise<string | null> => vcall(intent, "getType", `()${S}`);
+const typeOf = (intent: JIntent): PromiseOrVal<string | null> => vcall(intent, "getType", `()${S}`);
 
 // The activities DocumentsUI provides on a device, over the browser's own pickers.
 registerSystemActivity("android.intent.action.OPEN_DOCUMENT_TREE", driven(function* (): Gen<JIntent | null> {

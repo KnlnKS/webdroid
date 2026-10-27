@@ -23,7 +23,7 @@ import { fdLease, guardJavaDescriptor, unguardJavaDescriptor } from "../../andro
 /** a java.io.File's path as the VFS names it (libcore's File resolves a relative one against "/") */
 export const pathOf = (file: JObj): string => vfs.norm(vcall(file, "getPath", "()Ljava/lang/String;"));
 /** `new File(path)` */
-export const newFile = (path: string): JObj | Promise<JObj> => newObj("java/io/File", "(Ljava/lang/String;)V", path);
+export const newFile = (path: string): PromiseOrVal<JObj> => newObj("java/io/File", "(Ljava/lang/String;)V", path);
 
 const BAOS = "java/io/ByteArrayOutputStream";
 /** the bytes a ByteArrayOutputStream holds, without copying */
@@ -61,7 +61,7 @@ export const fdInt = (d: JObj | null): number => d ? guardJavaDescriptor(d, desc
 export function setFdInt(d: JObj, fd: number): void { unguardJavaDescriptor(d); descriptor.set(d, fd); }
 /** jniCreateFileDescriptor: a `new FileDescriptor()` given `fd` through setInt$, which also
  *  records whether it appends */
-export function mkFd(fd: number): JObj | Promise<JObj> {
+export function mkFd(fd: number): PromiseOrVal<JObj> {
   const lease = fdLease(fd), scoped = !!lease?.owner;
   return after(newObj(FILE_DESCRIPTOR), (d: JObj) => after(vcall(d, "setInt$", "(I)V", fd), () => {
     if (scoped) {
@@ -132,7 +132,7 @@ function ioStatus(n: number, reading: boolean): number {
   return lastError(n, reading ? "Read failed" : "Write failed");
 }
 /** a read into native memory: the bytes land once it completes, since guest memory may move meanwhile */
-function readInto(address: bigint, len: number, read: (target: Uint8Array) => number | Promise<number>): number | Promise<number> {
+function readInto(address: bigint, len: number, read: (target: Uint8Array) => PromiseOrVal<number>): PromiseOrVal<number> {
   const scratch = new Uint8Array(len);
   return after(read(scratch),n => { if (n > 0) writeAt(address,scratch.subarray(0,n)); return ioStatus(n,true); });
 }
@@ -331,7 +331,7 @@ function fillAttrs(attrs: JObj, st: Stat): void {
     st_size: BigInt(st.size), st_atime_sec: sec, st_atime_nsec: nsec, st_mtime_sec: sec, st_mtime_nsec: nsec, st_ctime_sec: sec, st_ctime_nsec: nsec });
 }
 /** stat(2) of a path in the realm that owns it: a directory, or a file (procfs included) */
-function statPath(path: string, attrs: JObj | null): number | Promise<number> {
+function statPath(path: string, attrs: JObj | null): PromiseOrVal<number> {
   return after(statAt(path), (st) => {
     if (typeof st === "number") throw unixError(-st);
     if (attrs) fillAttrs(attrs, st);

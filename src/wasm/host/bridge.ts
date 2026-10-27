@@ -343,7 +343,7 @@ export class Bridge implements HostBridge {
   }
   arrayLength(a: object): number { return this.op.alen(a); }
   element(a: object, i: number): unknown { return this.op.aget(a, i); }
-  readBuffer(b: object, at: number, n: number): Uint8Array | Promise<Uint8Array> {
+  readBuffer(b: object, at: number, n: number): PromiseOrVal<Uint8Array> {
     const fail = (e: unknown): never => {
       const t = this.src?.thrown(e);
       if (!t) throw e;

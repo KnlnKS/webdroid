@@ -39,9 +39,9 @@ export const interposed = new Map<string, number>();
  *  where the installer left the app's lib/<abi>/<name> */
 export const linkerHooks: {
   placeTls: ((mod: Module) => void) | null; hwcap: bigint; deviceLib: (name: string) => string | null;
-  appLib: (abi: string, name: string) => ImageFile | Promise<ImageFile> | undefined;
+  appLib: (abi: string, name: string) => PromiseOrVal<ImageFile> | undefined;
   /** a module is linked and about to be initialized */
-  linked: (mod: Module, cpu: Cpu) => Promise<void> | void;
+  linked: (mod: Module, cpu: Cpu) => PromiseOrVal<void>;
   /** a module's image is about to be unmapped */
   unloading: (mod: Module) => void;
 } = { placeTls: null, hwcap: 0n, deviceLib: () => null, appLib: () => undefined, linked: () => {}, unloading: () => {} };
@@ -50,7 +50,7 @@ function basename(p: string): string { return p.slice(p.lastIndexOf("/") + 1); }
 
 /** where lib<name>.so comes from and where it is on the device: the booted apk's lib/<abi>/, for any
  *  ABI the tier runs, else a device library at its path in the VFS */
-function libSource(name: string): { file: () => ImageFile | Promise<ImageFile> | undefined; read: () => Promise<Uint8Array | null> } | null {
+function libSource(name: string): { file: () => PromiseOrVal<ImageFile> | undefined; read: () => Promise<Uint8Array | null> } | null {
   for (const a of rt.nativeAbis) {
     const entry = `lib/${a}/${name}`;
     if (rt.hasClasspath(entry)) return { file: () => linkerHooks.appLib(a, name), read: async () => rt.readClasspath(entry) };

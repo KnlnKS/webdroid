@@ -70,7 +70,7 @@ function canScheduleExact(pkg: string): boolean {
   return target < 31 || target >= 33 && record.requested.has("android.permission.USE_EXACT_ALARM")
     || target < 34 && record.requested.has("android.permission.SCHEDULE_EXACT_ALARM");
 }
-let completion: JObj | Promise<JObj> | undefined;
+let completion: PromiseOrVal<JObj> | undefined;
 const WINDOW_EXACT = 0n;
 hostService("alarm", "webdroid/AlarmManagerService", "android/app/IAlarmManager$Stub", {
   "set(Ljava/lang/String;IJJJILandroid/app/PendingIntent;Landroid/app/IAlarmListener;Ljava/lang/String;Landroid/os/WorkSource;Landroid/app/AlarmManager$AlarmClockInfo;)V":

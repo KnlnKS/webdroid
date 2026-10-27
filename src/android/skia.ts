@@ -27,7 +27,7 @@ export const SKIA_TEXT_FACE = servedFont("/system/fonts/Roboto-Regular.ttf"), SK
 /** SkPathFillType by value: CanvasKit's binding names the two plain types, SkPath takes all four */
 let fillTypes: FillType[] = [];
 
-function canvasKit(): CanvasKit | Promise<CanvasKit> {
+function canvasKit(): PromiseOrVal<CanvasKit> {
   return kit ?? (kitLoading ??= CanvasKitInit({
     locateFile: (file) => typeof location !== "undefined" && location.protocol.startsWith("http") ? `/${file}?v=${canvasKitPackage.version}`
       : `${process.cwd()}/node_modules/canvaskit-wasm/bin/${file}`,
@@ -42,7 +42,7 @@ function canvasKit(): CanvasKit | Promise<CanvasKit> {
 /** SkPathOp, which Path$Op's ordinals follow */
 const DIFFERENCE = 0;
 /** Path.op: SkPathOps' result over two paths, and its fill type, into `dst`; false where Skia finds none */
-function pathOp(dst: NativePath, a: NativePath, b: NativePath, op: number): boolean | Promise<boolean> {
+function pathOp(dst: NativePath, a: NativePath, b: NativePath, op: number): PromiseOrVal<boolean> {
   const ca = expand(a.ops, true), cb = expand(b.ops, true);
   return after(canvasKit(), (k) => {
     const pa = k.Path.MakeFromCmds(ca), pb = k.Path.MakeFromCmds(cb);
@@ -58,7 +58,7 @@ function pathOp(dst: NativePath, a: NativePath, b: NativePath, op: number): bool
 }
 /** SkStroke: `src`'s outline at the stroke's width, cap and join (Paint's ordinals) into `dst`,
  *  emptied where Skia makes none */
-export function strokePath(dst: NativePath, src: NativePath, width: number, miter: number, cap: number, join: number): void | Promise<void> {
+export function strokePath(dst: NativePath, src: NativePath, width: number, miter: number, cap: number, join: number): PromiseOrVal<void> {
   const cmds = expand(src.ops, true);
   return after(canvasKit(), (k) => {
     const path = k.Path.MakeFromCmds(cmds);
@@ -83,7 +83,7 @@ function setCommands(dst: NativePath, cmds: Float32Array): void {
   }
 }
 /** a path's inverse fill within [l, t, r, b], as Canvas2D can fill it, once CanvasKit (which the page loads before anything draws) can subtract it */
-export function inversePath(path: NativePath, l: number, t: number, r: number, b: number): [Path2D, CanvasFillRule] | Promise<[Path2D, CanvasFillRule]> {
+export function inversePath(path: NativePath, l: number, t: number, r: number, b: number): PromiseOrVal<[Path2D, CanvasFillRule]> {
   if (path.fillRule === "evenodd") {
     const inverse = new Path2D();
     inverse.rect(l, t, r - l, b - t);

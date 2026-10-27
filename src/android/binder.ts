@@ -54,7 +54,7 @@ type ProxyData = { handle: BinderHandle; deaths: Map<unknown, () => void> };
 const proxyData = new WeakMap<JObj, ProxyData>();
 const local = new Map<number, JObj>();
 const localIds = new WeakMap<JObj, number>();
-const proxies = new Map<string, JObj | Promise<JObj>>();
+const proxies = new Map<string, PromiseOrVal<JObj>>();
 let nextId = 1;
 
 export function exportBinder(binder: unknown): BinderHandle | null {
@@ -67,7 +67,7 @@ export function exportBinder(binder: unknown): BinderHandle | null {
   return { pid: procIdentity.pid, id };
 }
 /** javaObjectForIBinder's one proxy per remote binder */
-function proxyFor(key: string, h: BinderHandle): JObj | Promise<JObj> {
+function proxyFor(key: string, h: BinderHandle): PromiseOrVal<JObj> {
   let proxy = proxies.get(key);
   if (proxy) return proxy;
   const data: ProxyData = { handle: h, deaths: new Map() };
@@ -75,10 +75,10 @@ function proxyFor(key: string, h: BinderHandle): JObj | Promise<JObj> {
   proxies.set(key, proxy);
   return proxy;
 }
-export function importBinder(h: BinderHandle | null): JObj | null | Promise<JObj> {
+export function importBinder(h: BinderHandle | null): PromiseOrVal<JObj> | null {
   if (!h) return null;
   // system_server's ids it never exported (PendingIntent records) are proxies even there
-  if (h.pid === procIdentity.pid && h.id > 0) return appView(local.get(h.id) ?? null) as JObj | null | Promise<JObj>;
+  if (h.pid === procIdentity.pid && h.id > 0) return appView(local.get(h.id) ?? null) as PromiseOrVal<JObj> | null;
   return proxyFor(h.pid + ":" + h.id, h);
 }
 /** binders hosted here on system_server's behalf, the webdroid/ classes: its services and the binders they hand out */
@@ -105,7 +105,7 @@ function systemView(o: unknown): unknown {
 }
 /** a binder system_server owns, as a client process holds it: a proxy, which AOSP tells apart
  *  from a local Binder (ActivityThread relaunches only activities whose token is not local) */
-export function systemToken(): JObj | Promise<JObj> {
+export function systemToken(): PromiseOrVal<JObj> {
   const id = nextId++;
   // a parcel written and read back here (an Intent's extras) imports the same token
   return after(proxyFor("token:" + id, { pid: procIdentity.pid, id }), (proxy) => { local.set(id, proxy); return proxy; });
@@ -234,7 +234,7 @@ function setWorkSource(uid: number, propagate: boolean): bigint {
 }
 const transactionCaller = (): Caller | undefined => ipc().caller;
 export const parcelScope = (): FdScope | undefined => ipc().parcelScope;
-export async function withParcelScope<T>(work: () => T | Promise<T>): Promise<T> {
+export async function withParcelScope<T>(work: () => PromiseOrVal<T>): Promise<T> {
   const state = ipc();
   if (state.parcelScope) return work();
   const scope = new FdScope(); state.parcelScope = scope;
@@ -280,7 +280,7 @@ const oneWay = new Map<number, Promise<unknown>>();
 export const binderThread = (): JThread => Object.assign(new JThread(), { jname: "Binder:" + procIdentity.pid });
 /** Java frames entered by `call` keep the binder thread across suspensions; the thread is
  *  released as soon as `call` returns, so no other job resumes on it */
-export async function withCallingIdentity<T>(caller: Caller, call: () => T | Promise<T>, system = false): Promise<T> {
+export async function withCallingIdentity<T>(caller: Caller, call: () => PromiseOrVal<T>, system = false): Promise<T> {
   const thread = binderThread(), state = ipc(thread);
   state.caller = caller;
   if (system) state.system = true;
@@ -292,14 +292,14 @@ export async function withCallingIdentity<T>(caller: Caller, call: () => T | Pro
  *  in app processes, beside app code whose AttributionSources carry that process's pid */
 export const SYSTEM_CALLER: Caller = { pid: 0, uid: 1000 };
 /** run a hosted service's calls into other binders as system_server makes them */
-export function asSystem<T>(call: () => T | Promise<T>): Promise<T> {
+export function asSystem<T>(call: () => PromiseOrVal<T>): Promise<T> {
   return withCallingIdentity(SYSTEM_CALLER, call, true);
 }
 /** Binder.execTransact over parcels of its own: `fill` writes the request (`size` bytes as sent),
  *  and a caller that waits for the reply has `read` take it once it fits its buffer. `escaped`
  *  hears an exception that escapes execTransact, as JavaBBinder reports it; without it the caller does. */
 function* execTransact<T>(binder: JObj, code: number, flags: number, size: number, fill: (data: NativeParcel) => unknown,
-  read: ((reply: NativeParcel) => T | Promise<T>) | null, escaped?: (error: unknown) => void): Gen<{ handled: number; reply: T | null }> {
+  read: ((reply: NativeParcel) => PromiseOrVal<T>) | null, escaped?: (error: unknown) => void): Gen<{ handled: number; reply: T | null }> {
   const scope = scopedServices.has(binder) ? new FdScope() : undefined, state = ipc(), previous = state.parcelScope;
   if (scope) state.parcelScope = scope;
   const data = new NativeParcel(scope), reply = new NativeParcel(), dataPtr = handle(data), replyPtr = handle(reply);
@@ -514,9 +514,9 @@ rt.registerJnis("android/os/BinderProxy", {
 // ── servicemanager: the context object BinderInternal hands AOSP's ServiceManager. It answers
 // from the services hosted behind binder; a name nobody hosts gets the null servicemanager
 // returns for an absent service, and is reported as a boundary gap.
-const binderServices = new Map<string, JObj | Promise<JObj> | (() => JObj | Promise<JObj>)>();
+const binderServices = new Map<string, PromiseOrVal<JObj> | (() => PromiseOrVal<JObj>)>();
 /** a ParceledListSlice over `items`, as a service returns a list too long for one transaction */
-export const parceledList = (items: unknown[] = []): JObj | Promise<JObj> => after(newArrayList(items), list => newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", list));
+export const parceledList = (items: unknown[] = []): PromiseOrVal<JObj> => after(newArrayList(items), list => newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", list));
 const scopedServices = new WeakSet<object>();
 const systemServices = new Set<string>();
 /** the services an app process reaches in system_server, those hosted as `system` */
@@ -544,11 +544,11 @@ export const absentService = (...names: string[]): void => names.forEach((name) 
 class JServiceManager extends JObj { binder: JObj | null = null; }
 /** system_server's handle of each of its services a Worker asked for: it outlives every app process */
 const remoteHandles = new Map<string, BinderHandle | Promise<BinderHandle | null>>();
-export function ownedSystemService(name: string): BinderHandle | null | Promise<BinderHandle | null> {
+export function ownedSystemService(name: string): PromiseOrVal<BinderHandle | null> {
   return after(localHostedService(name), exportBinder);
 }
 /** a hosted service's binder: system_server's through the broker for a `system` one in a Worker */
-export function hostedService(name: string): JObj | Promise<JObj> | null {
+export function hostedService(name: string): PromiseOrVal<JObj> | null {
   if (!remoteSystem() || !systemServices.has(name)) return localHostedService(name);
   let handle = remoteHandles.get(name);
   if (!handle) {
@@ -558,7 +558,7 @@ export function hostedService(name: string): JObj | Promise<JObj> | null {
   }
   return after(handle, importBinder);
 }
-function localHostedService(name: string): JObj | Promise<JObj> | null {
+function localHostedService(name: string): PromiseOrVal<JObj> | null {
   const service = binderServices.get(name);
   if (!service) { if (!absentServices.has(name)) rt.noteMissing(`service ${name} [binder]`); return null; }
   if (typeof service !== "function") return service;
@@ -578,7 +578,7 @@ rt.register({ name: "webdroid/ServiceManager", ctor: JServiceManager, ifaces: ["
     throw rt.mkThrowable("java/lang/SecurityException", "an app may not register a system service");
   },
 } });
-let contextObject: JObj | Promise<JObj> | null = null;
+let contextObject: PromiseOrVal<JObj> | null = null;
 rt.registerJni("com/android/internal/os/BinderInternal", "getContextObject()Landroid/os/IBinder;", () => contextObject ??= after(newObj("android/os/Binder", "()V"), (binder) => {
   const manager = rt.make("webdroid/ServiceManager") as JServiceManager;
   manager.binder = binder;

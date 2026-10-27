@@ -310,7 +310,7 @@ export class Deferred implements Hash {
   }
   digest(): Uint8Array { this.flush(); return this.inner.digest(); }
   /** digest(), from the browser when the held message is large enough */
-  final(): Uint8Array | Promise<Uint8Array> {
+  final(): PromiseOrVal<Uint8Array> {
     if (!this.held || this.n < WEB_MIN || !globalThis.crypto?.subtle) return this.digest();
     const d = crypto.subtle.digest(this.web!, this.held.subarray(0, this.n));
     this.held = null;
@@ -327,7 +327,7 @@ export const deferred = (name: string) => new Deferred(DIGESTS[name].make(), DIG
 
 /** A whole file's digest under a MessageDigest name (MD5, SHA-1, SHA-256, ...); null for an algorithm
  *  the platform lacks. */
-export function digestBytes(algorithm: string, data: Uint8Array): Uint8Array | Promise<Uint8Array> | null {
+export function digestBytes(algorithm: string, data: Uint8Array): PromiseOrVal<Uint8Array> | null {
   const name = algorithm.toLowerCase().replace("-", "");
   if (!(name in DIGESTS)) return null;
   const { make, web } = DIGESTS[name];

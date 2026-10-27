@@ -68,7 +68,7 @@ function scan(entries: PollEntry[]): number {
   return ready;
 }
 /** poll(2) over any descriptors: the number ready, once one is, `timeout` ms pass (-1: forever) or `signal` aborts */
-export function pollEntries(entries: PollEntry[], timeout: number, signal?: AbortSignal): number | Promise<number> {
+export function pollEntries(entries: PollEntry[], timeout: number, signal?: AbortSignal): PromiseOrVal<number> {
   const ready = scan(entries);
   return ready || timeout === 0 || signal?.aborted ? ready : pollWait(entries, timeout, signal);
 }
@@ -87,7 +87,7 @@ async function pollWait(entries: PollEntry[], timeout: number, signal?: AbortSig
   }
 }
 
-export function nativePoll(pollfds: number, count: number, timeout: number): number | Promise<number> {
+export function nativePoll(pollfds: number, count: number, timeout: number): PromiseOrVal<number> {
   const entries: PollEntry[] = [];
   for (let i = 0; i < count; i++) entries.push({ fd: mem.ld32(pollfds + i * 8), events: mem.ld16u(pollfds + i * 8 + 4), revents: 0 });
   const target = anchor(pollfds);
@@ -103,7 +103,7 @@ const FD_SETSIZE = 1024;
 const fdIsSet = (set: number, fd: number): boolean => !!set && !!(mem.u8[set + (fd >>> 3)] & (1 << (fd & 7)));
 const setFd = (set: number, fd: number): void => { mem.st8(set + (fd >>> 3), mem.u8[set + (fd >>> 3)] | (1 << (fd & 7))); };
 /** select(2) over fd_sets, sharing readiness and wakeups with poll(2), waiting `ms` (-1: until one is ready) */
-export function nativeSelect(count: number, readSet: number, writeSet: number, exceptSet: number, ms: number): number | Promise<number> {
+export function nativeSelect(count: number, readSet: number, writeSet: number, exceptSet: number, ms: number): PromiseOrVal<number> {
   if (count < 0 || count > FD_SETSIZE) return -E.INVAL;
   const setBytes = Math.ceil(count / (PTR * 8)) * PTR;
   const entries: PollEntry[] = [];

@@ -16,9 +16,9 @@ export interface Entry {
   /** `new cls(args)` from native code: initialize the class, then run the Java constructor `desc`; synchronous unless initialization or the constructor suspends */
   newObj(cls: string, desc?: string, ...args: unknown[]): any;
   /** a static field's value, once the class has initialized */
-  staticField<T = unknown>(cls: string, field: string): T | Promise<T>;
+  staticField<T = unknown>(cls: string, field: string): PromiseOrVal<T>;
   /** link + run <clinit>: the class is ready to be instantiated or have its statics read */
-  linkInit(cls: string): JavaClass | Promise<JavaClass>;
+  linkInit(cls: string): PromiseOrVal<JavaClass>;
   /** the class named `cls`, linked only: its fields and methods exist, `<clinit>` has not run */
   linkClass(cls: string): JavaClass;
   /** run `cls`'s <clinit> if it has not, linking it first; null when it was ready */
@@ -31,7 +31,7 @@ export interface Entry {
   callOn<T>(thread: JThread, call: () => T): T;
   /** `f` of `r`, now or once it settles, as the thread and call chain that call `after`. A native that waits enters Java again through it
    *  or as a generator native: code after an `await` or in a `.then` runs as the host's current thread */
-  after<R, T>(r: R | Promise<R>, f: (v: R) => T | Promise<T>): T | Promise<T>;
+  after<R, T>(r: PromiseOrVal<R>, f: (v: R) => PromiseOrVal<T>): PromiseOrVal<T>;
 }
 
 export interface JavaHost extends Entry {

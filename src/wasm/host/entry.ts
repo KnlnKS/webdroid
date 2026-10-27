@@ -138,7 +138,7 @@ function makeEntry(w: World): WasmEntry {
       return r instanceof Promise ? r.catch((e) => { throw fail(e); }) as T : r;
     } catch (e) { throw fail(e); }
   };
-  const chain = <A, B>(r: A | Promise<A>, f: (v: A) => B | Promise<B>): B | Promise<B> => {
+  const chain = <A, B>(r: PromiseOrVal<A>, f: (v: A) => PromiseOrVal<B>): PromiseOrVal<B> => {
     if (!(r instanceof Promise)) return f(r);
     const rec = threadNow(), parent = parentOf(rec);
     return r.then(v => asThread(rec, () => f(v), parent));
@@ -162,8 +162,8 @@ function makeEntry(w: World): WasmEntry {
     return bridge.toJava(obj, OBJECT) as object;
   };
   // asked as compiled code asks, so that an app build holds the allocator
-  const alloc = (cls: string) => onStrand((s) => w.helpers.invoker([], "L", true)(s, w.host.info(UInfo.AllocInstance, w.idOf(cls), 0), -1)) as object | Promise<object>;
-  const init = (cls: string) => w.needsInit(cls) ? enter(() => onStrand((s) => w.helpers.invoker([], "V", true)(s, w.ensureSlot(cls), -1))) as void | Promise<void> : undefined;
+  const alloc = (cls: string) => onStrand((s) => w.helpers.invoker([], "L", true)(s, w.host.info(UInfo.AllocInstance, w.idOf(cls), 0), -1)) as PromiseOrVal<object>;
+  const init = (cls: string) => w.needsInit(cls) ? enter(() => onStrand((s) => w.helpers.invoker([], "V", true)(s, w.ensureSlot(cls), -1))) as PromiseOrVal<void> : undefined;
 
   const staticOf = (cls: string, name: string, desc?: string) => prog.resolveField(cls, name, desc, true);
   const classes = new Map<string, JavaClass>();

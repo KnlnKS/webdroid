@@ -38,7 +38,7 @@ export function socketPair(type: number): [number, number] | number {
 interface Results { name: number; nameLength: number; messageFlags: number; control: { at: () => number; capacity: number; lengthAt: () => number } | null }
 const NO_RESULTS: Results = { name: 0, nameLength: 0, messageFlags: 0, control: null };
 /** recv(2)/recvfrom(2)/recvmsg(2) into the guest's buffers, which the bytes reach once they arrive */
-function receive(fd: number, s: Socket, buffers: GuestBuffer[], flags: number, { name, nameLength, messageFlags, control }: Results): number | Promise<number> {
+function receive(fd: number, s: Socket, buffers: GuestBuffer[], flags: number, { name, nameLength, messageFlags, control }: Results): PromiseOrVal<number> {
   if (name && !nameLength) return -E.FAULT;
   if (name && mem.ld32(nameLength) < 0) return -E.INVAL;
   const total = buffers.reduce((n, b) => n + b.length, 0), target = new Uint8Array(total);
@@ -73,7 +73,7 @@ function send(cpu: Cpu, s: Socket, bytes: Uint8Array, destination: number, desti
   if (typeof to === "number") return to;
   return written(cpu, s.file, s.send(bytes, to, control), flags);
 }
-function accept(fd: number, address: number, length: number, flags: number): HostRet | Promise<HostRet> {
+function accept(fd: number, address: number, length: number, flags: number): PromiseOrVal<HostRet> {
   const s = socketOf(fd);
   if (typeof s === "number") return s;
   const addressAt = anchor(address), lengthAt = anchor(length);
@@ -138,13 +138,13 @@ function setsockopt(fd: number, level: number, name: number, value: number, leng
   return accepted(s.setOption(level, name, length >= 4 ? mem.ld32(value) : mem.u8[value]));
 }
 /** sendto(2): a descriptor that is no socket takes a plain write */
-export function sendto(cpu: Cpu, fd: number, source: number, length: number, flags: number, destination: number, destinationLength: number): number | Promise<number> {
+export function sendto(cpu: Cpu, fd: number, source: number, length: number, flags: number, destination: number, destinationLength: number): PromiseOrVal<number> {
   const s = socketOf(fd);
   if (typeof s === "number") return destination || destinationLength ? -E.ISCONN : fdWrite(cpu, fd, source, length);
   return send(cpu, s, mem.bytes(source, length), destination, destinationLength, flags);
 }
 /** recvfrom(2): a descriptor that is no socket takes a plain read */
-export function recvfrom(fd: number, destination: number, length: number, flags: number, source = 0, sourceLength = 0): number | Promise<number> {
+export function recvfrom(fd: number, destination: number, length: number, flags: number, source = 0, sourceLength = 0): PromiseOrVal<number> {
   const s = socketOf(fd);
   if (typeof s !== "number") return length && !destination ? -E.FAULT : receive(fd, s, [guestBuffer(destination, length)], flags, { ...NO_RESULTS, name: source, nameLength: sourceLength });
   if (source || sourceLength) return -E.NOTCONN;

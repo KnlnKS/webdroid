@@ -17,10 +17,10 @@ import { broker, remoteSystem } from "../../shell/broker-access.ts";
 import type { PackageState } from "../../shell/packagedata.ts";
 import { persisted } from "../../shell/device-storage.ts";
 export type UriGrantCalls = {
-  check(uri: string, uid: number, modes: number): number | Promise<number>;
+  check(uri: string, uid: number, modes: number): PromiseOrVal<number>;
   /** the caller grants `targetPkg` each of `uris` it needs, or is refused with a SecurityException */
-  grant(targetPkg: string, uris: string[], modes: number): void | Promise<void>;
-  revoke(targetPkg: string | null, uri: string, modes: number): void | Promise<void>;
+  grant(targetPkg: string, uris: string[], modes: number): PromiseOrVal<void>;
+  revoke(targetPkg: string | null, uri: string, modes: number): PromiseOrVal<void>;
 };
 type PersistedUriGrant = { uri: string; flags: number; time: number };
 const READ_WRITE = 3, PERSISTABLE_GRANT = 0x40, PREFIX_GRANT = 0x80;

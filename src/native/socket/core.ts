@@ -171,16 +171,16 @@ export abstract class Socket {
 
   abstract bind(addr: SocketAddress): number;
   /** connect(2); null is AF_UNSPEC's dissolving of a datagram socket's association */
-  abstract connect(addr: SocketAddress | null): number | Promise<number>;
+  abstract connect(addr: SocketAddress | null): PromiseOrVal<number>;
   abstract listen(): number;
   abstract readonly listening: boolean;
   /** accept4(2) on descriptor `fd`; `flags` SOCK_NONBLOCK and SOCK_CLOEXEC are the new descriptor's */
-  abstract accept(fd: number, flags: number): Accepted | number | Promise<Accepted | number>;
+  abstract accept(fd: number, flags: number): PromiseOrVal<Accepted | number>;
   /** a write to the peer, or a datagram to `to`, with sendmsg's ancillary data (null for none) */
   abstract send(bytes: Uint8Array, to: SocketAddress | null, control: Cmsg[] | null): number;
   /** a read into `target` on descriptor `fd`, waiting unless nonblocking or MSG_DONTWAIT; EBADF
    *  once the descriptor closes under the wait */
-  abstract receive(fd: number, target: Uint8Array, flags: number): Received | number | Promise<Received | number>;
+  abstract receive(fd: number, target: Uint8Array, flags: number): PromiseOrVal<Received | number>;
   /** shutdown(2) of a connected socket's directions; `how` is valid */
   protected abstract shut(how: number): number;
   abstract name(peer: boolean): SocketAddress | number;
@@ -273,7 +273,7 @@ export function socketOf(fd: number): Socket | number {
 /** while descriptor `fd` names `socket`: what a socket call waiting on it checks */
 export const naming = (fd: number, socket: Socket) => (): boolean => openFd(fd) === socket.file;
 /** a socket read's bytes alone, the open files it passed dropped: read(2), recv without msg_control */
-export function readSocket(fd: number, target: Uint8Array, flags = 0): number | Promise<number> {
+export function readSocket(fd: number, target: Uint8Array, flags = 0): PromiseOrVal<number> {
   const s = socketOf(fd);
   if (typeof s === "number") return s;
   const r = s.receive(fd, target, flags);

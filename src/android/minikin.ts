@@ -289,7 +289,7 @@ rt.registerJnis("android/graphics/text/MeasuredText$Builder", {
     buildMeasured(deref<Run[]>(h), charsToString(chars, 0, chars.length), !!computeHyphenation, !!fast),
 });
 /** MeasuredText::Builder::build over `text`, measured again once a font it reached has loaded */
-function buildMeasured(runs: Run[], text: string, computeHyphenation: boolean, fast: boolean): bigint | Promise<bigint> {
+function buildMeasured(runs: Run[], text: string, computeHyphenation: boolean, fast: boolean): PromiseOrVal<bigint> {
   return after(withFonts((): Measured => {
     const widths = new Float32Array(text.length), extents = new Float32Array(text.length * 2);
     for (const r of runs) {

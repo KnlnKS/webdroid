@@ -42,7 +42,7 @@ export class StoredParcel {
     return data;
   }
   /** `read` of a replay to `pid`, whose rights it may take; the rest are discarded */
-  async readLocal<T>(pid: number, read: (data: ParcelData, rights: DescriptorRights) => T | Promise<T>): Promise<T> {
+  async readLocal<T>(pid: number, read: (data: ParcelData, rights: DescriptorRights) => PromiseOrVal<T>): Promise<T> {
     const data = await this.replay(pid), rights = this.kernel.rights(pid);
     try { return await read(data, rights); }
     finally { await releaseRights(data, rights, false); }

@@ -11,7 +11,7 @@ import type { Strand } from "./sched.ts";
 import { box, unbox } from "../compiler/primitives.ts";
 import { kindVT } from "../compiler/kinds.ts";
 
-export function invokeVarHandleView(w: World, handle: object, args: object, storage: string, mode: string, params: string[], ret: string, parent: Strand): object | null | Promise<object | null> {
+export function invokeVarHandleView(w: World, handle: object, args: object, storage: string, mode: string, params: string[], ret: string, parent: Strand): PromiseOrVal<object | null> {
   const BB = "java/nio/ByteBuffer", array = storage === "java/lang/invoke/ByteArrayViewVarHandle";
   const element = varHandleValues(mode) ? params[2] : ret, K = kindOf(element), width = element === "S" || element === "C" ? 2 : element === "J" || element === "D" ? 8 : 4;
   const nativeOrder = w.helpers.fieldReader<number>(storage, "nativeByteOrder", "Z")(handle);
@@ -99,5 +99,5 @@ export function invokeVarHandleView(w: World, handle: object, args: object, stor
     for (const size of [1, width]) for (const put of [false, true]) {
       cx.natives.declare(cx, [memoryScalarMethod(cx, !put, size * 8 as 8 | 16 | 32 | 64)]);
     }
-  })(args) as object | null | Promise<object | null>;
+  })(args) as PromiseOrVal<object | null>;
 }

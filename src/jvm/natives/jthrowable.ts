@@ -14,7 +14,7 @@ export class JThrowable extends JObj {
 
 /** Throwable.getCause, which libcore's InvocationTargetException, UndeclaredThrowableException and
  *  PrivilegedActionException answer from their own fields */
-const causeOf = (t: JThrowable): JThrowable | null | Promise<JThrowable | null> => vcall(t, "getCause", "()Ljava/lang/Throwable;");
+const causeOf = (t: JThrowable): PromiseOrVal<JThrowable | null> => vcall(t, "getCause", "()Ljava/lang/Throwable;");
 
 /** a store or cross-process transport used before the broker connects it */
 export function unconnected(): never { throw rt.mkThrowable("android/os/RemoteException", "Process transport unavailable"); }

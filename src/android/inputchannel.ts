@@ -94,7 +94,7 @@ rt.registerJnis("android/view/InputEventReceiver", {
   "nativeInit(Ljava/lang/ref/WeakReference;Landroid/view/InputChannel;Landroid/os/MessageQueue;)J":
     waits((weak: JObj, input: JObj, queue: JObj) => {
       const c = channelOf(input), looper = deref<NativeLooper>(getDeclared<bigint>(queue, "android/os/MessageQueue", "mPtr"));
-      return after(vcall(weak, "get", "()Ljava/lang/Object;") as JObj | Promise<JObj>, (receiver) => {
+      return after(vcall(weak, "get", "()Ljava/lang/Object;") as PromiseOrVal<JObj>, (receiver) => {
         c.receiver = { looper, receiver };
         deliverFocus(c);
         return handle({ channel: c });
