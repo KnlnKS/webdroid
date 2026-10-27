@@ -57,7 +57,7 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
   locator, and Tubi plays non-DRM titles. APKPure (2026-10-25) searches, downloads and installs Pokémon TCG Pocket's
   split XAPK, and the game (2026-10-26, Unity 6 over Vulkan) reaches its title screen; the terms, the 3.2 GB asset
   download and pack opening were reached before its driver was merged into Chrome's (history, Pokémon TCG Pocket). Google Chrome (2026-10-25) searches Google and loads pages such as vgpu.sh
-  across its browser, GPU and sandboxed renderer processes; YouTube's watch page plays (360p, about half of 60 fps frames dropped),
+  across its browser, GPU and sandboxed renderer processes, compositing and rasterizing with Skia on the Vulkan driver (2026-10-26); YouTube's watch page plays (360p, about half of 60 fps frames dropped),
   and vgpu.sh's WebGPU prism draws through the Vulkan driver over WebGPU (with chrome://flags#enable-unsafe-webgpu, about 3.6 frames/s).
 - **Deployment:** one Workers Builds build deploys the page to Pages and the backend, which is also the isolated
   WebView renderer's origin, to a Worker from `main`, and paired previews from other branches. Not yet deployed
