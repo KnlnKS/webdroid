@@ -9,7 +9,7 @@ import { mem } from "../mem.ts";
 import { PTR, stp, type HostFn } from "../host.ts";
 import { struct, list, u64s, ldU64, stU64, WHOLE, type Read } from "../struct.ts";
 import { textureFormat, vertexFormat } from "./formats.ts";
-import { R, UNUSED, COMPARE, UNIFORM_RANGE, objects, nd } from "./vk.ts";
+import { R, UNUSED, COMPARE, UNIFORM_RANGE, objects, nd, destroy, creates } from "./vk.ts";
 import { Buffer, BufferView, View, Device } from "./device.ts";
 import { translate, PUSH_BINDING, type Stage, type Translation, type Resource } from "./spirv/index.ts";
 
@@ -217,7 +217,7 @@ function specialization(p: number): Map<number, number[]> {
   const out = new Map<number, number[]>();
   if (!p) return out;
   const s = SpecInfo.read(p);
-  for (const e of list(s.pMapEntries, s.mapEntryCount, SpecEntry.size(), (at) => SpecEntry.read(at)))
+  for (const e of SpecEntry.list(s.pMapEntries, s.mapEntryCount))
     out.set(e.constantID, e.size === 8 ? [mem.ld32(s.pData + e.offset), mem.ld32(s.pData + e.offset + 4)] : e.size === 1 ? [mem.ld8u(s.pData + e.offset)] : [mem.ld32(s.pData + e.offset)]);
   return out;
 }
@@ -253,14 +253,14 @@ export class ShaderModule {
 
 function graphicsPipeline(dev: Device, info: Read<typeof GraphicsInfo>): GraphicsPipeline {
   const layout = objects.get<PipelineLayout>(info.layout);
-  const stages = list(info.pStages, info.stageCount, StageInfo.size(), (at) => stageOf(StageInfo.read(at), layout));
+  const stages = StageInfo.list(info.pStages, info.stageCount).map((x) => stageOf(x, layout));
   const vs = stages.find((s) => s.stage === "vertex"), fs = stages.find((s) => s.stage === "fragment");
   if (!vs) throw new Error("vulkan: a graphics pipeline without a vertex stage");
   const rp = objects.get<RenderPass>(info.renderPass), sub = rp.subpasses[info.subpass];
   const vi = VertexInput.read(info.pVertexInputState), buffers: (GPUVertexBufferLayout | null)[] = [];
-  for (const b of list(vi.pBindings, vi.bindings, VertexBinding.size(), (at) => VertexBinding.read(at)))
+  for (const b of VertexBinding.list(vi.pBindings, vi.bindings))
     buffers[b.binding] = { arrayStride: b.stride, stepMode: b.inputRate ? "instance" : "vertex", attributes: [] };
-  for (const a of list(vi.pAttributes, vi.attributes, VertexAttribute.size(), (at) => VertexAttribute.read(at))) {
+  for (const a of VertexAttribute.list(vi.pAttributes, vi.attributes)) {
     const format = vertexFormat(a.format);
     if (!format) throw new Error(`vulkan: vertex format ${a.format}`);
     (buffers[a.binding]!.attributes as GPUVertexAttribute[]).push({ shaderLocation: a.location, offset: a.offset, format });
@@ -291,7 +291,7 @@ function graphicsPipeline(dev: Device, info: Read<typeof GraphicsInfo>): Graphic
   }
   if (fs && !rs.rasterizerDiscardEnable) {
     const cb = info.pColorBlendState ? ColorBlend.read(info.pColorBlendState) : null;
-    const blends = cb ? list(cb.pAttachments, cb.attachmentCount, BlendAttachment.size(), (at) => BlendAttachment.read(at)) : [];
+    const blends = cb ? BlendAttachment.list(cb.pAttachments, cb.attachmentCount) : [];
     const targets = sub.colors.map((ai, i): GPUColorTargetState | null => {
       if (ai === UNUSED) return null;
       const b = blends[i], target: GPUColorTargetState = { format: textureFormat(rp.attachments[ai].format)!.gpu, writeMask: b?.colorWriteMask ?? 0xf };
@@ -313,21 +313,21 @@ export const PIPELINE: Record<string, HostFn> = {
     stU64(out, objects.add(new ShaderModule(dev, new Uint32Array(mem.bytes(info.pCode, info.codeSize).slice().buffer))));
     return R.SUCCESS;
   },
-  vkDestroyShaderModule: (_c, a) => { a.p(); objects.delete(nd(a)); },
+  vkDestroyShaderModule: destroy,
   // pipelines are made from WGSL WebGPU compiles and caches itself; the cache holds nothing
-  vkCreatePipelineCache: (_c, a) => { a.p(); a.p(); a.p(); stU64(a.p(), objects.add({})); return R.SUCCESS; },
-  vkDestroyPipelineCache: (_c, a) => { a.p(); objects.delete(nd(a)); },
+  vkCreatePipelineCache: creates(() => ({})),
+  vkDestroyPipelineCache: destroy,
   vkGetPipelineCacheData: (_c, a) => { a.p(); nd(a); stp(a.p(), 0); return R.SUCCESS; },
   vkMergePipelineCaches: () => R.SUCCESS,
 
   vkCreateDescriptorSetLayout: (_c, a) => {
     a.p(); const info = SetLayoutInfo.read(a.p()); a.p(); const out = a.p(), bindings = new Map<number, SetLayoutBinding>();
-    for (const b of list(info.pBindings, info.bindingCount, SetLayoutBindingS.size(), (at) => SetLayoutBindingS.read(at)))
+    for (const b of SetLayoutBindingS.list(info.pBindings, info.bindingCount))
       bindings.set(b.binding, { type: b.descriptorType, count: b.descriptorCount, samplers: u64s(b.pImmutableSamplers, b.descriptorCount).map((h) => objects.get<GPUSampler>(h)) });
     stU64(out, objects.add(new SetLayout(bindings)));
     return R.SUCCESS;
   },
-  vkDestroyDescriptorSetLayout: (_c, a) => { a.p(); objects.delete(nd(a)); },
+  vkDestroyDescriptorSetLayout: destroy,
   vkGetDescriptorSetLayoutSupport: (_c, a) => { a.p(); a.p(); mem.st32(a.p() + 2 * PTR, 1); },
   vkCreatePipelineLayout: (_c, a) => {
     const dev = objects.get(a.p(), Device), info = LayoutInfo.read(a.p()); a.p(); const out = a.p();
@@ -335,8 +335,8 @@ export const PIPELINE: Record<string, HostFn> = {
     stU64(out, objects.add({ sets: u64s(info.pSetLayouts, info.setLayoutCount).map((h) => objects.get(h, SetLayout)), push } satisfies PipelineLayout));
     return R.SUCCESS;
   },
-  vkDestroyPipelineLayout: (_c, a) => { a.p(); objects.delete(nd(a)); },
-  vkCreateDescriptorPool: (_c, a) => { a.p(); a.p(); a.p(); stU64(a.p(), objects.add(new DescriptorPool())); return R.SUCCESS; },
+  vkDestroyPipelineLayout: destroy,
+  vkCreateDescriptorPool: creates(() => new DescriptorPool()),
   vkDestroyDescriptorPool: (_c, a) => { a.p(); const h = nd(a); for (const s of objects.find(h, DescriptorPool)?.sets ?? []) objects.delete(s); objects.delete(h); },
   vkResetDescriptorPool: (_c, a) => { a.p(); const pool = objects.get(nd(a), DescriptorPool); for (const s of pool.sets) objects.delete(s); pool.sets.clear(); return R.SUCCESS; },
   vkAllocateDescriptorSets: (_c, a) => {
@@ -347,11 +347,11 @@ export const PIPELINE: Record<string, HostFn> = {
   vkFreeDescriptorSets: (_c, a) => { a.p(); const pool = objects.get(nd(a), DescriptorPool), n = a.u(); for (const s of u64s(a.p(), n)) { pool.sets.delete(s); objects.delete(s); } return R.SUCCESS; },
   vkUpdateDescriptorSets: (_c, a) => {
     a.p(); const writes = a.u(), pWrites = a.p(), copies = a.u(), pCopies = a.p();
-    for (const w of list(pWrites, writes, WriteSet.size(), (at) => WriteSet.read(at))) {
+    for (const w of WriteSet.list(pWrites, writes)) {
       const t = w.descriptorType, [p, size] = isBuffer(t) ? [w.pBufferInfo, BufferInfo.size()] : isTexel(t) ? [w.pTexelBufferView, 8] : [w.pImageInfo, ImageInfo.size()];
       writeDescriptors(objects.get(w.dstSet, DescriptorSet), w.dstBinding, w.dstArrayElement, w.descriptorCount, t, (i) => p + i * size);
     }
-    for (const c of list(pCopies, copies, CopySet.size(), (at) => CopySet.read(at))) {
+    for (const c of CopySet.list(pCopies, copies)) {
       const src = objects.get(c.srcSet, DescriptorSet), dst = objects.get(c.dstSet, DescriptorSet);
       for (let i = 0; i < c.descriptorCount; i++) dst.slots.get(c.dstBinding)![c.dstArrayElement + i] = src.slots.get(c.srcBinding)![c.srcArrayElement + i];
       dst.changed();
@@ -359,10 +359,10 @@ export const PIPELINE: Record<string, HostFn> = {
   },
   vkCreateDescriptorUpdateTemplate: (_c, a) => {
     a.p(); const info = TemplateInfo.read(a.p()); a.p();
-    stU64(a.p(), objects.add(list(info.pEntries, info.entryCount, TemplateEntry.size(), (at) => TemplateEntry.read(at))));
+    stU64(a.p(), objects.add(TemplateEntry.list(info.pEntries, info.entryCount)));
     return R.SUCCESS;
   },
-  vkDestroyDescriptorUpdateTemplate: (_c, a) => { a.p(); objects.delete(nd(a)); },
+  vkDestroyDescriptorUpdateTemplate: destroy,
   vkUpdateDescriptorSetWithTemplate: (_c, a) => {
     a.p(); const set = objects.get(nd(a), DescriptorSet), entries = objects.get<Read<typeof TemplateEntry>[]>(nd(a)), data = a.p();
     for (const e of entries) writeDescriptors(set, e.binding, e.element, e.count, e.type, (i) => data + e.offset + i * e.stride);
@@ -370,7 +370,7 @@ export const PIPELINE: Record<string, HostFn> = {
 
   vkCreateRenderPass: (_c, a) => {
     a.p(); const info = RenderPassInfo.read(a.p()); a.p(); const out = a.p();
-    const attachments = list(info.pAttachments, info.attachmentCount, AttachmentS.size(), (at) => attachmentOf(AttachmentS.read(at)));
+    const attachments = AttachmentS.list(info.pAttachments, info.attachmentCount).map(attachmentOf);
     const refs = (p: number, n: number) => list(p, n, 8, (at) => mem.ld32(at) >>> 0);
     const subpasses = list(info.pSubpasses, info.subpassCount, SubpassS.size(), (at) => {
       const s = SubpassS.read(at);
@@ -381,8 +381,8 @@ export const PIPELINE: Record<string, HostFn> = {
   },
   vkCreateRenderPass2: (_c, a) => {
     a.p(); const info = RenderPassInfo2.read(a.p()); a.p(); const out = a.p();
-    const attachments = list(info.pAttachments, info.attachmentCount, Attachment2.size(), (at) => attachmentOf(Attachment2.read(at)));
-    const refs = (p: number, n: number) => list(p, n, Reference2.size(), (at) => Reference2.read(at).attachment);
+    const attachments = Attachment2.list(info.pAttachments, info.attachmentCount).map(attachmentOf);
+    const refs = (p: number, n: number) => Reference2.list(p, n).map((r) => r.attachment);
     const subpasses = list(info.pSubpasses, info.subpassCount, Subpass2.size(), (at) => {
       const s = Subpass2.read(at);
       return { colors: refs(s.pColors, s.colors), resolves: refs(s.pResolves, s.colors), depth: s.pDepth ? Reference2.read(s.pDepth).attachment : UNUSED };
@@ -390,14 +390,14 @@ export const PIPELINE: Record<string, HostFn> = {
     stU64(out, objects.add({ attachments, subpasses } satisfies RenderPass));
     return R.SUCCESS;
   },
-  vkDestroyRenderPass: (_c, a) => { a.p(); objects.delete(nd(a)); },
+  vkDestroyRenderPass: destroy,
   vkGetRenderAreaGranularity: (_c, a) => { a.p(); nd(a); const out = a.p(); mem.st32(out, 1); mem.st32(out + 4, 1); },
   vkCreateFramebuffer: (_c, a) => {
     a.p(); const info = FramebufferInfo.read(a.p()); a.p(); const out = a.p();
     stU64(out, objects.add({ views: u64s(info.pAttachments, info.attachmentCount).map((h) => objects.get(h, View)), width: info.width, height: info.height } satisfies Framebuffer));
     return R.SUCCESS;
   },
-  vkDestroyFramebuffer: (_c, a) => { a.p(); objects.delete(nd(a)); },
+  vkDestroyFramebuffer: destroy,
 
   vkCreateGraphicsPipelines: (_c, a) => {
     const dev = objects.get(a.p(), Device); nd(a); const n = a.u(), infos = a.p(); a.p(); const out = a.p();
@@ -419,5 +419,5 @@ export const PIPELINE: Record<string, HostFn> = {
     }
     return R.SUCCESS;
   },
-  vkDestroyPipeline: (_c, a) => { a.p(); objects.delete(nd(a)); },
+  vkDestroyPipeline: destroy,
 };

@@ -3,8 +3,9 @@
 // held as partial blocks. The draws cover their viewport with one triangle and read their parameters
 // from a slot of the device's push buffers.
 
+import { bitsf } from "../host.ts";
 import { UNUSED } from "./vk.ts";
-import { BU, type Image } from "./device.ts";
+import { BU, subresource, type Image } from "./device.ts";
 import { F, formatFeatures } from "./formats.ts";
 import type { Replay } from "./commands.ts";
 
@@ -57,7 +58,7 @@ export function clearAttachments(r: Replay, clears: Clear[], rects: Rect[]): voi
     pass.setPipeline(pipeline);
     if (color >= 0) pass.setBindGroup(0, gpu.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: r.data(c.words) }] }));
     if (stencil) pass.setStencilReference(c.words[1]);
-    const z = Math.min(1, Math.max(0, new Float32Array(c.words.buffer, c.words.byteOffset, 1)[0] || 0));
+    const z = Math.min(1, Math.max(0, bitsf(c.words[0]) || 0));
     for (const { x, y, width, height } of rects) {
       pass.setViewport(x, y, width, height, z, z);
       pass.setScissorRect(x, y, width, height);
@@ -115,11 +116,11 @@ export function blit(r: Replay, src: Image, s: Blit, dst: Image, d: Blit, linear
     }
     // the corners in the destination's order: a flip is a rectangle drawn the other way round
     const rect = new Float32Array([(dw < 0 ? s.x1 : s.x0) / width, (dh < 0 ? s.y1 : s.y0) / height, (dw < 0 ? s.x0 : s.x1) / width, (dh < 0 ? s.y0 : s.y1) / height]);
-    const pipeline = blitPipeline(gpu, dst.format.gpu, filterable), single = (mip: number, layer: number) => ({ dimension: "2d", baseMipLevel: mip, mipLevelCount: 1, baseArrayLayer: layer, arrayLayerCount: 1 }) as const;
-    const pass = enc.beginRenderPass({ colorAttachments: [{ view: dst.texture.createView(single(d.mip, d.layer + l)), loadOp: "load", storeOp: "store" }] });
+    const pipeline = blitPipeline(gpu, dst.format.gpu, filterable);
+    const pass = enc.beginRenderPass({ colorAttachments: [{ view: dst.texture.createView(subresource(d.mip, d.layer + l)), loadOp: "load", storeOp: "store" }] });
     pass.setPipeline(pipeline);
     pass.setBindGroup(0, gpu.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: [
-      { binding: 0, resource: src.texture.createView(single(s.mip, s.layer + l)) }, { binding: 1, resource: samplerOf(gpu, linear && filterable) },
+      { binding: 0, resource: src.texture.createView(subresource(s.mip, s.layer + l)) }, { binding: 1, resource: samplerOf(gpu, linear && filterable) },
       { binding: 2, resource: r.data(new Uint32Array(rect.buffer)) },
     ] }));
     pass.setViewport(Math.min(d.x0, d.x1), Math.min(d.y0, d.y1), Math.abs(dw), Math.abs(dh), 0, 1);
@@ -142,7 +143,7 @@ function decodePipeline(gpu: GPUDevice, format: GPUTextureFormat): GPURenderPipe
 export function decode(r: Replay, img: Image, mip: number, layer: number, layers: number): void {
   const gpu = r.dev.gpu, enc = r.outside(), pipeline = decodePipeline(gpu, img.texture.format);
   for (let l = layer; l < layer + layers; l++) {
-    const range = { dimension: "2d", baseMipLevel: mip, mipLevelCount: 1, baseArrayLayer: l, arrayLayerCount: 1 } as const;
+    const range = subresource(mip, l);
     const pass = enc.beginRenderPass({ colorAttachments: [{ view: img.texture.createView(range), loadOp: "clear", storeOp: "store" }] });
     pass.setPipeline(pipeline);
     pass.setBindGroup(0, gpu.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: img.blocks!.createView(range) }] }));

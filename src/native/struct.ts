@@ -29,6 +29,8 @@ export interface Struct<K extends string, N extends Nested> extends Layout {
   read(p: number): Values<K, N>;
   /** an array field's elements */
   array(p: number, name: K): number[];
+  /** `n` of these from `p`, none when `p` is null */
+  list(p: number, n: number): Values<K, N>[];
   write(p: number, values: Inputs<K, N>): void;
 }
 /** `spec` lists `name:type` or `name:type[n]` fields in order; `size` is size_t, a pointer's width, and `struct`
@@ -98,6 +100,7 @@ export function struct<S extends string, N extends Nested = Record<never, Layout
       const f = field(name), t = f.type as Scalar, w = width(t);
       return Array.from({ length: f.count }, (_, i) => load(t, p + f.off + i * w));
     },
+    list(p, n) { return list(p, n, layout().size, (at) => this.read(at)); },
     write(p, values) {
       for (const [name, v] of Object.entries(values) as [string, unknown][]) {
         const f = field(name);

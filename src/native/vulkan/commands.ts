@@ -4,11 +4,11 @@
 // passes and WebGPU's does not, so the replay keeps it and sets on each pass what a draw needs.
 
 import { mem } from "../mem.ts";
-import { PTR, ldp, stp, type HostFn } from "../host.ts";
-import { struct, list, u64s, stU64, WHOLE, type Read } from "../struct.ts";
+import { PTR, ldp, stp, bitsf, type HostFn } from "../host.ts";
+import { struct, list, u64s, WHOLE, type Read } from "../struct.ts";
 import { texel, type TextureFormat } from "./formats.ts";
-import { R, UNUSED, objects, dispatchable, nd } from "./vk.ts";
-import { BU, TU, Buffer, Device, Image } from "./device.ts";
+import { R, UNUSED, objects, dispatchable, nd, creates } from "./vk.ts";
+import { BU, TU, Buffer, Device, Image, subresource } from "./device.ts";
 import { bindGroup, BindGroupCache, PUSH_SIZE, PUSH_SLOT, DescriptorSet, GraphicsPipeline, type Bound, type ComputePipeline, type Framebuffer, type PushSlot, type RenderPass } from "./pipeline.ts";
 import { take } from "./ahb.ts";
 import { blit, clearAttachments, copyBytes, decode } from "./internal.ts";
@@ -109,11 +109,9 @@ function bindGroups(r: Replay, pass: GPURenderPassEncoder | GPUComputePassEncode
   }
 }
 
-const bits = new DataView(new ArrayBuffer(4));
-const f32 = (w: number) => { bits.setInt32(0, w, true); return bits.getFloat32(0, true); };
 /** a VkClearColorValue's words as the format's channels read them */
 function clearValue(f: TextureFormat, words: number[]): GPUColorDict {
-  const [r, g, b, a] = words.map(f.gpu.endsWith("uint") ? (w) => w >>> 0 : f.gpu.endsWith("sint") ? (w) => w | 0 : f32);
+  const [r, g, b, a] = words.map(f.gpu.endsWith("uint") ? (w) => w >>> 0 : f.gpu.endsWith("sint") ? (w) => w | 0 : bitsf);
   return { r, g, b, a };
 }
 
@@ -134,7 +132,7 @@ function beginSubpass(r: Replay): void {
   if (sub.depth !== UNUSED) {
     const a = pass.attachments[sub.depth], view = fb.views[sub.depth], f = view.image.format, c = clears[sub.depth] ?? [0, 0];
     const ds: GPURenderPassDepthStencilAttachment = { view: view.gpu };
-    if (f.depth) Object.assign(ds, { depthLoadOp: first(sub.depth) ? a.load : "load", depthStoreOp: last(sub.depth) ? a.store : "store", depthClearValue: a.clear ? f32(c[0]) : 0 });
+    if (f.depth) Object.assign(ds, { depthLoadOp: first(sub.depth) ? a.load : "load", depthStoreOp: last(sub.depth) ? a.store : "store", depthClearValue: a.clear ? bitsf(c[0]) : 0 });
     if (f.stencil) Object.assign(ds, { stencilLoadOp: first(sub.depth) ? a.stencilLoad : "load", stencilStoreOp: last(sub.depth) ? a.stencilStore : "store", stencilClearValue: a.stencilClear ? c[1] >>> 0 : 0 });
     desc.depthStencilAttachment = ds;
   }
@@ -237,7 +235,7 @@ function clearImage(r: Replay, img: Image, range: Read<typeof Range>, color: GPU
   for (let l = baseMipLevel; l < baseMipLevel + mipLevelCount; l++) {
     for (let layer = baseArrayLayer; layer < baseArrayLayer + arrayLayerCount; layer++) {
       if (renderable) {
-        const view = img.texture.createView({ dimension: "2d", baseMipLevel: l, mipLevelCount: 1, baseArrayLayer: layer, arrayLayerCount: 1 });
+        const view = img.texture.createView(subresource(l, layer));
         if (color) enc.beginRenderPass({ colorAttachments: [{ view, loadOp: "clear", storeOp: "store", clearValue: color }] }).end();
         else enc.beginRenderPass({ colorAttachments: [], depthStencilAttachment: { view, ...(f.depth && range.aspectMask & 2 ? { depthLoadOp: "clear", depthStoreOp: "store", depthClearValue: depth } : f.depth ? { depthLoadOp: "load", depthStoreOp: "store" } : {}), ...(f.stencil && range.aspectMask & 4 ? { stencilLoadOp: "clear", stencilStoreOp: "store", stencilClearValue: stencil } : f.stencil ? { stencilLoadOp: "load", stencilStoreOp: "store" } : {}) } }).end();
         continue;
@@ -263,7 +261,7 @@ const words = (p: number, n: number) => Array.from({ length: n }, (_, i) => mem.
 
 export const COMMANDS: Record<string, HostFn> = {
   // a command pool is the set of its command buffers, to free and reset them with it
-  vkCreateCommandPool: (_c, a) => { a.p(); a.p(); a.p(); stU64(a.p(), objects.add(new CommandPool())); return R.SUCCESS; },
+  vkCreateCommandPool: creates(() => new CommandPool()),
   vkDestroyCommandPool: (_c, a) => { a.p(); const h = nd(a); for (const b of objects.find(h, CommandPool)?.buffers ?? []) objects.delete(b); objects.delete(h); },
   vkResetCommandPool: (_c, a) => { a.p(); for (const b of objects.get(nd(a), CommandPool).buffers) cbOf(b).reset(); return R.SUCCESS; },
   vkTrimCommandPool: () => {},
@@ -291,7 +289,7 @@ export const COMMANDS: Record<string, HostFn> = {
 
   vkCmdPipelineBarrier: (_c, a) => {
     const h = a.p(); a.u(); a.u(); a.u(); a.u(); a.p(); a.u(); a.p(); const n = a.u(), p = a.p();
-    for (const b of list(p, n, ImageBarrier.size(), (at) => ImageBarrier.read(at))) {
+    for (const b of ImageBarrier.list(p, n)) {
       if (foreign(b.dstQueueFamilyIndex) && !foreign(b.srcQueueFamilyIndex)) { const img = objects.get(b.image, Image); record(h, (r) => { r.released.add(img); }); }
       // contents survive an acquire even from VK_IMAGE_LAYOUT_UNDEFINED, as Android's drivers keep them and
       // Chrome, which always acquires from it (crbug.com/327111284), relies on
@@ -381,24 +379,24 @@ export const COMMANDS: Record<string, HostFn> = {
   },
 
   vkCmdCopyBuffer: (_c, a) => {
-    const h = a.p(), src = objects.get(nd(a), Buffer), dst = objects.get(nd(a), Buffer), n = a.u(), regions = list(a.p(), n, BufferCopy.size(), (at) => BufferCopy.read(at)), cb = cbOf(h);
+    const h = a.p(), src = objects.get(nd(a), Buffer), dst = objects.get(nd(a), Buffer), n = a.u(), regions = BufferCopy.list(a.p(), n), cb = cbOf(h);
     cb.use(src); cb.use(dst, true);
     record(h, (r) => { for (const c of regions) copyBytes(r, src.gpu, c.srcOffset, dst.gpu, c.dstOffset, c.size); });
   },
   vkCmdCopyBufferToImage: (_c, a) => {
-    const h = a.p(), src = objects.get(nd(a), Buffer), img = objects.get(nd(a), Image); a.u(); const n = a.u(), regions = list(a.p(), n, BufferImageCopy.size(), (at) => BufferImageCopy.read(at));
+    const h = a.p(), src = objects.get(nd(a), Buffer), img = objects.get(nd(a), Image); a.u(); const n = a.u(), regions = BufferImageCopy.list(a.p(), n);
     cbOf(h).use(src);
     record(h, (r) => {
       for (const c of regions) { copyBufferImage(r.outside(), img, c, src.gpu, true); if (img.blocks) decode(r, img, c.mipLevel, c.baseArrayLayer, c.layerCount); }
     });
   },
   vkCmdCopyImageToBuffer: (_c, a) => {
-    const h = a.p(), img = objects.get(nd(a), Image); a.u(); const dst = objects.get(nd(a), Buffer), n = a.u(), regions = list(a.p(), n, BufferImageCopy.size(), (at) => BufferImageCopy.read(at));
+    const h = a.p(), img = objects.get(nd(a), Image); a.u(); const dst = objects.get(nd(a), Buffer), n = a.u(), regions = BufferImageCopy.list(a.p(), n);
     cbOf(h).use(dst, true);
     record(h, (r) => { const enc = r.outside(); for (const c of regions) copyBufferImage(enc, img, c, dst.gpu, false); });
   },
   vkCmdCopyImage: (_c, a) => {
-    const h = a.p(), src = objects.get(nd(a), Image); a.u(); const dst = objects.get(nd(a), Image); a.u(); const n = a.u(), regions = list(a.p(), n, ImageCopy.size(), (at) => ImageCopy.read(at));
+    const h = a.p(), src = objects.get(nd(a), Image); a.u(); const dst = objects.get(nd(a), Image); a.u(); const n = a.u(), regions = ImageCopy.list(a.p(), n);
     const { bw, bh } = src.format;
     record(h, (r) => {
       for (const c of regions) {
@@ -429,7 +427,7 @@ export const COMMANDS: Record<string, HostFn> = {
   vkCmdClearAttachments: (_c, a) => {
     const h = a.p(), n = a.u(), p = a.p(), m = a.u(), q = a.p();
     const clears = list(p, n, ClearAttachment.size(), (at) => ({ ...ClearAttachment.read(at), words: new Uint32Array(ClearAttachment.array(at, "value")) }));
-    const rects = list(q, m, ClearRect.size(), (at) => ClearRect.read(at));
+    const rects = ClearRect.list(q, m);
     record(h, (r) => clearAttachments(r, clears, rects));
   },
   vkCmdBlitImage: (_c, a) => {
@@ -441,19 +439,19 @@ export const COMMANDS: Record<string, HostFn> = {
     record(h, (r) => { for (const [s, d] of regions) blit(r, src, s, dst, d, linear); });
   },
   vkCmdClearColorImage: (_c, a) => {
-    const h = a.p(), img = objects.get(nd(a), Image); a.u(); const color = words(a.p(), 4), n = a.u(), ranges = list(a.p(), n, Range.size(), (at) => Range.read(at));
+    const h = a.p(), img = objects.get(nd(a), Image); a.u(); const color = words(a.p(), 4), n = a.u(), ranges = Range.list(a.p(), n);
     record(h, (r) => { for (const range of ranges) clearImage(r, img, range, clearValue(img.format, color), 0, 0); });
   },
   vkCmdClearDepthStencilImage: (_c, a) => {
-    const h = a.p(), img = objects.get(nd(a), Image); a.u(); const p = a.p(), depth = mem.ldf32(p), stencil = mem.ld32(p + 4) >>> 0, n = a.u(), ranges = list(a.p(), n, Range.size(), (at) => Range.read(at));
+    const h = a.p(), img = objects.get(nd(a), Image); a.u(); const p = a.p(), depth = mem.ldf32(p), stencil = mem.ld32(p + 4) >>> 0, n = a.u(), ranges = Range.list(a.p(), n);
     record(h, (r) => { for (const range of ranges) clearImage(r, img, range, null, depth, stencil); });
   },
   vkCmdResolveImage: (_c, a) => {
-    const h = a.p(), src = objects.get(nd(a), Image); a.u(); const dst = objects.get(nd(a), Image); a.u(); const n = a.u(), regions = list(a.p(), n, ImageCopy.size(), (at) => ImageCopy.read(at));
+    const h = a.p(), src = objects.get(nd(a), Image); a.u(); const dst = objects.get(nd(a), Image); a.u(); const n = a.u(), regions = ImageCopy.list(a.p(), n);
     record(h, (r) => {
       for (const c of regions) r.outside().beginRenderPass({ colorAttachments: [{
-        view: src.texture.createView({ dimension: "2d", baseMipLevel: c.srcMip, mipLevelCount: 1, baseArrayLayer: c.srcLayer, arrayLayerCount: 1 }), loadOp: "load", storeOp: "store",
-        resolveTarget: dst.texture.createView({ dimension: "2d", baseMipLevel: c.dstMip, mipLevelCount: 1, baseArrayLayer: c.dstLayer, arrayLayerCount: 1 }),
+        view: src.texture.createView(subresource(c.srcMip, c.srcLayer)), loadOp: "load", storeOp: "store",
+        resolveTarget: dst.texture.createView(subresource(c.dstMip, c.dstLayer)),
       }] }).end();
     });
   },

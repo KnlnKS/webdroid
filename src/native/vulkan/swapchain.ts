@@ -8,7 +8,7 @@ import { windowOf } from "../libandroid.ts";
 import { bufferHeight, bufferWidth, presentSurface, type GlSurface } from "../../android/glsurface.ts";
 import { vsync } from "../../android/vsync.ts";
 import { struct, list, u64s, stU64 } from "../struct.ts";
-import { R, objects, nd, enumerate } from "./vk.ts";
+import { R, objects, nd, enumerate, destroy } from "./vk.ts";
 import { TU, Device, Image, Queue } from "./device.ts";
 import { textureFormat } from "./formats.ts";
 import { FrameCanvas } from "./ahb.ts";
@@ -51,7 +51,7 @@ export const SWAPCHAIN: Record<string, HostFn> = {
     stU64(out, objects.add(new Surface(window)));
     return R.SUCCESS;
   },
-  vkDestroySurfaceKHR: (_c, a) => { a.p(); objects.delete(nd(a)); },
+  vkDestroySurfaceKHR: destroy,
   vkGetPhysicalDeviceSurfaceSupportKHR: (_c, a) => { a.p(); a.u(); nd(a); mem.st32(a.p(), 1); return R.SUCCESS; },
   vkGetPhysicalDeviceSurfaceCapabilitiesKHR: (_c, a) => {
     a.p(); const { window } = objects.get(nd(a), Surface), extent = [bufferWidth(window), bufferHeight(window)];

@@ -2,7 +2,8 @@
 // chains and the two-call enumeration idiom.
 
 import { mem } from "../mem.ts";
-import { PTR, ldp, type ArgReader } from "../host.ts";
+import { PTR, ldp, type ArgReader, type HostFn } from "../host.ts";
+import { stU64 } from "../struct.ts";
 import { Handles } from "../handles.ts";
 
 /** VkResult */
@@ -34,6 +35,10 @@ export const objects = new Handles<object>("vulkan");
 export const dispatchable = (o: object): number => objects.alloc(o, 2 * PTR);
 /** a non-dispatchable handle argument */
 export const nd = (a: ArgReader): number => Number(a.ul());
+/** vkDestroy*(device, handle, pAllocator) of an object with nothing to release but its handle */
+export const destroy: HostFn = (_c, a) => { a.p(); objects.delete(nd(a)); };
+/** vkCreate*(device, pCreateInfo, pAllocator, pHandle) of an object its create info does not shape */
+export const creates = (make: () => object): HostFn => (_c, a) => { a.p(); a.p(); a.p(); stU64(a.p(), objects.add(make())); return R.SUCCESS; };
 
 /** the structs chained from `pNext`, by sType: each one's address */
 export function chain(pNext: number): Map<number, number> {

@@ -7,7 +7,7 @@ import { PTR, ldp, type HostFn } from "../host.ts";
 import { closeFd } from "../fd.ts";
 import { fence, fenceOf, syncFileFd } from "../syncfile.ts";
 import { struct, list, u64s, stU64 } from "../struct.ts";
-import { R, SYNC_FD, objects, nd } from "./vk.ts";
+import { R, SYNC_FD, objects, nd, destroy, creates } from "./vk.ts";
 import { BU, Queue, type Device, type Buffer } from "./device.ts";
 import { Replay, cbOf, type CommandBuffer } from "./commands.ts";
 import { publish } from "./ahb.ts";
@@ -77,7 +77,7 @@ export const SYNC: Record<string, HostFn> = {
     const dev = objects.get(a.p(), Queue).dev, n = a.u(), infos = a.p(), fence = objects.find(nd(a), Signal);
     if (dev.lost) return R.DEVICE_LOST;
     let last: Promise<void> = Promise.resolve();
-    for (const info of list(infos, n, SubmitInfo.size(), (at) => SubmitInfo.read(at))) {
+    for (const info of SubmitInfo.list(infos, n)) {
       const cbs = list(info.pBuffers, info.buffers, PTR, (at) => cbOf(ldp(at)));
       try { last = submit(dev, cbs); }
       catch (e) { console.warn("[vulkan] vkQueueSubmit:", (e as Error).stack); return R.DEVICE_LOST; }
@@ -90,7 +90,7 @@ export const SYNC: Record<string, HostFn> = {
   vkQueueBindSparse: () => R.FEATURE_NOT_PRESENT,
 
   vkCreateFence: (_c, a) => { a.p(); const info = FenceInfo.read(a.p()); a.p(); stU64(a.p(), objects.add(new Signal(!!(info.flags & 1)))); return R.SUCCESS; },
-  vkDestroyFence: (_c, a) => { a.p(); objects.delete(nd(a)); },
+  vkDestroyFence: destroy,
   vkResetFences: (_c, a) => { a.p(); const n = a.u(); for (const h of u64s(a.p(), n)) objects.get(h, Signal).set(false); return R.SUCCESS; },
   vkGetFenceStatus: (_c, a) => { a.p(); return objects.get(nd(a), Signal).signaled ? R.SUCCESS : R.NOT_READY; },
   vkWaitForFences: async (_c, a) => {
@@ -103,8 +103,8 @@ export const SYNC: Record<string, HostFn> = {
     return await until(works, all, ms) ? R.SUCCESS : R.TIMEOUT;
   },
 
-  vkCreateSemaphore: (_c, a) => { a.p(); a.p(); a.p(); stU64(a.p(), objects.add(new Signal(false))); return R.SUCCESS; },
-  vkDestroySemaphore: (_c, a) => { a.p(); objects.delete(nd(a)); },
+  vkCreateSemaphore: creates(() => new Signal(false)),
+  vkDestroySemaphore: destroy,
   vkGetSemaphoreFdKHR: (_c, a) => {
     a.p(); const info = GetFd.read(a.p()), out = a.p();
     if (info.handleType !== SYNC_FD) return R.INVALID_EXTERNAL_HANDLE;
@@ -124,8 +124,8 @@ export const SYNC: Record<string, HostFn> = {
     return R.SUCCESS;
   },
 
-  vkCreateEvent: (_c, a) => { a.p(); a.p(); a.p(); stU64(a.p(), objects.add(new VkEvent())); return R.SUCCESS; },
-  vkDestroyEvent: (_c, a) => { a.p(); objects.delete(nd(a)); },
+  vkCreateEvent: creates(() => new VkEvent()),
+  vkDestroyEvent: destroy,
   vkGetEventStatus: (_c, a) => { a.p(); return objects.get(nd(a), VkEvent).set ? R.EVENT_SET : R.EVENT_RESET; },
   vkSetEvent: (_c, a) => { a.p(); objects.get(nd(a), VkEvent).set = true; return R.SUCCESS; },
   vkResetEvent: (_c, a) => { a.p(); objects.get(nd(a), VkEvent).set = false; return R.SUCCESS; },

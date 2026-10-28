@@ -7,10 +7,10 @@
 import { mem } from "../mem.ts";
 import { PTR, ldp, stp, type HostFn } from "../host.ts";
 import { bufferAt, acquire, release as releaseBuffer, vulkanFormat, type HardwareBuffer } from "../hardwarebuffer.ts";
-import { struct, ptrs, stU64, WHOLE } from "../struct.ts";
-import { R, S, AHB_HANDLE, REMAINING, COMPARE, UNIFORM_RANGE, objects, dispatchable, nd, chain } from "./vk.ts";
+import { struct, stU64, WHOLE } from "../struct.ts";
+import { R, S, AHB_HANDLE, REMAINING, COMPARE, UNIFORM_RANGE, objects, dispatchable, nd, chain, destroy, creates } from "./vk.ts";
 import { F, decodedFormat, formatFeatures, textureFormat, vkFormatOf, type TextureFormat } from "./formats.ts";
-import { DEVICE_EXTENSIONS, MEMORY_TYPES, Physical, deviceAdapter } from "./instance.ts";
+import { DEVICE_EXTENSIONS, MEMORY_TYPES, Physical, deviceAdapter, hasExtensions } from "./instance.ts";
 import type { PushChunk } from "./pipeline.ts";
 
 /** GPUBufferUsage and GPUTextureUsage */
@@ -51,6 +51,9 @@ export class Buffer {
   get host(): number { return this.memory?.host ? this.memory.host + this.offset : 0; }
 }
 type Extent = Required<GPUExtent3DDict>;
+/** the 2D view of one level of one layer */
+export const subresource = (mip: number, layer: number) => ({ dimension: "2d", baseMipLevel: mip, mipLevelCount: 1, baseArrayLayer: layer, arrayLayerCount: 1 }) as const;
+
 export class Image {
   gpu: GPUTexture | null = null;
   /** a compressed image whose size is not whole blocks, which WebGPU cannot create: its blocks, padded to whole blocks, as copies
@@ -182,8 +185,7 @@ const allTypes = (1 << MEMORY_TYPES.length) - 1;
 export const DEVICE: Record<string, HostFn> = {
   vkCreateDevice: async (_c, a) => {
     const p = objects.get(a.p(), Physical), info = DeviceInfo.read(a.p()); a.p(); const out = a.p();
-    const known = new Set(DEVICE_EXTENSIONS.map(([n]) => n));
-    if (ptrs(info.extensionNames, info.extensions).some((n) => !known.has(mem.cstr(n)))) return R.EXTENSION_NOT_PRESENT;
+    if (!hasExtensions(DEVICE_EXTENSIONS, info.extensionNames, info.extensions)) return R.EXTENSION_NOT_PRESENT;
     // every capability the adapter has: Vulkan enables features a device then never needs to ask WebGPU for
     const requiredLimits: Record<string, number> = {};
     for (const k in p.limits) { const v = p.limits[k as keyof GPUSupportedLimits]; if (typeof v === "number") requiredLimits[k] = v; }
@@ -254,9 +256,9 @@ export const DEVICE: Record<string, HostFn> = {
   },
   vkBindBufferMemory: (_c, a) => { a.p(); const b = objects.get(nd(a), Buffer); b.memory = objects.get(nd(a), Memory); b.offset = Number(a.ul()); return R.SUCCESS; },
   vkBindBufferMemory2: (_c, a) => {
-    a.p(); const n = a.u(), infos = a.p();
-    for (let i = 0; i < n; i++) {
-      const info = BindInfo.read(infos + i * BindInfo.size()), b = objects.get(info.object, Buffer);
+    a.p(); const n = a.u();
+    for (const info of BindInfo.list(a.p(), n)) {
+      const b = objects.get(info.object, Buffer);
       b.memory = objects.get(info.memory, Memory); b.offset = info.memoryOffset;
     }
     return R.SUCCESS;
@@ -267,7 +269,7 @@ export const DEVICE: Record<string, HostFn> = {
     stU64(out, objects.add(new BufferView(b, info.offset, info.range === WHOLE ? (b.size - info.offset) & ~3 : info.range)));
     return R.SUCCESS;
   },
-  vkDestroyBufferView: (_c, a) => { a.p(); objects.delete(nd(a)); },
+  vkDestroyBufferView: destroy,
 
   vkCreateImage: (_c, a) => {
     const dev = objects.get(a.p(), Device), info = ImageInfo.read(a.p()); a.p(); const out = a.p();
@@ -301,9 +303,9 @@ export const DEVICE: Record<string, HostFn> = {
   vkGetImageSparseMemoryRequirements2: (_c, a) => { a.p(); a.p(); mem.st32(a.p(), 0); },
   vkBindImageMemory: (_c, a) => { const dev = objects.get(a.p(), Device), img = objects.get(nd(a), Image), m = objects.get(nd(a), Memory); a.ul(); return bind(dev, img, m); },
   vkBindImageMemory2: (_c, a) => {
-    const dev = objects.get(a.p(), Device), n = a.u(), infos = a.p();
-    for (let i = 0; i < n; i++) {
-      const info = BindInfo.read(infos + i * BindInfo.size()), r = bind(dev, objects.get(info.object, Image), objects.get(info.memory, Memory));
+    const dev = objects.get(a.p(), Device), n = a.u();
+    for (const info of BindInfo.list(a.p(), n)) {
+      const r = bind(dev, objects.get(info.object, Image), objects.get(info.memory, Memory));
       if (r) return r;
     }
     return R.SUCCESS;
@@ -327,7 +329,7 @@ export const DEVICE: Record<string, HostFn> = {
     stU64(out, objects.add(new View(img, desc)));
     return R.SUCCESS;
   },
-  vkDestroyImageView: (_c, a) => { a.p(); objects.delete(nd(a)); },
+  vkDestroyImageView: destroy,
 
   vkCreateSampler: (_c, a) => {
     const dev = objects.get(a.p(), Device), s = SamplerInfo.read(a.p()); a.p(); const out = a.p();
@@ -345,10 +347,10 @@ export const DEVICE: Record<string, HostFn> = {
     stU64(out, objects.add(dev.gpu.createSampler(desc)));
     return R.SUCCESS;
   },
-  vkDestroySampler: (_c, a) => { a.p(); objects.delete(nd(a)); },
+  vkDestroySampler: destroy,
   // the only formats that take a conversion are the external ones, whose pixels need none (RGB_IDENTITY)
-  vkCreateSamplerYcbcrConversion: (_c, a) => { a.p(); a.p(); a.p(); stU64(a.p(), objects.add({})); return R.SUCCESS; },
-  vkDestroySamplerYcbcrConversion: (_c, a) => { a.p(); objects.delete(nd(a)); },
+  vkCreateSamplerYcbcrConversion: creates(() => ({})),
+  vkDestroySamplerYcbcrConversion: destroy,
 
   vkGetAndroidHardwareBufferPropertiesANDROID: (_c, a) => {
     a.p(); const b = bufferAt(a.p()), out = a.p();

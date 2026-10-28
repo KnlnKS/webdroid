@@ -3,7 +3,7 @@
 // tessellation stages, sparse resources, input attachments or resource arrays a shader indexes.
 
 import { mem } from "../mem.ts";
-import { PTR, ldp, stp, type HostFn } from "../host.ts";
+import { PTR, ldp, stp, type HostFn, type ArgReader } from "../host.ts";
 import { struct, ptrs } from "../struct.ts";
 import { R, S, AHB_HANDLE, SYNC_FD, UNIFORM_RANGE, objects, dispatchable, chain, enumerate } from "./vk.ts";
 import { formatFeatures, multisamples, textureFormat } from "./formats.ts";
@@ -242,25 +242,28 @@ function externalProperties(at: number, handleType: number, supported: number, f
   (supported === AHB_HANDLE ? ExternalMemoryProperties : ExternalProperties).write(at, handleType === supported ? { exportFrom: supported, compatible: supported, features } : { exportFrom: 0, compatible: 0, features: 0 });
 }
 
+/** vkEnumerate*ExtensionProperties(pLayerName, pPropertyCount, pProperties) of `list` */
+function extensionProperties(list: [string, number][], a: ArgReader): number {
+  const layer = a.p(), count = a.p(), props = a.p();
+  if (layer) return R.LAYER_NOT_PRESENT;
+  return enumerate(list, count, props, Extension.size(), (at, [name, version]) => Extension.write(at, { extensionName: name, specVersion: version }));
+}
+/** whether `list` has each of the `n` extension names at `names` */
+export function hasExtensions(list: [string, number][], names: number, n: number): boolean {
+  const known = new Set(list.map(([name]) => name));
+  return ptrs(names, n).every((p) => known.has(mem.cstr(p)));
+}
+
 export const INSTANCE: Record<string, HostFn> = {
   vkEnumerateInstanceVersion: (_c, a) => { mem.st32(a.p(), API_VERSION); return R.SUCCESS; },
-  vkEnumerateInstanceExtensionProperties: (_c, a) => {
-    const layer = a.p(), count = a.p(), props = a.p();
-    if (layer) return R.LAYER_NOT_PRESENT;
-    return enumerate(INSTANCE_EXTENSIONS, count, props, Extension.size(), (at, [name, version]) => Extension.write(at, { extensionName: name, specVersion: version }));
-  },
+  vkEnumerateInstanceExtensionProperties: (_c, a) => extensionProperties(INSTANCE_EXTENSIONS, a),
   vkEnumerateInstanceLayerProperties: (_c, a) => enumerate([], a.p(), a.p(), Layer.size(), () => {}),
   vkEnumerateDeviceLayerProperties: (_c, a) => { a.p(); return enumerate([], a.p(), a.p(), Layer.size(), () => {}); },
-  vkEnumerateDeviceExtensionProperties: (_c, a) => {
-    a.p(); const layer = a.p(), count = a.p(), props = a.p();
-    if (layer) return R.LAYER_NOT_PRESENT;
-    return enumerate(DEVICE_EXTENSIONS, count, props, Extension.size(), (at, [name, version]) => Extension.write(at, { extensionName: name, specVersion: version }));
-  },
+  vkEnumerateDeviceExtensionProperties: (_c, a) => { a.p(); return extensionProperties(DEVICE_EXTENSIONS, a); },
   // the instance is the realm's: one adapter, asked for once
   vkCreateInstance: (_c, a) => {
     const info = InstanceInfo.read(a.p()); a.p(); const out = a.p();
-    const known = new Set(INSTANCE_EXTENSIONS.map(([n]) => n));
-    if (ptrs(info.extensionNames, info.extensions).some((n) => !known.has(mem.cstr(n)))) return R.EXTENSION_NOT_PRESENT;
+    if (!hasExtensions(INSTANCE_EXTENSIONS, info.extensionNames, info.extensions)) return R.EXTENSION_NOT_PRESENT;
     if (info.layers) return R.LAYER_NOT_PRESENT;
     stp(out, dispatchable(new Instance()));
     return R.SUCCESS;
