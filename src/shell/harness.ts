@@ -5,7 +5,8 @@ import { vsyncScheduled } from "../android/vsync.ts";
 import { pendingTransitions } from "../android/server/atm.ts";
 import { newObj, vcall, scall } from "../jvm/natives/jentry.ts";
 import type { Mirror } from "./frame-port.ts";
-import { redraw, rotateDevice } from "./device.ts";
+import { rotateDevice } from "./device.ts";
+import { scheduleComposite } from "../android/surfaceflinger.ts";
 import { clearRoots } from "./hostfs.ts";
 import { clearPickedDocuments } from "../android/documents.ts";
 import { perf, perfReset } from "../perf.ts";
@@ -105,7 +106,8 @@ function harness(canvas: HTMLCanvasElement, ticks: () => number, { boot, back }:
     },
     looperDump: () => import("../android/mainloop.ts").then((m) => m.looperDump()),
     threads: wasmThreads,
-    redraw,
+    // present the screen again, for a harness sampling it
+    redraw: scheduleComposite,
     testFrame: async () => {
       await page.testFrame();
       for (const entry of processBroker().activities.shownEntries()) if (entry.host) await entry.host.control.testFrame();

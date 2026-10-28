@@ -183,7 +183,6 @@ export async function bootApk(install: Install, assetKey = "", processName: stri
 
 /** this process's activities turn the display as they launch, resume and ask for an orientation */
 export function useDisplayRotation(): void { displayHooks.requestOrientation = applyOrientationRequest; }
-const turnDisplay = async (landscape: boolean) => { if (turnTo(landscape)) await configurationChanged(); };
 /** The sensor's rotation, which every process records (ActivityStack.rotate). The activity here
  *  that sets the display's orientation resolves it, as DisplayRotation does: one that fixed or
  *  locked its orientation keeps it, and a stopped or translucent one leaves it to another. */
@@ -192,7 +191,7 @@ export function rotateDevice(landscape: boolean): Promise<void> {
   return onMain(async () => { if (applyOrientationRequest(orientationRequest())) await configurationChanged(); });
 }
 /** the page's display turns to the orientation of the Worker whose activity fills it */
-export const followDisplay = (landscape: boolean): Promise<void> => onMain(() => turnDisplay(landscape));
+export const followDisplay = (landscape: boolean): Promise<void> => onMain(async () => { if (turnTo(landscape)) await configurationChanged(); });
 // system_server's realm hosts no app to hear it
 function applyConfigChange(): void { if (appHost) postMain(configurationChanged); }
 function applyNightMode(night: boolean): void {
@@ -226,10 +225,8 @@ export async function testFrame(): Promise<void> {
   deliverVsync();
   await onMain(() => {});
   await onMain(() => {});
-  redraw();
+  scheduleComposite();
 }
-/** present the screen again, for a harness sampling it */
-export function redraw(): void { scheduleComposite(); }
 
 /** a touch event to the window under its first pointer, as InputDispatcher delivers it; charged to
  *  perf.inputMs, since the wall time a tap costs is otherwise in no counter at all */
