@@ -9,6 +9,7 @@ import { after } from "../jvm/natives/jentry.ts";
 import { NativePath, expand, pathAt } from "./path.ts";
 import { servedFont, platformFontBytes } from "./fonts.ts";
 import { colorGlyphClips, ownBuffer } from "./sfnt.ts";
+import { deviceBounds } from "./matrix.ts";
 
 type Ctx = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 let kit: CanvasKit | null = null;
@@ -101,6 +102,7 @@ rt.registerJnis("android/graphics/Path", {
   "nOp(JJIJ)Z": (a: bigint, b: bigint, op: number, dst: bigint) => after(pathOp(pathAt(dst), pathAt(a), pathAt(b), op), Number),
 });
 
+const glyphBox = new Float64Array(4);
 function inkBounds(font: Font, paint: Paint, glyphs: Uint16Array, positions: Float32Array, x: number, y: number,
   matrix: DOMMatrix, width: number, height: number): [number, number, number, number] | null {
   const bounds = font.getGlyphBounds(glyphs, paint);
@@ -108,14 +110,8 @@ function inkBounds(font: Font, paint: Paint, glyphs: Uint16Array, positions: Flo
   for (let i = 0; i < glyphs.length; i++) {
     const offset = i * 4, gx = x + positions[i * 2], gy = y + positions[i * 2 + 1];
     if (bounds[offset + 2]! > bounds[offset]! && bounds[offset + 3]! > bounds[offset + 1]!) {
-      const x0 = gx + bounds[offset]!, x1 = gx + bounds[offset + 2]!;
-      const y0 = gy + bounds[offset + 1]!, y1 = gy + bounds[offset + 3]!;
-      const ax0 = matrix.a * x0, ax1 = matrix.a * x1, cx0 = matrix.c * y0, cx1 = matrix.c * y1;
-      const bx0 = matrix.b * x0, bx1 = matrix.b * x1, dx0 = matrix.d * y0, dx1 = matrix.d * y1;
-      left = Math.min(left, Math.min(ax0, ax1) + Math.min(cx0, cx1) + matrix.e);
-      right = Math.max(right, Math.max(ax0, ax1) + Math.max(cx0, cx1) + matrix.e);
-      top = Math.min(top, Math.min(bx0, bx1) + Math.min(dx0, dx1) + matrix.f);
-      bottom = Math.max(bottom, Math.max(bx0, bx1) + Math.max(dx0, dx1) + matrix.f);
+      const [l, t, r, b] = deviceBounds(matrix, gx + bounds[offset]!, gy + bounds[offset + 1]!, gx + bounds[offset + 2]!, gy + bounds[offset + 3]!, glyphBox);
+      left = Math.min(left, l); top = Math.min(top, t); right = Math.max(right, r); bottom = Math.max(bottom, b);
     }
   }
   if (left === Infinity) return null;
