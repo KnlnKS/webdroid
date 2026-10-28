@@ -5,7 +5,7 @@
 
 import { mem, guestAt } from "./mem.ts";
 import type { HostFn } from "./host.ts";
-import { E, PAGE_SIZE } from "./abi.ts";
+import { E, PAGE_SIZE, pages } from "./abi.ts";
 import { invalidateRange } from "./cpu.ts";
 import { offArg } from "./kernel.ts";
 import { fdFile, contentAt, regionOf } from "./fs.ts";
@@ -16,7 +16,6 @@ import { hasWindow, inWindow, mapWindow, unmapWindow } from "./window.ts";
 
 export const PROT_READ = 1, PROT_WRITE = 2, PROT_EXEC = 4, MAP_SHARED = 1, MAP_PRIVATE = 2, MAP_FIXED = 0x10, MAP_ANONYMOUS = 0x20;
 const MREMAP_MAYMOVE = 1, MREMAP_FIXED = 2, MADV_DONTNEED = 4;
-const pages = (n: number) => Math.ceil(n / PAGE_SIZE) * PAGE_SIZE;
 /** mmap(2): the mapping's address, or -errno. Native code's (`native`) shared mappings of a pooled region
  *  are in the window; Java's direct memory is the core's own. A descriptor's mapping is refused beyond an
  *  ashmem region's protection, and a writable shared one of a file whose stores could not reach it. */

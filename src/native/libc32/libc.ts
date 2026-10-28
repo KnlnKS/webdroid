@@ -51,6 +51,8 @@ function ctypeBits(c: number): number {
   if ((c >= 48 && c <= 57) || (c >= 65 && c <= 70) || (c >= 97 && c <= 102)) b |= _X;
   return b;
 }
+/** an is*() of the class `mask` names */
+const ofClass = (mask: number): HostFn => (_c, a) => (ctypeBits(a.i() & 255) & mask) ? 1 : 0;
 const isspace = (c: number) => c === 32 || (c >= 9 && c <= 13);
 const isdigit = (c: number) => c >= 48 && c <= 57;
 
@@ -347,7 +349,6 @@ export function libcInit(): void {
     strtoll: (cpu, a) => strtoNum(cpu, a.p(), a.p(), a.i(), 64, false),
     strtoull: (cpu, a) => strtoNum(cpu, a.p(), a.p(), a.i(), 64, true),
     atoi: (cpu, a) => strtoNum(cpu, a.p(), 0, 10, 32, false),
-    atol: (cpu, a) => strtoNum(cpu, a.p(), 0, 10, 32, false),
     atoll: (cpu, a) => strtoNum(cpu, a.p(), 0, 10, 64, false),
     strtod: (c, a) => retD(c, strtodAt(a.p(), a.p())),
     strtof: (c, a) => retF(c, Math.fround(strtodAt(a.p(), a.p()))),
@@ -356,20 +357,19 @@ export function libcInit(): void {
     toupper: (_c, a) => { const c = a.i(); return c >= 97 && c <= 122 ? c - 32 : c; },
     isupper: (_c, a) => { const c = a.i(); return c >= 65 && c <= 90 ? 1 : 0; },
     islower: (_c, a) => { const c = a.i(); return c >= 97 && c <= 122 ? 1 : 0; },
-    isalpha: (_c, a) => (ctypeBits(a.i() & 255) & (_U | _L)) ? 1 : 0,
+    isalpha: ofClass(_U | _L),
     isdigit: (_c, a) => (isdigit(a.i()) ? 1 : 0),
-    isxdigit: (_c, a) => (ctypeBits(a.i() & 255) & _X) ? 1 : 0,
+    isxdigit: ofClass(_X),
     isspace: (_c, a) => (isspace(a.i()) ? 1 : 0),
-    isalnum: (_c, a) => (ctypeBits(a.i() & 255) & (_U | _L | _N)) ? 1 : 0,
-    ispunct: (_c, a) => (ctypeBits(a.i() & 255) & _P) ? 1 : 0,
+    isalnum: ofClass(_U | _L | _N),
+    ispunct: ofClass(_P),
     isprint: (_c, a) => { const c = a.i(); return c >= 32 && c < 127 ? 1 : 0; },
-    iscntrl: (_c, a) => (ctypeBits(a.i() & 255) & _C) ? 1 : 0,
+    iscntrl: ofClass(_C),
 
     // ── wide chars (wchar_t is 32-bit)
     wcslen: (_c, a) => wlen(a.p()),
     wmemchr: (_c, a) => { const p = a.p(), c = a.i(), n = a.u(); for (let i = 0; i < n; i++) if (mem.ld32(p + i * 4) === c) return ptr(p + i * 4); return 0; },
     wmemcmp: (_c, a) => { const x = a.p(), y = a.p(), n = a.u(); for (let i = 0; i < n; i++) { const d = mem.ld32(x + i * 4) - mem.ld32(y + i * 4); if (d) return d < 0 ? -1 : 1; } return 0; },
-    wmemcpy: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); mem.memmove(d, s, n * 4); return ARG0; },
     wmemmove: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); mem.memmove(d, s, n * 4); return ARG0; },
     wmemset: (_c, a) => { const d = a.p(), c = a.i(), n = a.u(); for (let i = 0; i < n; i++) mem.st32(d + i * 4, c); return ARG0; },
     wcscmp: (_c, a) => { let x = a.p(), y = a.p(); for (;; x += 4, y += 4) { const c = mem.ld32(x) >>> 0, d = mem.ld32(y) >>> 0; if (c !== d) return c < d ? -1 : 1; if (!c) return 0; } },
@@ -474,6 +474,7 @@ export function libcInit(): void {
   M.strtold = M.strtod; M.strtold_l = M.strtod; M.__strchr_chk = M.strchr; M.__strrchr_chk = M.strrchr;
   M._setjmp = M.sigsetjmp = M.setjmp; M._longjmp = M.siglongjmp = M.longjmp;
   M.rand = M.random = M.lrand48; M.srand = M.srandom = M.srand48; M.ntohs = M.htons; M.ntohl = M.htonl;
+  M.atol = M.atoi; M.wmemcpy = M.wmemmove;
   const libm = libmLibc();
   hostLib("libc.so", { ...asWrappers(KERNEL_SYSCALLS), ...M, ...stdioLibc(), ...PTHREAD_LIBC, ...libm, ...localeLibc(), ...SIGNAL_LIBC, ...procLibc(), ...netLibc(), ...FDSAN_LIBC32 });
   hostLib("libm.so", libm);

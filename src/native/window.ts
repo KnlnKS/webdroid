@@ -1,11 +1,10 @@
 // An ARM32 process's window (abi.WINDOW) onto the memory pool its processes share (shm.ts): the
 // pool, its views, the pool offset each window page shows, the mappings there, and the core's
 // imports that reach them. The core's page flags hold each window page's protection.
-import { MEM_SIZE, MEM_SIZE_A32, PAGE_SHIFT, PAGE_SIZE, WINDOW, WINDOW_SIZE } from "./abi.ts";
+import { MEM_SIZE, MEM_SIZE_A32, PAGE_SHIFT, PAGE_SIZE, WINDOW, WINDOW_SIZE, pages } from "./abi.ts";
 import { core } from "./core.ts";
 import { BadAddress } from "./faults.ts";
 
-const pages = (n: number) => Math.ceil(n / PAGE_SIZE) * PAGE_SIZE;
 /** first-fit runs of `limit` bytes: the free runs below `top` by offset, and everything from `top` on */
 export class Runs {
   private free: { off: number; n: number }[] = [];

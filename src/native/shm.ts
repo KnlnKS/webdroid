@@ -2,12 +2,11 @@
 // page, whose kernel owns every process's regions) is a run of it, and a MAP_SHARED mapping of one
 // is a run of the window (window.ts) of the process that maps it whose pages show the region's, so
 // every process's stores, and the atomics that order them, reach the same bytes.
-import { PAGE_SIZE, WINDOW_SIZE } from "./abi.ts";
+import { WINDOW_SIZE, pages } from "./abi.ts";
 import { Runs, attachPool, attachedPool, poolBytes } from "./window.ts";
 import type { VfsFile } from "../shell/vfs.ts";
 
 const WASM_PAGE = 0x10000;
-const pages = (n: number) => Math.ceil(n / PAGE_SIZE) * PAGE_SIZE;
 
 /** the pool this realm made and allocates regions from */
 let made: { memory: WebAssembly.Memory; runs: Runs } | null = null;

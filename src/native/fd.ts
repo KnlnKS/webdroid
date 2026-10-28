@@ -235,19 +235,12 @@ export async function readRest(fd: number): Promise<Uint8Array | null> {
   const bytes = new Uint8Array(Math.max(0, stat.size - position)), n = await readFd(fd, bytes, bytes.length, position);
   return n < 0 ? null : bytes.subarray(0, n);
 }
-export function seekFd(fd: number, off: number, whence: number): PromiseOrVal<number> {
-  const f = fds.get(fd);
-  return f ? f.ops.seek(f, off, whence) : -E.BADF;
-}
-export function truncateFd(fd: number, length: number): PromiseOrVal<number> {
-  const f = fds.get(fd);
-  return f ? f.ops.truncate(f, length) : -E.BADF;
-}
+/** `op` on the file open on `fd`, or `none` when none is */
+const onFd = <T>(fd: number, none: T, op: (f: OpenFile) => T): T => { const f = fds.get(fd); return f ? op(f) : none; };
+export function seekFd(fd: number, off: number, whence: number): PromiseOrVal<number> { return onFd(fd, -E.BADF, (f) => f.ops.seek(f, off, whence)); }
+export function truncateFd(fd: number, length: number): PromiseOrVal<number> { return onFd(fd, -E.BADF, (f) => f.ops.truncate(f, length)); }
 /** fsync and fdatasync */
-export function syncFd(fd: number): PromiseOrVal<number> {
-  const f = fds.get(fd);
-  return f ? f.ops.sync(f) : -E.BADF;
-}
+export function syncFd(fd: number): PromiseOrVal<number> { return onFd(fd, -E.BADF, (f) => f.ops.sync(f)); }
 /** fallocate's mode 0: the file grown to cover the range */
 export function allocateFd(fd: number, off: number, length: number): PromiseOrVal<number> {
   const f = fds.get(fd);
@@ -259,29 +252,17 @@ export function ioctlIntFd(fd: number, request: number, arg = 0): PromiseOrVal<n
   const f = fds.get(fd);
   return !f ? -E.BADF : request === FIONREAD ? f.ops.available(f) : f.ops.ioctl(f, request, arg);
 }
-export function fdStat(fd: number): PromiseOrVal<FdStat | null> {
-  const f = fds.get(fd);
-  return f ? f.ops.stat(f) : null;
-}
+export function fdStat(fd: number): PromiseOrVal<FdStat | null> { return onFd(fd, null, (f) => f.ops.stat(f)); }
 /** the stat of an open file this realm holds */
 export function localFdStat(fd: number): FdStat | null {
   const f = fds.get(fd), stat = f && f.ops.stat(f);
   return !stat || stat instanceof Promise ? null : stat;
 }
-export function fdSource(fd: number): PromiseOrVal<FileSource | null> {
-  const f = fds.get(fd);
-  return f ? f.ops.source(f, fd) : null;
-}
+export function fdSource(fd: number): PromiseOrVal<FileSource | null> { return onFd(fd, null, (f) => f.ops.source(f, fd)); }
 /** fchmod, fchown and futimens: a change to the file open on `fd`, which its owner (by `uid`) makes */
-export function changeFdAttributes(fd: number, change: AttributeChange, uid?: number): PromiseOrVal<number> {
-  const f = fds.get(fd);
-  return f ? f.ops.change(f, change, uid) : -E.BADF;
-}
+export function changeFdAttributes(fd: number, change: AttributeChange, uid?: number): PromiseOrVal<number> { return onFd(fd, -E.BADF, (f) => f.ops.change(f, change, uid)); }
 /** what the open file `fd` names becomes crossing to another realm, if it is a socket end that can */
-export function crossingOf(fd: number): CrossingSocket | null {
-  const f = fds.get(fd);
-  return f?.ops.cross?.(f) ?? null;
-}
+export function crossingOf(fd: number): CrossingSocket | null { return onFd(fd, null, (f) => f.ops.cross?.(f) ?? null); }
 export const isSocketFd = (fd: number): boolean => ((fds.get(fd)?.ops.mode ?? 0) & S_IFMT) === S_IFSOCK;
 /** poll(2)'s answer for one descriptor: which of `events` it is ready for, with POLLERR and POLLHUP */
 export function pollEvents(fd: number, events: number): number {

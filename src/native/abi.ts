@@ -3,12 +3,15 @@
 
 // The address map is the core's (src/native/core/abi.zig), which scripts/generated.ts generates core-abi.gen.ts from.
 export { PAGE_SHIFT, PAGE_SIZE, LOW, STACK_BASE, TRAMP_BASE, TRAMP_END, RET_SENTINEL, JIT_BUF, MEM_SIZE_INITIAL, MEM_SIZE_A32, MEM_SIZE_A64, WINDOW, WINDOW_SIZE, PAGE_GUARD, PAGE_MAPPED, PAGE_NOACCESS, PAGE_READONLY, STACK_SIZE, STACK_GUARD } from "./core-abi.gen.ts";
-import { MEM_SIZE_INITIAL, TRAMP_BASE } from "./core-abi.gen.ts";
+import { MEM_SIZE_INITIAL, PAGE_SIZE, TRAMP_BASE } from "./core-abi.gen.ts";
 /** the live size, set by mem.init */
 export let MEM_SIZE = MEM_SIZE_INITIAL;
 export function setMemSize(n: number): void { MEM_SIZE = n; }
 /** the main thread's, Android's 8 MiB RLIMIT_STACK; other threads get pthread's 1 MiB */
 export const MAIN_STACK_SIZE = 0x80_0000;
+
+/** `n` bytes rounded up to whole pages */
+export const pages = (n: number) => Math.ceil(n / PAGE_SIZE) * PAGE_SIZE;
 
 export const trampAddr = (slot: number) => TRAMP_BASE + slot * 8;
 export const trampSlot = (pc: number) => (pc - TRAMP_BASE) >> 3;
