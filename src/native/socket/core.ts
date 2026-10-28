@@ -157,6 +157,12 @@ export abstract class Socket {
   constructor(type: number, protocol: number) { this.type = type; this.protocol = protocol; }
   /** O_NONBLOCK, which is SOCK_NONBLOCK, on its open file */
   get nonblock(): boolean { return !!(this.file.statusFlags & SOCK_NONBLOCK); }
+  /** `attempt`'s answer, waited for (block) unless the socket or call does not block */
+  protected wait<T>(fd: number, attempt: () => T | null, dontWait = false): PromiseOrVal<T | number> {
+    const ready = attempt();
+    if (ready !== null) return ready;
+    return this.nonblock || dontWait ? -E.AGAIN : block(this, fd, attempt);
+  }
   /** each write stays whole: SOCK_DGRAM and SOCK_SEQPACKET */
   get messages(): boolean { return this.type !== SOCK_STREAM; }
   option(level: number, name: number, fallback = 0): number { return this.options.get(level << 16 | name) ?? fallback; }
@@ -221,14 +227,14 @@ export abstract class Socket {
   protected abstract setFamilyOption(level: number, name: number, value: number): number;
 }
 
-/** Wait until `attempt` answers (anything but null), the socket's `timeoutOption` (SO_RCVTIMEO or
- *  SO_SNDTIMEO) elapses (EAGAIN) or the descriptor waited on stops naming it (EBADF). */
-export async function block<T>(socket: Socket, named: () => boolean, attempt: () => T | null, timeoutOption: number): Promise<T | number> {
-  const ms = socket.option(SOL_SOCKET, timeoutOption), timeout = ms > 0 ? ms : -1, deadline = guestNow() + timeout;
+/** Wait until `attempt` answers (anything but null), the socket's SO_RCVTIMEO elapses (EAGAIN) or
+ *  descriptor `fd` stops naming it (EBADF). */
+export async function block<T>(socket: Socket, fd: number, attempt: () => T | null): Promise<T | number> {
+  const ms = socket.option(SOL_SOCKET, SO_RCVTIMEO), timeout = ms > 0 ? ms : -1, deadline = guestNow() + timeout;
   const subscribe = (wake: () => void) => socket.watch(wake);
   for (;;) {
     if (!await waitUntil(subscribe, msLeft(timeout, deadline))) return -E.AGAIN;
-    if (!named()) return -E.BADF;
+    if (openFd(fd) !== socket.file) return -E.BADF;
     const result = attempt();
     if (result !== null) return result;
   }
@@ -270,8 +276,6 @@ export function socketOf(fd: number): Socket | number {
   const f = openFd(fd);
   return isKind(f, SOCKET) ? f.state : f ? -E.NOTSOCK : -E.BADF;
 }
-/** while descriptor `fd` names `socket`: what a socket call waiting on it checks */
-export const naming = (fd: number, socket: Socket) => (): boolean => openFd(fd) === socket.file;
 /** a socket read's bytes alone, the open files it passed dropped: read(2), recv without msg_control */
 export function readSocket(fd: number, target: Uint8Array, flags = 0): PromiseOrVal<number> {
   const s = socketOf(fd);

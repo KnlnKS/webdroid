@@ -13,7 +13,7 @@ import {
   SOL_SOCKET, SOCK_STREAM, SOCK_DGRAM, SOCK_SEQPACKET, MSG_PEEK, MSG_DONTWAIT, SHUT_RD, SHUT_WR, SCM_RIGHTS, SCM_CREDENTIALS,
   unixAddress, scmRights, readUcred, type SocketAddress, type Cmsg, type Ucred,
 } from "./abi.ts";
-import { Socket, Loopback, block, received, installSocket, naming, SO_LINGER, SO_PASSCRED, SO_RCVTIMEO, type Received, type Accepted } from "./core.ts";
+import { Socket, Loopback, received, installSocket, SO_LINGER, SO_PASSCRED, type Received, type Accepted } from "./core.ts";
 import { bridge, type CrossingSocket } from "./bridge.ts";
 import { DAEMONS, type Daemon } from "./daemons.ts";
 
@@ -67,10 +67,7 @@ class UnixSocket extends Socket {
     if (!this.backlog) return -E.INVAL;
     // the peer is unnamed
     const attempt = (): Accepted | null => { const c = this.backlog!.shift(); return c ? { fd: installSocket(c, flags), peer: unixAddress("") } : null; };
-    const ready = attempt();
-    if (ready) return ready;
-    if (this.nonblock) return -E.AGAIN;
-    return block(this, naming(fd, this), attempt, SO_RCVTIMEO);
+    return this.wait(fd, attempt);
   }
   /** a daemon, or a socket listening in this process */
   connect(addr: SocketAddress | null): number {
@@ -174,10 +171,7 @@ class UnixSocket extends Socket {
       const n = rx.take(target, 0, target.length, !!(flags & MSG_PEEK), rights);
       return received(Math.min(n, target.length), n, name ? unixAddress(name) : null, rights, credentials);
     };
-    const now = attempt();
-    if (now) return now;
-    if (this.nonblock || flags & MSG_DONTWAIT) return -E.AGAIN;
-    return block(this, naming(fd, this), attempt, SO_RCVTIMEO);
+    return this.wait(fd, attempt, !!(flags & MSG_DONTWAIT));
   }
   /** SHUT_WR ends what its peer reads, SHUT_RD what it reads once drained, the peer's writes then
    *  meeting EPIPE */

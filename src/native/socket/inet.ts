@@ -11,8 +11,8 @@ import {
 } from "../net-address.ts";
 import { SOL_SOCKET, SOCK_STREAM, SOCK_DGRAM, MSG_PEEK, MSG_DONTWAIT, SHUT_RD, SHUT_WR, type SocketAddress, type Cmsg } from "./abi.ts";
 import {
-  Socket, Loopback, block, record, received, installSocket, socketOf, naming, type Stream, type Received, type Accepted,
-  SO_REUSEADDR, SO_BROADCAST, SO_RCVBUF, SO_SNDBUF, SO_LINGER, SO_RCVTIMEO,
+  Socket, Loopback, block, record, received, installSocket, socketOf, type Stream, type Received, type Accepted,
+  SO_REUSEADDR, SO_BROADCAST, SO_RCVBUF, SO_SNDBUF, SO_LINGER,
 } from "./core.ts";
 
 export const IPPROTO_IP = 0, IPPROTO_TCP = 6, IPPROTO_UDP = 17, IPPROTO_IPV6 = 41;
@@ -225,10 +225,7 @@ class TcpSocket extends InetSocket {
       record(`accept fd=${fd} -> ${child}`);
       return { fd: child, peer: accepted.address(accepted.peer!) };
     };
-    const ready = attempt();
-    if (ready) return ready;
-    if (this.nonblock) return -E.AGAIN;
-    return block(this, naming(fd, this), attempt, SO_RCVTIMEO);
+    return this.wait(fd, attempt);
   }
   protected shut(how: number): number {
     if (!this.connected) return this.backlog ? 0 : -E.NOTCONN;
@@ -255,7 +252,7 @@ class TcpSocket extends InetSocket {
     if (ready !== null) return ready;
     if (!this.connected && !this.connecting) return -(this.error || E.NOTCONN);
     if (this.nonblock || flags & MSG_DONTWAIT) return -E.AGAIN;
-    return block(this, naming(fd, this), attempt, SO_RCVTIMEO);
+    return block(this, fd, attempt);
   }
   poll(events: number): number {
     let ready = this.error ? POLLERR : 0;
@@ -411,10 +408,7 @@ class UdpSocket extends InetSocket {
       target.set(datagram.bytes.subarray(0, copied));
       return received(copied, datagram.bytes.length, this.address(datagram.source));
     };
-    const ready = attempt();
-    if (ready !== null) return ready;
-    if (this.nonblock || flags & MSG_DONTWAIT) return -E.AGAIN;
-    return block(this, naming(fd, this), attempt, SO_RCVTIMEO);
+    return this.wait(fd, attempt, !!(flags & MSG_DONTWAIT));
   }
   poll(events: number): number {
     let ready = (this.error ? POLLERR : 0) | events & POLLOUT;
