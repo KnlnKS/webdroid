@@ -5,7 +5,7 @@ import net from "node:net";
 import tls from "node:tls";
 import type { RawData, WebSocket } from "ws";
 import { parseIpv4 } from "./src/native/net-address.ts";
-import { closeReason, MAX_PENDING_TCP_BYTES, TCP_CONNECT_FAILED, TCP_HANDSHAKE_FAILED, TCP_TOO_SLOW, tcpReady, type TcpTarget } from "./src/shell/tcpwire.ts";
+import { closeReason, MAX_PENDING_TCP_BYTES, TCP_CONNECT_FAILED, TCP_HANDSHAKE_FAILED, TCP_TOO_SLOW, tcpReady, udpFrame, type TcpTarget } from "./src/shell/tcpwire.ts";
 
 // Raw TCP over a WebSocket (tcpwire.ts). A page cannot open a socket, but every Java networking stack
 // ultimately wants one, so the dev server lends it ours. Java sockets can ask the relay to terminate
@@ -55,11 +55,7 @@ export function relayUdp(ws: WebSocket): void {
   // the name, which the guest never saw), framed as a request is
   socket.on("message", (bytes, { port, address }) => {
     if (!parseIpv4(address)) return;
-    const name = new TextEncoder().encode(names.get(address) ?? address);
-    const frame = new Uint8Array(3 + name.length + bytes.length);
-    frame[0] = name.length; frame[1] = port >> 8; frame[2] = port & 255;
-    frame.set(name, 3); frame.set(bytes, 3 + name.length);
-    ws.send(frame);
+    ws.send(udpFrame(new TextEncoder().encode(names.get(address) ?? address), port, bytes));
   });
   let bound = false;
   // once bound, a failed send is a lost datagram

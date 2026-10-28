@@ -1,6 +1,6 @@
 import { unshared } from "../jvm/abi.ts";
 import { dialName, pageOrigin, parseIpv4, syntheticAddress, type Ipv4 } from "../native/net-address.ts";
-import { parseTcpReady, type RelayEndpoint } from "./tcpwire.ts";
+import { parseTcpReady, udpFrame, type RelayEndpoint } from "./tcpwire.ts";
 
 const EMPTY_CHUNK = new Uint8Array(0);
 
@@ -41,10 +41,7 @@ export class DatagramRelay {
     const transport = await (this.transport ??= this.open());
     const name = new TextEncoder().encode(dialName(host));
     if (name.length > 253 || bytes.length > 65507) throw new Error("UDP datagram is too large");
-    const frame = new Uint8Array(3 + name.length + bytes.length);
-    frame[0] = name.length; frame[1] = port >> 8; frame[2] = port & 255;
-    frame.set(name, 3); frame.set(bytes, 3 + name.length);
-    transport.send(frame);
+    transport.send(udpFrame(name, port, bytes));
   }
   /** A guest's own resolver is answered over DNS-over-HTTPS, which needs no UDP relay (the deployed
    *  Worker has none). A failed query is a lost datagram: the resolver's retry and timeout apply. */

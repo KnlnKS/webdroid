@@ -34,3 +34,11 @@ export const TCP_CONNECT_FAILED = 4000, TCP_HANDSHAKE_FAILED = 4001, TCP_TOO_SLO
 export const MAX_PENDING_TCP_BYTES = 8 * 1024 * 1024;
 /** a WebSocket close reason, which holds 123 bytes: the message's printable ASCII */
 export const closeReason = (message: string) => message.replace(/[^ -~]/g, "?").slice(0, 123);
+
+/** a /udp relay frame, each way: the name's length, the port, the name the peer is dialed by, then the datagram */
+export function udpFrame(name: Uint8Array, port: number, bytes: Uint8Array): Uint8Array<ArrayBuffer> {
+  const frame = new Uint8Array(3 + name.length + bytes.length);
+  frame[0] = name.length; frame[1] = port >> 8; frame[2] = port & 255;
+  frame.set(name, 3); frame.set(bytes, 3 + name.length);
+  return frame;
+}
