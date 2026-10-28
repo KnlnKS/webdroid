@@ -15,17 +15,15 @@ const c32 = wasm.c32;
 const c64 = wasm.c64;
 const mo = wasm.mo;
 const sv = wasm.simd;
-const vm = wasm.vm;
 const L_CPU = jit.L_CPU;
 const L_A = jit.L_A;
 const L_B = jit.L_B;
 const OFF_FPSR = @offsetOf(cpu.Cpu, "fpsr");
 const vreg = @import("jitreg.zig");
-const voff = vreg.voff;
-const zeroTop = vreg.zeroTop;
+const scalar = @import("jitscalar.zig");
 const vget = vreg.vget;
 const vput = vreg.vput;
-const maskLowHalf = vreg.maskLowHalf;
+const keepLow = vreg.keepLow;
 
 fn setQIf(e: *Emit) void {
     const b = e.b;
@@ -49,7 +47,7 @@ fn saturatedBinop(e: *Emit, rn: u8, rm: u8, size: u32, q: bool, op: u8, wrapping
     vget(e, rn);
     vget(e, rm);
     e.b.emit(.{ sv(wrapping), sv(S.ne[size]) });
-    if (!q) maskLowHalf(e);
+    if (!q) keepLow(e, 8);
     e.b.emit(.{sv(S.any_true)});
     setQIf(e);
 }
@@ -72,10 +70,9 @@ fn saturatedBinop32(e: *Emit, rd: u8, rn: u8, rm: u8, q: bool, unsigned: bool, s
     }
     b.set(jit.L_VB);
     b.get(jit.L_VB);
-    if (!q) maskLowHalf(e);
+    if (!q) keepLow(e, 8);
     b.emit(.{sv(S.any_true)});
     setQIf(e);
-    b.get(L_CPU);
     if (unsigned) vectorConst(e, 2, if (subtract) 0 else 0xffff_ffff) else {
         vget(e, rn);
         b.emit(.{ c32(31), sv(S.shr_s[2]) });
@@ -103,10 +100,8 @@ fn emitSaturatedNarrow(e: *Emit, rn: u8, size: u32, kind: NarrowKind) void {
     e.b.emit(.{sv(if (kind == .signed) S.narrow_s[size] else S.narrow_u[size])});
 }
 fn writeNarrow(e: *Emit, rd: u8, q: bool) void {
-    const b = e.b;
-    b.get(L_CPU);
-    b.get(jit.L_VA);
-    if (q) b.emit(.{ vm(S.store64_lane, voff(rd) + 8), 0 }) else vput(e, rd, false);
+    e.b.get(jit.L_VA);
+    if (q) vreg.vputHigh(e, rd) else vput(e, rd, false);
 }
 fn putNarrow(e: *Emit, rd: u8, rn: u8, size: u32, q: bool, kind: NarrowKind) void {
     emitSaturatedNarrow(e, rn, size, kind);
@@ -151,7 +146,6 @@ fn putShiftNarrow(e: *Emit, rd: u8, rn: u8, size: u32, amount: u32, round: bool,
     writeNarrow(e, rd, q);
 }
 fn shuffle(e: *Emit, rn: u8, rm: u8, lanes: *const [16]u8) void {
-    e.b.get(L_CPU);
     vget(e, rn);
     vget(e, rm);
     e.b.emit(.{sv(S.shuffle)});
@@ -165,20 +159,23 @@ fn lane(tab: [4]u8, esz: u32) ?u8 {
 }
 fn emitVariableShift16(e: *Emit, rd: u8, rn: u8, rm: u8, q: bool, unsigned: bool, round: bool) void {
     const b = e.b;
+    vget(e, rd);
+    b.set(jit.L_VB);
     for (0..(if (q) @as(usize, 8) else 4)) |i| {
         vget(e, rm);
         b.emit(.{ sv(S.extract_s[0]), @as(u8, @intCast(i * 2)), set(L_A) });
         vget(e, rn);
         b.emit(.{ sv(if (unsigned) S.extract_u[1] else S.extract_s[1]), @as(u8, @intCast(i)), set(L_B) });
-        b.emit(.{ get(L_CPU), get(L_CPU), vm(S.load, voff(rd)), get(L_B), get(L_A), O.i32_shl, get(L_B) });
+        b.emit(.{ get(jit.L_VB), get(L_B), get(L_A), O.i32_shl, get(L_B) });
         if (round) b.emit(.{ c32(1), c32(0), get(L_A), O.i32_sub, c32(1), O.i32_sub, O.i32_shl, O.i32_add });
         b.emit(.{ c32(0), get(L_A), O.i32_sub, if (unsigned) O.i32_shr_u else O.i32_shr_s,
             get(L_A), c32(0), O.i32_ge_s, O.select,
             c32(0), get(L_A), c32(-16), if (round) O.i32_ge_s else O.i32_gt_s,
             get(L_A), c32(16), O.i32_lt_s, O.i32_and, O.select,
-            sv(S.replace[1]), @as(u8, @intCast(i)), vm(S.store, voff(rd)) });
+            sv(S.replace[1]), @as(u8, @intCast(i)), set(jit.L_VB) });
     }
-    if (!q) zeroTop(e, rd, true);
+    b.get(jit.L_VB);
+    vput(e, rd, q);
 }
 fn emitSqrshl32(e: *Emit, rd: u8, rn: u8, rm: u8, q: bool) void {
     const b = e.b;
@@ -208,7 +205,7 @@ fn emitSqrshl32(e: *Emit, rd: u8, rn: u8, rm: u8, q: bool) void {
             O.i64_add, c32(0), get(L_A), O.i32_sub, O.i64_extend_i32_u, O.i64_shr_s, O.i32_wrap_i64, O.end, O.end,
             sv(S.replace[2]), @as(u8, @intCast(i)), set(jit.L_VB) });
     }
-    b.emit(.{ get(L_CPU), get(jit.L_VB) });
+    b.get(jit.L_VB);
     vput(e, rd, q);
 }
 fn halvingOperand(e: *Emit, rm: u8, subtract: bool) void {
@@ -217,7 +214,6 @@ fn halvingOperand(e: *Emit, rm: u8, subtract: bool) void {
 }
 fn emitHalving(e: *Emit, rd: u8, rn: u8, rm: u8, size: u32, q: bool, unsigned: bool, round: bool, subtract: bool) void {
     const b = e.b;
-    b.get(L_CPU);
     if (unsigned and round and !subtract and size < 2) {
         vget(e, rn);
         vget(e, rm);
@@ -258,7 +254,6 @@ fn emitFma32Half(e: *Emit, rd: u8, rn: u8, rm: u8, high: bool, subtract: bool, e
 }
 fn emitFma32(e: *Emit, rd: u8, rn: u8, rm: u8, q: bool, subtract: bool, element: ?u8) void {
     const b = e.b;
-    b.get(L_CPU);
     emitFma32Half(e, rd, rn, rm, false, subtract, element);
     if (q) {
         emitFma32Half(e, rd, rn, rm, true, subtract, element);
@@ -306,7 +301,6 @@ inline fn emitThreeSame(e: *Emit, w: u32) bool {
                 odd[i * es + j] = @intCast(source + (pair + 1) * es + j);
             }
         }
-        b.get(L_CPU);
         vget(e, rn);
         vget(e, rm);
         b.emit(.{sv(S.shuffle)});
@@ -325,7 +319,6 @@ inline fn emitThreeSame(e: *Emit, w: u32) bool {
         return true;
     }
     if (opcode == 14 and size < 3) {
-        b.get(L_CPU);
         vget(e, rn);
         vget(e, rm);
         b.emit(.{sv(S.sub[size])});
@@ -359,7 +352,6 @@ inline fn emitThreeSame(e: *Emit, w: u32) bool {
             30 => if (!U) (if (fv) S.fmin[f] else S.fmax[f]) else return false,
             else => return false,
         };
-        b.get(L_CPU);
         vget(e, rn);
         vget(e, rm);
         b.emit(.{sv(op)});
@@ -381,7 +373,6 @@ inline fn emitThreeSame(e: *Emit, w: u32) bool {
         else => null,
     };
     const o = op orelse return false;
-    b.get(L_CPU);
     if (opcode == 1 or opcode == 5) {
         saturatedBinop(e, rn, rm, size, q, o, if (opcode == 1) S.add[size] else S.sub[size]);
         vget(e, rn);
@@ -418,7 +409,6 @@ inline fn emitTwoRegister(e: *Emit, w: u32) bool {
     if ((opcode == 2 or opcode == 6) and size < 3) {
         const es: usize = @as(usize, 1) << @intCast(size);
         const pairs = (if (q) @as(usize, 16) else 8) / (2 * es);
-        b.get(L_CPU);
         if (opcode == 6) vget(e, rd);
         for (0..2) |odd| {
             var lanes: [16]u8 = [_]u8{16} ** 16;
@@ -437,7 +427,6 @@ inline fn emitTwoRegister(e: *Emit, w: u32) bool {
         return true;
     }
     if (opcode == 22 and !U and size == 1) {
-        b.get(L_CPU);
         vget(e, rn);
         b.emit(.{sv(S.f32x4_demote_f64x2_zero)});
         if (q) {
@@ -453,7 +442,6 @@ inline fn emitTwoRegister(e: *Emit, w: u32) bool {
     // FCMGT/FCMGE, FCMEQ/FCMLE and FCMLT against zero
     if (opcode >= 12 and opcode <= 14 and fv and !(opcode == 14 and U) and (q or !dp)) {
         const zero_first = opcode == 14 or (opcode == 13 and U);
-        b.get(L_CPU);
         if (zero_first) vectorConst(e, 0, 0);
         vget(e, rn);
         if (!zero_first) vectorConst(e, 0, 0);
@@ -464,7 +452,6 @@ inline fn emitTwoRegister(e: *Emit, w: u32) bool {
     // SCVTF/UCVTF on 64-bit lanes, which wasm only converts a lane at a time
     if (opcode == 29 and !fv and dp and q) {
         const cvt: u8 = if (U) O.f64_convert_i64_u else O.f64_convert_i64_s;
-        b.get(L_CPU);
         vget(e, rn);
         b.emit(.{ sv(S.extract_s[3]), @as(u8, 0), cvt, sv(S.fsplat[1]) });
         vget(e, rn);
@@ -482,21 +469,18 @@ inline fn emitTwoRegister(e: *Emit, w: u32) bool {
             27 => if (!fv or dp) return false else if (U) S.i32x4_trunc_sat_f32x4_u else S.i32x4_trunc_sat_f32x4_s,
             else => return false,
         };
-        b.get(L_CPU);
         vget(e, rn);
         b.emit(.{sv(op)});
         vput(e, rd, q);
         return true;
     }
     if (opcode == 11 or (opcode == 5 and !U and size == 0)) {
-        b.get(L_CPU);
         vget(e, rn);
         b.emit(.{sv(if (opcode == 5) S.popcnt else if (U) S.neg[size] else S.neg[size] - 1)});
         vput(e, rd, q);
         return true;
     }
     if (opcode == 19 and U and size < 3) {
-        b.get(L_CPU);
         vget(e, rn);
         b.emit(.{ sv(S.extend_low_s[size] + @as(u8, if (q) 3 else 2)), c32(@intCast(@as(u32, 8) << @intCast(size))), sv(S.shl[size + 1]) });
         vput(e, rd, true);
@@ -545,7 +529,6 @@ inline fn emitShiftImmediate(e: *Emit, w: u32) bool {
     const amount = (immh << 3) | bits(w, 16, 3);
     const shr = 2 * bitsT - amount;
     if ((opcode == 16 or opcode == 17) and !U and esz < 2 and shr < 2 * bitsT) {
-        b.get(L_CPU);
         if (opcode == 16 and shr & 7 == 0) {
             const width: usize = @as(usize, 1) << @intCast(esz);
             var lanes: [16]u8 = [_]u8{16} ** 16;
@@ -556,7 +539,7 @@ inline fn emitShiftImmediate(e: *Emit, w: u32) bool {
             vectorConst(e, 0, 0);
             b.emit(.{sv(S.shuffle)});
             b.bytes(&lanes);
-            if (q) b.emit(.{ vm(S.store64_lane, voff(rd) + 8), 0 }) else vput(e, rd, false);
+            if (q) vreg.vputHigh(e, rd) else vput(e, rd, false);
             return true;
         }
         emitRoundedShift(e, rn, esz + 1, shr, opcode == 17, true);
@@ -564,7 +547,7 @@ inline fn emitShiftImmediate(e: *Emit, w: u32) bool {
         b.emit(.{sv(S.and_)});
         vectorConst(e, esz + 1, 0);
         b.emit(.{sv(S.narrow_u[esz])});
-        if (q) b.emit(.{ vm(S.store64_lane, voff(rd) + 8), 0 }) else vput(e, rd, false);
+        if (q) vreg.vputHigh(e, rd) else vput(e, rd, false);
         return true;
     }
     if (opcode >= 16 and opcode <= 19 and esz < 2) {
@@ -573,13 +556,11 @@ inline fn emitShiftImmediate(e: *Emit, w: u32) bool {
         return true;
     }
     if (opcode == 4 and shr < bitsT) {
-        b.get(L_CPU);
         emitRoundedShift(e, rn, esz, shr, true, U);
         vput(e, rd, q);
         return true;
     }
     if ((opcode == 2 or opcode == 6) and shr < bitsT) {
-        b.get(L_CPU);
         vget(e, rd);
         emitRoundedShift(e, rn, esz, shr, opcode == 6, U);
         b.emit(.{sv(S.add[esz])});
@@ -592,10 +573,9 @@ inline fn emitShiftImmediate(e: *Emit, w: u32) bool {
         vget(e, rn);
         vectorConst(e, esz, max);
         b.emit(.{ sv(S.gt_u[esz]), set(jit.L_VB), get(jit.L_VB) });
-        if (!q) maskLowHalf(e);
+        if (!q) keepLow(e, 8);
         b.emit(.{sv(S.any_true)});
         setQIf(e);
-        b.get(L_CPU);
         vget(e, rn);
         vectorConst(e, esz, max);
         b.emit(.{ sv(S.min_u[esz]), c32(@intCast(shift)), sv(S.shl[esz]), get(jit.L_VB), sv(S.or_) });
@@ -604,11 +584,10 @@ inline fn emitShiftImmediate(e: *Emit, w: u32) bool {
     }
     if (opcode == 20) {
         if (esz == 3) return false;
-        b.get(L_CPU);
         vget(e, rn);
         b.emit(.{sv(S.extend_low_s[esz] + @as(u8, if (q) 1 else 0) + @as(u8, if (U) 2 else 0))});
         if (amount != bitsT) b.emit(.{ c32(@intCast(amount - bitsT)), sv(S.shl[esz + 1]) });
-        b.emit(.{vm(S.store, voff(rd))});
+        vput(e, rd, true);
         return true;
     }
     // SRI and SLI: the shifted bits of Vn replace those of Vd
@@ -616,7 +595,6 @@ inline fn emitShiftImmediate(e: *Emit, w: u32) bool {
         const ones: u64 = if (esz == 3) ~@as(u64, 0) else (@as(u64, 1) << @intCast(bitsT)) - 1;
         const left = opcode == 10;
         const shift = if (left) amount - bitsT else shr;
-        b.get(L_CPU);
         vget(e, rn);
         b.emit(.{ c32(@intCast(shift)), sv(if (left) S.shl[esz] else S.shr_u[esz]) });
         vget(e, rd);
@@ -627,7 +605,6 @@ inline fn emitShiftImmediate(e: *Emit, w: u32) bool {
     }
     // FCVTZS/FCVTZU with fbits: scaling by 2^fbits is exact, so it truncates as the interpreter does
     if (opcode == 31 and esz == 2) {
-        b.get(L_CPU);
         vget(e, rn);
         vectorConst(e, 2, (127 + shr) << 23);
         b.emit(.{ sv(S.fmul[0]), sv(if (U) S.i32x4_trunc_sat_f32x4_u else S.i32x4_trunc_sat_f32x4_s) });
@@ -639,7 +616,6 @@ inline fn emitShiftImmediate(e: *Emit, w: u32) bool {
         10 => S.shl[esz],
         else => return false,
     };
-    b.get(L_CPU);
     vget(e, rn);
     b.emit(.{ c32(@intCast(if (opcode == 10) amount - bitsT else @min(shr, bitsT - 1))), sv(op) });
     vput(e, rd, q);
@@ -655,21 +631,17 @@ pub fn emitVector(e: *Emit, w: u32) bool {
     const q = bits(w, 30, 1) != 0;
     const U = bits(w, 29, 1) != 0;
     const size = bits(w, 22, 2);
-    if (w & 0x1000_0000 != 0) return false;
+    if (w & 0x1000_0000 != 0) return scalar.emitScalar(e, w);
     if (is(w, 0x9ff8_0400, 0x0f00_0400)) {
         const cmode = bits(w, 12, 4);
         const ex = simd.expandImm(bits(w, 29, 1), cmode, bits(w, 11, 1), (bits(w, 16, 3) << 5) | bits(w, 5, 5)) orelse return false;
         if (ex.kind == .fmov and U and !q) return false;
-        const v: i64 = @bitCast(ex.v);
-        for ([_]u32{ 0, 8 }) |off| {
-            b.get(L_CPU);
-            if (off == 8 and !q) b.i64c(0) else switch (ex.kind) {
-                .orr, .bic => b.emit(.{ get(L_CPU), mo(O.i64_load, voff(rd) + off), c64(if (ex.kind == .orr) v else ~v), if (ex.kind == .orr) O.i64_or else O.i64_and }),
-                .mvni => b.i64c(~v),
-                else => b.i64c(v),
-            }
-            b.memop(O.i64_store, voff(rd) + off);
-        }
+        const v = if (ex.kind == .mvni or ex.kind == .bic) ~ex.v else ex.v;
+        if (ex.kind == .orr or ex.kind == .bic) vget(e, rd);
+        b.emit(.{sv(S.const_)});
+        b.bytes(&@as([16]u8, @bitCast([2]u64{ v, v })));
+        if (ex.kind == .orr) b.emit(.{sv(S.or_)}) else if (ex.kind == .bic) b.emit(.{sv(S.and_)});
+        vput(e, rd, q);
         return true;
     }
     if (is(w, 0x9fe0_8400, 0x0e00_0400)) {
@@ -679,32 +651,30 @@ pub fn emitVector(e: *Emit, w: u32) bool {
         const esz: u32 = @ctz(imm5);
         const idx: u8 = @intCast(imm5 >> @intCast(esz + 1));
         if (U) {
-            b.get(L_CPU);
             vget(e, rd);
             vget(e, rn);
-            b.emit(.{ sv(S.extract_u[esz]), @as(u8, @intCast(imm4 >> @intCast(esz))), sv(S.replace[esz]), idx, vm(S.store, voff(rd)) });
+            b.emit(.{ sv(S.extract_u[esz]), @as(u8, @intCast(imm4 >> @intCast(esz))), sv(S.replace[esz]), idx });
+            vput(e, rd, true);
             return true;
         }
         switch (imm4) {
             0 => {
-                b.get(L_CPU);
                 vget(e, rn);
                 b.emit(.{ sv(S.extract_u[esz]), idx, sv(S.splat[esz]) });
                 vput(e, rd, q);
             },
             1 => {
-                b.get(L_CPU);
                 e.getX(rn);
                 if (esz < 3) b.byte(O.i32_wrap_i64);
                 b.emit(.{sv(S.splat[esz])});
                 vput(e, rd, q);
             },
             3 => {
-                b.get(L_CPU);
                 vget(e, rd);
                 e.getX(rn);
                 if (esz < 3) b.byte(O.i32_wrap_i64);
-                b.emit(.{ sv(S.replace[esz]), idx, vm(S.store, voff(rd)) });
+                b.emit(.{ sv(S.replace[esz]), idx });
+                vput(e, rd, true);
             },
             5, 7 => {
                 if (esz == 3 and !q) return false;
@@ -737,7 +707,6 @@ pub fn emitVector(e: *Emit, w: u32) bool {
         const len = bits(w, 13, 2) + 1;
         const tbx = bits(w, 12, 1) != 0;
         if (rn + len > 32) return false;
-        b.get(L_CPU);
         for (0..len) |i| {
             vget(e, rn + @as(u8, @intCast(i)));
             vget(e, rm);
@@ -772,7 +741,6 @@ pub fn emitVector(e: *Emit, w: u32) bool {
         return true;
     }
     if (is(w, 0x9f20_fc00, 0x0e20_1c00)) {
-        b.get(L_CPU);
         if (!U) {
             vget(e, rn);
             vget(e, rm);
@@ -799,16 +767,14 @@ pub fn emitVector(e: *Emit, w: u32) bool {
         return true;
     }
     if (is(w, 0xbfff_fc00, 0x2e20_5800)) {
-        b.get(L_CPU);
         vget(e, rn);
         b.emit(.{sv(S.not)});
         vput(e, rd, q);
         return true;
     }
     if (is(w, 0x8f3e_0c00, 0x0e30_0800) and bits(w, 12, 5) == 3 and size < 3) {
-        b.get(L_CPU);
         vget(e, rn);
-        if (!q) maskLowHalf(e);
+        if (!q) keepLow(e, 8);
         if (size == 0) b.emit(.{sv(S.extadd_pairwise[0][@intFromBool(U)])});
         if (size < 2) b.emit(.{sv(S.extadd_pairwise[1][@intFromBool(U)])});
         b.set(jit.L_VA);
@@ -818,8 +784,7 @@ pub fn emitVector(e: *Emit, w: u32) bool {
             if (i != 0) b.byte(if (size == 2) O.i64_add else O.i32_add);
         }
         if (size == 0) b.emit(.{ c32(0xffff), O.i32_and });
-        b.memop(if (size == 2) O.i64_store else O.i32_store, voff(rd));
-        zeroTop(e, rd, size == 2);
+        vreg.vputScalar(e, rd, size == 2, false);
         return true;
     }
     if (is(w, 0x8f3e_0c00, 0x0e30_0800) and size < 3) {
@@ -831,7 +796,6 @@ pub fn emitVector(e: *Emit, w: u32) bool {
             else => return false,
         };
         // fold the upper half of the remaining lanes onto the lower until lane 0 holds the result
-        b.get(L_CPU);
         vget(e, rn);
         var width: usize = if (q) 8 else 4;
         while (width >= @as(usize, 1) << @intCast(size)) : (width /= 2) {
@@ -842,8 +806,7 @@ pub fn emitVector(e: *Emit, w: u32) bool {
             b.emit(.{sv(op)});
         }
         b.emit(.{ sv(S.extract_u[size]), @as(u8, 0) });
-        b.memop(O.i32_store, voff(rd));
-        zeroTop(e, rd, false);
+        vreg.vputScalar(e, rd, false, false);
         return true;
     }
     if (is(w, 0x9f20_0c00, 0x0e20_0000) and size < 3) {
@@ -854,7 +817,6 @@ pub fn emitVector(e: *Emit, w: u32) bool {
             b.emit(.{ sv(extend), set(jit.L_VA) });
             vget(e, rm);
             b.emit(.{ sv(extend), set(jit.L_VB) });
-            b.get(L_CPU);
             if (opcode == 5) vget(e, rd);
             b.emit(.{ get(jit.L_VA), get(jit.L_VB), sv(if (U) S.max_u[size + 1] else S.max_s[size + 1]),
                 get(jit.L_VA), get(jit.L_VB), sv(if (U) S.min_u[size + 1] else S.min_s[size + 1]), sv(S.sub[size + 1]) });
@@ -868,7 +830,6 @@ pub fn emitVector(e: *Emit, w: u32) bool {
             b.emit(.{ sv(extend), set(jit.L_VA) });
             vget(e, rm);
             b.emit(.{ sv(extend), set(jit.L_VB) });
-            b.get(L_CPU);
             vectorConst(e, 1, 0);
             for (0..8) |i| {
                 b.get(jit.L_VA);
@@ -884,7 +845,6 @@ pub fn emitVector(e: *Emit, w: u32) bool {
         if (opcode > 3 and opcode != 8 and opcode != 10 and opcode != 12) return false;
         const extend = S.extend_low_s[size] + @as(u8, if (q) 1 else 0) + @as(u8, if (U) 2 else 0);
         const accumulate = opcode == 8 or opcode == 10;
-        b.get(L_CPU);
         if (accumulate) vget(e, rd);
         vget(e, rn);
         if (opcode < 8 and opcode != 1 and opcode != 3) b.emit(.{sv(extend)});
@@ -910,7 +870,6 @@ pub fn emitVector(e: *Emit, w: u32) bool {
             if (dp and bits(w, 21, 1) != 0) return false;
             const el = simd.element(w, if (dp) 3 else 2);
             const f: u32 = @intFromBool(dp);
-            b.get(L_CPU);
             vget(e, rn);
             vget(e, el.m);
             b.emit(.{ sv(S.fextract[f]), el.idx, sv(S.fsplat[f]), sv(S.fmul[f]) });
@@ -925,7 +884,6 @@ pub fn emitVector(e: *Emit, w: u32) bool {
         if (size != 1 and size != 2) return false;
         const el = simd.element(w, size);
         if ((opcode == 8 and !U) or ((opcode == 0 or opcode == 4) and U)) {
-            b.get(L_CPU);
             if (opcode != 8) vget(e, rd);
             vget(e, rn);
             vget(e, el.m);
@@ -935,7 +893,6 @@ pub fn emitVector(e: *Emit, w: u32) bool {
             return true;
         }
         if (opcode == 2 or opcode == 6 or opcode == 10) {
-            b.get(L_CPU);
             if (opcode != 10) vget(e, rd);
             vget(e, rn);
             vget(e, el.m);
@@ -967,7 +924,6 @@ fn fmulx(e: *Emit, rn: u8, rm: u8, dp: bool) void {
             @as(*align(1) u32, @ptrCast(&two[4 * i])).* = 0x4000_0000;
         }
     }
-    b.get(L_CPU);
     vget(e, rn);
     vget(e, rm);
     b.emit(.{ sv(S.xor), sv(S.const_) });

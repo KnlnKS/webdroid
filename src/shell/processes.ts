@@ -33,7 +33,7 @@ import { ProcessHosts, type ProcessHost } from "./process-host.ts";
 import type { StartPhase } from "./worker-control.ts";
 import { PrivateFiles } from "./privatefiles.ts";
 import { packedArchives } from "./packedarchive.ts";
-import { serveFile } from "./remote-file.ts";
+import { shareFile } from "./remote-file.ts";
 import { storageEntries } from "./device-storage.ts";
 import { bootstrapTransfers, type ProcessBootstrap } from "./process-bootstrap-data.ts";
 import { serveCalls, closePort } from "./rpc.ts";
@@ -207,7 +207,7 @@ export class ProcessBroker {
     });
     const certificates = await Promise.all(registry.map(record => record.certificates));
     const publish = (source: NonNullable<ReturnType<typeof vfs.source>>) => {
-      const served = serveFile(source); ports.push(served.close); return served.data;
+      const served = shareFile(source); ports.push(served.close); return served.data;
     };
     return registry.map(({ file, ...record }, i) => ({ ...record, certificates: certificates[i],
       source: record.source ?? publish(file!), splits: record.splits.map(publish) }));
@@ -223,7 +223,7 @@ export class ProcessBroker {
       ports.push(broker.close);
       const payload: ProcessBootstrap = { pid: entry.pid, pkg: owner.pkg, process: entry.process, uid: entry.uid,
         registry: snapshots, launcher: entry.launcher, broker: broker.port, ...entry.host!.surfaces(), storage: storageEntries(entry),
-        rotation: this.activities.rotation };
+        rotation: this.activities.rotation, fileChanges: vfs.changeCounts() };
       const data = structuredClone(payload, { transfer: bootstrapTransfers(payload) });
       entry.bootstrap.push(...ports);
       return data;

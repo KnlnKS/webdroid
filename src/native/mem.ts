@@ -1,5 +1,5 @@
 // Guest memory: the core's linear memory with typed views and the host-side accessors, and the
-// allocator, page, plane and region calls forwarded to the core (mem.zig). See abi.ts for the
+// allocator, page, plane and region calls forwarded to the core (mem.zig, plane.zig). See abi.ts for the
 // address map. The code-page flags let a store into executable pages invalidate the decoder.
 
 import { core, memory, shared, NativeFault, BadAddress, onMemoryGrown, pageFlags } from "./core.ts";
@@ -22,6 +22,7 @@ function resolve(a: number, n: number, write: boolean): number {
   held = u8;
   if (n === 0) return a >>> 0; // an empty access touches no page (JNI's NewString(NULL, 0), a zero-length write)
   if (((a >>> 0) - LOW) >>> 0 > SPAN - n) {
+    if (followGrowth()) return resolve(a, n, write);
     const mask = PAGE_MAPPED | PAGE_NOACCESS | (write ? PAGE_READONLY : 0), end = (a >>> 0) + n - 1;
     if (!inWindow(a) || end > 0xffffffff) badAddr(a);
     for (let pg = a >>> PAGE_SHIFT; pg <= end >>> PAGE_SHIFT; pg++) if ((codePages[pg] & mask) !== PAGE_MAPPED) badAddr(a);
@@ -65,6 +66,8 @@ export function wrote(a: number, n: number): void {
 function badAddr(a: number): never {
   throw new BadAddress(BigInt(a >>> 0), `[native] bad address 0x${(a >>> 0).toString(16)}`);
 }
+/** whether the memory grew past these views, which a lane's core instance (lanes.ts) does without saying so */
+export function followGrowth(): boolean { if (memory.buffer.byteLength === buf.byteLength) return false; views(); return true; }
 function views(): void {
   buf = memory.buffer;
   SPAN = buf.byteLength - LOW;
@@ -256,7 +259,7 @@ export const mem = {
     return p;
   },
   stats(): { used: number; blocks: number; peak: number; size: number; free: number; planes: number; chunks: number; moves: number } {
-    return { used: core.stat(0), blocks: core.stat(1), peak: core.stat(2), size: core.stat(3), free: core.stat(4), planes: core.stat(5), chunks: core.stat(6), moves: core.stat(7) };
+    return { used: core.stat(0), blocks: core.stat(1), peak: core.stat(2), size: core.stat(3), free: core.stat(4), planes: core.plane_stat(0), chunks: core.plane_stat(1), moves: core.plane_stat(2) };
   },
 };
 export const guestAt = (base: number | bigint, offset = 0): number => (typeof base === "bigint" ? mem.txVa(base + BigInt(offset)) : base + offset);

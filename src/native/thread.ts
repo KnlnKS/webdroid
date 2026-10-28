@@ -51,19 +51,19 @@ export function futex(cpu: Cpu, addr: number, op: number, val: number, ts: numbe
     const q = queueAt(addr);
     fstat(cpu, ms < 0 ? "wait" : "timedwait");
     return new Promise<number>((r) => {
-      const previous = cpu.signalInterrupt;
+      const previous = cpu.signalInterrupt, depth = cpu.depth;
       let active = true;
       const finish = (result: number) => {
         if (!active) return;
         active = false;
-        cpu.deferSignalsUntilResume();
+        cpu.deferSignalsUntilResume(depth);
         unparkTimeout(id);
         stop();
-        if (cpu.signalInterrupt === interrupt) cpu.signalInterrupt = previous;
+        if (cpu.signalInterrupt === waiting) cpu.signalInterrupt = previous;
         r(result);
       };
-      const interrupt = () => { fstat(cpu, "interrupted"); finish(-E.INTR); };
-      cpu.signalInterrupt = interrupt;
+      const waiting = { depth, interrupt: () => { fstat(cpu, "interrupted"); finish(-E.INTR); } };
+      cpu.signalInterrupt = waiting;
       const stop = q.add(() => { fstat(cpu, "woken"); finish(0); });
       const id = ms < 0 ? undefined : parkTimeout(() => { fstat(cpu, "timeout"); finish(-E.TIMEDOUT); }, ms);
     });

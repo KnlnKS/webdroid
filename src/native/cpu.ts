@@ -7,12 +7,13 @@ import { JThread, mainThread, releaseThread, resumeAs } from "../jvm/natives/jen
 import { java } from "../jvm/javahost.ts";
 import { rt } from "../jvm/runtime.ts";
 import type { Strand } from "../jvm/suspend.ts";
-import { mem } from "./mem.ts";
+import { mem, followGrowth } from "./mem.ts";
 import { NativeFault, BadAddress, core, jitDrain } from "./core.ts";
+import { takeLane, giveLane, laneBound, lanePiece, laneExitWaiting, type Lane } from "./lanes.ts";
 import { Args, Args64, type ArgReader, onBadAddress, kernelEntry, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, wordsd, slowMs, hostTrace } from "./host.ts";
 import { E, RET_SENTINEL, TRAMP_BASE, TRAMP_END, STACK_SIZE, MAIN_STACK_SIZE, MEM_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi.ts";
 import { perf } from "../perf.ts";
-import { answeringFor, promptPending, yieldToLoop } from "../jvm/yield.ts";
+import { answeringFor, idleTurn, promptPending, yieldToLoop } from "../jvm/yield.ts";
 import { procIdentity, processTid } from "../shell/procfs.ts";
 import { never, processExited } from "../process-exit.ts";
 import { SIGILL, SIGTRAP, SIGBUS, SIGSEGV, SA_SIGINFO, SA_ONSTACK, SA_RESETHAND, SA_NODEFER, SS_DISABLE, SS_AUTODISARM, BLOCKABLE, action, blocked, dispositions, sigbit, type Handler } from "./signals.ts";
@@ -146,9 +147,10 @@ export class Cpu {
     for (const [sig, info] of this.signals) if (pick(sig)) { this.signals.delete(sig); return { sig, info }; }
     return null;
   }
-  signalInterrupt: (() => void) | null = null;
+  /** the futex wait parked at `depth`, which a signal ends with EINTR while no handler runs above it */
+  signalInterrupt: { depth: number; interrupt: () => void } | null = null;
   private deferredSignalDepths = new Set<number>();
-  deferSignalsUntilResume(): void { if (this.depth) this.deferredSignalDepths.add(this.depth); }
+  deferSignalsUntilResume(depth = this.depth): void { if (depth) this.deferredSignalDepths.add(depth); }
   /** an app thread's mask on the reference device (/proc/<pid>/task/<tid>/status SigBlk 0x80001204):
    *  ART's Runtime::BlockSignals (SIGQUIT, SIGUSR1, SIGPIPE) and bionic's reserved signal 32 */
   signalMask = 0x80001204n;
@@ -261,9 +263,8 @@ export class Cpu {
     if (this.finished || !blocked(this.signalMask, sig) && action(sig, this.signalMask, false) === "ignore") return;
     if (!this.signals.has(sig)) this.signals.set(sig, info);
     this.sigQueued?.();
-    if (this.signalInterrupt && !blocked(this.signalMask, sig)) {
-      this.deferSignalsUntilResume();
-      this.signalInterrupt();
+    if (this.signalInterrupt?.depth === this.depth && !blocked(this.signalMask, sig)) {
+      this.signalInterrupt.interrupt();
       return;
     }
     this.pump();
@@ -274,7 +275,8 @@ export class Cpu {
   pump(): void {
     if (this.budgetWake && this.deliverable()) this.budgetWake();
     queueMicrotask(() => {
-      if (this.finished || this.deferredSignalDepths.size || (!this.parked && !this.baseAvailable)) return;
+      // a frame whose host call completed returns to the guest first; a handler above it is a frame of its own
+      if (this.finished || this.deferredSignalDepths.has(this.depth) || (!this.parked && !this.baseAvailable)) return;
       const taken = this.takeSignal();
       if (taken) void this.deliver(taken.sig, taken.info);
     });
@@ -326,9 +328,13 @@ export class Cpu {
     const alt = (h.flags & SA_ONSTACK) && this.alternateStack && !(this.alternateStack.flags & SS_DISABLE) && !this.alternateActive
       ? this.alternateStack.sp + this.alternateStack.size : undefined;
     const p = (async () => {
-      const frame = h.flags & SA_SIGINFO ? mem.malloc(frameSize(this)) : 0;
-      if (h.flags & SA_SIGINFO && !frame) throw new NativeFault("[native] out of memory for signal frame");
-      const context = frame ? writeFrame(this, frame, sig, info, mask) : 0;
+      // As the kernel's setup_rt_frame, siginfo and ucontext go on the handler's stack, where a collector
+      // scanning it finds the interrupted registers: Boehm's suspend handler pushes none of its own.
+      // a Java thread between native calls has no interrupted sp: its handler takes the thread's stack from the top
+      if (!this.depth) this.ensureStack();
+      const frame = ((alt ?? (this.depth ? this.spVa : BigInt(this.stackTop))) - BigInt(frameSize(this))) & ~15n;
+      const at = mem.txVa(frame), context = frame + BigInt(writeFrame(this, at, sig, info, mask) - at);
+      const ptr = (v: bigint) => this.a64 ? v : Number(v);
       const previousAlt = this.alternateStack, previousActive = this.alternateActive;
       if (alt !== undefined) {
         const autodisarm = !!(previousAlt && previousAlt.flags & SS_AUTODISARM);
@@ -343,14 +349,13 @@ export class Cpu {
         resume: (returned) => {
           restore();
           if (handler.exit) handler.exit();
-          else if (returned && context) loadContext(this, context);
+          else if (returned && h.flags & SA_SIGINFO) loadContext(this, mem.txVa(context));
         },
       };
       try {
-        await this.enter(h.fn, [sig, frame, context], { label: "signal " + sig, handler }, alt);
+        await this.enter(h.fn, [sig, ptr(frame), ptr(context)], { label: "signal " + sig, handler }, frame);
       } finally {
         if (alt !== undefined) { this.alternateStack = previousAlt; this.alternateActive = previousActive; }
-        if (frame) mem.free(frame);
       }
     })();
     if (base) this.baseBusy = p.catch(() => {}).finally(() => { this.baseBusy = null; });
@@ -568,19 +573,48 @@ export class Cpu {
     if (ex !== SliceExit.Exit) return this.drive(sync, caller, turn, ex);
     if (sync.on) resumeAs(caller); else turn.release();
   }
-  /** one budgeted slice, accounted */
-  private timedSlice(): SliceExit {
-    const t0 = performance.now(), ic0 = this.ic;
+  /** one budgeted slice on this Worker's core, accounted */
+  private timedSlice(servesLanes = false): SliceExit {
+    const t0 = performance.now(), ic0 = this.ic, x0 = this.exits;
     this.state = "slice";
-    try { return this.runSlice(sliceBudget()); }
+    try { return this.runSlice(sliceBudget(), servesLanes); }
     finally {
-      const dt = performance.now() - t0;
+      const dt = performance.now() - t0, instr = this.ic - ic0;
       this.lastSliceMs = dt;
-      perf.nativeMs += dt; perf.nativeSlices++; perf.nativeInstr += this.ic - ic0;
-      if (slowMs && dt > slowMs) console.warn(`[slow-native] ${this.name} slice ${dt.toFixed(0)}ms ${this.ic - ic0} instr from ${symbolizeHook(this.bpc)}`);
+      perf.nativeMs += dt; perf.nativeSlices++; perf.nativeInstr += instr;
+      if (slowMs && dt > slowMs) console.warn(`[slow-native] ${this.name} slice ${dt.toFixed(0)}ms ${instr} instr from ${symbolizeHook(this.bpc)}`);
+      this.pace(instr, this.exits - x0);
+    }
+  }
+  /** a slice on a lane, each exit handled here as runSlice handles its own */
+  private async laneSlice(lane: Lane, turn: LoopTurn): Promise<SliceExit> {
+    const t0 = performance.now(), ic0 = this.ic, x0 = this.exits, limit = this.ic + SLICE_INSTR;
+    try {
+      for (;;) {
+        this.state = "lane";
+        turn.release();
+        let ex: number;
+        try { ex = await lane.run(this.base, Math.max(0, limit - this.ic)); }
+        catch (e) { throw this.trap(e); }
+        finally { turn.own(); }
+        // the access runs again on this Worker's core, which may grow a plane where a lane may not
+        if (ex === CoreExit.Fault) ex = this.coreRun(1);
+        const r = this.afterExit(ex, limit);
+        if (r !== undefined) return r;
+      }
+    } finally {
+      giveLane(lane);
+      const dt = performance.now() - t0, instr = this.ic - ic0;
+      perf.laneMs += dt; perf.laneSlices++; perf.laneInstr += instr;
+      this.pace(instr, this.exits - x0);
     }
   }
   private lastSliceMs = 0;
+  /** the core's exits other than the budget's, counted as `ic` counts instructions */
+  private exits = 0;
+  /** whether the next slice goes to a lane */
+  private laneBound = false;
+  private pace(instr: number, exits: number): void { this.laneBound = A64 && !stepMode.on && !watchPcs.size && laneBound(instr, exits); }
   /** the run loop past its first slice (`first`, already run when given) */
   private async drive(sync: { on: boolean }, caller: Strand, turn: LoopTurn, first?: SliceExit): Promise<void> {
     const myDepth = this.depth;
@@ -593,7 +627,10 @@ export class Cpu {
           turn.own();
           if (processExited()) { turn.release(); await never(); }
           for (let taken; (taken = this.takeSignal());) await this.deliverFromLoop(turn, taken.sig, taken.info);
-          ex = this.timedSlice();
+          const lane = this.laneBound ? takeLane() : null;
+          ex = lane ? await this.laneSlice(lane, turn) : this.timedSlice(true);
+          // a lane's slice took none of this Worker's time, which the share below is of
+          if (lane && ex === SliceExit.Budget) continue;
         }
         const sliceMs = this.lastSliceMs;
         if (ex === SliceExit.Exit) return;
@@ -640,16 +677,18 @@ export class Cpu {
         turn.release();
         budgetStreak++;
         // All guest pthreads share one JS thread, where a device would run them on other cores:
-        // while input is being handled or frames are being presented, sustained background work
-        // (not the UI thread, not a frame producer) gets about a quarter of it. Back-to-back slices
+        // while input is being handled, sustained background work (not the UI thread, not a frame
+        // producer) gets about a quarter of it; while frames are being presented, at least that and
+        // whatever time the frames and other tasks leave. Back-to-back slices at normal priority
         // would otherwise hold off rendering until Chrome's 100 ms starvation limit.
-        const now = performance.now();
-        if ((answeringFor(now) > 0 || budgetStreak >= 3 && now - lastPresentAt < FRAME_ACTIVE_MS) && !this.foreground(now))
+        const now = performance.now(), answering = answeringFor(now) > 0;
+        if ((answering || budgetStreak >= 3 && now - lastPresentAt < FRAME_ACTIVE_MS) && !this.foreground(now))
           await new Promise<void>((resolve) => {
             let timer: ReturnType<typeof setTimeout>;
             const resume = () => { clearTimeout(timer); if (this.budgetWake === resume) this.budgetWake = null; resolve(); };
             this.budgetWake = resume;
             timer = setTimeout(resume, Math.min(250, sliceMs * 3));
+            if (!answering) void idleTurn?.().then(resume);
           });
         else await yieldToLoop();
       }
@@ -661,38 +700,50 @@ export class Cpu {
   private foreground(now: number): boolean {
     return this.jthread === mainThread || this.handling.size > 0 || now - this.lastFrameAt < FRAME_ACTIVE_MS || java.contended(this.jthread);
   }
-  /** run the core until the frame returns, a host call parks the thread, or the budget is spent */
-  runSlice(budget: number): SliceExit {
+  /** run the core until the frame returns, a host call parks the thread, or the budget is spent;
+   *  `servesLanes`, it ends early for a lane's exit (the first slice of a call stays synchronous) */
+  runSlice(budget: number, servesLanes = false): SliceExit {
     const limit = this.ic + budget;
     for (;;) {
       if (stepMode.on) { stepPrev.set(this.w); if (watchPcs.has(this.pc)) this.watchHit(); }
-      let ex: number;
-      try { ex = core.run_slice(this.base, stepMode.on ? 1 : Math.max(0, limit - this.ic)); }
-      catch (e) { core.slice_abort(); throw this.trap(e); }
+      const piece = servesLanes ? lanePiece() : Infinity;
+      const ex = this.coreRun(stepMode.on ? 1 : Math.max(0, Math.min(piece, limit - this.ic)));
       if (stepMode.on) this.step();
-      switch (ex) {
-        case CoreExit.Budget:
-          jitDrain();
-          if (profile.on) profile.samples.set(this.pc, (profile.samples.get(this.pc) ?? 0) + 1);
-          if (this.ic >= limit) return SliceExit.Budget;
-          continue;
-        case CoreExit.Host:
-          hostDispatch(this, this.exit);
-          if (this.pending || this.finished || this.raised) { jitDrain(); return this.pending ? SliceExit.Suspend : this.raised ? SliceExit.Signal : SliceExit.Exit; }
-          if (this.signals.size && this.deliverable()) { jitDrain(); return SliceExit.Budget; }
-          continue;
-        case CoreExit.Ret: jitDrain(); return SliceExit.Exit;
-        case CoreExit.Syscall:
-          this.syscall(this.exit);
-          if (this.pending) { jitDrain(); return SliceExit.Suspend; }
-          if (this.signals.size && this.deliverable()) { jitDrain(); return SliceExit.Budget; }
-          continue;
-        default: {
-          const code = this.exit, word = this.u32[OFF_WORD >> 2] >>> 0;
-          if ((this.raised = this.faultSignal(code))) { jitDrain(); return SliceExit.Signal; }
-          const what = code === Fault.BadAddress ? `bad address 0x${(this.u32[OFF_ADDR >> 2] >>> 0).toString(16)}` : code === Fault.UnsupportedSyscall ? `${FAULTS[code]} ${word}` : `${FAULTS[code] ?? "fault " + code} 0x${word.toString(16).padStart(8, "0")}`;
-          this.fault(what);
-        }
+      const r = this.afterExit(ex, limit);
+      if (r !== undefined) return r;
+      if (servesLanes && laneExitWaiting()) return SliceExit.Budget;
+    }
+  }
+  private coreRun(budget: number): number {
+    try { return core.run_slice(this.base, budget); }
+    catch (e) { core.slice_abort(); throw this.trap(e); }
+  }
+  /** how the slice goes on after the core's exit `ex`: undefined to run the core again */
+  private afterExit(ex: number, limit: number): SliceExit | undefined {
+    // a lane may have grown the memory, and the host reads what the exit names through these views
+    followGrowth();
+    if (ex !== CoreExit.Budget) this.exits++;
+    switch (ex) {
+      case CoreExit.Budget:
+        jitDrain();
+        if (profile.on) profile.samples.set(this.pc, (profile.samples.get(this.pc) ?? 0) + 1);
+        return this.ic >= limit ? SliceExit.Budget : undefined;
+      case CoreExit.Host:
+        hostDispatch(this, this.exit);
+        if (this.pending || this.finished || this.raised) { jitDrain(); return this.pending ? SliceExit.Suspend : this.raised ? SliceExit.Signal : SliceExit.Exit; }
+        if (this.signals.size && this.deliverable()) { jitDrain(); return SliceExit.Budget; }
+        return undefined;
+      case CoreExit.Ret: jitDrain(); return SliceExit.Exit;
+      case CoreExit.Syscall:
+        this.syscall(this.exit);
+        if (this.pending) { jitDrain(); return SliceExit.Suspend; }
+        if (this.signals.size && this.deliverable()) { jitDrain(); return SliceExit.Budget; }
+        return undefined;
+      default: {
+        const code = this.exit, word = this.u32[OFF_WORD >> 2] >>> 0;
+        if ((this.raised = this.faultSignal(code))) { jitDrain(); return SliceExit.Signal; }
+        const what = code === Fault.BadAddress ? `bad address 0x${(this.u32[OFF_ADDR >> 2] >>> 0).toString(16)}` : code === Fault.UnsupportedSyscall ? `${FAULTS[code]} ${word}` : `${FAULTS[code] ?? "fault " + code} 0x${word.toString(16).padStart(8, "0")}`;
+        this.fault(what);
       }
     }
   }

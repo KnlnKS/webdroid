@@ -65,6 +65,10 @@ export const yieldToLoop = (): Promise<void> => turn(waiters);
 /** A macrotask ahead of the threads that only yielded: a parked thread's wake (so its waker runs
  *  on to its next await first), the main looper's turn. */
 export const wakeSoon = (): Promise<void> => turn(woken);
+const host = (globalThis as { scheduler?: { postTask(f: () => void, o: { priority: "background" }): Promise<void> } }).scheduler;
+/** A turn once no other task is queued (the host's background priority): frames, input, timers and yielded threads go first.
+ *  Null in a host without task priorities. */
+export const idleTurn = host ? (): Promise<void> => host.postTask(() => {}, { priority: "background" }) : null;
 /** Timers that are a thread waiting with a deadline rather than scheduled work: a park, a timed
  *  monitor wait, a futex or semaphore timeout. An idle observer ignores them; everything else it
  *  must wait for. */

@@ -1,11 +1,12 @@
 // The open files another realm owns: a process Worker's descriptors on the page's mutable files,
-// whose position, flags and bytes live with their owner, so every operation is a request to it.
+// whose position, flags and bytes live with their owner, so every operation is a request to it; an
+// fstat it answered stands while its count of the file's changes holds (vfs.ts).
 import { E, O_CLOEXEC, S_IFMT, S_IFREG } from "./abi.ts";
 import { ANON, crossingOf, fdSource, installFile, isKind, newFile, openFd, closeFd, readRest, type FdStat, type FileOps } from "./fd.ts";
 import { localOpen, listAt } from "./fs.ts";
 import { openRemoteFifo } from "./pipe.ts";
 import type { FileSource } from "../shell/lazyfile.ts";
-import { pathOwner } from "../shell/file-path.ts";
+import { OwnerAnswers, ownerChange, pathOwner } from "../shell/file-path.ts";
 import { vfs } from "../shell/vfs.ts";
 import type { DescriptorCalls, DescriptorRights, MappingLease, TakenRight } from "../shell/file-descriptors.ts";
 import { settleRemoteMaps } from "./mappings.ts";
@@ -21,8 +22,18 @@ export const descriptorTransport: {
 export class RemoteDescriptor {
   token: number;
   calls: DescriptorCalls;
-  constructor(token: number, calls: DescriptorCalls) { this.token = token; this.calls = calls; }
-  stat(): Promise<FdStat | null> { return this.calls.stat(this.token).then(reply => typeof reply === "number" ? null : reply); }
+  /** the file's name as its owner last answered, whose fstat stands while the name is unchanged */
+  private name: string | null;
+  private readonly stats = new OwnerAnswers<FdStat | null>(1);
+  /** `opened`: the fstat the owner answered the open with, when `name` had changed `count` times */
+  constructor(token: number, calls: DescriptorCalls, name: string | null, opened?: { count: number | undefined; stat: FdStat }) {
+    this.token = token; this.calls = calls; this.name = opened?.stat.path ?? name;
+    if (name !== null && opened?.stat.path === name) this.stats.keep(name, opened.count, opened.stat);
+  }
+  stat(): FdStat | null | Promise<FdStat | null> {
+    const name = this.name, ask = () => this.calls.stat(this.token).then(reply => typeof reply === "number" ? null : (this.name = reply.path, reply));
+    return name === null ? ask() : this.stats.answer(name, ask, (stat) => stat?.path === name);
+  }
   /** a lease on [offset, offset + length) of the open file */
   async map(offset: number, length: number, prot: number): Promise<ProcessMapping | number> {
     const calls = this.calls, acquired = await calls.mappingAcquire(this.token, offset, length, prot);
@@ -76,10 +87,10 @@ const REMOTE: FileOps<Remote> = {
   status: ({state: {remote}}, command, arg) => remote.calls.fcntl(remote.token, command, arg),
   change: ({state: {remote}}, change) => remote.calls.changeAttributes(remote.token, change),
   /** a regular file as a source of its size now, read through its owner */
-  source(f) {
-    const remote = f.state.remote;
-    return remote.stat().then((stat): FileSource | null => stat && (stat.mode & S_IFMT) === S_IFREG ? { size: stat.size, read: (offset, length) =>
-      remoteRead(remote, length, offset).then(bytes => { if (typeof bytes === "number") throw new Error("Bad file descriptor"); return bytes; }) } : null);
+  async source(f) {
+    const remote = f.state.remote, stat = await remote.stat();
+    return stat && (stat.mode & S_IFMT) === S_IFREG ? { size: stat.size, read: (offset, length) =>
+      remoteRead(remote, length, offset).then(bytes => { if (typeof bytes === "number") throw new Error("Bad file descriptor"); return bytes; }) } : null;
   },
   entries(f) {
     if (!f.dir) return -E.NOTDIR;
@@ -96,8 +107,8 @@ const REMOTE: FileOps<Remote> = {
 export const remoteOf = (fd: number): RemoteDescriptor | undefined => { const f = openFd(fd); return isKind(f, REMOTE) ? f.state.remote : undefined; };
 export const isRemoteFd = (fd: number): boolean => !!remoteOf(fd);
 
-function installRemote(token: number, calls: DescriptorCalls, path: string, flags: number, dir = false, cloexec = !!(flags & O_CLOEXEC)): number {
-  return installFile(newFile(REMOTE, path, flags, { remote: new RemoteDescriptor(token, calls), entries: null }, undefined, dir), cloexec);
+function installRemote(remote: RemoteDescriptor, path: string, flags: number, dir = false, cloexec = !!(flags & O_CLOEXEC)): number {
+  return installFile(newFile(REMOTE, path, flags, { remote, entries: null }, undefined, dir), cloexec);
 }
 const owner = () => pathOwner()?.descriptors;
 /** `send` of what the page's kernel can hold of this realm's `fd`: a remote descriptor's token, or a socket end crossing to
@@ -114,7 +125,7 @@ function handOver(fd: number, send: (calls: DescriptorCalls, right: number | Cro
 }
 /** a right the page's kernel handed this realm, as a descriptor: a socket end connected across realms, or an open file its owner keeps */
 const installTaken = (calls: DescriptorCalls, right: number | TakenRight): number =>
-  typeof right === "number" ? right : "port" in right ? importSocket(right) : installRemote(right.token, calls, right.path, right.flags, right.dir, true);
+  typeof right === "number" ? right : "port" in right ? importSocket(right) : installRemote(new RemoteDescriptor(right.token, calls, right.path || null), right.path, right.flags, right.dir, true);
 /** this realm's descriptor rights, which the page's kernel holds: the page's own locally, a process's through requests */
 export const processRights: DescriptorRights = {
   stage(fd) {
@@ -143,8 +154,12 @@ export const processRights: DescriptorRights = {
 export function processOpenFd(path: string, flags: number): PromiseOrVal<number> {
   const normalized = vfs.norm(path), calls = pathOwner(normalized)?.descriptors;
   if (!calls) return localOpen(normalized,flags);
-  return calls.open(normalized, flags).then(reply =>
-    typeof reply === "number" ? reply : reply === "fifo" ? openRemoteFifo(normalized,flags) : installRemote(reply.token,calls,normalized,flags,reply.dir));
+  const count = ownerChange(normalized);
+  return calls.open(normalized, flags).then(reply => {
+    if (typeof reply === "number") return reply;
+    if (reply === "fifo") return openRemoteFifo(normalized,flags);
+    return installRemote(new RemoteDescriptor(reply.token,calls,normalized,reply.stat ? {count,stat:reply.stat} : undefined),normalized,flags,reply.dir);
+  });
 }
 
 /** `use` of `path` open for reading in the realm that owns it; null when it does not open */
@@ -165,5 +180,5 @@ export async function withProcessSource<T>(path: string, use: (source: FileSourc
 export type ProcessMapping = Omit<MappingLease, "lease"> & { size: number; read(offset: number, length: number): Promise<Uint8Array>; write(offset: number, bytes: Uint8Array): Promise<void>; close(): Promise<void> };
 export function processAshmemCreate(size: number): Promise<number> | null {
   const calls = owner();
-  return calls ? calls.ashmemCreate(size).then(token => token < 0 ? token : installRemote(token,calls,"",2,false,true)) : null;
+  return calls ? calls.ashmemCreate(size).then(token => token < 0 ? token : installRemote(new RemoteDescriptor(token,calls,null),"",2,false,true)) : null;
 }

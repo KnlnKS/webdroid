@@ -50,24 +50,31 @@ function centralDirFromTail(z: Uint8Array, fileSize: number): Map<string, ZEntry
   return centralDirRecords(z.subarray(start, start + d.size), d.entries);
 }
 export const centralDir = (z: Uint8Array): Map<string, ZEntry> => centralDirFromTail(z, z.length);
+/** the last bytes of `source`, which hold its end record and any comment */
+function tailOf(source: FileSource): Promise<Uint8Array> {
+  const n = Math.min(22 + 0xffff, source.size);
+  return readFully(source, source.size - n, n);
+}
+/** where `source`'s central directory begins */
+export const centralDirOffset = async (source: FileSource): Promise<number> => directoryFromTail(await tailOf(source), source.size).offset;
 export async function centralDirOfSource(source: FileSource): Promise<Map<string, ZEntry>> {
-  const tailSize = Math.min(22 + 0xffff, source.size);
-  const tail = await readFully(source, source.size - tailSize, tailSize);
-  const info = directoryFromTail(tail, source.size);
+  const tail = await tailOf(source), info = directoryFromTail(tail, source.size);
   if (info.offset >= source.size - tail.length) return centralDirFromTail(tail, source.size);
   return centralDirRecords(await readFully(source, info.offset, info.size), info.entries);
 }
+/** a local header's fixed part, before its name and extra field */
+const LOCAL_HEADER = 30;
 /** where an entry's data begins: the local header carries its own name/extra lengths, which
  *  may differ from the central ones */
 export function localStart(z: Uint8Array, e: ZEntry): number {
   const v = new DataView(z.buffer, z.byteOffset, z.byteLength);
-  return e.off + 30 + v.getUint16(e.off + 26, true) + v.getUint16(e.off + 28, true);
+  return e.off + LOCAL_HEADER + v.getUint16(e.off + 26, true) + v.getUint16(e.off + 28, true);
 }
 export async function localDataOffset(source: FileSource, e: ZEntry): Promise<number> {
-  const header = await readFully(source, e.off, 30);
+  const header = await readFully(source, e.off, LOCAL_HEADER);
   const view = new DataView(header.buffer, header.byteOffset, header.byteLength);
-  if (header.length !== 30 || view.getUint32(0, true) !== 0x04034b50) throw new Error("Invalid local header: " + e.name);
-  return e.off + 30 + view.getUint16(26, true) + view.getUint16(28, true);
+  if (header.length !== LOCAL_HEADER || view.getUint32(0, true) !== 0x04034b50) throw new Error("Invalid local header: " + e.name);
+  return e.off + LOCAL_HEADER + view.getUint16(26, true) + view.getUint16(28, true);
 }
 /** an entry's bytes, reading only that entry of the archive */
 export async function entryBytesOf(source: FileSource, e: ZEntry): Promise<Uint8Array> {
@@ -95,10 +102,13 @@ export function inflateEntry(raw: Uint8Array, e: ZEntry): Uint8Array {
  *  inflated on first read and then replaces its own accessor, so a second read is a plain
  *  property. `Object.keys` stays free; `Object.entries` inflates the whole tree, which is why
  *  nothing on the boot path uses it. `rename` returns null to drop an entry. */
-export function zipTree(z: Uint8Array, into: Record<string, Uint8Array> = {}, rename?: (n: string) => string | null): Record<string, Uint8Array> {
+export const zipTree = (z: Uint8Array, into: Record<string, Uint8Array> = {}, rename?: (n: string) => string | null): Record<string, Uint8Array> =>
+  treeOf(z, centralDir(z).values(), into, rename);
+/** `entries` of the archive bytes `z` added to `into`, each inflated when first read: `z` may be a range of the archive, the entries' offsets relative to it */
+function treeOf(z: Uint8Array, entries: Iterable<ZEntry>, into: Record<string, Uint8Array> = {}, rename?: (n: string) => string | null): Record<string, Uint8Array> {
   let pending = lazyEntries.get(into);
   if (!pending) lazyEntries.set(into, pending = new Map());
-  for (const e of centralDir(z).values()) {
+  for (const e of entries) {
     if (e.name.endsWith("/")) continue;
     const name = rename ? rename(e.name) : e.name;
     if (name === null || Object.prototype.hasOwnProperty.call(into, name)) continue;
@@ -115,6 +125,21 @@ export function zipTree(z: Uint8Array, into: Record<string, Uint8Array> = {}, re
     });
   }
   return into;
+}
+/** `entries` of `source` that `resident` names, added to `into` as treeOf adds them, read in as few ranges as they lie in */
+export async function residentTree(source: FileSource, entries: Iterable<ZEntry>, resident: (name: string) => boolean, into: Record<string, Uint8Array>): Promise<void> {
+  const sorted = [...entries].filter((e) => !e.name.endsWith("/")).sort((a, b) => a.off - b.off), runs: [number, number][] = [];
+  sorted.forEach((e, i) => {
+    if (!resident(e.name)) return;
+    if (runs.at(-1)?.[1] === i) runs.at(-1)![1]++;
+    else runs.push([i, i + 1]);
+  });
+  await Promise.all(runs.map(async ([from, to]) => {
+    // an entry ends where the next begins; the last, within its local header's longest name and extra field
+    const start = sorted[from].off, last = sorted[to - 1];
+    const end = to < sorted.length ? sorted[to].off : Math.min(source.size, last.off + LOCAL_HEADER + 2 * 0xffff + last.csize);
+    treeOf(await readFully(source, start, end - start), sorted.slice(from, to).map((e) => ({ ...e, off: e.off - start })), into);
+  }));
 }
 const lazyEntries = new WeakMap<Record<string, Uint8Array>, Map<string, [Uint8Array, ZEntry]>>();
 /** the size of a tree's entry, without inflating it */

@@ -1,7 +1,7 @@
 import { parseAXML, attrStr, type XmlNode } from "./axml.ts";
 import { zipTree, centralDirOfSource } from "../zip.ts";
 import { ZipEntryFile, type Install, type InstalledSplit } from "../shell/install.ts";
-import { readFully, type FileSource } from "../shell/lazyfile.ts";
+import { BytesFile, readFully, type FileSource } from "../shell/lazyfile.ts";
 import { Arsc } from "./arsc.ts";
 import type { Apk } from "./res.ts";
 import { apkSigners } from "./apksignature.ts";
@@ -17,8 +17,8 @@ export interface PackageArchive {
 
 /** the certificates Android's Signature API exposes: each v3 (else v2) signer's first, else those of
  *  the v1 signature blocks' PKCS #7 SignedData */
-export async function apkCertificates(bytes: Uint8Array, zip: Record<string, Uint8Array>): Promise<Uint8Array[]> {
-  const signers = apkSigners(bytes)?.schemes[0]?.signers;
+export async function apkCertificates(apk: Uint8Array | FileSource, zip: Record<string, Uint8Array>): Promise<Uint8Array[]> {
+  const signers = (await apkSigners(apk instanceof Uint8Array ? new BytesFile(apk) : apk))?.schemes[0]?.signers;
   if (signers) return signers.map((s) => s.certificates[0].slice());
   const names = Object.keys(zip).filter((name) => /^META-INF\/[^/]+\.(RSA|DSA|EC)$/i.test(name));
   if (!names.length) return [];

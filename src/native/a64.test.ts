@@ -240,7 +240,7 @@ describe("a64 decoder: hints, atomics, the REV family and system registers", () 
       0xb8218127,   // swp w1, w7, [x9]
       0xb821013f,   // stadd w1, [x9]
       0x38e10128,   // ldaddalb w1, w8, [x9]
-      0x9100212c,   // add x12, x9, #8
+      0x9100412c,   // add x12, x9, #16 (a pair is aligned to its whole size)
       0xd280002d,   // mov x13, #1
       0xf900018d,   // str x13, [x12]
       0xb2407fea,   // mov x10, #0xffffffff
@@ -278,7 +278,7 @@ describe("a64 decoder: hints, atomics, the REV family and system registers", () 
       0x52800c61,   // mov w1, #99
       0x88037d21,   // stxr w3, w1, [x9]       (no monitor: fails)
       0xb940012a,   // ldr w10, [x9]
-      0x9100212c,   // add x12, x9, #8
+      0x9100412c,   // add x12, x9, #16 (a pair is aligned to its whole size)
       0xd280002d,   // mov x13, #1
       0xd280004e,   // mov x14, #2
       0xa900398d,   // stp x13, x14, [x12]

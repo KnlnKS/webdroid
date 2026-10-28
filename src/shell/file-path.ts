@@ -1,5 +1,5 @@
 import { E, S_IFCHR, S_IFDIR, S_IFIFO, S_IFREG } from "../native/abi.ts";
-import { vfs, type FileAttributes, type VfsFile } from "./vfs.ts";
+import { changeCount, vfs, type FileAttributes, type VfsFile } from "./vfs.ts";
 import { procIdentity, procText } from "./procfs.ts";
 import type { FdStat, FileStat } from "../native/fd.ts";
 import { isFifo, moveRemoteFifo, nameFifo } from "../native/pipe.ts";
@@ -43,6 +43,31 @@ export type PathOwner = { files: FilePaths; descriptors: DescriptorCalls };
 /** the realm that owns `path`, or every mutable file when none is given, when this realm does not: in a process
  *  Worker a mutable path is the page's */
 export const pathOwner = (path?: string): PathOwner | null => remoteSystem() && (path === undefined || isMutablePath(path)) ? broker() : null;
+let ownerChanges: Int32Array | undefined;
+/** the page's counts of its files' changes (vfs.ts), which a process Worker checks what it learned of them against */
+export function useOwnerChanges(counts: Int32Array | undefined): void { ownerChanges = counts; stats.clear(); }
+/** the page's count of the changes to normalized `path` now, if it shares its counts */
+export const ownerChange = (path: string): number | undefined => ownerChanges && changeCount(ownerChanges, path);
+/** The owner's answers about paths, each standing while the page's count of its path's changes holds. The count is
+ *  read before asking, so a change made while a question is in flight voids its answer. */
+export class OwnerAnswers<T> {
+  private readonly known = new Map<string, { count: number; answer: T }>();
+  private readonly limit: number;
+  constructor(limit: number) { this.limit = limit; }
+  clear(): void { this.known.clear(); }
+  /** the answer before about normalized `path` while the path is unchanged, else `ask`'s, kept when `keeps` it */
+  answer(path: string, ask: () => Promise<T>, keeps: (answer: T) => boolean): T | Promise<T> {
+    const count = ownerChange(path), known = this.known.get(path);
+    if (count !== undefined && known?.count === count) return known.answer;
+    return ask().then((answer) => { if (keeps(answer)) this.keep(path, count, answer); return answer; });
+  }
+  /** `answer`, which the owner gave when `path` had changed `count` times */
+  keep(path: string, count: number | undefined, answer: T): void {
+    if (count === undefined) return;
+    if (this.known.size >= this.limit) this.known.clear();
+    this.known.set(path, { count, answer });
+  }
+}
 /** chmod, chown and utimes of `path` as process `uid` may make them: an owner changes its file's mode and times, and
  *  gives it to a group it is in (its own, or the cache and shared application gids ProcessList gives every app process) */
 function changeFileAttributes(path: string, change: AttributeChange, uid = procIdentity.uid): number {
@@ -162,9 +187,12 @@ const localFilePaths: Answering<Operations, true> = {
   fileSetAttributes: (path, change) => changeFileAttributes(path, change),
 };
 const owned = () => broker().files;
+/** the owner's stat replies; a denial follows the packages installed, which the counts do not */
+const stats = new OwnerAnswers<PathReply<FileStat | null>>(1 << 14);
+const ownerStat = (path: string) => { const p = vfs.norm(path); return stats.answer(p, () => owned().fileStat(p), (reply) => reply.errno !== E.ACCES); };
 /** the owning realm's path operations; this process's pipes for its fifos follow their names (pipe.ts) */
 const ownerFilePaths: FilePaths = {
-  fileStat: path => owned().fileStat(path),
+  fileStat: ownerStat,
   fileMkdir: path => owned().fileMkdir(path),
   fileAccess: (path, mode) => owned().fileAccess(path, mode),
   fileList: path => owned().fileList(path),

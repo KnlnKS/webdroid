@@ -58,12 +58,14 @@ export const fieldGetters = (t: Record<string, string>) => accessors(t, (f) => f
 export const fieldSetters = (t: Record<string, string>) => accessors(t, (f) => function (this: any, v?: unknown) { this[f] = v; });
 
 
+/** the booted apk's entries when they are read as they are opened (process-packages.ts) */
+export type ClasspathSource = { has(name: string): boolean; entry(name: string): Promise<Uint8Array | null>; entrySize(name: string): number; names(): string[] };
 export class Runtime {
   natives = new Map<string, NativeSpec>();
   missing = new Set<string>();
   /** the booted apk's entries: what ClassLoader.getResourceAsStream and ServiceLoader read */
   classpath: Record<string, Uint8Array> = {};
-  classpathSource: { has(name: string): boolean; entry(name: string): Promise<Uint8Array | null>; entrySize(name: string): number; names(): string[] } | null = null;
+  classpathSource: ClasspathSource | null = null;
   /** the boot class path's own entries by name, with the jar holding each: the boot class
    *  loader answers them ahead of the apk */
   bootResources = new Map<string, { jar: string; read(): Uint8Array }>();

@@ -42,11 +42,10 @@ export function bootSystemOwner(): Promise<void> {
 /** Install the selected package with its original archive and split sources;
  * loading its bytecode remains the application's Worker responsibility. */
 export async function prepareWorkerInstall(install: import("./install.ts").Install): Promise<{ pkg: string; label: string }> {
-  const [{ apkCertificates, packageArchive }, { registerPackage }, { readFully }] = await Promise.all([
-    import("../android/packagearchive.ts"), import("../android/installpackage.ts"), import("./lazyfile.ts"),
+  const [{ apkCertificates, packageArchive }, { registerPackage }] = await Promise.all([
+    import("../android/packagearchive.ts"), import("../android/installpackage.ts"),
   ]);
-  const bytes = install.base instanceof Uint8Array ? install.base : await readFully(install.base);
-  const archive = packageArchive(install.zip, await apkCertificates(bytes, install.zip), install);
+  const archive = packageArchive(install.zip, await apkCertificates(install.base, install.zip), install);
   const record = registerPackage(archive, { source: install.base });
   return { pkg: record.pkg, label: record.label() };
 }

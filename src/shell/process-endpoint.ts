@@ -22,6 +22,7 @@ import { storageChanged } from "./device-storage.ts";
 import { unregisterPackage } from "../android/installpackage.ts";
 import { asBroker, brokerArgTransfers, brokerMethods, javaFailure, type BroadcastData, type BrokerCalls, type ProcessEndpoint } from "./broker-contract.ts";
 import { connectBroker, processLife } from "./broker-access.ts";
+import { useOwnerChanges } from "./file-path.ts";
 import type { ProcessBroker } from "./processes.ts";
 import { callProxy, closePort } from "./rpc.ts";
 import { procIdentity } from "./procfs.ts";
@@ -37,10 +38,11 @@ function attach(port: MessagePort, worker: boolean): BrokerCalls {
   connectBroker(calls.endpoint, worker);
   return calls.endpoint;
 }
-/** a Worker's command port, behind which system_server's realm holds the stores */
-export function attachProcessBrokerPort(port: MessagePort): BrokerCalls {
+/** a Worker's command port, behind which system_server's realm holds the stores and the files, whose `fileChanges` it shares */
+export function attachProcessBrokerPort(port: MessagePort, fileChanges?: Int32Array): BrokerCalls {
   const broker = attach(port, true);
   releaseFiles = vfs.useOwner({ prepare: broker.files.filePrepare });
+  useOwnerChanges(fileChanges);
   return broker;
 }
 export function closeProcessBrokerPort(): void {
@@ -48,6 +50,7 @@ export function closeProcessBrokerPort(): void {
   connectBroker(undefined, true);
   processLife.close();
   releaseFiles();
+  useOwnerChanges(undefined);
 }
 /** system_server's realm: it asks the broker over its own command port as a Worker does, but holds
  *  the stores and its descriptors itself */

@@ -11,7 +11,7 @@ import { handle, deref, release, FINALIZER } from "./handles.ts";
 import { newObj, vcall } from "../jvm/natives/jentry.ts";
 import { i8, u8, jarray } from "../jvm/abi.ts";
 import {
-  Resources, NativeTheme, type Apk, type SV, newSV, emptyApk, resolveAttributes, STYLE_NUM_ENTRIES,
+  Resources, NativeTheme, type Apk, type SV, newSV, emptyApk, apkEntryNames, resolveAttributes, STYLE_NUM_ENTRIES,
 } from "./res.ts";
 import { TV, XE, parseAXMLDoc, StringPool, type XmlDoc, type XmlEvent, type XmlNode } from "./axml.ts";
 import { qualifiers } from "./arsc.ts";
@@ -69,7 +69,7 @@ export const assetEntry = (res: Resources, path: string): FileSource | null => f
  *  for a regular file and false for a directory; a later apk's entry replaces an earlier one's */
 export function assetDir(res: Resources, dir: string): [name: string, regular: boolean][] {
   const path = "assets/" + dir, prefix = path.endsWith("/") ? path : path + "/", names = new Map<string, boolean>();
-  for (const apk of apksOf(res)) for (const entry of [...Object.keys(apk.zip), ...apk.lazyEntries.keys()]) {
+  for (const apk of apksOf(res)) for (const entry of apkEntryNames(apk)) {
     if (!entry.startsWith(prefix) || entry.length === prefix.length) continue;
     const slash = entry.indexOf("/", prefix.length);
     names.set(entry.slice(prefix.length, slash < 0 ? undefined : slash), slash < 0);

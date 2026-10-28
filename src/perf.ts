@@ -21,6 +21,8 @@ export const perf = {
   // the native tier: guest instructions, wall time in the core, slices, host calls, GLES draws,
   // and errors from native GL (counted under __wdGlProbe).
   nativeInstr: 0, nativeMs: 0, nativeSlices: 0, nativeHostCalls: 0, glDraws: 0, glErrors: 0,
+  // the native slices other cores ran (lanes.ts): their guest instructions, wall time and count
+  laneInstr: 0, laneMs: 0, laneSlices: 0,
   // the JIT: regions linked into the core, and the wall time spent emitting, compiling and linking them
   jitRegions: 0, jitMs: 0,
   // the Wasm tier: Java calls made from the host, host reads of a Java object's property no field backs (each also a missing entry), and

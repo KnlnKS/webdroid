@@ -1,11 +1,10 @@
 import { packageArchive, packageArchiveSource, type PackageArchive } from "../android/packagearchive.ts";
-import { zipTree } from "../zip.ts";
 import { PackedArchive, SYSTEM_PACKAGE_BASE, systemPackage, type PackedArchiveIndex } from "./packedarchive.ts";
 import { SYSTEM_PACKAGES } from "./system-packages.ts";
-import { rt } from "../jvm/runtime.ts";
-import { openInstallApks, type Install } from "./install.ts";
-import { RemoteFile } from "./remote-file.ts";
-import { readFully } from "./lazyfile.ts";
+import { rt, type ClasspathSource } from "../jvm/runtime.ts";
+import { openApk, openInstallApks, type Install, type InstallBase } from "./install.ts";
+import { remoteFile } from "./remote-file.ts";
+import { ChunkCache, readFully, type FileSource } from "./lazyfile.ts";
 import { installedPath } from "../android/packages.ts";
 import { registerPackage } from "../android/installpackage.ts";
 import { hexBytes, u8 } from "../jvm/abi.ts";
@@ -33,7 +32,7 @@ async function openArchive({ source, certificates }: PackageSnapshot): Promise<{
     const packed = await preparedArchive(source.index, source.base, false);
     return { archive: packageArchive(packed.zip, source.index.certificates.map(hexBytes)), base: packed };
   }
-  const file = new RemoteFile(source);
+  const file = remoteFile(source);
   return { archive: await packageArchiveSource(file, certificates), base: file };
 }
 const register = (snapshot: PackageSnapshot, archive: PackageArchive, source: Install["base"]) =>
@@ -44,24 +43,40 @@ export async function registerSnapshot(snapshot: PackageSnapshot): Promise<void>
   const { archive, base } = await openArchive(snapshot);
   register(snapshot, archive, base);
 }
+/** a class path over an apk's entries that are read when opened, the most recently read kept: a ranged read
+ *  of an entry (pm.ts) reads all of it */
+function lazyClasspath(entries: Map<string, FileSource>): ClasspathSource {
+  const read = new ChunkCache<string>(32 << 20);
+  return {
+    has: (name) => entries.has(name),
+    names: () => [...entries.keys()],
+    entrySize: (name) => entries.get(name)!.size,
+    entry: async (name) => {
+      const source = entries.get(name);
+      return source ? read.get(name, () => readFully(source)) : null;
+    },
+  };
+}
+
 /** Load a process registry from its transferred archive descriptors: archives open together, packages register in registry order. */
 export async function loadProcessPackages(data: ProcessBootstrap): Promise<Install | null> {
   let boot: Install | null = null;
   const opened = await Promise.all(data.registry.map(async (snapshot) => {
     if (snapshot.pkg !== data.pkg) return { snapshot, ...await openArchive(snapshot) };
     const source = snapshot.source;
-    let certificates, base: Pick<Install, "zip" | "base">;
+    let certificates, base: InstallBase;
     if ("index" in source) {
       const packed = await preparedArchive(source.index, source.base, true);
       certificates = source.index.certificates.map(hexBytes);
       rt.classpathSource = packed;
       base = { zip: packed.zip, base: packed };
     } else {
-      const bytes = await readFully(new RemoteFile(source));
       certificates = snapshot.certificates;
-      base = { zip: zipTree(bytes), base: bytes };
+      const apk = await openApk(remoteFile(source));
+      rt.classpathSource = lazyClasspath(apk.lazyEntries);
+      base = apk;
     }
-    boot = await openInstallApks(snapshot.splits.map((split) => new RemoteFile(split)), base);
+    boot = await openInstallApks(snapshot.splits.map(remoteFile), base);
     // the record's apk is the one ApkAssets loads at sourceDir: the splits join it
     return { snapshot, archive: packageArchive(base.zip, certificates, boot), base: base.base };
   }));

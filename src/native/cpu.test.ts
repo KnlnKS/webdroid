@@ -214,6 +214,33 @@ test("a signal interrupts an ARM64 futex before its handler observes the saved c
   }
 });
 
+test("a handler waiting above a futex its own run completed still takes signals", async () => {
+  // IL2CPP's GC suspends a thread with a handler that waits in sigsuspend for the restart signal
+  setA64(true);
+  const cpu = new Cpu(new JThread(), "futex-suspend"), addr = mem.reserve(4096, 4096);
+  mem.st32(addr, 7);
+  const entry = defineHost("test.signal.suspend.wait", (c) => futex(c, addr, 0, 7, 0));
+  const suspend = defineHost("test.signal.suspend.handler", (c) => {
+    futex(c, addr, 1, 1, 0);
+    return new Promise<number>((r) => { c.sigWait = () => r(0); });
+  });
+  const restart = defineHost("test.signal.suspend.restart", () => 0);
+  const restore = [install(12, sigHandler(suspend, 0, 0n)), install(14, sigHandler(restart, 0, 0n))];
+  try {
+    cpu.signalMask = 1n << 11n;
+    const result = cpu.call(entry);
+    cpu.kill(12);
+    // unblocked while the wait is parked, the handler runs above it
+    cpu.signalMask = 0n; cpu.pump();
+    await new Promise((r) => setTimeout(r, 0));
+    cpu.kill(14);
+    expect(await result).toBe(0);
+  } finally {
+    for (const r of restore) r();
+    cpu.dispose(); setA64(false);
+  }
+});
+
 test("an ARM64 signal context is restored before the interrupted frame runs on", async () => {
   setA64(true);
   const cpu = new Cpu(new JThread(), "signal-context"), first = Promise.withResolvers<number>(), second = Promise.withResolvers<number>();

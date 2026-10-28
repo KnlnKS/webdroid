@@ -41,7 +41,44 @@ function reserve(file: VfsFile, size: number) {
   grown.set(file.data.subarray(0, file.len));
   file.data = grown;
 }
-const nodes = new Map<string, VfsNode>(["/data", "/data/local", "/data/local/tmp", "/sdcard"].map(path => [path, { content: null, mtime: 0 }]));
+const nodes = new Map<string, VfsNode>();
+/** each directory's entries, implicit ones too: by name, how many nodes are at or under it */
+const children = new Map<string, Map<string, number>>();
+function count(path: string, by: 1 | -1): void {
+  for (let i = 0; i < path.length - 1;) {
+    const next = path.indexOf("/", i + 1), dir = i ? path.slice(0, i) : "/", name = path.slice(i + 1, next < 0 ? undefined : next);
+    let names = children.get(dir);
+    if (!names) children.set(dir, names = new Map());
+    const n = (names.get(name) ?? 0) + by;
+    if (n) names.set(name, n);
+    else if (names.delete(name) && !names.size) children.delete(dir);
+    if (next < 0) break;
+    i = next;
+  }
+}
+/** A count per slot of the changes to the paths hashing to it, and to what is under them. A process Worker whose
+ *  mutable files the page's tree holds shares the page's counts: what it learned of a path stays true while
+ *  the path's count holds. Every change a stat can see counts within the turn that makes it. */
+const CHANGE_SLOTS = 1 << 12;
+let changeCounts: Int32Array | undefined;
+function changeSlot(path: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < path.length; i++) h = Math.imul(h ^ path.charCodeAt(i), 0x01000193);
+  return h & (CHANGE_SLOTS - 1);
+}
+/** `counts`' count of the changes to `path` */
+export const changeCount = (counts: Int32Array, path: string): number => Atomics.load(counts, changeSlot(path));
+/** `path` changed, and so did each directory over it */
+function changed(path: string): void {
+  if (changeCounts) for (let end = path.length; end > 0; end = path.lastIndexOf("/", end - 1)) Atomics.add(changeCounts, changeSlot(path.slice(0, end)), 1);
+}
+function put(path: string, node: VfsNode): void {
+  if (!nodes.has(path)) count(path, 1);
+  nodes.set(path, node);
+  changed(path);
+}
+function unput(path: string): void { if (nodes.delete(path)) { count(path, -1); changed(path); } }
+for (const path of ["/data", "/data/local", "/data/local/tmp", "/sdcard"]) put(path, { content: null, mtime: 0 });
 let watchers: readonly ((path: string, change: VfsChange) => void)[] = [];
 const notify = (path: string, change: VfsChange) => { for (const watcher of watchers) watcher(path, change); };
 const UNOWNED: FileOwner = { prepare: () => Promise.resolve(), flush: () => Promise.resolve() };
@@ -59,37 +96,42 @@ function defaultAttributes(path: string | null, directory: boolean): FileAttribu
 }
 const created = (path: string, content: Uint8Array | FileSource | null): VfsNode =>
   ({ content, mtime: Date.now(), attributes: defaultAttributes(path, content === null) });
-/** `node`'s content is now `content`; its open file follows it there */
-function fill(node: VfsNode, content: Uint8Array | FileSource): void {
+/** `path`'s content is now `content`; its open file follows it there */
+function fill(path: string, node: VfsNode, content: Uint8Array | FileSource): void {
   node.content = content; node.mtime = Date.now();
+  changed(path);
   const file = node.open;
   if (!file) return;
   if (content instanceof Uint8Array) { file.data = content; file.len = content.length; file.source = undefined; }
   else { file.data = EMPTY; file.len = content.size; file.source = content; }
 }
+/** `path`'s attributes as `change` has them, and its time `mtime` when given */
+function amend(path: string, node: VfsNode, change: Partial<FileAttributes> | undefined, mtime: number | undefined): void {
+  // in place: an open file holds the same attributes
+  if (change) { if (node.attributes) Object.assign(node.attributes, change); else node.attributes = { ...defaultAttributes(path, node.content === null), ...change }; }
+  if (mtime !== undefined) node.mtime = mtime;
+  changed(path);
+}
 /** descriptors open on `node` keep a file without a name */
 function detach(node: VfsNode): void {
   if (node.open) { node.open.path = null; node.open = undefined; }
 }
-function drop(path: string, node: VfsNode): void { nodes.delete(path); detach(node); }
+function drop(path: string, node: VfsNode): void { unput(path); detach(node); }
 /** `node` named `to` now, in place of anything there */
 function move(from: string, to: string, node: VfsNode): void {
   const there = nodes.get(to);
   if (there) drop(to, there);
-  nodes.delete(from); nodes.set(to, node);
+  unput(from); put(to, node);
   if (node.open) node.open.path = to;
   if (!node.volatile) { notify(from, "delete"); notify(to, "create"); }
 }
-function under(p: string): boolean {
-  const dir = p.endsWith("/") ? p : p + "/";
-  for (const path of nodes.keys()) if (path.startsWith(dir)) return true;
-  return false;
-}
+const under = (p: string): boolean => children.has(p.length > 1 && p.endsWith("/") ? p.slice(0, -1) : p);
 function publish(file: VfsFile) {
   const node = file.path === null ? undefined : nodes.get(file.path);
   if (!node || node.open !== file) return;
   node.mtime = Date.now();
   if (!file.source) node.content = file.data.subarray(0, file.len);
+  changed(file.path!);
   if (!node.volatile) notify(file.path!, "modify");
 }
 /** the space every path's filesystem reports (one backs everything here): the browser's storage estimate */
@@ -116,17 +158,19 @@ export const vfs = {
     let node = nodes.get(path);
     if (!node) {
       if (!under(path)) return;
-      nodes.set(path, node = { content: null, mtime: 0 });
+      put(path, node = { content: null, mtime: 0 });
     }
-    if (node.attributes) Object.assign(node.attributes, change);
-    else node.attributes = { ...defaultAttributes(path, node.content === null), ...change };
-    if (mtime !== undefined) node.mtime = Math.floor(mtime);
+    amend(path, node, change, mtime === undefined ? undefined : Math.floor(mtime));
     if (notifies && !node.volatile) notify(path, "modify");
   },
   /** `watch` hears each change from now on, until the returned function stops it */
   watch(watch: (path: string, change: VfsChange) => void): () => void {
     watchers = [...watchers, watch];
     return () => { watchers = watchers.filter(w => w !== watch); };
+  },
+  /** the counts of this tree's changes, which the process Workers it serves share; none without cross-origin isolation */
+  changeCounts(): Int32Array | undefined {
+    return changeCounts ??= globalThis.crossOriginIsolated ? new Int32Array(new SharedArrayBuffer(4 * CHANGE_SLOTS)) : undefined;
   },
   /** `next` persists this realm's files until the returned function hands them back */
   useOwner(next: Partial<FileOwner>): () => void {
@@ -204,18 +248,18 @@ export const vfs = {
   /** the file's bytes now live in `source`; descriptors already open on it follow them there */
   adopt(p: string, source: FileSource) {
     const path = this.norm(p), node = nodes.get(path);
-    if (node) fill(node, source); else nodes.set(path, created(path, source));
+    if (node) fill(path, node, source); else put(path, created(path, source));
   },
   write(p: string, data: Uint8Array, notifies = true) {
     const path = this.norm(p), node = nodes.get(path), existed = !!node?.content;
-    if (node) fill(node, data); else nodes.set(path, created(path, data));
+    if (node) fill(path, node, data); else put(path, created(path, data));
     if (notifies && !node?.volatile) notify(path, existed ? "write" : "create");
   },
   /** a new file at `p` over `source`, unheard; descriptors open on what was there keep it */
   mount(p: string, source: FileSource) {
     const path = this.norm(p), node = nodes.get(path);
     if (node) drop(path, node);
-    nodes.set(path, created(path, source));
+    put(path, created(path, source));
   },
   /** `content` at `p`: bytes written, a source mounted */
   place(p: string, content: Uint8Array | FileSource) {
@@ -229,13 +273,12 @@ export const vfs = {
     let node = nodes.get(path);
     if (!entry) { if (node) drop(path, node); return; }
     const { content, mtime, attributes } = entry;
-    if (!node) nodes.set(path, node = created(path, content));
+    if (!node) put(path, node = created(path, content));
     else if (node.content !== content) {
-      if (content) fill(node, content);
+      if (content) fill(path, node, content);
       else { detach(node); node.content = null; }
     }
-    if (attributes) { if (node.attributes) Object.assign(node.attributes, attributes); else node.attributes = { ...attributes }; }
-    if (mtime !== undefined) node.mtime = mtime;
+    amend(path, node, attributes, mtime);
   },
   exists(p: string): boolean {
     p = this.norm(p);
@@ -268,19 +311,19 @@ export const vfs = {
   renameDir(from: string, to: string) {
     from = this.norm(from); to = this.norm(to);
     const prefix = from + "/";
-    if (!nodes.has(from)) nodes.set(from, { content: null, mtime: 0, attributes: defaultAttributes(from, true) });
+    if (!nodes.has(from)) put(from, { content: null, mtime: 0, attributes: defaultAttributes(from, true) });
     for (const [path, node] of [...nodes]) if (path === from || path.startsWith(prefix)) move(path, to + path.slice(from.length), node);
   },
   mkdir(p: string, notifies = true) {
     const path = this.norm(p);
     if (nodes.has(path)) return;
-    nodes.set(path, created(path, null));
+    put(path, created(path, null));
     if (notifies) notify(path, "create");
   },
   rmdir(p: string, notifies = true): boolean {
     const path = this.norm(p), node = nodes.get(path);
     if (!node || node.content !== null) return false;
-    nodes.delete(path);
+    unput(path);
     if (notifies) notify(path, "delete");
     return true;
   },
@@ -288,10 +331,6 @@ export const vfs = {
     p = this.norm(p);
     const proc = procList(p);
     if (proc) return proc;
-    const dir = p === "/" ? "/" : p + "/";
-    const names = new Set<string>();
-    for (const path of nodes.keys()) if (path.startsWith(dir)) names.add(path.slice(dir.length).split("/")[0]);
-    names.delete("");
-    return [...names];
+    return [...children.get(p)?.keys() ?? []];
   },
 };

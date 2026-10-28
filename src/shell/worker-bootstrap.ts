@@ -34,7 +34,7 @@ export async function attachWorkerBootstrap(data: ProcessBootstrap): Promise<Bro
     setProcessIdentity(data.pid, data.uid);
     setProcessName(data.process);
     const { attachProcessBrokerPort, closeProcessBrokerPort } = await import("./process-endpoint.ts");
-    const broker = attachProcessBrokerPort(data.broker);
+    const broker = attachProcessBrokerPort(data.broker, data.fileChanges);
     (await import("./device-storage.ts")).useStorageReplica(data.storage, broker.storageWrite);
     const [{ setDisplayChangeHandler, setRotation }, { device }] = await Promise.all([import("./device.ts"), import("./config.ts")]);
     setRotation(data.rotation);

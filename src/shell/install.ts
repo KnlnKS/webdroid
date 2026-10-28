@@ -3,8 +3,8 @@
 
 import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml.ts";
 import { isDexEntry } from "../jvm/dex.ts";
-import { centralDirOfSource, entryBytesOf, inflateEntry, localDataOffset, zipTree, type ZEntry } from "../zip.ts";
-import { BlobFile, BytesFile, RangeFile, SliceFile, readFully, type FileSource } from "./lazyfile.ts";
+import { centralDirOfSource, entryBytesOf, inflateEntry, localDataOffset, residentTree, zipTree, type ZEntry } from "../zip.ts";
+import { BlobFile, BytesFile, SliceFile, readFully, type FileSource } from "./lazyfile.ts";
 
 /** A split install (.xapk, .apks, an App Bundle's output) is a zip of apks rather than an
  *  apk: a base and its config/feature splits. Merge them into the one tree the rest of the
@@ -13,11 +13,13 @@ import { BlobFile, BytesFile, RangeFile, SliceFile, readFully, type FileSource }
 export interface Install {
   zip: Record<string, Uint8Array>;
   lazyEntries: Map<string, FileSource>;
-  /** the base apk's own bytes: what sourceDir names and what ZipFile(sourceDir) must open */
+  /** the base apk: what sourceDir names and what ZipFile(sourceDir) must open */
   base: Uint8Array | FileSource;
   /** each split, and a resident config split's own resource table: the entries for its configs only */
   splits: InstalledSplit[];
 }
+/** an open base apk that splits merge over */
+export type InstallBase = Pick<Install, "zip" | "base"> & Partial<Pick<Install, "lazyEntries">>;
 /** a split as ApkLiteParseUtils reads its manifest: its name, whether it is a feature split, the split its
  *  code uses and the one it configures */
 export interface Split { name: string; manifest: XmlNode; feature: boolean; uses: string | null; configFor: string | null }
@@ -39,7 +41,7 @@ function parseSplit(manifest: XmlNode | null): Split | null {
   return { name, manifest, feature: flag(manifest, "isFeatureSplit"), uses: uses ? attrStr(uses, "name") : null, configFor: attrStr(manifest, "configForSplit") };
 }
 /** the apks merged over their base: the one among `opened`, or `base` when its tree is already open */
-export function mergeInstall(opened: OpenedApk[], base?: Pick<Install, "zip" | "base">): Install {
+export function mergeInstall(opened: OpenedApk[], base?: InstallBase): Install {
   let manifest: XmlNode | null = null;
   if (!base) {
     const apk = opened.find((o) => o.manifest && !o.split);
@@ -51,7 +53,7 @@ export function mergeInstall(opened: OpenedApk[], base?: Pick<Install, "zip" | "
   const merged = base.zip;
   // with isolatedSplits each feature split's code stays in its apk, for the class loader LoadedApk gives that split
   const isolated = flag(manifest ?? parseAXML(merged["AndroidManifest.xml"]), "isolatedSplits");
-  const lazyEntries = new Map<string, FileSource>();
+  const lazyEntries = new Map(base.lazyEntries);
   const splits: Install["splits"] = [];
   let extra = 0;
   for (const o of opened) {
@@ -120,9 +122,21 @@ async function openedApk(source: FileSource, entries: Map<string, ZEntry>, lazy:
   return { kind: "resident", source: new BytesFile(bytes), bytes, zip: zipTree(bytes), manifest: xml, split };
 }
 
+/** what a process reads of its apk synchronously as it boots, rather than through a stream when it is opened:
+ *  all but the assets (save the dexopt profile) and the native libraries */
+const bootEntry = (name: string) => !name.startsWith("lib/") && (!name.startsWith("assets/") || name.startsWith("assets/dexopt/"));
+/** A plain apk over `source`: its boot entries resident, read in as few ranges as they lie in, and
+ *  every other entry read from the archive when it is opened. */
+export async function openApk(source: FileSource, entries?: Map<string, ZEntry>): Promise<Install> {
+  entries ??= await centralDirOfSource(source);
+  const zip: Record<string, Uint8Array> = {}, lazyEntries = new Map<string, FileSource>();
+  for (const e of entries.values()) if (!e.name.endsWith("/") && !bootEntry(e.name)) lazyEntries.set(e.name, new ZipEntryFile(source, e));
+  await residentTree(source, entries.values(), bootEntry, zip);
+  return { zip, lazyEntries, base: source, splits: [] };
+}
 async function openInstallSource(source: FileSource): Promise<Install> {
   const entries = await centralDirOfSource(source);
-  if (entries.has("AndroidManifest.xml")) return openInstall(await readFully(source));
+  if (entries.has("AndroidManifest.xml")) return openApk(source, entries);
   const apks = [...entries.values()].filter((entry) => entry.name.endsWith(".apk"));
   if (!apks.length) throw new Error(NOT_AN_INSTALL);
   return openInstallApks(await Promise.all(apks.map((entry) => entrySource(source, entry))));
@@ -130,17 +144,20 @@ async function openInstallSource(source: FileSource): Promise<Install> {
 
 /** an install from its apks: the base among them, or given already open (a packed archive, a
  *  parsed apk) so that it is not read again */
-export const openInstallApks = async (apks: FileSource[], base?: Pick<Install, "zip" | "base">): Promise<Install> => mergeInstall(await openApks(apks, false), base);
+export const openInstallApks = async (apks: FileSource[], base?: InstallBase): Promise<Install> => mergeInstall(await openApks(apks, false), base);
 /** an installed package's splits over its open base, as a package manager that runs none of their code holds
  *  them: every entry read when it is opened, and a split's dex left in its own apk */
-export const openInstalledSplits = async (apks: FileSource[], base: Pick<Install, "zip" | "base">): Promise<Install> => mergeInstall(await openApks(apks, true), base);
+export const openInstalledSplits = async (apks: FileSource[], base: InstallBase): Promise<Install> => mergeInstall(await openApks(apks, true), base);
 async function openApks(apks: FileSource[], lazy: boolean): Promise<OpenedApk[]> {
   const dirs = await Promise.all(apks.map(centralDirOfSource));
   return Promise.all(apks.map((apk, i) => openedApk(apk, dirs[i], lazy)));
 }
 
+/** an install downloaded whole: the browser holds its bytes, out of this realm's heap */
 export async function openInstallRemote(url: string): Promise<Install> {
-  return openInstallSource(await RangeFile.open(url));
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`GET ${url}: ${response.status}`);
+  return openInstallSource(new BlobFile(await response.blob()));
 }
 
 export async function openInstallLocal(file: File): Promise<Install> {

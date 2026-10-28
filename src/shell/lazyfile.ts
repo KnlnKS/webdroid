@@ -67,7 +67,7 @@ export class BytesFile implements FileSource {
 }
 
 export class BlobFile implements FileSource {
-  private readonly blob: Blob;
+  readonly blob: Blob;
   readonly size: number;
 
   constructor(blob: Blob) {
@@ -130,22 +130,6 @@ export class RangeFile implements FileSource {
 
   constructor(url: string, size: number, chunkSize = 1 << 20, maxChunks = 32) {
     this.url = url; this.size = size; this.chunkSize = chunkSize; this.chunks = new ChunkCache(chunkSize * maxChunks);
-  }
-
-  static async open(url: string): Promise<FileSource> {
-    const response = await fetch(url, { method: "HEAD" });
-    if (!response.ok) throw new Error(`HEAD ${url}: ${response.status}`);
-    const header = response.headers.get("content-length");
-    if (header !== null && /^\d+$/.test(header) && Number.isSafeInteger(Number(header)))
-      return new RangeFile(url, Number(header));
-    const probe = await fetch(url, { headers: { Range: "bytes=0-0" } });
-    if (probe.status === 206) {
-      const match = /^bytes 0-0\/(\d+)$/.exec(probe.headers.get("content-range") ?? "");
-      await probe.body?.cancel();
-      if (match && Number.isSafeInteger(Number(match[1]))) return new RangeFile(url, Number(match[1]));
-    }
-    if (probe.status === 200) return new BytesFile(new Uint8Array(await probe.arrayBuffer()));
-    throw new Error(`range probe ${url}: ${probe.status}`);
   }
 
   read(offset: number, length: number): Promise<Uint8Array> {

@@ -20,7 +20,7 @@ import type { HostUi } from "./host-ui.ts";
 import type { PackageDataChange } from "./packagedata.ts";
 import type { ProcessLifeCalls } from "./process-life.ts";
 import type { ServiceRequest, ServiceStarts } from "./servicerecords.ts";
-import type { ProcessBootstrap } from "./process-bootstrap-data.ts";
+import { snapshotPorts, type ProcessBootstrap } from "./process-bootstrap-data.ts";
 import type { SettingsAccess } from "./settings.ts";
 import { asSystem } from "../android/binder.ts";
 import { checkPermission } from "../android/permissions.ts";
@@ -138,7 +138,7 @@ const processMethods = methodsOf<ProcessEndpoint>()(["processDied", "activity", 
 export const javaFailure = (error: CallFailure): unknown => error.javaClass ? rt.mkThrowable(error.javaClass, error.message) : callError(error);
 export const processProxy = (port: MessagePort, options: Pick<ProxyOptions<ProcessEndpoint>, "makeError" | "onClose"> = {}) =>
   callProxy<ProcessEndpoint>(port, processMethods, { notifications: ["kill"], makeError: javaFailure, ...options,
-    transfer: { packageAdded: ({ source, splits }) => [..."port" in source ? [source.port] : [], ...splits.map(split => split.port)], surfaceConnect: (_token, port) => [port] } });
+    transfer: { packageAdded: snapshotPorts, surfaceConnect: (_token, port) => [port] } });
 
 export const permissionDenied = async (permission: string, pkg: string) =>
   await checkPermission(permission, pkg) !== 0;

@@ -71,6 +71,9 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
   and vgpu.sh's WebGPU prism draws through the Vulkan driver over WebGPU (with chrome://flags#enable-unsafe-webgpu, 10.6–11.3 presentations/s).
   Bloons TD 6 (2026-10-26, Unity 6 IL2CPP over Vulkan) downloads its 598 MB of assets, and its tutorial plays through round 3 at about 56 frames/s:
   towers are placed, upgraded and pop bloons; Google Play Games sign-in is cancelled at launch.
+  RimWorld (2026-10-26, a Unity IL2CPP port) generates a world and a map and plays at 10–17 fps; a tap that selects a colonist answers
+  in about 150 ms (2026-10-28). Its menu loads about 6× slower than on the AVD and world generation about 6× (2.5 min), bound by
+  UnityMain's one thread (history, RimWorld).
 - **Deployment:** one Workers Builds build deploys the page to Pages and the backend, which is also the isolated
   WebView renderer's origin, to a Worker from `main`, and paired previews from other branches. Not yet deployed
   from this layout. See [deployment.md](docs/deployment.md).

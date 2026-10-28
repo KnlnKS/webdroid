@@ -140,12 +140,15 @@ each process. Each is hosted with `hostService` by the module that owns it. A Wo
 (`src/shell/broker-access.ts`), which throws RemoteException before the realm connects and after its port
 closes; a Worker reaches system_server's stores and services through it rather than answering from a local
 copy, while the page and a realm that never connects hold them. Path operations and descriptors of another
-realm's files go through one `pathOwner()` (`src/shell/file-path.ts`).
+realm's files go through one `pathOwner()` (`src/shell/file-path.ts`); a Worker answers a stat from the page's
+earlier answer while the page's shared count of that path's changes holds (`src/shell/vfs.ts`).
 
 ## Native code
 
 ARM32 and A64 execute in `src/native/core/` (Zig compiled to Wasm), with an interpreter and a JIT whose results
-must agree; `src/native/cpu.ts` drives asynchronous exits, and host calls exit `run_slice`. 64-bit processes run
+must agree; `src/native/cpu.ts` drives asynchronous exits, and host calls exit `run_slice`. An A64 thread whose slices
+are compute-bound runs them on a lane (`src/native/lanes.ts`): a nested Worker that instantiates the process's core over
+its shared memory. Each lane exit returns to the process Worker, so host code stays single-threaded. 64-bit processes run
 the reference build's bionic as guest code (decision below). 32-bit processes keep the HLE libc
 (`src/native/libc32/`), because the reference build ships no 32-bit bionic. EGL/GLES (onto WebGL), Vulkan (onto WebGPU in
 `src/native/vulkan/`, which translates SPIR-V to WGSL), audio, media codecs and DRM stay high-level emulation. Networking goes through the dev server's or Worker's HTTP proxy, DNS lookup and TCP WebSocket relay.

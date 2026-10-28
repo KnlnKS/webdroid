@@ -10,6 +10,7 @@ import { yieldStats } from "../jvm/yield.ts";
 import { mem } from "./mem.ts";
 import { processExited } from "../process-exit.ts";
 import { core, jitStats } from "./core.ts";
+import { FALLBACK_FORMS } from "./core-abi.gen.ts";
 import { netDebug } from "./socket/core.ts";
 
 export const native = {
@@ -35,6 +36,8 @@ export const native = {
   core,
   /** the host calls made, most often first */
   hostCalls: (n = 20) => [...hostCounts].map((k, i) => [k, i]).filter(([k]) => k).sort((a, b) => b[0] - a[0]).slice(0, n).map(([k, i]) => `${k} ${slotName(i)}`),
+  /** JIT code's interpreter fallbacks by instruction form, most first: what the JIT leaves to the interpreter (counted from the first call) */
+  fallbacks: (n = 20) => (core.jit_census(), [...Array(FALLBACK_FORMS).keys()]).map((i) => [core.jit_fallback_count(i) >>> 0, core.jit_fallback_form(i) >>> 0]).filter(([k]) => k).sort((a, b) => b[0] - a[0]).slice(0, n).map(([k, w]) => `${k} ${w.toString(16).padStart(8, "0")}`),
   /** profileReset(n) also sets the slice budget: a smaller one samples the hot pcs more finely */
   profileReset: (instr = slice.instr) => { slice.instr = instr; profile.samples.clear(); },
   /** top pcs at slice boundaries, symbolised (share of all samples) */

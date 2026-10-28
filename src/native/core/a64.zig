@@ -1,10 +1,13 @@
 const abi = @import("abi.zig");
 const mem = @import("mem.zig");
+const plane = @import("plane.zig");
 const cpu = @import("cpu.zig");
 const libc = @import("libc.zig");
+const lane = @import("lane.zig");
 const simd = @import("simd.zig");
 const Cpu = cpu.Cpu;
 const Status = cpu.Status;
+const storable = cpu.storable;
 const Fault = cpu.Fault;
 
 pub const Kind = enum(u16) {
@@ -24,6 +27,8 @@ pub const Kind = enum(u16) {
     br,
     svc,
     clrex,
+    /// DMB, DSB
+    fence,
     mrs,
     msr,
     ldrlit,
@@ -52,6 +57,15 @@ pub const Op = extern struct {
     b: u8,
     imm: u64,
 };
+
+/// the load/store-exclusive family's forms (o.b); o.a is log2 of the bytes each register accesses
+pub const Excl = enum(u8) { ldx, stx, ldar, stlr, cas, ldxp, stxp, casp };
+/// log2 of the bytes an exclusive op accesses, all of both registers' for a pair
+pub inline fn exclSpan(o: *const Op) u3 {
+    return @intCast(o.a + @intFromBool(o.b >= @intFromEnum(Excl.ldxp)));
+}
+/// the atomic memory forms (o.b, the encoding's o3:opc); o.a is log2 of the bytes accessed
+const Lse = enum(u8) { add, clr, eor, set, smax, smin, umax, umin, swp, ldapr = 12 };
 
 const std = @import("std");
 const bt = @import("bits.zig");
@@ -183,7 +197,11 @@ pub fn decode(w: u32, pc: u32) Op {
         }
         if (is(w, 0xffe0001f, 0xd4000001)) return op(.svc, w);
         if (is(w, 0xfffff01f, 0xd503201f)) return op(.nop, w);
-        if (is(w, 0xfffff01f, 0xd503301f)) return if (bits(w, 5, 3) == 2) op(.clrex, w) else op(.nop, w);
+        if (is(w, 0xfffff01f, 0xd503301f)) return switch (bits(w, 5, 3)) {
+            2 => op(.clrex, w),
+            4, 5 => op(.fence, w),
+            else => op(.nop, w),
+        };
         if (is(w, 0xfff8f01f, 0xd500401f)) return op(.nop, w);
         if (is(w, 0xfff80000, 0xd5080000)) return if (bits(w, 5, 11) == 0x3a1) faultOp(.dc_zva) else op(.nop, w);
         if (is(w, 0xfff00000, 0xd5300000)) {
@@ -229,17 +247,25 @@ pub fn decode(w: u32, pc: u32) Op {
         }
         if (is(w, 0x3f000000, 0x08000000)) {
             var r = op(.excl, w);
-            r.a = @intCast(bits(w, 30, 2));
-            r.b = @intCast((bits(w, 23, 1) << 2) | (bits(w, 22, 1) << 1) | bits(w, 21, 1));
+            const size = bits(w, 30, 2);
+            const loads = bits(w, 22, 1) != 0;
+            const form: Excl = if (bits(w, 21, 1) == 0)
+                (if (bits(w, 23, 1) == 0) (if (loads) .ldx else .stx) else if (loads) .ldar else .stlr)
+            else if (bits(w, 23, 1) != 0) .cas else if (size < 2) .casp else if (loads) .ldxp else .stxp;
+            // CASP's size field names the size below its registers'
+            r.a = @intCast(if (form == .casp) size + 2 else size);
+            r.b = @intFromEnum(form);
             r.ra = @intCast(bits(w, 10, 5));
             return r;
         }
         const size = bits(w, 30, 2);
         const opc = bits(w, 22, 2);
         if (is(w, 0x3f200c00, 0x38200000)) {
+            const form = bits(w, 12, 4);
+            if (form > @intFromEnum(Lse.swp) and form != @intFromEnum(Lse.ldapr)) return faultOp(.unimplemented);
             var r = op(.atomic, w);
             r.a = @intCast(size);
-            r.b = @intCast(bits(w, 12, 4));
+            r.b = @intCast(form);
             return r;
         }
         if (size == 3 and opc == 2) return op(.nop, w);
@@ -415,7 +441,7 @@ pub inline fn addr(c: *Cpu, va: u64) ?u32 {
     const lo: u32 = @truncate(va);
     const hi: u32 = @intCast((va & TBI_MASK) >> 32);
     if (hi != 0) {
-        const p = mem.tx(hi, lo);
+        const p = plane.tx(hi, lo);
         if (p == 0) {
             c.fault_addr = va & TBI_MASK;
             return null;
@@ -542,6 +568,7 @@ pub fn exec(c: *Cpu, o: *const Op, pc: u32) Status {
             return svc(c);
         },
         .clrex => c.excl = 0,
+        .fence => lane.fence(),
         .mrs => setX(c, o.rd, sysRead(c, o.imm) orelse return raise(c, .sysreg, ld(u32, pc))),
         .msr => {
             const t = zr(c, o.rd);
@@ -594,9 +621,9 @@ pub fn exec(c: *Cpu, o: *const Op, pc: u32) Status {
             if (o.a == 1 or o.a == 2) c.x[o.rn] = if (o.a == 1) base +% o.imm else base;
             const load = opc != 0 and !(size == 3 and opc == 2);
             if (!load) {
-                if (!stSized(c, a, size, zr(c, o.rd))) return badAddr(c, pc);
+                if (!stSized(c, a, @intCast(size), zr(c, o.rd))) return badAddr(c, pc);
             } else {
-                const v = ldSized(a, size);
+                const v = ldSized(a, @intCast(size));
                 const shl: u6 = @intCast(64 - (@as(u32, 8) << size));
                 const s: u64 = @bitCast(@as(i64, @bitCast(v << shl)) >> shl);
                 setX(c, o.rd, if (opc == 1 or size == 3) v else if (opc == 2) s else s & 0xffff_ffff);
@@ -710,100 +737,169 @@ fn two(comptime T: type, c: *Cpu, o: *const Op) void {
     setX(c, o.rd, v);
 }
 
+/// Exclusives and CAS run as the Wasm atomics they emulate, so lanes running the same lock agree
+/// on it (lane.zig): a store-exclusive swaps in its value only while memory still holds what the
+/// load-exclusive read.
 fn exclusive(c: *Cpu, o: *const Op, pc: u32) Status {
-    const size = o.a;
-    const o2 = o.b & 4 != 0;
-    const load = o.b & 2 != 0;
-    const o1 = o.b & 1 != 0;
-    const a = addr(c, c.x[o.rn]) orelse return badAddr(c, pc);
-    if (!o1) {
-        if (load) {
-            if (!o2) c.excl = 1;
-            setX(c, o.rd, ldSized(a, size));
-        } else {
-            if ((o2 or c.excl != 0) and !stSized(c, a, size, zr(c, o.rd))) return badAddr(c, pc);
-            if (!o2) {
-                setW(c, o.rm, c.excl ^ 1);
-                c.excl = 0;
+    const form: Excl = @enumFromInt(o.b);
+    const span = exclSpan(o);
+    const n = @as(u32, 1) << span;
+    const a = aligned(c, o, pc, n) orelse return .fault;
+    if (span == 4) return exclusive128(c, o, form, a, pc);
+    const k: u2 = @intCast(span);
+    switch (form) {
+        .ldx, .ldar, .ldxp => {
+            const v = atomicLoad(a, k);
+            if (form != .ldar) {
+                c.excl = 1;
+                c.excl_val = v;
             }
-        }
-    } else if (!o2 and size >= 2) {
-        const step: u32 = if (size == 3) 8 else 4;
-        if (load) {
-            c.excl = 1;
-            setX(c, o.rd, ldSized(a, size));
-            setX(c, o.ra, ldSized(a + step, size));
-        } else {
-            if (c.excl != 0 and (!stSized(c, a, size, zr(c, o.rd)) or !stSized(c, a + step, size, zr(c, o.ra)))) return badAddr(c, pc);
-            setW(c, o.rm, c.excl ^ 1);
+            if (form == .ldxp) {
+                setW(c, o.rd, @truncate(v));
+                setW(c, o.ra, @truncate(v >> 32));
+            } else setX(c, o.rd, v);
+        },
+        .stx, .stxp => {
+            var ok = false;
+            if (c.excl != 0) {
+                if (!storable(c, a, n)) return badAddr(c, pc);
+                ok = casSized(a, k, c.excl_val, if (form == .stxp) words(zr(c, o.rd), zr(c, o.ra)) else zr(c, o.rd)) == c.excl_val;
+            }
+            setW(c, o.rm, @intFromBool(!ok));
             c.excl = 0;
-        }
-    } else if (o2) {
-        const v = ldSized(a, size);
-        const cmp = zr(c, o.rm) & sizeMask(size);
-        if (v == cmp) if (!stSized(c, a, size, zr(c, o.rd))) return badAddr(c, pc);
-        setX(c, o.rm, v);
-    } else if (size == 1) {
-        const v = ld(u64, a);
-        const t = ld(u64, a + 8);
-        if (v == zr(c, o.rm) and t == zr(c, o.rm + 1)) {
-            if (!st(u64, c, a, zr(c, o.rd)) or !st(u64, c, a + 8, zr(c, o.rd + 1))) return badAddr(c, pc);
-        }
-        setX(c, o.rm, v);
-        setX(c, o.rm + 1, t);
-    } else {
-        const v = ld(u32, a);
-        const t = ld(u32, a + 4);
-        if (v == @as(u32, @truncate(zr(c, o.rm))) and t == @as(u32, @truncate(zr(c, o.rm + 1)))) {
-            if (!st(u32, c, a, @truncate(zr(c, o.rd))) or !st(u32, c, a + 4, @truncate(zr(c, o.rd + 1)))) return badAddr(c, pc);
-        }
-        setW(c, o.rm, v);
-        setW(c, o.rm + 1, t);
+        },
+        .stlr => {
+            if (!storable(c, a, n)) return badAddr(c, pc);
+            switch (k) {
+                inline else => |w| lane.store(Word(w), a, @truncate(zr(c, o.rd))),
+            }
+        },
+        .cas => {
+            if (!storable(c, a, n)) return badAddr(c, pc);
+            setX(c, o.rm, casSized(a, k, zr(c, o.rm), zr(c, o.rd)));
+        },
+        .casp => {
+            if (!storable(c, a, n)) return badAddr(c, pc);
+            const v = casSized(a, k, words(zr(c, o.rm), zr(c, o.rm + 1)), words(zr(c, o.rd), zr(c, o.rd + 1)));
+            setW(c, o.rm, @truncate(v));
+            setW(c, o.rm + 1, @truncate(v >> 32));
+        },
     }
     return .next;
 }
-inline fn sizeMask(size: u8) u64 {
-    return bt.ones(@as(u32, 8) << @intCast(size));
+/// the 128-bit pairs, which Wasm has no atomic for: under the lanes' lock
+fn exclusive128(c: *Cpu, o: *const Op, form: Excl, a: u32, pc: u32) Status {
+    lane.lock();
+    defer lane.unlock();
+    const v = ld(u64, a);
+    const t = ld(u64, a + 8);
+    switch (form) {
+        .ldxp => {
+            c.excl = 1;
+            c.excl_val = v;
+            c.excl_val2 = t;
+            setX(c, o.rd, v);
+            setX(c, o.ra, t);
+        },
+        .stxp => {
+            var ok = false;
+            if (c.excl != 0) {
+                if (!storable(c, a, 16)) return badAddr(c, pc);
+                ok = v == c.excl_val and t == c.excl_val2;
+                if (ok) store128(a, zr(c, o.rd), zr(c, o.ra));
+            }
+            setW(c, o.rm, @intFromBool(!ok));
+            c.excl = 0;
+        },
+        else => {
+            if (!storable(c, a, 16)) return badAddr(c, pc);
+            if (v == zr(c, o.rm) and t == zr(c, o.rm + 1)) store128(a, zr(c, o.rd), zr(c, o.rd + 1));
+            setX(c, o.rm, v);
+            setX(c, o.rm + 1, t);
+        },
+    }
+    return .next;
 }
-inline fn ldSized(a: u32, size: u8) u64 {
+inline fn store128(a: u32, lo: u64, hi: u64) void {
+    mem.ptr(u64, a).* = lo;
+    mem.ptr(u64, a + 8).* = hi;
+}
+inline fn ldSized(a: u32, size: u2) u64 {
     return switch (size) {
-        0 => ld(u8, a),
-        1 => ld(u16, a),
-        2 => ld(u32, a),
-        else => ld(u64, a),
+        inline else => |k| ld(Word(k), a),
     };
 }
-inline fn stSized(c: *Cpu, a: u32, size: u8, v: u64) bool {
+inline fn stSized(c: *Cpu, a: u32, size: u2, v: u64) bool {
     return switch (size) {
-        0 => st(u8, c, a, @truncate(v)),
-        1 => st(u16, c, a, @truncate(v)),
-        2 => st(u32, c, a, @truncate(v)),
-        else => st(u64, c, a, v),
+        inline else => |k| st(Word(k), c, a, @truncate(v)),
     };
+}
+/// a pair of 32-bit registers as the doubleword they occupy
+inline fn words(lo: u64, hi: u64) u64 {
+    return (lo & 0xffff_ffff) | hi << 32;
+}
+fn Word(comptime size: u2) type {
+    return std.meta.Int(.unsigned, @as(u16, 8) << size);
+}
+/// the address an atomic access of span bytes names, or null with the fault raised: it faults unless
+/// aligned to the span, as on a device
+inline fn aligned(c: *Cpu, o: *const Op, pc: u32, span: u32) ?u32 {
+    if (addr(c, c.x[o.rn])) |a| {
+        if (a & (span - 1) == 0) return a;
+        c.fault_addr = c.x[o.rn] & TBI_MASK;
+    }
+    _ = badAddr(c, pc);
+    return null;
+}
+inline fn atomicLoad(a: u32, size: u2) u64 {
+    return switch (size) {
+        inline else => |k| lane.load(Word(k), a),
+    };
+}
+/// what memory held, zero-extended
+inline fn casSized(a: u32, size: u2, expected: u64, v: u64) u64 {
+    return switch (size) {
+        inline else => |k| lane.cas(Word(k), a, @truncate(expected), @truncate(v)),
+    };
+}
+fn lse(comptime T: type, form: Lse, a: u32, s: T) T {
+    switch (form) {
+        .add => return lane.rmw(T, .Add, a, s),
+        .clr => return lane.rmw(T, .And, a, ~s),
+        .eor => return lane.rmw(T, .Xor, a, s),
+        .set => return lane.rmw(T, .Or, a, s),
+        .swp => return lane.rmw(T, .Xchg, a, s),
+        .ldapr => unreachable,
+        .smax, .smin, .umax, .umin => {
+            const S = std.meta.Int(.signed, @bitSizeOf(T));
+            var v = lane.load(T, a);
+            while (true) {
+                const t = switch (form) {
+                    .smax => if (@as(S, @bitCast(v)) > @as(S, @bitCast(s))) v else s,
+                    .smin => if (@as(S, @bitCast(v)) < @as(S, @bitCast(s))) v else s,
+                    .umax => @max(v, s),
+                    else => @min(v, s),
+                };
+                const seen = lane.cas(T, a, v, t);
+                if (seen == v) return v;
+                v = seen;
+            }
+        },
+    }
 }
 fn atomic(c: *Cpu, o: *const Op, pc: u32) Status {
-    const size = o.a;
-    const a = addr(c, c.x[o.rn]) orelse return badAddr(c, pc);
-    const v = ldSized(a, size);
-    const s = zr(c, o.rm) & sizeMask(size);
-    const shl: u6 = @intCast(64 - (@as(u32, 8) << @intCast(size)));
-    const sv: i64 = @as(i64, @bitCast(v << shl)) >> shl;
-    const ss: i64 = @as(i64, @bitCast(s << shl)) >> shl;
-    const t: ?u64 = switch (o.b) {
-        0 => v +% s,
-        1 => v & ~s,
-        2 => v ^ s,
-        3 => v | s,
-        4 => if (sv > ss) v else s,
-        5 => if (sv < ss) v else s,
-        6 => if (v > s) v else s,
-        7 => if (v < s) v else s,
-        8 => s,
-        12 => null,
-        else => return raise(c, .unimplemented, ld(u32, pc)),
-    };
-    if (t) |nv| if (!stSized(c, a, size, nv & sizeMask(size))) return badAddr(c, pc);
-    setX(c, o.rd, v);
+    const size: u2 = @intCast(o.a);
+    const form: Lse = @enumFromInt(o.b);
+    const a = aligned(c, o, pc, @as(u32, 1) << size) orelse return .fault;
+    // LDAPR: the load alone
+    if (form == .ldapr) {
+        setX(c, o.rd, atomicLoad(a, size));
+        return .next;
+    }
+    if (!storable(c, a, @as(u32, 1) << size)) return badAddr(c, pc);
+    setX(c, o.rd, switch (size) {
+        inline else => |k| lse(Word(k), form, a, @truncate(zr(c, o.rm))),
+    });
     return .next;
 }
 
@@ -825,11 +921,19 @@ fn svc(c: *Cpu) Status {
 /// the decoded op at `pc`, decoding it and marking its word executed on first use
 pub inline fn opAt(page: *cpu.Page, pc: u32) *Op {
     const o = &page.ops[(pc & (abi.PAGE_SIZE - 1)) >> 2];
-    if (o.kind == .raw) {
-        o.* = decode(ld(u32, pc), pc);
+    if (@atomicLoad(Kind, &o.kind, .acquire) == .raw) {
+        // marked before it is read, so a store from another lane in between drops the page
         cpu.cover(page, pc, pc);
+        publish(o, pc, ld(u32, pc));
     }
     return o;
+}
+/// Decode w into o, the op at pc. Another lane may be running o: its kind, which says it is decoded, goes last.
+pub fn publish(o: *Op, pc: u32, w: u32) void {
+    const d = decode(w, pc);
+    comptime std.debug.assert(std.mem.eql(u8, @typeInfo(Op).@"struct".fields[0].name, "kind"));
+    inline for (@typeInfo(Op).@"struct".fields[1..]) |f| @field(o, f.name) = @field(d, f.name);
+    @atomicStore(Kind, &o.kind, d.kind, .release);
 }
 
 pub fn block(c: *Cpu, start: u32, page: *cpu.Page) Status {

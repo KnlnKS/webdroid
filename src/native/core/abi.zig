@@ -62,6 +62,11 @@ pub const TRAMP_SLOTS: u32 = (TRAMP_END - TRAMP_BASE) / 8;
 /// Entries in the host's `__indirect_function_table`, the core's own below JIT_SLOT0 and JIT regions' above.
 pub const JIT_SLOTS: u32 = 1 << 18;
 pub const JIT_SLOT0: u32 = 8192;
+/// what a region returns to hand the instruction at the Cpu's pc to the interpreter (cpu.RegionExit),
+/// as a lane's table slot does until the lane links the slot's region (lanes.ts)
+pub const REGION_INTERPRET: u32 = 4;
+/// Instruction forms the JIT's fallback census tells apart (cpu.zig), a power of two.
+pub const FALLBACK_FORMS: u32 = 1 << 10;
 
 // The kernel region, one table after another. Each base is the previous base plus what the
 // previous table needs, so widening an entry moves everything after it instead of overwriting it;

@@ -106,8 +106,9 @@ pnpm ts scripts/perfsum.ts tests/e2e/actual <baseline.json>
 - ARM32/A64 execute in `src/native/core/`; `cpu.ts` drives async exits. Interpreter semantics
   and JIT results must agree. Stores to executed code invalidate decoded operations and regions;
   install compiled regions only against their source page epoch. Host calls exit `run_slice`;
-  preserve guest-frame, signal and callback ordering. See the history for core implementation
-  details and rejected performance experiments.
+  preserve guest-frame, signal and callback ordering. Lanes (`lanes.ts`) run A64 slices in parallel
+  over the process's memory: core state they share changes under `lane.zig`'s lock, and only lane 0
+  moves a plane. See the history for core implementation details and rejected performance experiments.
 - Java runs on the Wasm tier, `src/wasm/{compiler,link,host}`, loaded by a dynamic import from `src/jvm/tier.ts`.
   Only `host` may import the runtime, natives and services (`tests/wasm-layers.test.ts`). Its suites are `pnpm wasm <suite>` (`scripts/wasm/run.ts`);
   a change to the shared front end (`prepared`, `dex`, `abi`, `opcodes`) also needs `pnpm wasm all`. Map: [docs/architecture.md](docs/architecture.md).
@@ -120,4 +121,5 @@ pnpm ts scripts/perfsum.ts tests/e2e/actual <baseline.json>
 
 The browser exposes `wd` from `src/shell/harness.ts`; missing APIs are `wd.rt.missing`.
 For suspected JIT faults, compare `?jit=0`, then narrow with `__wdJit` ranges or
-`core.jit_fallback(lo, hi)`. Combine reproduction, tier comparison and source inspection.
+`core.jit_fallback(lo, hi)`. For suspected races between native threads, compare `?lanes=0`.
+Combine reproduction, tier comparison and source inspection.

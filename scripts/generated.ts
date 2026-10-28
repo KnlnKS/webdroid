@@ -31,7 +31,7 @@ export function writeWhole(path: string, data: string | Uint8Array): void {
 }
 
 const NATIVE = "src/native", CORE = `${NATIVE}/core`, ABI = `${NATIVE}/core-abi.gen.ts`;
-const FEATURES = "generic+simd128+bulk_memory+sign_ext+nontrapping_fptoint+mutable_globals";
+const FEATURES = "generic+simd128+bulk_memory+sign_ext+nontrapping_fptoint+mutable_globals+atomics";
 const MODES = [["ReleaseFast", "core.wasm"], ["ReleaseSafe", "core.safe.wasm"]] as const;
 
 /** abi.zig's and libc.zig's TLS_ constants are integer expressions JS evaluates alike; libc.zig numbers its functions from 1 */
@@ -47,8 +47,11 @@ async function buildCore(): Promise<void> {
   writeAbi();
   await Promise.all(MODES.map(async ([mode, name]) => {
     const bin = `${NATIVE}/${process.pid}-${name}`;
-    await run("zig", ["build-exe", `${CORE}/core.zig`, "-target", "wasm32-freestanding", "-O", mode, `-mcpu=${FEATURES}`, "-fno-entry", "-rdynamic",
-      "--import-memory", "--max-memory=4294901760", "--import-table", "--global-base=65536", "--stack", "262144", "--export=__heap_base", "-fstrip", `-femit-bin=${bin}`]);
+    // Shared memory with thread-local lanes: each instance of a process's core (core.ts, lanes.ts) keeps its own stack and TLS,
+    // and the passive data segments initialize the memory once, for the first.
+    await run("zig", ["build-exe", `${CORE}/core.zig`, "-target", "wasm32-freestanding", "-O", mode, `-mcpu=${FEATURES}`, "-fno-single-threaded", "-fno-entry", "-rdynamic",
+      "--import-memory", "--shared-memory", "--max-memory=4294901760", "--import-table", "--global-base=65536", "--stack", "262144", "--export=__heap_base",
+      "--export=__stack_pointer", "--export=__wasm_init_tls", "--export=__tls_size", "--export=__tls_align", "-fstrip", `-femit-bin=${bin}`]);
     const bytes = new Uint8Array(readFileSync(bin));
     if (mode === "ReleaseFast") renameSync(bin, `${NATIVE}/native-core.wasm`);
     else rmSync(bin);

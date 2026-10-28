@@ -8,17 +8,16 @@ const Emit = jit.Emit(true);
 const O = wasm.Op;
 const S = wasm.Simd;
 const get = wasm.get;
-const c32 = wasm.c32;
 const c64 = wasm.c64;
 const mo = wasm.mo;
 const sv = wasm.simd;
 const vm = wasm.vm;
-const L_CPU = jit.L_CPU;
 const L_A = jit.L_A;
 const vreg = @import("jitreg.zig");
-const voff = vreg.voff;
 const vget = vreg.vget;
 const vput = vreg.vput;
+/// integer loads of 1 << size bytes into the i32 or i64 a lane takes
+const LANE_LD = [4]u8{ O.i32_load8_u, O.i32_load16_u, O.i32_load, O.i64_load };
 
 fn emitVlane(e: *Emit, w: u32) bool {
     const b = e.b;
@@ -54,10 +53,12 @@ fn emitVlane(e: *Emit, w: u32) bool {
         const t: u8 = @intCast((rt + i) & 31);
         const off: u32 = @as(u32, @intCast(i)) << @intCast(esz);
         if (opcode >= 6) {
-            b.emit(.{ get(L_CPU), get(L_A), vm(S.load8_splat + @as(u8, @intCast(esz)), off) });
+            b.emit(.{ get(L_A), vm(S.load8_splat + @as(u8, @intCast(esz)), off) });
             vput(e, t, q != 0);
         } else if (Ld) {
-            b.emit(.{ get(L_CPU), get(L_A), mo(jit.LD[esz][0], off), mo(jit.ST[esz], voff(t) + (idx << @intCast(esz))) });
+            vget(e, t);
+            b.emit(.{ get(L_A), mo(LANE_LD[esz], off), sv(S.replace[esz]), @as(u8, @intCast(idx)) });
+            vput(e, t, true);
         } else {
             b.get(L_A);
             vget(e, t);
@@ -73,15 +74,22 @@ fn emitVlane(e: *Emit, w: u32) bool {
     return true;
 }
 
-fn vload(e: *Emit, t: u8, off: u32, sz: u32) void {
-    const b = e.b;
-    if (sz >= 3) {
-        b.emit(.{ get(L_CPU), get(L_A), vm(if (sz == 4) S.load else S.load64_zero, off), vm(S.store, voff(t)) });
-        return;
+/// Vt's load of 1 << sz bytes at `off` from the address on the stack, the bytes above them cleared
+fn vloadFrom(e: *Emit, t: u8, off: u32, sz: u32) void {
+    if (sz < 2) {
+        e.b.memop(LANE_LD[sz], off);
+        return vreg.vputScalar(e, t, false, false);
     }
-    b.emit(.{ get(L_CPU), get(L_A), mo(jit.LD[sz][0], off), mo(O.i64_store, voff(t)), get(L_CPU) });
-    b.i64c(0);
-    b.memop(O.i64_store, voff(t) + 8);
+    e.b.emit(.{vm(switch (sz) {
+        2 => S.load32_zero,
+        3 => S.load64_zero,
+        else => S.load,
+    }, off)});
+    vput(e, t, true);
+}
+fn vload(e: *Emit, t: u8, off: u32, sz: u32) void {
+    e.b.get(L_A);
+    vloadFrom(e, t, off, sz);
 }
 /// the store of V`t` at L_A + off, which its caller's storeCheck or rangeCheck covers
 fn vstore(e: *Emit, t: u8, off: u32, sz: u32) void {
@@ -95,15 +103,10 @@ fn vstore(e: *Emit, t: u8, off: u32, sz: u32) void {
     b.emit(.{ vm(S.store8_lane + @as(u8, @intCast(sz)), off), 0 });
 }
 pub fn emitVldrlit(e: *Emit, o: *const a64.Op) void {
-    e.vloaded = 0;
-    const a: u32 = @truncate(o.imm);
-    const sz: u32 = 2 + o.b;
-    e.b.emit(.{ get(L_CPU), c32(0), mo(jit.LD[@min(sz, 3)][0], a), mo(O.i64_store, voff(o.rd)), get(L_CPU) });
-    if (sz == 4) e.b.emit(.{ c32(0), mo(O.i64_load, a + 8) }) else e.b.i64c(0);
-    e.b.memop(O.i64_store, voff(o.rd) + 8);
+    e.b.i32c(0);
+    vloadFrom(e, o.rd, @truncate(o.imm), 2 + o.b);
 }
 pub fn emitVmem(e: *Emit, w: u32, pc: u32, k: u32) void {
-    if (w & (1 << 22) != 0) e.vloaded = 0;
     const b = e.b;
     const rt: u8 = @intCast(w & 31);
     const rn: u8 = @intCast(bits(w, 5, 5));
@@ -122,7 +125,7 @@ pub fn emitVmem(e: *Emit, w: u32, pc: u32, k: u32) void {
                     for (0..count) |i| for (0..es) |j| {
                         lanes[i * es + j] = @intCast((2 * i + reg) * es + j);
                     };
-                    b.emit(.{ get(L_CPU), get(L_A), vm(S.load, 0), get(L_A), vm(S.load, if (q) 16 else 0), sv(S.shuffle) });
+                    b.emit(.{ get(L_A), vm(S.load, 0), get(L_A), vm(S.load, if (q) 16 else 0), sv(S.shuffle) });
                     b.bytes(&lanes);
                     vput(e, @intCast((rt + reg) & 31), q);
                 }

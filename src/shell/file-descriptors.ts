@@ -16,8 +16,8 @@ import { rt } from "../jvm/runtime.ts";
  *  result, or -errno */
 export type DescriptorCalls = {
   ashmemCreate(size: number): Promise<number>;
-  /** the process that holds a fifo keeps its own pipe behind its name */
-  open(path: string, flags: number): Promise<number | { token: number; dir: boolean } | "fifo">;
+  /** an open file's token, with its fstat as it opened; the process that holds a fifo keeps its own pipe behind its name */
+  open(path: string, flags: number): Promise<number | { token: number; dir: boolean; stat: FdStat | null } | "fifo">;
   /** at the open file's position, or at `offset` without moving it */
   read(fd: number, length: number, offset?: number): Promise<number | Uint8Array>;
   write(fd: number, bytes: Uint8Array, offset?: number): Promise<number>;
@@ -259,7 +259,7 @@ export class FileDescriptors {
         const existed = vfs.exists(path), fd = localOpen(path,flags);
         if (fd >= 0 && !existed && s.uid !== undefined) vfs.setAttributes(path,{uid:s.uid,gid:s.uid});
         const dir = fd >= 0 && openFd(fd)!.dir, token = this.put(s,fd);
-        return token < 0 ? token : {token,dir};
+        return token < 0 ? token : {token,dir,stat:localFdStat(fd)};
       },
       read: async (fd, length, offset) => on(fd, async descriptor => {
         if (!Number.isSafeInteger(length) || length < 0) return -E.INVAL;

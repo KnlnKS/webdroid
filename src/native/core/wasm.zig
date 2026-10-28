@@ -144,6 +144,14 @@ pub const F = struct {
     pub const iload = [2]u8{ Op.i32_load, Op.i64_load };
     pub const istore = [2]u8{ Op.i32_store, Op.i64_store };
 };
+/// the threads proposal's i64 forms, by access size (1 << index bytes)
+pub const Atomic = struct {
+    pub const prefix: u8 = 0xfe;
+    pub const fence: u8 = 0x03;
+    pub const load = [4]u8{ 0x14, 0x15, 0x16, 0x11 };
+    pub const store = [4]u8{ 0x1b, 0x1c, 0x1d, 0x18 };
+    pub const cmpxchg = [4]u8{ 0x4c, 0x4d, 0x4e, 0x49 };
+};
 pub const Simd = struct {
     pub const prefix: u8 = 0xfd;
     pub const load: u8 = 0x00;
@@ -152,6 +160,7 @@ pub const Simd = struct {
     pub const shuffle: u8 = 0x0d;
     pub const swizzle: u8 = 0x0e;
     pub const load8_splat: u8 = 0x07;
+    pub const load32_zero: u8 = 0x5c;
     pub const load64_zero: u8 = 0x5d;
     pub const store8_lane: u8 = 0x58;
     pub const store64_lane: u8 = 0x5b;
@@ -239,6 +248,8 @@ pub const Br = struct { depth: u32 };
 pub const BrIf = struct { depth: u32 };
 pub const Vop = struct { op: u8 };
 pub const Vm = struct { op: u8, off: u32 };
+/// an atomic access of 1 << size bytes, whose memarg must state that natural alignment
+pub const Am = struct { op: u8, size: u2, off: u32 };
 pub fn get(l: u32) Get {
     return .{ .l = l };
 }
@@ -268,6 +279,9 @@ pub fn simd(op: u8) Vop {
 }
 pub fn vm(op: u8, off: u32) Vm {
     return .{ .op = op, .off = off };
+}
+pub fn am(op: [4]u8, size: u2, off: u32) Am {
+    return .{ .op = op[size], .size = size, .off = off };
 }
 
 pub const Buf = struct {
@@ -376,6 +390,12 @@ pub const Buf = struct {
                 b.byte(Simd.prefix);
                 b.u(x.op);
                 b.u(0);
+                b.u(x.off);
+            },
+            Am => {
+                b.byte(Atomic.prefix);
+                b.u(x.op);
+                b.u(x.size);
                 b.u(x.off);
             },
             else => @compileError("emit: " ++ @typeName(@TypeOf(x))),

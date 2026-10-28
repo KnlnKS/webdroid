@@ -5,4 +5,5 @@ export const WORKER_SCRIPTS = {
   warm: { url: "/wasm-warm-worker.js", entry: "src/wasm/host/warm-worker.ts" },
   process: { url: "/process-worker.js", entry: "src/process-worker.ts" },
   disk: { url: "/disk-worker.js", entry: "src/shell/disk-worker.ts" },
+  lane: { url: "/lane-worker.js", entry: "src/native/lane-worker.ts" },
 } as const;

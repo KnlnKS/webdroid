@@ -43,6 +43,8 @@ const SEL = { density: 0 };
 /** the native half of an ApkAssets: one archive and its resource table */
 export interface Apk { table: Arsc | null; zip: Record<string, Uint8Array>; lazyEntries: Map<string, FileSource> }
 export const emptyApk = (): Apk => ({ table: null, zip: {}, lazyEntries: new Map() });
+/** every entry of an apk, resident or read when opened */
+export const apkEntryNames = (apk: Apk): string[] => [...Object.keys(apk.zip), ...apk.lazyEntries.keys()];
 
 /** AssetManager2: its apks' tables by package id, selecting under one configuration. */
 export class Resources {

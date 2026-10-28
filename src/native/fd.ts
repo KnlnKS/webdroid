@@ -46,7 +46,7 @@ export interface FileOps<S = unknown> {
   /** call `wake` once the readiness may have changed; answers how to stop */
   watch(f: OpenFile<S>, wake: () => void): () => void;
   seek(f: OpenFile<S>, off: number, whence: number): PromiseOrVal<number>;
-  stat(f: OpenFile<S>): FdStat | Promise<FdStat | null>;
+  stat(f: OpenFile<S>): PromiseOrVal<FdStat | null>;
   sync(f: OpenFile<S>): PromiseOrVal<number>;
   /** FIONREAD: what a read could take now */
   available(f: OpenFile<S>): PromiseOrVal<number>;
@@ -202,7 +202,12 @@ export function readFd(fd: number, into: Uint8Array | number, n: number, off = -
   if (typeof r !== "number") {
     if (!guest) return r.then((v) => typeof v === "number" ? v : (into.set(v), v.length));
     const at = anchor(into);
-    return r.then((v) => typeof v === "number" ? v : (mem.write(at(), v), v.length));
+    return r.then((v) => {
+      if (typeof v === "number") return v;
+      const a = at();
+      mem.write(a, v); wrote(a, v.length);
+      return v.length;
+    });
   }
   if (r > 0) { if (guest) wrote(into, r); }
   else if (r === -E.AGAIN && !(f!.statusFlags & O_NONBLOCK)) {

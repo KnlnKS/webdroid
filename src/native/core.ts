@@ -9,14 +9,17 @@ import { perf } from "../perf.ts";
 import { uptimeMillis, wallMillis } from "../guest-clock.ts";
 
 export { NativeFault, BadAddress } from "./faults.ts";
-import { NativeFault } from "./faults.ts";
 import { attachedPool, windowImports } from "./window.ts";
+import { coreEnv, jitEnv } from "./core-env.ts";
 
 interface Core {
   __heap_base: WebAssembly.Global;
+  __tls_size: WebAssembly.Global;
+  __tls_align: WebAssembly.Global;
   mem_init(size: number): void;
   flags_ptr(): number;
   stat(i: number): number;
+  plane_stat(i: number): number;
   malloc(n: number): number;
   free(p: number): number;
   calloc(n: number, m: number): number;
@@ -54,6 +57,9 @@ interface Core {
   invalidate_range(addr: number, size: number): void;
   invalidate_all(): void;
   cpu_stat(i: number): number;
+  jit_census(): void;
+  jit_fallback_form(i: number): number;
+  jit_fallback_count(i: number): number;
   set_max_block(n: number): void;
   host_bind(slot: number, id: number): void;
   host_bypass(on: number): void;
@@ -69,6 +75,10 @@ interface Core {
   jit_done(): void;
   jit_flush(): void;
   jit_reclaim(): number;
+  jit_hold(): void;
+  jit_unhold(slot: number): void;
+  jit_live(slot: number): number;
+  jit_flushes(): number;
   jit_stat(): number;
   exec_word32(cpu: number, pc: number): number;
   exec_it_block32(cpu: number, pc: number, end: number): number;
@@ -115,12 +125,12 @@ if (shared) {
     return decode.call(this, ArrayBuffer.isView(input) && !(input.buffer instanceof ArrayBuffer) ? new Uint8Array(input.buffer, input.byteOffset, input.byteLength).slice() : input, options);
   };
 }
-const MEMORY_IMPORT = [3, ..."env", 6, ..."memory", 2, 1].map((c) => typeof c === "string" ? c.charCodeAt(0) : c);
-/** the core's import of `memory`, which the build declares unshared, as the memory was made */
+const MEMORY_IMPORT = [3, ..."env", 6, ..."memory", 2, 3].map((c) => typeof c === "string" ? c.charCodeAt(0) : c);
+/** the core's import of `memory`, which the build declares shared, as the memory was made */
 function imported(bytes: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer> {
-  if (!shared) return bytes;
+  if (shared) return bytes;
   const at = bytes.findIndex((_, i) => MEMORY_IMPORT.every((b, j) => bytes[i + j] === b));
-  bytes[at + MEMORY_IMPORT.length - 1] = 0x03; // limits: shared, with a maximum
+  bytes[at + MEMORY_IMPORT.length - 1] = 0x01; // limits: unshared, with a maximum
   return bytes;
 }
 /** the core's function table, which JIT regions are linked into above the core's own entries (JIT_SLOT0) */
@@ -145,20 +155,11 @@ async function load(): Promise<WebAssembly.Module> {
   const b64 = typeof process !== "undefined" && process.env.NODE_ENV === "test" ? (await import("./core.safe.wasm.ts")).default : (await import("./core.wasm.ts")).default;
   return WebAssembly.compile(imported(Uint8Array.fromBase64(b64)));
 }
-const instance = await WebAssembly.instantiate(await load(), {
-  env: {
-    memory,
-    __indirect_function_table: table,
-    now_ms: () => performance.now(),
-    // read through: a realm's clock may be replaced after instantiation
-    uptime_ms: () => uptimeMillis(),
-    wall_ms: () => wallMillis(),
-    mem_grown: () => grown(),
-    ...windowImports(memory),
-    js_panic(ptr: number, len: number): never {
-      throw new NativeFault("[native] core: " + new TextDecoder().decode(new Uint8Array(memory.buffer, ptr, len)));
-    },
-  },
+/** the compiled core, which each lane (lanes.ts) instantiates over the same memory */
+export const coreModule = await load();
+const instance = await WebAssembly.instantiate(coreModule, {
+  // the clocks read through: a realm's clock may be replaced after instantiation
+  env: { ...coreEnv(memory, table, { now: () => performance.now(), uptime: () => uptimeMillis(), wall: () => wallMillis() }, () => grown()), ...windowImports(memory) },
 });
 export const core = instance.exports as unknown as Core;
 if (core.__heap_base.value > STACK_BASE) throw new Error("[native] the core's data overruns the stack region");
@@ -174,25 +175,68 @@ export function pageFlags(): Uint8Array {
 const JIT_CAP = 1 << 20; // the last MiB of the KERN region (abi.ts)
 /** what an ARM32 module's window helpers reach while this realm has no pool, and so no window page */
 const noPool = new WebAssembly.Memory({ initial: 0, maximum: WINDOW_SIZE >>> 16, ...(shared && { shared: true }) });
-const jitImports = { env: { get pool() { return attachedPool() ?? noPool; }, memory, __indirect_function_table: table, exec: core.exec_word, exec32: core.exec_word32, fmax32: core.jit_fmax32, fmin32: core.jit_fmin32, fmaxnm32: core.jit_fmaxnm32, fminnm32: core.jit_fminnm32, fmax64: core.jit_fmax64, fmin64: core.jit_fmin64, fmaxnm64: core.jit_fmaxnm64, fminnm64: core.jit_fminnm64, fma64: core.jit_fma64, it32: core.exec_it_block32, estimate32: core.jit_estimate32 } };
+const jitImports = jitEnv(instance.exports as never, memory, table, () => attachedPool() ?? noPool);
 /** whether the engine has wasm tail calls: a region then hands off to the next region without returning to the dispatcher */
 const TAIL = WebAssembly.validate(new Uint8Array([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0, 1, 5, 1, 0x60, 0, 1, 0x7f, 3, 2, 1, 0, 10, 6, 1, 4, 0, 0x12, 0, 0x0b]));
 core.jit_config((TAIL ? 1 : 0) | (shared ? 2 : 0));
 /** whether this engine compiles synchronously (node does; Chrome's main thread refuses past 4 KB) */
 let syncCompile: boolean | null = null;
+/** a batch's regions linked in table slots: their export indices and slots, in step */
+export type JitBatch = { module: WebAssembly.Module; regions: number[]; slots: number[] };
+/** A lane's table (lanes.ts): it links every batch as this one does, and unlinks the slots the core
+ *  frees, which the core holds until every lane's table has let go of them. */
+export type JitTable = { link(batch: JitBatch): void; unlink(slots: number[]): Promise<void> };
+/** every started lane's table */
+export const jitTables: JitTable[] = [];
+/** each linked slot's module and export index, for a lane's table to start from */
+const linked = new Map<number, { module: WebAssembly.Module; region: number }>();
+let flushes = 0;
+/** A lane starts its table (lanes.ts): freed slots are held from now on, and the slots the core still
+ *  names are what it links, by batch. */
+export function jitJoin(t: JitTable): JitBatch[] {
+  core.jit_hold();
+  jitTables.push(t);
+  const batches = new Map<WebAssembly.Module, JitBatch>();
+  for (const [slot, { module, region }] of linked) {
+    if (!core.jit_live(slot)) continue;
+    let batch = batches.get(module);
+    if (!batch) batches.set(module, batch = { module, regions: [], slots: [] });
+    batch.regions.push(region); batch.slots.push(slot);
+  }
+  return [...batches.values()];
+}
+/** the slots the core freed, unlinked here and then in every lane's table, after which the core may reuse them */
+function unlink(slots: number[]): void {
+  for (const s of slots) { table.set(s, null); linked.delete(s); }
+  if (slots.length && jitTables.length) void Promise.all(jitTables.map((t) => t.unlink(slots))).then(() => { for (const s of slots) core.jit_unhold(s); });
+}
 export const jitStats = { get regions(): number { return core.jit_stat(); }, async: 0, on: true, chain: TAIL };
 /** debug: only regions whose entry lies in one of the [lo, hi) ranges are installed (set __wdJit before load: bisects a miscompile) */
-function jitLink(inst: WebAssembly.Instance, n: number, t0: number): void {
+function jitLink(module: WebAssembly.Module, inst: WebAssembly.Instance, n: number, t0: number): void {
   const jitRanges = (globalThis as { __wdJit?: [number, number][] }).__wdJit;
-  for (let s; (s = core.jit_reclaim());) table.set(s, null);
+  const freed: number[] = [];
+  for (let s; (s = core.jit_reclaim());) freed.push(s);
+  unlink(freed);
+  let batch: JitBatch = { module, regions: [], slots: [] };
   for (let i = 0; i < n; i++) {
     const pc = core.jit_entry(i) >>> 0;
     if (jitRanges && !jitRanges.some(([lo, hi]) => pc >= lo && pc < hi)) continue;
     const slot = core.jit_install(i);
-    if (slot) table.set(slot, inst.exports["r" + i] as (...a: unknown[]) => unknown);
+    if (!slot) continue;
+    table.set(slot, inst.exports["r" + i] as (...a: unknown[]) => unknown); linked.set(slot, { module, region: i });
+    batch.regions.push(i); batch.slots.push(slot);
   }
+  // a full table dropped every region, this batch's earlier ones included, which every table unlinks
+  // before the core reuses their slots
+  if (core.jit_flushes() !== flushes) {
+    flushes = core.jit_flushes();
+    unlink([...linked.keys()].filter((s) => !core.jit_live(s)));
+    const kept = batch.slots.flatMap((s, k) => linked.get(s)?.module === module && linked.get(s)?.region === batch.regions[k] ? [k] : []);
+    batch = { module, regions: kept.map((k) => batch.regions[k]), slots: kept.map((k) => batch.slots[k]) };
+  }
+  for (const t of jitTables) t.link(batch);
   core.jit_done();
-  perf.jitRegions += n; perf.jitMs += performance.now() - t0;
+  perf.jitRegions += batch.regions.length; perf.jitMs += performance.now() - t0;
 }
 /** compile and link what turned hot since the last drain; called at every exit from the core */
 export function jitDrain(): void {
@@ -203,12 +247,12 @@ export function jitDrain(): void {
   // Both Module and asynchronous instantiate snapshot the source bytes before returning.
   const bytes = new Uint8Array(memory.buffer, JIT_BUF, len), n = core.jit_count();
   if (syncCompile !== false) {
-    try { jitLink(new WebAssembly.Instance(new WebAssembly.Module(bytes), jitImports), n, t0); syncCompile = true; return; }
+    try { const module = new WebAssembly.Module(bytes); jitLink(module, new WebAssembly.Instance(module, jitImports), n, t0); syncCompile = true; return; }
     catch (e) {
       if (!(e instanceof RangeError)) { core.jit_done(); throw e; }
       syncCompile = false;
     }
   }
   jitStats.async++;
-  WebAssembly.instantiate(bytes, jitImports).then(({ instance }) => jitLink(instance, n, t0), (e) => { console.warn("[jit] compile failed:", e); core.jit_done(); });
+  WebAssembly.instantiate(bytes, jitImports).then(({ module, instance }) => jitLink(module, instance, n, t0), (e) => { console.warn("[jit] compile failed:", e); core.jit_done(); });
 }

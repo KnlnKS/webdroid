@@ -3,6 +3,7 @@
 //! and faults, translates or invalidates as it needs.
 const abi = @import("abi.zig");
 const mem = @import("mem.zig");
+const plane = @import("plane.zig");
 const jit = @import("jit.zig");
 const wasm = @import("wasm.zig");
 const O = wasm.Op;
@@ -42,9 +43,9 @@ pub fn Access(comptime wide: bool) type {
             const b = e.b;
             b.emit(.{ tee(L_T0), c64(8), O.i64_shl, c64(40), O.i64_shr_u, O.i32_wrap_i64, tee(L_B) });
             e.ifOf(wasm.I32);
-            b.emit(.{ get(L_B), c32(255), O.i32_and, c32(2), O.i32_shl, set(L_NEXT), get(L_T0), O.i32_wrap_i64, get(L_NEXT), mo(O.i32_load, @intFromPtr(&mem.L)), O.i32_sub, tee(L_R), get(L_NEXT), mo(O.i32_load, @intFromPtr(&mem.S)), O.i32_ge_u, get(L_B), c32(255), O.i32_gt_u, O.i32_or });
+            b.emit(.{ get(L_B), c32(255), O.i32_and, c32(2), O.i32_shl, set(L_NEXT), get(L_T0), O.i32_wrap_i64, get(L_NEXT), mo(O.i32_load, @intFromPtr(&plane.L)), O.i32_sub, tee(L_R), get(L_NEXT), mo(O.i32_load, @intFromPtr(&plane.S)), O.i32_ge_u, get(L_B), c32(255), O.i32_gt_u, O.i32_or });
             interpretIf(e);
-            b.emit(.{ get(L_NEXT), mo(O.i32_load, @intFromPtr(&mem.P)), get(L_R), O.i32_add, O.else_, get(L_T0), O.i32_wrap_i64 });
+            b.emit(.{ get(L_NEXT), mo(O.i32_load, @intFromPtr(&plane.P)), get(L_R), O.i32_add, O.else_, get(L_T0), O.i32_wrap_i64 });
             e.endif();
             b.emit(.{ tee(L_A), c32(abi.LOW), O.i32_lt_u });
             interpretIf(e);

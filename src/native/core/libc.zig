@@ -2,6 +2,7 @@ const std = @import("std");
 const abi = @import("abi.zig");
 const assert = std.debug.assert;
 const mem = @import("mem.zig");
+const plane = @import("plane.zig");
 const cpu = @import("cpu.zig");
 const a64 = @import("a64.zig");
 const Cpu = cpu.Cpu;
@@ -146,7 +147,7 @@ inline fn miss(e: Miss) Result {
 }
 /// whether argument i points at n backed bytes, committing a plane's writable pages under them
 fn committed(c: *Cpu, i: u32, n: u32) bool {
-    if (mem.commit_range(arg(c, i), n) != 0) return true;
+    if (plane.commit_range(arg(c, i), n) != 0) return true;
     c.fault_addr = arg(c, i) & a64.TBI_MASK;
     return false;
 }
@@ -360,7 +361,7 @@ pub fn call(c: *Cpu, id: u8) Result {
             const ch: u8 = @truncate(arg(c, 1));
             const s = std.mem.span(@as([*:0]const u8, @ptrFromInt(p)));
             const i = if (ch == 0) s.len else if (f == .strchr) std.mem.findScalar(u8, s, ch) else std.mem.findScalarLast(u8, s, ch);
-            ret(c, if (i) |k| mem.va(p + @as(u32, @intCast(k))) else 0);
+            ret(c, if (i) |k| plane.va(p + @as(u32, @intCast(k))) else 0);
         },
         .__tls_get_addr => {
             const index = ptr(c, 0) orelse return .fault;
@@ -386,7 +387,7 @@ pub fn call(c: *Cpu, id: u8) Result {
             var found: u64 = 0;
             if (n != 0) {
                 const p = scan(c, 0) catch |e| return miss(e);
-                if (std.mem.findScalar(u8, mem.bytes(p)[0..n], ch)) |i| found = mem.va(p + @as(u32, @intCast(i)));
+                if (std.mem.findScalar(u8, mem.bytes(p)[0..n], ch)) |i| found = plane.va(p + @as(u32, @intCast(i)));
             }
             ret(c, found);
         },

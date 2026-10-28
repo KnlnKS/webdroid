@@ -28,7 +28,7 @@ import { brokerMethods } from "../src/shell/broker-contract.ts";
 import { callProxy, serveCalls } from "../src/shell/rpc.ts";
 import { isRemoteFd, processRights } from "../src/native/process-fd.ts";
 import { type JBuffer, addressOf, directAddress } from "../src/jvm/natives/jnio.ts";
-import { canonicalFilePaths, renamePath, makeFifo, type FilePaths, type PathOwner } from "../src/shell/file-path.ts";
+import { canonicalFilePaths, renamePath, makeFifo, useOwnerChanges, type FilePaths, type PathOwner } from "../src/shell/file-path.ts";
 import type { BrokerCalls } from "../src/shell/broker-contract.ts";
 
 /** this realm as a Worker whose mutable files `owner` holds, or as the page again */
@@ -451,6 +451,9 @@ describe("file-descriptor", () => {
     const stop = serveCalls(channel.port1, owner.session(1001, () => 0));
     const proxy = callProxy<DescriptorCalls>(channel.port2, brokerMethods.descriptors);
     usePathOwner({ files: new Proxy(paths, { get: (calls, name) => async (...args: never[]) => (calls as unknown as Record<string, (...a: never[]) => unknown>)[name as string]?.(...args) }), descriptors: proxy.endpoint });
+    // the process trusts the stats it learned while the owner's counts of the files' changes hold
+    (globalThis as { crossOriginIsolated?: boolean }).crossOriginIsolated = true;
+    useOwnerChanges(vfs.changeCounts());
     vfs.mkdir("/data/data/test/fd");
     vfs.write(source, Uint8Array.of(1, 2, 3, 4, 5));
     try {
@@ -461,15 +464,24 @@ describe("file-descriptor", () => {
       const fd = await scall("android/system/Os", "open", "(Ljava/lang/String;II)Ljava/io/FileDescriptor;", target, 2, 0);
       expect(isRemoteFd(fdInt(fd))).toBe(true);
       const attrs = await newObj("sun/nio/fs/UnixFileAttributes", "()V");
-      await scall("sun/nio/fs/UnixNativeDispatcher", "fstat", "(ILsun/nio/fs/UnixFileAttributes;)V", fdInt(fd), attrs);
-      expect(getDeclared(attrs, "sun/nio/fs/UnixFileAttributes", "st_size")).toBe(5n);
+      const fstat = async (field: string) => {
+        await scall("sun/nio/fs/UnixNativeDispatcher", "fstat", "(ILsun/nio/fs/UnixFileAttributes;)V", fdInt(fd), attrs);
+        return getDeclared(attrs, "sun/nio/fs/UnixFileAttributes", field);
+      };
+      const length = async () => vcall(await newFile(target), "length", "()J");
+      expect([await fstat("st_size"), await length()]).toEqual([5n, 5n]);
+      // another process's write
+      vfs.writeAt(vfs.opened(target)!, 5, Uint8Array.of(6));
+      expect([await fstat("st_size"), await length()]).toEqual([6n, 6n]);
       await scall("sun/nio/fs/UnixNativeDispatcher", "fchmod", "(II)V", fdInt(fd), 0o600);
       expect(vfs.attributes(target).mode).toBe(0o600);
+      expect((await fstat("st_mode") as number) & 0o7777).toBe(0o600);
       expect(await vcall(await newFile(target), "setReadOnly", "()Z")).toBe(1);
       expect(vfs.attributes(target).mode).toBe(0o400);
       await scall("android/system/Os", "close", "(Ljava/io/FileDescriptor;)V", fd);
     } finally {
-      usePathOwner(null);
+      usePathOwner(null); useOwnerChanges(undefined);
+      delete (globalThis as { crossOriginIsolated?: boolean }).crossOriginIsolated;
       owner.close(1001); proxy.close(); stop(); vfs.delete(source); vfs.delete(target);
     }
   });

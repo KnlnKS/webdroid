@@ -10,6 +10,7 @@ import { createGuestClockPort } from "../guest-clock.ts";
 import { serveTierPorts, type TierPorts } from "../jvm/tier.ts";
 import { sendPlatformJars } from "../android/framework.ts";
 import type { PackageRecord } from "../android/packages.ts";
+import { apkEntryNames } from "../android/res.ts";
 import { is64BitPackage } from "../jvm/natives/jvmruntime.ts";
 import { packedArchives } from "./packedarchive.ts";
 import { displayRate } from "./display-rate.ts";
@@ -80,7 +81,7 @@ export class ProcessHosts {
   prestart(): void { this.spare ??= spawn(this.nextPid++, true); }
   /** a host for a new process of `owner`'s, in the spare Worker when it runs the zygote of the package's bitness */
   create(owner: PackageRecord): ProcessHost {
-    const wide = is64BitPackage(packedArchives.get(owner.path)?.names() ?? Object.keys(owner.apk.zip));
+    const wide = is64BitPackage(packedArchives.get(owner.path)?.names() ?? apkEntryNames(owner.apk));
     let spare = this.spare;
     this.spare = undefined;
     if (spare && spare.url !== workerUrl(spare.pid, wide)) { spare.worker.terminate(); spare.release(); spare = undefined; }

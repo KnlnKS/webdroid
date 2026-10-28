@@ -1,7 +1,8 @@
 // APK Signature Scheme v2 and v3 (source.android.com/docs/security/features/apksigning): the signing
 // block before the ZIP central directory, its signers, and their verification.
 import { sameBytes } from "../jvm/abi.ts";
-import { endRecord } from "../zip.ts";
+import { centralDirOffset, endRecord } from "../zip.ts";
+import { readFully, type FileSource } from "../shell/lazyfile.ts";
 import { children, expect, parseOne, SEQUENCE } from "../crypto/der.ts";
 
 class Fields {
@@ -25,10 +26,11 @@ function signingSequence(bytes: Uint8Array): Uint8Array[] {
   while (fields.at < bytes.length) out.push(fields.field());
   return out;
 }
-function apkSigningBlock(bytes: Uint8Array) {
+/** `bytes` are the apk from offset `base` to its end, which holds the signing block when `base` is at or before it */
+function apkSigningBlock(bytes: Uint8Array, base = 0) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.length), end = endRecord(bytes);
   if (end < 0) throw new Error("APK has no valid ZIP end record");
-  const central = view.getUint32(end + 16, true);
+  const central = view.getUint32(end + 16, true) - base;
   if (view.getUint16(end + 4, true) || view.getUint16(end + 6, true) || central + view.getUint32(end + 12, true) !== end)
     throw new Error("unsupported APK ZIP directory");
   if (central < 24 || central > end || new TextDecoder().decode(bytes.subarray(central - 16, central)) !== "APK Sig Block 42") return null;
@@ -81,8 +83,8 @@ type ApkSigner = {
 };
 /** the signing block and the signers of its v3 and v2 schemes, v3 first as ApkSignatureVerifier
  *  prefers it; null without a signing block */
-export function apkSigners(bytes: Uint8Array) {
-  const block = apkSigningBlock(bytes);
+function signers(bytes: Uint8Array, base = 0) {
+  const block = apkSigningBlock(bytes, base);
   if (!block) return null;
   const schemes: { id: number; signers: ApkSigner[] }[] = [];
   for (const id of [V3, V2]) {
@@ -101,10 +103,20 @@ export function apkSigners(bytes: Uint8Array) {
   return { block, schemes };
 }
 
+/** signers of the apk `source`, reading only its signing block, central directory and end record */
+export async function apkSigners(source: FileSource) {
+  const central = await centralDirOffset(source);
+  if (central < 24) return null;
+  const footer = await readFully(source, central - 24, 24);
+  const size = Number(new DataView(footer.buffer).getBigUint64(0, true)), start = central - size - 8;
+  const base = Number.isSafeInteger(start) && start >= 0 && start < central - 24 ? start : central - 24;
+  return signers(await readFully(source, base, source.size - base), base);
+}
+
 // Android signs each signer's data and a two-level digest of ZIP data, directory, and patched EOCD.
 /** the verified signers' certificates, each signer's first */
 export async function verifyApkSignature(bytes: Uint8Array): Promise<Uint8Array[]> {
-  const parsed = apkSigners(bytes);
+  const parsed = signers(bytes);
   if (!parsed?.schemes.length) throw new Error("unsupported APK signature: v2 or v3 required");
   const { block, schemes } = parsed;
   if (block.blocks.has(V31)) throw new Error("unsupported APK v3.1 signature");

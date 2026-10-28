@@ -1,12 +1,15 @@
 const std = @import("std");
 const abi = @import("abi.zig");
 const mem = @import("mem.zig");
+const plane = @import("plane.zig");
 const cpu = @import("cpu.zig");
 const a64 = @import("a64.zig");
 const wasm = @import("wasm.zig");
+const lane = @import("lane.zig");
 const jit32 = @import("jit32.zig");
 const jitfp = @import("jitfp.zig");
 const jitmem = @import("jitmem.zig");
+const vreg = @import("jitreg.zig");
 const fp = @import("fp.zig");
 const bt = @import("bits.zig");
 const assert = std.debug.assert;
@@ -21,6 +24,8 @@ const tee = wasm.tee;
 const c32 = wasm.c32;
 const c64 = wasm.c64;
 const mo = wasm.mo;
+const am = wasm.am;
+const At = wasm.Atomic;
 const call = wasm.call;
 const bit = bt.bit;
 const bits = bt.bits;
@@ -144,6 +149,7 @@ const OFF_CPSR = @offsetOf(Cpu, "cpsr");
 const OFF_IC = @offsetOf(Cpu, "ic");
 const OFF_LIMIT = @offsetOf(Cpu, "ic_limit");
 const OFF_EXCL = @offsetOf(Cpu, "excl");
+const OFF_EXCL_VAL = @offsetOf(Cpu, "excl_val");
 const OFF_TLS = @offsetOf(Cpu, "tls");
 const OFF_SLOT = @offsetOf(cpu.Page, "slot");
 /// bit 0: the engine has tail calls; bit 1: the host's memory is shared
@@ -163,6 +169,10 @@ pub const Region = struct {
     isa: Isa,
     nblocks: u32,
     blocks: [MAX_BLOCKS]Block,
+    /// A64 branches to targets the interpreter had not entered, which wait for the budget the
+    /// targets that ran leave
+    cold: [MAX_BLOCKS]struct { blk: u32, target: u32 } = undefined,
+    ncold: u32 = 0,
 };
 var regions: [MAX_REGIONS]Region = undefined;
 var nregions: u32 = 0;
@@ -173,6 +183,8 @@ var in_flight: bool = false;
 pub var regions_installed: u32 = 0;
 
 pub fn request(pc: u32, isa: Isa) bool {
+    lane.lock();
+    defer lane.unlock();
     if (nrequests >= MAX_REGIONS) return false;
     for (requests[0..nrequests]) |r| if (r == pc) return true;
     requests[nrequests] = pc;
@@ -207,6 +219,8 @@ export fn jit_stat() u32 {
 /// is flushed first (cpu.freeSlot), uninstalling every region, this batch's earlier ones included.
 export fn jit_install(i: u32) u32 {
     abi.require(i < nregions, "jit_install: region index out of range");
+    lane.lock();
+    defer lane.unlock();
     const r = &regions[i];
     for (r.blocks[0..r.nblocks]) |b| if ((blockPage(b) orelse return 0).epoch != b.epoch) return 0;
     // An empty block only exits to its own pc, so installing one would hand that pc straight back
@@ -253,6 +267,17 @@ pub fn addCall(r: *Region, i: u32, next: u32) void {
     const page = cpu.decodedPage(next >> abi.PAGE_SHIFT) orelse return;
     if (observed(page, next)) r.blocks[i].cont = blockFor(r, next);
 }
+/// IL2CPP's null, bounds and initialization checks branch to code that stays cold. Discovered
+/// breadth first, those blocks filled a region's budget and its hot path left it within a few
+/// dozen instructions, so a target the interpreter never entered gets its block last.
+fn takenFor(r: *Region, i: u32, pc: u32) i32 {
+    for (r.blocks[0..r.nblocks], 0..) |b, j| if (b.pc == pc) return @intCast(j);
+    const page = cpu.decodedPage(pc >> abi.PAGE_SHIFT) orelse return -1;
+    if (observed(page, pc)) return blockFor(r, pc);
+    r.cold[r.ncold] = .{ .blk = i, .target = pc };
+    r.ncold += 1;
+    return -1;
+}
 fn scanA64(r: *Region, i: u32, page: *cpu.Page, pc: u32) jit32.Scan {
     const o = a64.opAt(page, pc);
     const next = pc + 4;
@@ -260,11 +285,11 @@ fn scanA64(r: *Region, i: u32, page: *cpu.Page, pc: u32) jit32.Scan {
         // ISB must redispatch after a store invalidates the active region's source page.
         .nop => mem.ld(u32, pc) & 0xfffff0ff == 0xd50330df,
         .b => blk: {
-            if (o.a != 0) addCall(r, i, next) else r.blocks[i].taken = blockFor(r, @truncate(o.imm));
+            if (o.a != 0) addCall(r, i, next) else r.blocks[i].taken = takenFor(r, i, @truncate(o.imm));
             break :blk true;
         },
         .bcond, .cbz, .tbz => blk: {
-            r.blocks[i].taken = blockFor(r, @truncate(o.imm));
+            r.blocks[i].taken = takenFor(r, i, @truncate(o.imm));
             r.blocks[i].fall = blockFor(r, next);
             break :blk true;
         },
@@ -284,31 +309,40 @@ fn discover(r: *Region) bool {
     // on the budget here and not only inside the inner loop is what keeps the instructions across
     // every block down to MAX_INSTR: a block reached after it is exhausted keeps blockFor's n = 0
     // and emits nothing, and jit_install leaves its pc to the interpreter.
-    while (i < r.nblocks and total < MAX_INSTR) : (i += 1) {
-        var pc = r.blocks[i].pc;
-        const page = blockPage(r.blocks[i]).?;
-        var n: u32 = 0;
-        while (true) {
-            // An instruction straddling pages depends on both pages' epochs: leave it to the interpreter.
-            if ((pc & (abi.PAGE_SIZE - 1)) == abi.PAGE_SIZE - 2 and ilen(.thumb, pc) == 4) {
-                r.blocks[i].fall = -1;
-                break;
+    var next_cold: u32 = 0;
+    while (true) : ({
+        // every target that ran is in: the cold ones take what budget remains, in the order met
+        const c = r.cold[next_cold];
+        next_cold += 1;
+        r.blocks[c.blk].taken = blockFor(r, c.target);
+    }) {
+        while (i < r.nblocks and total < MAX_INSTR) : (i += 1) {
+            var pc = r.blocks[i].pc;
+            const page = blockPage(r.blocks[i]).?;
+            var n: u32 = 0;
+            while (true) {
+                // An instruction straddling pages depends on both pages' epochs: leave it to the interpreter.
+                if ((pc & (abi.PAGE_SIZE - 1)) == abi.PAGE_SIZE - 2 and ilen(.thumb, pc) == 4) {
+                    r.blocks[i].fall = -1;
+                    break;
+                }
+                const s = switch (r.isa) {
+                    .a64 => scanA64(r, i, page, pc),
+                    .arm => jit32.scanArm(r, i, page, pc),
+                    .thumb => jit32.scanThumb(r, i, page, pc),
+                };
+                n += 1;
+                total += 1;
+                pc += s.len;
+                if (s.ends or n >= MAX_INSTR or total >= MAX_INSTR or (pc & (abi.PAGE_SIZE - 1)) == 0) {
+                    if (!s.ends) r.blocks[i].fall = if (total < MAX_INSTR) blockFor(r, pc) else -1;
+                    r.blocks[i].exits = s.ends and r.blocks[i].taken == -2;
+                    break;
+                }
             }
-            const s = switch (r.isa) {
-                .a64 => scanA64(r, i, page, pc),
-                .arm => jit32.scanArm(r, i, page, pc),
-                .thumb => jit32.scanThumb(r, i, page, pc),
-            };
-            n += 1;
-            total += 1;
-            pc += s.len;
-            if (s.ends or n >= MAX_INSTR or total >= MAX_INSTR or (pc & (abi.PAGE_SIZE - 1)) == 0) {
-                if (!s.ends) r.blocks[i].fall = if (total < MAX_INSTR) blockFor(r, pc) else -1;
-                r.blocks[i].exits = s.ends and r.blocks[i].taken == -2;
-                break;
-            }
+            r.blocks[i].n = n;
         }
-        r.blocks[i].n = n;
+        if (i < r.nblocks or total >= MAX_INSTR or next_cold == r.ncold) break;
     }
     // The blocks registered after that hold no instructions, so entering one leaves the region:
     // the flags a predecessor still keeps pending must be settled on that edge as on any exit.
@@ -316,8 +350,9 @@ fn discover(r: *Region) bool {
     return r.blocks[0].n != 0;
 }
 
-pub const RW = struct { r: u32, w: u32, fr: u4 = 0, fw: u4 = 0, cond: bool = false };
-const ALL = RW{ .r = 0xffff_ffff, .w = 0xffff_ffff, .fr = 15, .fw = 15 };
+/// v: it may read or write V registers
+pub const RW = struct { r: u32, w: u32, fr: u4 = 0, fw: u4 = 0, cond: bool = false, v: bool = false };
+const ALL = RW{ .r = 0xffff_ffff, .w = 0xffff_ffff, .fr = 15, .fw = 15, .v = true };
 pub const ALL32 = RW{ .r = 0x7fff, .w = 0x7fff, .fr = 15, .fw = 15 };
 pub const LD = [4][2]u8{
     .{ O.i64_load8_u, O.i64_load8_s },
@@ -401,12 +436,13 @@ pub fn Emit(comptime wide: bool) type {
         lin: [MAX_BLOCKS]u4 = undefined,
         pw: bool = false,
         pdirty: u4 = 0,
-        vloaded: u32 = 0,
+        /// the V registers the region reads or writes, which live in locals (jitreg.zig) as `used` and `dirty` do
+        vused: u32 = 0,
+        vwritten: u32 = 0,
         /// the ITSTATE of the compiled IT body being emitted, which a hand-back gives the interpreter
         it: u8 = 0,
         /// b.nwrites when the instruction at pc began
         wstart: u32 = 0,
-        vcachedWrite: bool = false,
 
         const A = @import("jitaccess.zig").Access(wide);
         pub const checkAddress = A.checkAddress;
@@ -596,9 +632,9 @@ pub fn Emit(comptime wide: bool) type {
         fn storeIc(e: *Self) void {
             e.b.emit(.{ get(L_CPU), get(L_IC), mo(O.i64_store, OFF_IC) });
         }
-        /// the used registers from memory into their locals, or the dirty ones back; neither is a
-        /// use of a register by the region's code
-        fn moveRegs(e: *Self, comptime dir: enum { load, store }) void {
+        /// the used registers from memory into their locals, or the dirty ones back, and with `v` the V
+        /// registers likewise; neither is a use of a register by the region's code
+        fn moveRegs(e: *Self, comptime dir: enum { load, store }, v: bool) void {
             const watched = e.b.nwatch;
             defer e.b.nwatch = watched;
             e.b.nwatch = 0;
@@ -608,14 +644,15 @@ pub fn Emit(comptime wide: bool) type {
                 const off = OFF_X + 8 * @as(u32, n);
                 if (dir == .load) e.b.emit(.{ get(L_CPU), mo(W(wide, O.i32_load), off), set(L_X + n) }) else e.b.emit(.{ get(L_CPU), get(L_X + n), mo(W(wide, O.i32_store), off) });
             };
+            if (wide and v) if (dir == .load) vreg.loadV(e, e.vused) else vreg.spillV(e, e.vwritten);
         }
         /// A call out of the region keeps no register local live across it, which would make the
         /// engine spill that local at every definition: the written ones are stored before and all
         /// reloaded after, which a helper that executes an instruction needs anyway.
         pub fn callOut(e: *Self, f: u32) void {
-            e.moveRegs(.store);
+            e.moveRegs(.store, false);
             e.b.call(f);
-            e.moveRegs(.load);
+            e.moveRegs(.load, false);
         }
         /// NZCV and, on ARM32, the T bit of this region's state: a chain from a region of the other
         /// state leaves it stale until here, where anything that reads it next comes after
@@ -650,12 +687,12 @@ pub fn Emit(comptime wide: bool) type {
         fn leave(e: *Self, pc: u32) void {
             const b = e.b;
             if (!chain) return e.exitTo(pc);
-            e.moveRegs(.store);
+            e.moveRegs(.store, true);
             e.spillFlags();
             e.storeIc();
             b.emit(.{ O.block, wasm.VOID, get(L_IC), get(L_LIMIT), O.i64_ge_s, wasm.brIf(0), get(L_RET_TO), c32(@bitCast(pc)), O.i32_eq, wasm.brIf(0) });
             slotOf(b, wide, pc);
-            callSlot(b, null);
+            callSlot(b, wide, pc, null);
             b.emit(.{ O.end, c32(@bitCast(pc)), O.return_ });
         }
         pub fn exitTo(e: *Self, pc: u32) void {
@@ -704,14 +741,14 @@ pub fn Emit(comptime wide: bool) type {
             const c = e.r.blocks[e.blk].cont;
             if (c < 0 or e.r.blocks[@intCast(c)].n == 0) return e.exit();
             const to = e.r.blocks[@intCast(c)];
-            e.moveRegs(.store);
+            e.moveRegs(.store, true);
             e.spillFlags();
             e.storeIc();
             b.emit(.{ O.block, wasm.VOID });
             e.nest += 1;
             slotOf(b, wide, null);
             b.emit(.{ get(L_IC), get(L_LIMIT), O.i64_ge_s, wasm.brIf(0), get(L_DEPTH), c32(MAX_DEPTH), O.i32_ge_u, wasm.brIf(0) });
-            callSlot(b, ret);
+            callSlot(b, wide, null, ret);
             b.set(L_RET);
             // Anywhere else, or code the callee rewrote, is the outer frames' to go on at: they hold
             // no state the callee's regions have not stored.
@@ -720,10 +757,9 @@ pub fn Emit(comptime wide: bool) type {
             b.byte(O.i32_or);
             b.unlikely();
             b.emit(.{ O.if_, wasm.VOID, get(L_RET), O.return_, O.end });
-            e.moveRegs(.load);
+            e.moveRegs(.load, true);
             e.loadFlags(e.lin[@intCast(c)]);
             b.emit(.{ get(L_CPU), mo(O.i64_load, OFF_IC), set(L_IC) });
-            e.vloaded = 0;
             const blk: i32 = @intCast(e.blk);
             if (c > blk) b.br(@as(u32, @intCast(c - blk - 1)) + e.nest) else {
                 b.emit(.{ c32(c), set(L_NEXT) });
@@ -750,9 +786,11 @@ pub fn Emit(comptime wide: bool) type {
                 e.spillFlags();
             }
             if (wide) b.emit(.{ get(L_CPU), c32(@bitCast(mem.ld(u32, pc))), c32(@bitCast(pc)) }) else b.emit(.{ get(L_CPU), c32(@bitCast(pc)) });
-            e.callOut(if (wide) F_EXEC else F_EXEC32);
+            // what the instruction reads and writes, the V registers included, is the Cpu's
+            e.moveRegs(.store, e.rw.v);
+            b.call(if (wide) F_EXEC else F_EXEC32);
+            e.moveRegs(.load, e.rw.v);
             b.set(L_R);
-            e.vloaded = 0;
             if (e.rw.fw != 0) {
                 e.loadFlags(15);
                 e.eager(15);
@@ -1120,71 +1158,66 @@ pub fn Emit(comptime wide: bool) type {
                     e.setX(o.rd);
                 },
                 .excl => {
-                    const size: u2 = @intCast(o.a);
-                    const o2 = o.b & 4 != 0;
-                    const load = o.b & 2 != 0;
-                    const o1 = o.b & 1 != 0;
-                    if (o1 and !o2 and size < 2) {
+                    const form: a64.Excl = @enumFromInt(o.b);
+                    const span = a64.exclSpan(o);
+                    // CASP and the 128-bit pair take the interpreter's lock (a64.exclusive)
+                    if (form == .casp or span == 4) {
                         e.fallback(pc, k);
                         return false;
                     }
+                    const sz: u2 = @intCast(span);
                     e.getSP(o.rn);
                     e.address();
-                    if (o1 and !o2) {
-                        // LDXP/STXP: the pair beside the monitor, as the single-register forms
-                        const step: u32 = if (size == 3) 8 else 4;
-                        if (load) {
-                            b.emit(.{ get(L_CPU), c32(1), mo(O.i32_store, OFF_EXCL), get(L_A), mo(LD[size][0], 0) });
-                            e.setX(o.rd);
-                            b.emit(.{ get(L_A), mo(LD[size][0], step) });
-                            e.setX(o.ra);
-                        } else {
-                            b.emit(.{ get(L_CPU), mo(O.i32_load, OFF_EXCL) });
-                            e.ifv();
-                            e.rangeCheck(0, 2 * step);
+                    // atomics on a device fault unless aligned to their span, which the interpreter raises
+                    if (sz != 0) {
+                        b.emit(.{ get(L_A), c32((@as(i32, 1) << sz) - 1), O.i32_and });
+                        e.coldIf();
+                        e.interpretHere();
+                        e.endif();
+                    }
+                    switch (form) {
+                        .cas => {
+                            e.storeCheck(0, @as(u32, 1) << sz);
+                            b.get(L_A);
+                            e.getX(o.rm);
+                            e.getX(o.rd);
+                            b.emit(.{am(At.cmpxchg, sz, 0)});
+                            e.setX(o.rm);
+                        },
+                        .ldx, .ldar, .ldxp => {
+                            b.emit(.{ get(L_A), am(At.load, sz, 0) });
+                            if (form != .ldar) b.emit(.{ tee(L_T0), get(L_CPU), c32(1), mo(O.i32_store, OFF_EXCL), get(L_CPU), get(L_T0), mo(O.i64_store, OFF_EXCL_VAL) });
+                            if (form == .ldxp) {
+                                b.emit(.{ c64(0xffff_ffff), O.i64_and });
+                                e.setX(o.rd);
+                                b.emit(.{ get(L_T0), c64(32), O.i64_shr_u });
+                                e.setX(o.ra);
+                            } else e.setX(o.rd);
+                        },
+                        .stlr => {
+                            e.storeCheck(0, @as(u32, 1) << sz);
                             b.get(L_A);
                             e.getX(o.rd);
-                            b.memop(ST[size], 0);
-                            b.get(L_A);
-                            e.getX(o.ra);
-                            b.memop(ST[size], step);
-                            e.endif();
-                            b.emit(.{ get(L_CPU), mo(O.i32_load, OFF_EXCL), c32(1), O.i32_xor });
-                            e.setW(o.rm);
-                            b.emit(.{ get(L_CPU), c32(0), mo(O.i32_store, OFF_EXCL) });
-                        }
-                    } else if (o1) {
-                        b.emit(.{ get(L_A), mo(LD[size][0], 0), set(L_T0), get(L_T0) });
-                        e.getX(o.rm);
-                        if (size < 3) b.emit(.{ c64(@bitCast((@as(u64, 1) << (@as(u6, 8) << size)) - 1)), O.i64_and });
-                        b.byte(O.i64_eq);
-                        e.ifv();
-                        e.storeCheck(0, @as(u32, 1) << size);
-                        b.get(L_A);
-                        e.getX(o.rd);
-                        b.memop(ST[size], 0);
-                        e.endif();
-                        b.get(L_T0);
-                        e.setX(o.rm);
-                    } else if (load) {
-                        if (!o2) b.emit(.{ get(L_CPU), c32(1), mo(O.i32_store, OFF_EXCL) });
-                        b.emit(.{ get(L_A), mo(LD[size][0], 0) });
-                        e.setX(o.rd);
-                    } else {
-                        if (!o2) {
+                            b.emit(.{am(At.store, sz, 0)});
+                        },
+                        else => {
+                            // the value goes in only while memory holds what the load-exclusive read: excl says whether it did
                             b.emit(.{ get(L_CPU), mo(O.i32_load, OFF_EXCL) });
                             e.ifv();
-                        }
-                        e.storeCheck(0, @as(u32, 1) << size);
-                        b.get(L_A);
-                        e.getX(o.rd);
-                        b.memop(ST[size], 0);
-                        if (!o2) {
+                            e.storeCheck(0, @as(u32, 1) << sz);
+                            b.emit(.{ get(L_CPU), get(L_A), get(L_CPU), mo(O.i64_load, OFF_EXCL_VAL) });
+                            e.getX(o.rd);
+                            if (form == .stxp) {
+                                b.emit(.{ c64(0xffff_ffff), O.i64_and });
+                                e.getX(o.ra);
+                                b.emit(.{ c64(32), O.i64_shl, O.i64_or });
+                            }
+                            b.emit(.{ am(At.cmpxchg, sz, 0), get(L_CPU), mo(O.i64_load, OFF_EXCL_VAL), O.i64_eq, mo(O.i32_store, OFF_EXCL) });
                             e.endif();
                             b.emit(.{ get(L_CPU), mo(O.i32_load, OFF_EXCL), c32(1), O.i32_xor });
                             e.setW(o.rm);
                             b.emit(.{ get(L_CPU), c32(0), mo(O.i32_store, OFF_EXCL) });
-                        }
+                        },
                     }
                 },
                 .mrs => if (o.imm == 0x5e82) {
@@ -1244,6 +1277,7 @@ pub fn Emit(comptime wide: bool) type {
                     } else e.mulHigh(o.rd, o.rn, o.rm, op31 == 2);
                 },
                 .clrex => b.emit(.{ get(L_CPU), c32(0), mo(O.i32_store, OFF_EXCL) }),
+                .fence => b.emit(.{ At.prefix, At.fence, 0x00 }),
                 .simd => jitfp.emitSimd(e, @truncate(o.imm), pc, k),
                 .vmem => jitmem.emitVmem(e, @truncate(o.imm), pc, k),
                 .vldrlit => jitmem.emitVldrlit(e, o),
@@ -1256,7 +1290,8 @@ pub fn Emit(comptime wide: bool) type {
 
 fn rwOf(o: *const Op) RW {
     return switch (o.kind) {
-        .nop, .clrex, .fault, .vldrlit => .{ .r = 0, .w = 0 },
+        .nop, .clrex, .fence, .fault => .{ .r = 0, .w = 0 },
+        .vldrlit => .{ .r = 0, .w = 0, .v = true },
         .bcond => .{ .r = 0, .w = 0, .fr = condReads(o.a) },
         .adr, .ldrlit => .{ .r = 0, .w = bit(o.rd) },
         .movw => .{ .r = if (o.a & 3 == 3) bit(o.rd) else 0, .w = bit(o.rd) },
@@ -1290,8 +1325,12 @@ fn rwOf(o: *const Op) RW {
         .atomic => .{ .r = bit(o.rn) | bit(o.rm), .w = bit(o.rd) },
         .mrs => .{ .r = 0, .w = bit(o.rd), .fr = if (o.imm == 0x5a10) 15 else 0 },
         .msr => .{ .r = bit(o.rd), .w = 0, .fw = if (o.imm == 0x5a10) 15 else 0 },
-        .vmem => .{ .r = bit(o.rn) | bit(o.rm), .w = bit(o.rn) },
-        .simd => simdRw(@truncate(o.imm)),
+        .vmem => .{ .r = bit(o.rn) | bit(o.rm), .w = bit(o.rn), .v = true },
+        .simd => blk: {
+            var rw = simdRw(@truncate(o.imm));
+            rw.v = true;
+            break :blk rw;
+        },
         .svc, .raw => ALL,
     };
 }
@@ -1328,6 +1367,7 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region) void {
     var fr: [MAX_INSTR]u4 = undefined;
     var fk: [MAX_INSTR]u4 = undefined;
     var t: u32 = 0;
+    var vtouch = false;
     for (r.blocks[0..n], 0..) |blk, i| {
         base[i] = t;
         const page = blockPage(blk).?;
@@ -1340,6 +1380,7 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region) void {
                 .thumb => jit32.rwThumb(pc),
             };
             if (forcedFallback(pc)) rw = if (wide) ALL else ALL32;
+            vtouch = vtouch or rw.v;
             assert(t < fr.len);
             fr[t] = rw.fr;
             fk[t] = if (rw.cond) 0 else rw.fw;
@@ -1373,24 +1414,19 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region) void {
     for (lin[0..n]) |l| live |= l;
     // The registers the region uses live in locals from the prologue to the epilogue, which stores
     // those it writes; a helper that executes an instruction gets them stored first. The emitters
-    // name registers only through their locals (XZR is a constant), so emitting each block once into
-    // a buffer that keeps nothing finds them.
-    var dry = Buf.init(abi.LOW, 0);
-    dry.watch = L_X;
-    dry.nwatch = if (wide) 32 else 15;
-    var d = e;
-    d.b = &dry;
-    for (0..n) |i| emitBlock(isa, &d, @intCast(i));
-    e.used = dry.reads | dry.writes;
-    e.dirty = dry.writes;
+    // name registers only through their locals (XZR is a constant), as the SIMD&FP emitters name V
+    // registers, so emitting each block once into a buffer that keeps nothing finds them.
+    e.used, e.dirty = dryRun(isa, &e, L_X, if (wide) 32 else 15);
+    if (wide and vtouch) e.vused, e.vwritten = dryRun(isa, &e, L_VREG, 32);
     b.emit(.{ if (wide) @as(u8, 10) else 9, L_N - L_X, if (wide) wasm.I64 else wasm.I32, L_T0 - L_N, wasm.I32, L_A - L_T0, wasm.I64, L_IC - L_A, wasm.I32, L_F0 - L_IC, wasm.I64, L_FA64 - L_F0, wasm.F64, L_FA32 - L_FA64, wasm.I64, L_VA - L_FA32, wasm.I32, L_VREG - L_VA, wasm.V128 });
     if (wide) b.emit(.{ 32, wasm.V128 });
     b.watch = L_X;
     b.nwatch = if (wide) 32 else 15;
-    // run_slice passes the running Cpu, which is always CPU_CUR: as a constant it folds into offsets
-    b.emit(.{ c32(abi.CPU_CUR), set(L_CPU) });
+    // run_slice passes the running Cpu, which for ARM32 is always CPU_CUR: as a constant it folds into
+    // offsets. An A64 region may run on a lane, whose running Cpu is its own (cpu.current).
+    if (!wide) b.emit(.{ c32(abi.CPU_CUR), set(L_CPU) });
     e.loadFlags(live);
-    e.moveRegs(.load);
+    e.moveRegs(.load, true);
     b.emit(.{ get(L_CPU), mo(O.i64_load, OFF_IC), set(L_IC), get(L_CPU), mo(O.i64_load, OFF_LIMIT), set(L_LIMIT), get(L_ENTRY), set(L_NEXT), O.block, wasm.VOID, O.block, wasm.VOID, O.loop, wasm.VOID });
     for (0..n) |_| b.blockStart(O.block, wasm.VOID);
     b.emit(.{ get(L_NEXT), O.br_table });
@@ -1403,11 +1439,22 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region) void {
     }
     // an instruction the interpreter takes over from, its pc in L_RET
     b.emit(.{ wasm.Br{ .depth = 2 }, O.end, O.end, get(L_CPU), get(L_RET), O.i64_extend_i32_u, mo(O.i64_store, @offsetOf(Cpu, "pc")), c32(@intFromEnum(cpu.RegionExit.interpret)), set(L_RET), O.end });
-    e.moveRegs(.store);
+    e.moveRegs(.store, true);
     e.spillFlags();
     e.storeIc();
     if (chain) chainTo(b, wide);
     b.emit(.{ get(L_RET), O.end });
+}
+/// The locals [watch, watch + n) the region's code reads or writes, and those it writes, found by
+/// emitting each block into a buffer that keeps nothing
+fn dryRun(comptime isa: Isa, e: *const Emit(isa == .a64), watch: u32, n: u32) [2]u32 {
+    var dry = Buf.init(abi.LOW, 0);
+    dry.watch = watch;
+    dry.nwatch = n;
+    var d = e.*;
+    d.b = &dry;
+    for (0..e.r.nblocks) |i| emitBlock(isa, &d, @intCast(i));
+    return .{ dry.reads | dry.writes, dry.writes };
 }
 fn emitBlock(comptime isa: Isa, e: *Emit(isa == .a64), i: u32) void {
     const wide = isa == .a64;
@@ -1416,7 +1463,6 @@ fn emitBlock(comptime isa: Isa, e: *Emit(isa == .a64), i: u32) void {
     e.chain_depth = e.r.nblocks - i;
     e.pk = .none;
     e.pdirty = 0;
-    e.vloaded = 0;
     const page = blockPage(blk).?;
     var pc = blk.pc;
     var j: u32 = 0;
@@ -1448,9 +1494,15 @@ fn slotOf(b: *Buf, comptime wide: bool, pc: ?u32) void {
     if (pc) |p| b.emit(.{ c32(0), mo(O.i32_load, cpu.DECODED + (p >> abi.PAGE_SHIFT) * 4), tee(L_A), O.i32_eqz, wasm.brIf(0), get(L_A), mo(O.i32_load, OFF_SLOT + ((p & mask) << 1)) }) else b.emit(.{ get(L_RET), c32(abi.PAGE_SHIFT - 2), O.i32_shr_u, c32(-4), O.i32_and, mo(O.i32_load, cpu.DECODED), tee(L_A), O.i32_eqz, wasm.brIf(0), get(L_A), get(L_RET), c32(mask), O.i32_and, c32(1), O.i32_shl, O.i32_add, mo(O.i32_load, OFF_SLOT) });
     b.emit(.{ tee(L_B), O.i32_eqz, wasm.brIf(0) });
 }
-/// The region in L_B's slot at its block: a tail call within this region's call, or a call one
-/// deeper whose continuation is `ret`.
-fn callSlot(b: *Buf, ret: ?u32) void {
+/// The region in L_B's slot at its block, which holds `pc` or L_RET's address when null: a tail call
+/// within this region's call, or a call one deeper whose continuation is `ret`. An A64 region stores
+/// the pc first, which a lane's table hands the interpreter where it does not link the slot yet.
+fn callSlot(b: *Buf, comptime wide: bool, pc: ?u32, ret: ?u32) void {
+    if (wide) {
+        b.get(L_CPU);
+        if (pc) |p| b.emit(.{c64(p)}) else b.emit(.{ get(L_RET), O.i64_extend_i32_u });
+        b.emit(.{mo(O.i64_store, @offsetOf(Cpu, "pc"))});
+    }
     b.emit(.{ get(L_CPU), get(L_B), c32(255), O.i32_and });
     if (ret) |r| b.emit(.{ c32(@bitCast(r)), get(L_DEPTH), c32(1), O.i32_add }) else b.emit(.{ get(L_RET_TO), get(L_DEPTH) });
     b.emit(.{ get(L_B), c32(8), O.i32_shr_u, if (ret != null) O.call_indirect else O.return_call_indirect, T_REGION, 0 });
@@ -1460,7 +1512,7 @@ fn callSlot(b: *Buf, ret: ?u32) void {
 fn chainTo(b: *Buf, comptime wide: bool) void {
     b.emit(.{ O.block, wasm.VOID, get(L_RET), c32(abi.LOW), O.i32_lt_u, wasm.brIf(0), get(L_RET), get(L_RET_TO), O.i32_eq, wasm.brIf(0), get(L_IC), get(L_LIMIT), O.i64_ge_s, wasm.brIf(0) });
     slotOf(b, wide, null);
-    callSlot(b, null);
+    callSlot(b, wide, null, null);
     b.byte(O.end);
 }
 
@@ -1473,17 +1525,25 @@ fn importFn(b: *Buf, name: []const u8, ty: Ty) void {
 }
 export fn jit_emit(out: u32, cap: u32) u32 {
     if (in_flight) return 0;
+    // the pages scanned stay this lane's to read while it emits (lane.zig), and the queue is taken whole
+    lane.enter();
+    defer lane.leave();
+    var pcs: [MAX_REGIONS]u32 = undefined;
+    var isas: [MAX_REGIONS]Isa = undefined;
+    lane.lock();
+    const queued = nrequests;
+    @memcpy(pcs[0..queued], requests[0..queued]);
+    @memcpy(isas[0..queued], request_isa[0..queued]);
+    nrequests = 0;
+    lane.unlock();
     nregions = 0;
-    var q: u32 = 0;
-    while (q < nrequests) : (q += 1) {
-        const pc = requests[q];
+    for (pcs[0..queued], isas[0..queued]) |pc, isa| {
         // A block that heated while its function's entry waited here is already in that region.
         if (inBatch(pc)) continue;
         const r = &regions[nregions];
-        r.* = .{ .entry = pc, .isa = request_isa[q], .nblocks = 0, .blocks = undefined };
+        r.* = .{ .entry = pc, .isa = isa, .nblocks = 0, .blocks = undefined };
         if (blockFor(r, pc) == 0 and discover(r)) nregions += 1;
     }
-    nrequests = 0;
     // A batch too large for the buffer is halved until it fits; the regions left out go back on
     // the queue rather than waiting for their entries' heat to wrap around.
     var n = nregions;

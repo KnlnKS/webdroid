@@ -172,10 +172,15 @@ export class PrivateFiles {
       // between keeps the previous record rather than one over a partly written file
       await this.disk.flush();
       const transaction = (await this.db()).transaction("files", "readwrite"), store = transaction.objectStore("files");
-      // a view into a larger growing buffer would otherwise clone the whole buffer
       for (const [path, value] of pending) {
-        if (!value) store.delete(path);
-        else store.put(value.kind === "file" && value.bytes.byteLength !== value.bytes.buffer.byteLength ? { ...value, bytes: value.bytes.slice() } : value, path);
+        if (!value) { store.delete(path); continue; }
+        // A file written through a descriptor is a view of a buffer grown by doubling, which storing would clone
+        // whole. The copy stored replaces the view in memory too, unless the file changed since.
+        if (value.kind === "file" && value.bytes.byteLength !== value.bytes.buffer.byteLength) {
+          value.bytes = value.bytes.slice();
+          if (this.bound && this.values.get(path) === value) this.install(this.bound.view, path, value);
+        }
+        store.put(value, path);
       }
       await txDone(transaction);
       await Promise.all(orphans.map((id) => this.disk.remove(id)));

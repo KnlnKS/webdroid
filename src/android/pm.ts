@@ -10,7 +10,7 @@ import { uuidDefault } from "./os.ts";
 import { vcall, after, newObj } from "../jvm/natives/jentry.ts";
 import { logUncaught, detached } from "../jvm/natives/jthrowable.ts";
 import { type XmlNode, attrStr, attr, TV } from "./axml.ts";
-import { resolved, resString, type Resources } from "./res.ts";
+import { apkEntryNames, resolved, resString, type Resources } from "./res.ts";
 import { appHost } from "./apphost.ts";
 import { vfs, apkPath } from "../shell/vfs.ts";
 import { systemProviders, systemProviderInfo$ } from "./systemproviders.ts";
@@ -57,7 +57,7 @@ const splitNames = (record: PackageRecord) => ownSplits(record).map((split) => s
 const INSTRUCTION_SETS: Record<string, string> = { "arm64-v8a": "arm64", "armeabi-v7a": "arm", armeabi: "arm", x86_64: "x86_64", x86: "x86" };
 /** primaryCpuAbi: the ABI of the package's libraries a process here loads, null when it ships none */
 const primaryAbi = (record: PackageRecord): string | null =>
-  libraryAbi(record === currentPackage ? rt.classpathNames() : [...Object.keys(record.apk.zip), ...record.apk.lazyEntries.keys()]);
+  libraryAbi(record === currentPackage ? rt.classpathNames() : apkEntryNames(record.apk));
 const nativeLibraryRoot = (record: PackageRecord): string => `${record.path.slice(0, record.path.lastIndexOf("/"))}/lib`;
 /** <codePath>/lib/<instruction set>, the device's own when the package ships no libraries */
 const nativeLibraryDir = (record: PackageRecord, abi: string | null): string => `${nativeLibraryRoot(record)}/${INSTRUCTION_SETS[abi ?? ABIS_64[0]]}`;
