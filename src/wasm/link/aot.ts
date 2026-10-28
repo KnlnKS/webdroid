@@ -373,11 +373,6 @@ export class AotRuntime {
     this.synthState.set(file, LIVE);
     return true;
   }
-  /** whether the platform build numbers class `name`: the classes of its jars; those of the other jars of the class path are numbered, like the app's, as they are used */
-  seeded(name: string): boolean {
-    const id = this.w.numbers.ids.get(name);
-    return id !== undefined && id <= this.nSeeded;
-  }
   /** whether the module that holds platform class `name` is loaded */
   hasLoaded(name: string): boolean {
     const id = this.w.numbers.ids.get(name);
