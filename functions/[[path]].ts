@@ -7,7 +7,7 @@ type Env = { ASSETS: Fetcher; BACKEND_ORIGIN: string };
 type Sizes = Record<string, { size: number; partSize?: number }>;
 
 const read = new Map<string, Promise<unknown>>();
-/** the file build-prod or deploy wrote at `path` for this Function, read once */
+/** the file build-prod wrote at `path` for this Function, read once */
 function written<T>(env: Env, url: URL, path: string, parse: (response: Response) => Promise<T>): Promise<T> {
   let value = read.get(path) as Promise<T> | undefined;
   if (!value) read.set(path, value = env.ASSETS.fetch(new URL(path, url))
@@ -69,6 +69,7 @@ async function backend(request: Request, env: Env): Promise<Response> {
   const origin = URL.parse(env.BACKEND_ORIGIN);
   if (!origin || origin.protocol !== "https:") return new Response("Backend not configured", { status: 503 });
   const url = new URL(request.url), headers = new Headers(request.headers);
+  // the backend's own origin would stand for a same-origin request that names none (pageOrigin, serve-routes.ts)
   if (!headers.has("origin") && headers.get("sec-fetch-site") === "same-origin") headers.set("origin", url.origin);
   return fetch(new Request(new URL(url.pathname + url.search, origin), new Request(request, { headers })), { redirect: "manual" });
 }
