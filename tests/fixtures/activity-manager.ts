@@ -6,10 +6,8 @@ import "../../src/natives.ts";
 import { rt, JObj, declaredField } from "../../src/jvm/runtime.ts";
 import { classNameOf, newObj, vcall, scall } from "../../src/jvm/natives/jentry.ts";
 import { setAppHost } from "../../src/android/apphost.ts";
-import { testAppHost, fixtureDeadline, useTestBroker } from "../../tests/java.ts";
-import { packages, PackageRecord, packageUid } from "../../src/android/packages.ts";
-import { emptyApk } from "../../src/android/res.ts";
-import { TV } from "../../src/android/axml.ts";
+import { testAppHost, fixtureDeadline, useTestBroker, attr, packageRecord, thrown } from "../../tests/java.ts";
+import { packages } from "../../src/android/packages.ts";
 import { setProcessIdentity, setProcessName } from "../../src/android/os.ts";
 import { hostedService } from "../../src/android/binder.ts";
 import { newIntent, mkComponentName } from "../../src/android/intent.ts";
@@ -30,7 +28,6 @@ useTestBroker({ starts: remoteStarts.endpoint });
 
 
 const PKG = "org.webdroid.test.am", SERVICE = PKG + ".Svc";
-const attr = (name: string, str: string | null, data = 0) => ({ name, str, ns: "", resId: 0, type: str === null ? TV.INT_DEC : TV.STRING, data });
 const S = "Ljava/lang/String;", INTENT = "Landroid/content/Intent;", BINDER = "Landroid/os/IBinder;", APP = "Landroid/app/IApplicationThread;";
 const BIND = `(${APP}${BINDER}${INTENT}${S}Landroid/app/IServiceConnection;J${S}${S}I)I`;
 
@@ -73,11 +70,7 @@ const serviceIntent = async () => {
 };
 
 await startMainLooper();
-const manifest = { name: "manifest", attrs: [attr("package", PKG)], children: [
-  { name: "uses-sdk", attrs: [attr("minSdkVersion", null, 21), attr("targetSdkVersion", null, 35)], children: [] },
-  { name: "application", attrs: [], children: [{ name: "service", attrs: [attr("name", SERVICE)], children: [] }] },
-] };
-const record = new PackageRecord(manifest, emptyApk(), `/${PKG}.apk`, packageUid(PKG), async () => [new Uint8Array([1])]);
+const record = await packageRecord(PKG, { application: [{ name: "service", attrs: [attr("name", SERVICE)], children: [] }] });
 packages.set(PKG, record);
 setProcessIdentity(4322, record.uid); setProcessName(PKG);
 setAppHost(testAppHost(record));
@@ -157,8 +150,7 @@ const copy = await vcall(delivered!, "getStringArrayListExtra", `(${S})Ljava/uti
 out.copied = { proxy: classNameOf(proxy), same: copy === list, size: await vcall(copy, "size", "()I") };
 const big = await serviceIntent();
 await vcall(big, "putExtra", `(${S}[B)${INTENT}`, "big", new Int8Array(2 << 20));
-out.tooLarge = await Promise.resolve().then(() => vcall(proxy, "startService", START, app, big, null, 0, PKG, null, 0))
-  .then(() => null, (e: { msg?: string }) => `${classNameOf(e)}: ${e.msg}`);
+out.tooLarge = await thrown(() => vcall(proxy, "startService", START, app, big, null, 0, PKG, null, 0));
 remoteStarts.close();stopStarts();
 console.log(JSON.stringify(out));
 process.exit(0);

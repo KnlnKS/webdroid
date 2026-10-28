@@ -6,10 +6,8 @@ import "../../src/natives.ts";
 import { rt, JObj, declaredField } from "../../src/jvm/runtime.ts";
 import { classNameOf, newObj, vcall, scall } from "../../src/jvm/natives/jentry.ts";
 import { setAppHost } from "../../src/android/apphost.ts";
-import { testAppHost, fixtureDeadline, loadPlatform, useTestBroker } from "../../tests/java.ts";
-import { packages, PackageRecord, packageUid } from "../../src/android/packages.ts";
-import { emptyApk } from "../../src/android/res.ts";
-import { TV } from "../../src/android/axml.ts";
+import { testAppHost, fixtureDeadline, loadPlatform, useTestBroker, attr, packageRecord } from "../../tests/java.ts";
+import { packages } from "../../src/android/packages.ts";
 import { setProcessIdentity, setProcessName, mkPfd, pfdContents } from "../../src/android/os.ts";
 import { hostedService, receiveTransaction, exportBinder, type ParcelData } from "../../src/android/binder.ts";
 import { mkUri } from "../../src/android/net.ts";
@@ -19,13 +17,8 @@ console.warn = () => {};
 fixtureDeadline();
 
 const CLIENT = "org.webdroid.test.client", OWNER = "org.webdroid.test.owner", AUTHORITY = OWNER + ".data", HERE = 4322, REMOTE = 4400;
-const attr = (name: string, str: string | null, data = 0) => ({ name, str, ns: "", resId: 0, type: str === null ? TV.INT_DEC : TV.STRING, data });
-const manifest = (pkg: string, providers: { name: string; attrs: ReturnType<typeof attr>[]; children: [] }[]) => ({ name: "manifest", attrs: [attr("package", pkg)], children: [
-  { name: "uses-sdk", attrs: [attr("minSdkVersion", null, 21), attr("targetSdkVersion", null, 35)], children: [] },
-  { name: "application", attrs: [], children: providers },
-] });
-const install = (pkg: string, providers: Parameters<typeof manifest>[1] = []) => {
-  const record = new PackageRecord(manifest(pkg, providers) as never, emptyApk(), `/${pkg}.apk`, packageUid(pkg), async () => [new Uint8Array([1])]);
+const install = async (pkg: string, application: { name: string; attrs: ReturnType<typeof attr>[]; children: [] }[] = []) => {
+  const record = await packageRecord(pkg, { application });
   packages.set(pkg, record);
   return record;
 };
@@ -46,7 +39,7 @@ rt.register({ name: "webdroid/test/Provider", ctor: class extends JObj {}, sup: 
 // framework-res: CursorWindow sizes itself from Resources.getSystem()
 await loadPlatform();
 await startMainLooper();
-const client = install(CLIENT), owner = install(OWNER, [{ name: "provider", attrs: [attr("name", ".Data"), attr("authorities", AUTHORITY), attr("exported", "true")], children: [] }]);
+const client = await install(CLIENT), owner = await install(OWNER, [{ name: "provider", attrs: [attr("name", ".Data"), attr("authorities", AUTHORITY), attr("exported", "true")], children: [] }]);
 setProcessIdentity(HERE, client.uid); setProcessName(CLIENT);
 setAppHost(testAppHost(client));
 

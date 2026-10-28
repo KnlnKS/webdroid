@@ -18,11 +18,11 @@ export async function serveModules(entries: string[], route: Route = () => undef
   } });
 }
 
-/** what `test` answers given a page of the harnesses' Chrome (`jsFlags` added) opened on serveModules(`entries`, `route`) at `host` (127.0.0.1
+/** what `test` answers given a page of the harnesses' Chrome (`jsFlags` added) opened on serveModules(`entries`) at `host` (127.0.0.1
  *  unless named) and `query`; an uncaught page error fails it, and the browser and server close after */
 export async function withPage<T>(entries: string[], test: (page: Page) => Promise<T>,
-  { route, query = "", host, jsFlags }: { route?: Route; query?: string; host?: string; jsFlags?: string } = {}): Promise<T> {
-  const [server, browser] = await Promise.all([serveModules(entries, route), launchBrowser(jsFlags)]);
+  { query = "", host, jsFlags }: { query?: string; host?: string; jsFlags?: string } = {}): Promise<T> {
+  const [server, browser] = await Promise.all([serveModules(entries), launchBrowser(jsFlags)]);
   try {
     const page = await browser.newPage(), errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));

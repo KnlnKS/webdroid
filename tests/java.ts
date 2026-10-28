@@ -5,6 +5,7 @@ import type { AppHost } from "../src/android/apphost.ts";
 import type { BrokerCalls } from "../src/shell/broker-contract.ts";
 import { connectBroker } from "../src/shell/broker-access.ts";
 import { notConnected, unconnected } from "../src/jvm/natives/jthrowable.ts";
+import { TV } from "../src/android/axml.ts";
 
 export { scall } from "../src/jvm/natives/jentry.ts";
 
@@ -22,11 +23,11 @@ export async function assetFd(bytes: Uint8Array): Promise<JObj> {
 export const getInstance = (cls: string, algo: string) => scall(cls, "getInstance", `(Ljava/lang/String;)L${cls};`, algo);
 
 /** a fixture process that stalls prints the Java threads' states and exits rather than outliving its test */
-export function fixtureDeadline(ms = 90_000): void {
+export function fixtureDeadline(): void {
   setTimeout(async () => {
     console.log(JSON.stringify({ stalled: (await import("../src/jvm/tier.ts")).wasmThreads() }));
     process.exit(1);
-  }, ms).unref();
+  }, 90_000).unref();
 }
 
 /** the AppHost a booted page sets for `pkg` */
@@ -122,7 +123,7 @@ let started: Promise<unknown> | null = null;
  *  Application once its onCreate ran. Asking for another package takes the process over: its
  *  identity, name and Application, made by its own LoadedApk, are the current ones until another
  *  is asked for. */
-export async function bootApp(record: import("../src/android/packages.ts").PackageRecord, pid = 4321): Promise<JObj> {
+export async function bootApp(record: import("../src/android/packages.ts").PackageRecord): Promise<JObj> {
   const { packages } = await import("../src/android/packages.ts");
   const { setProcessIdentity, setProcessName } = await import("../src/android/os.ts");
   const { setAppHost } = await import("../src/android/apphost.ts");
@@ -137,7 +138,7 @@ export async function bootApp(record: import("../src/android/packages.ts").Packa
     // installd's createAppData, as a page's boot does it
     for (const dir of ["", "/cache", "/code_cache"]) vfs.mkdir(`/data/data/${record.pkg}${dir}`);
   }
-  setProcessIdentity(pid, record.uid);
+  setProcessIdentity(4321, record.uid);
   setProcessName(record.pkg);
   setAppHost(testAppHost(record));
   const thread = () => scall(AT, "currentActivityThread", `()L${AT};`);
@@ -187,13 +188,13 @@ export async function bootApp(record: import("../src/android/packages.ts").Packa
   return app;
 }
 
+/** a manifest attribute: the string `str`, or with none the integer `data` */
+export const attr = (name: string, str: string | null, data = 0) => ({ name, str, ns: "", resId: 0, type: str === null ? TV.INT_DEC : TV.STRING, data });
 /** a package `pkg` targeting `target` that requests `permissions`, as the package manager records an
  *  installed one; its archive is an empty table at /data/app/`pkg`.apk */
 export async function packageRecord(pkg: string, { target = 35, permissions = [] as string[], certificate = 1, application = [] as import("../src/android/axml.ts").XmlNode[] } = {}) {
   const { PackageRecord, packageUid } = await import("../src/android/packages.ts");
   const { emptyApk } = await import("../src/android/res.ts");
-  const { TV } = await import("../src/android/axml.ts");
-  const attr = (name: string, str: string | null, data = 0) => ({ name, str, ns: "", resId: 0, type: str === null ? TV.INT_DEC : TV.STRING, data });
   const manifest = { name: "manifest", attrs: [attr("package", pkg)], children: [
     { name: "uses-sdk", attrs: [attr("minSdkVersion", null, 21), attr("targetSdkVersion", null, target)], children: [] },
     ...permissions.map((name) => ({ name: "uses-permission", attrs: [attr("name", name)], children: [] })),

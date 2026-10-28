@@ -1,9 +1,8 @@
 import { expect, test, describe, beforeAll } from "vite-plus/test";
 import "../src/natives.ts";
-import { TV } from "../src/android/axml.ts";
 import { vcall, newObj, scall, linkInit, JThread, curThread, setCurThread, iof } from "../src/jvm/natives/jentry.ts";
 import { rt, JObj, getDeclared } from "../src/jvm/runtime.ts";
-import { bootApp, packageRecord, useTestBroker } from "./java.ts";
+import { attr, bootApp, packageRecord, useTestBroker } from "./java.ts";
 
 const lifeCalls = (calls: Partial<ProcessLifeCalls>): ProcessLifeCalls =>
   ({ processAlive: async () => true, processSignal: async () => {}, processWatch: async () => {}, processUnwatch: async () => {}, ...calls });
@@ -132,7 +131,7 @@ describe("looper", () => {
 
 // one app process for the file, declaring the job service below
 const PKG = "org.webdroid.test.os";
-const app = async () => bootApp(await packageRecord(PKG, { application: [{ name: "service", attrs: [{ name: "name", str: ".Worker", ns: "", resId: 0, type: TV.STRING, data: 0 }], children: [] }] }));
+const app = async () => bootApp(await packageRecord(PKG, { application: [{ name: "service", attrs: [attr("name", ".Worker")], children: [] }] }));
 
 describe("job-scheduler", () => {
   test("enqueued work reaches a bound service's JobServiceEngine and finishing unbinds it", async () => {
