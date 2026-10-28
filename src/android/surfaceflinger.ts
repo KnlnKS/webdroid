@@ -214,6 +214,8 @@ const layerOf = (h: bigint) => control(h).layer;
 type Op = () => void;
 export interface Transaction { ops: Op[] }
 const tx = (h: bigint) => deref<Transaction>(h);
+/** a crop or frame, null when it is empty */
+const nonEmpty = (r: Rect): Rect | null => r[2] > r[0] && r[3] > r[1] ? r : null;
 const op = (fn: (layer: Layer, ...a: never[]) => void) => (t: bigint, sc: bigint, ...a: never[]) => {
   const layer = layerOf(sc);
   tx(t).ops.push(() => fn(layer, ...a));
@@ -300,12 +302,8 @@ rt.registerJnis("android/view/SurfaceControl", {
   "nativeSetMatrix(JJFFFF)V": op((l, dsdx: number, dtdx: number, dtdy: number, dsdy: number) => { l.matrix = [dsdx, dtdx, dtdy, dsdy]; }),
   "nativeSetAlpha(JJF)V": op((l, a: number) => { l.alpha = a; }),
   "nativeSetColor(JJ[F)V": op((l, c: Float32Array) => { l.color = [c[0], c[1], c[2]]; }),
-  "nativeSetWindowCrop(JJIIII)V": op((l, left: number, top: number, right: number, bottom: number) => {
-    l.crop = right > left && bottom > top ? [left, top, right, bottom] : null;
-  }),
-  "nativeSetDestinationFrame(JJIIII)V": op((l, left: number, top: number, right: number, bottom: number) => {
-    l.dest = right > left && bottom > top ? [left, top, right, bottom] : null;
-  }),
+  "nativeSetWindowCrop(JJIIII)V": op((l, ...r: Rect) => { l.crop = nonEmpty(r); }),
+  "nativeSetDestinationFrame(JJIIII)V": op((l, ...r: Rect) => { l.dest = nonEmpty(r); }),
   "nativeSetCornerRadius(JJF)V": op((l, r: number) => { l.cornerRadius = r; }),
   // an opaque layer composes as any other
   "nativeSetFlags(JJII)V": op((l, flags: number, mask: number) => { if (mask & LAYER_HIDDEN) l.hidden = !!(flags & LAYER_HIDDEN); }),

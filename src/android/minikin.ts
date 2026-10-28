@@ -793,6 +793,9 @@ const textAdvances = (h: bigint, text: string, start: number, count: number, out
   if (out) out.set(adv, at);
   return sum(adv);
 });
+/** getRunCharacterAdvance, with or without the RunInfo it leaves unset */
+const runCharacterAdvance = retries((h: bigint, c: Uint16Array, start: number, end: number, cs: number, ce: number, _rtl: number, offset: number, out: Float32Array | null, at: number) =>
+  runAdvanceOf(h, charsToString(c, cs, ce - cs), start - cs, end - start, offset - cs, out, at));
 // the Paint natives that measure text; paint.ts registers the rest
 rt.registerJnis("android/graphics/Paint", {
   "nGetFontMetricsIntForText(J[CIIIIZLandroid/graphics/Paint$FontMetricsInt;)V": (h: bigint, c: Uint16Array, start: number, count: number, _cs: number, _cc: number, _rtl: number, fm: object) =>
@@ -805,10 +808,8 @@ rt.registerJnis("android/graphics/Paint", {
     textAdvances(h, s.slice(cs, ce), start - cs, end - start, out, at)),
   "nGetRunAdvance(J[CIIIIZI)F": retries((h: bigint, c: Uint16Array, start: number, end: number, cs: number, ce: number, _rtl: number, offset: number) =>
     runAdvanceOf(h, charsToString(c, cs, ce - cs), start - cs, end - start, offset - cs, null, 0)),
-  "nGetRunCharacterAdvance(J[CIIIIZI[FILandroid/graphics/RectF;)F": retries((h: bigint, c: Uint16Array, start: number, end: number, cs: number, ce: number, _rtl: number, offset: number, out: Float32Array | null, at: number) =>
-    runAdvanceOf(h, charsToString(c, cs, ce - cs), start - cs, end - start, offset - cs, out, at)),
-  "nGetRunCharacterAdvance(J[CIIIIZI[FILandroid/graphics/RectF;Landroid/graphics/Paint$RunInfo;)F": retries((h: bigint, c: Uint16Array, start: number, end: number, cs: number, ce: number, _rtl: number, offset: number, out: Float32Array | null, at: number) =>
-    runAdvanceOf(h, charsToString(c, cs, ce - cs), start - cs, end - start, offset - cs, out, at)),
+  "nGetRunCharacterAdvance(J[CIIIIZI[FILandroid/graphics/RectF;)F": runCharacterAdvance,
+  "nGetRunCharacterAdvance(J[CIIIIZI[FILandroid/graphics/RectF;Landroid/graphics/Paint$RunInfo;)F": runCharacterAdvance,
   "nGetOffsetForAdvance(J[CIIIIZF)I": (h: bigint, c: Uint16Array, start: number, end: number, _cs: number, ce: number, _rtl: number, advance: number) =>
     offsetFor(h, charsToString(c, 0, ce), start, end - start, advance),
   "nGetTextRunCursor(J[CIIIII)I": (h: bigint, c: Uint16Array, cs: number, count: number, _dir: number, offset: number, opt: number) =>
