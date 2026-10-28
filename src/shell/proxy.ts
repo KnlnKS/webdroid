@@ -22,7 +22,7 @@ export function sandboxDocument(request: Request, response: Response): Response 
 }
 
 export interface ProxyOptions {
-  /** whether this server may connect to `hostname`: the deployed Worker keeps off private networks */
+  /** whether this server may connect to `hostname`: the production backend keeps off private networks */
   reachable?: (hostname: string) => boolean;
   bridgeCall: (request: Request) => Promise<Response>;
   /** the upstream fetch, which follows a redirect unless told otherwise: the global one by default */
@@ -87,7 +87,7 @@ async function proxied(request: Request, options: ProxyOptions): Promise<Respons
       method: request.method, headers,
       // buffered: a redirect (307/308) must replay the body, which a stream cannot
       body,
-      redirect: manual ? "manual" : "follow",
+      redirect: manual ? "manual" : "follow", signal: request.signal,
     };
     const upstream = intercepted ?? await (encoded ? options.fetchEncoded! : options.fetch ?? fetch)(url, init);
     const contentType = upstream.headers.get("content-type") ?? "";

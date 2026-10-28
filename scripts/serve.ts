@@ -13,14 +13,14 @@ export type Handler = (req: Request) => PromiseOrVal<Response>;
 export interface Served { url: URL; port: number; stop(force?: boolean): void }
 
 /** answers `req` through `fetch`: the Request aborts when the client goes away, and a throw answers 500 */
-export async function respond(req: IncomingMessage, res: ServerResponse, fetch: Handler): Promise<void> {
+export async function respond(req: IncomingMessage, res: ServerResponse, fetch: Handler, protocol = "http:"): Promise<void> {
   const aborted = new AbortController();
   res.once("close", () => { if (!res.writableFinished) aborted.abort(); });
   const body = req.method === "GET" || req.method === "HEAD" ? undefined : toWeb(req);
   const headers = new Headers();
   for (let i = 0; i < req.rawHeaders.length; i += 2) headers.append(req.rawHeaders[i], req.rawHeaders[i + 1]);
   try {
-    const response = await fetch(new Request(new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`),
+    const response = await fetch(new Request(new URL(req.url ?? "/", `${protocol}//${req.headers.host ?? "localhost"}`),
       { method: req.method, headers, body, duplex: "half", signal: aborted.signal } as RequestInit));
     const out: string[] = [];
     response.headers.forEach((value, name) => { if (name !== "set-cookie") out.push(name, value); });
