@@ -209,7 +209,7 @@ Unranked; each needs a measurement or a check against the current code before wo
   WebGL context in its tap (~9 ms), which could be made while idle; a caught exception captures its Java stack
   eagerly whenever bridged callers exist (~1.5 ms a Komikku tap); a LaunchRecord's ran slots are keyed by the build
   id, so after a rebuild they are not used.
-- **Maintainability:** shaping is cached for measurement but not for layout; two deflate libraries (fflate and pako).
+- **Maintainability:** shaping is cached for measurement but not for layout; scripts and tests still write zips with fflate, a dev dependency beside the app's zlib.
 
 ## Verification for changed behavior
 

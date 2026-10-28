@@ -20,7 +20,6 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { cli } from "./args.ts";
 import { tempDir } from "./java.ts";
 import { setTimeout } from "node:timers/promises";
-import { unzipSync } from "fflate";
 import { constObject, writeGenerated } from "./lib.ts";
 import { loadDexes } from "./dexes.ts";
 import { bootTier } from "./tier.ts";
@@ -30,6 +29,7 @@ import { insnLen } from "../src/jvm/opcodes.ts";
 import { PLATFORM_JARS, PLATFORM_DATA, BOOT_JAR_PATHS, SHARED_LIBRARIES } from "../src/jvm/bootclasspath.ts";
 import { SYSTEM_PACKAGES } from "../src/shell/system-packages.ts";
 import { Arsc } from "../src/android/arsc.ts";
+import { centralDir, entryBytes } from "../src/zip.ts";
 import { deviceQualifiers } from "../src/android/configuration.ts";
 import { postScriptName } from "../src/android/sfnt.ts";
 import { adb, asRoot, pull, runDex } from "./adb.ts";
@@ -173,7 +173,7 @@ async function recordFontUpdates(): Promise<Record<string, number>> {
  *  own configuration: SystemUI's Monet palette, the gestural navigation bar's insets and scrim, the
  *  Google and Pixel configuration. Only inline values; strings, arrays and files keep framework-res's. */
 async function recordDeviceOverlays() {
-  const table = new Arsc(unzipSync(new Uint8Array(readFileSync(RES)), { filter: (f) => f.name === "resources.arsc" })["resources.arsc"]);
+  const table = tableOf(RES);
   const keys = new Set<string>();
   for (const [, overlay] of adb("shell", "cmd", "overlay", "list", "android").matchAll(/^\[x\] (\S+)/gm))
     for (const [, key] of adb("shell", "cmd", "overlay", "dump", overlay).matchAll(/^\s*0x[0-9a-f]{8} -> .*?\(((?:bool|integer|dimen|color)\/\w+)/gm)) keys.add(key);
@@ -382,9 +382,11 @@ async function recordTextLayouts() {
 const jarDexes = loadDexes(JAR);
 console.log(`${JAR}: ${jarDexes.length} dex, ${jarDexes.reduce((n, d) => n + d.classDefCount, 0)} classes`);
 
-const tableOf = async (apk: string) =>
-  new Arsc(unzipSync(new Uint8Array(readFileSync(apk)), { filter: (f) => f.name === "resources.arsc" })["resources.arsc"]);
-const paired = await tableOf(RES);
+function tableOf(apk: string): Arsc {
+  const z = new Uint8Array(readFileSync(apk));
+  return new Arsc(entryBytes(z, centralDir(z).get("resources.arsc")!));
+}
+const paired = tableOf(RES);
 
 /** every (name, id) pair the R$<type> classes in the framework dex declare: the ids are constants,
  *  their static values; styleables are int[] built in <clinit>, and not what a table answers for */

@@ -25,3 +25,4 @@ dist/
 worker-configuration.d.ts
 vendor/wasm-aot/
 .claude
+src/zlib.wasm.ts

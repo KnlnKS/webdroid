@@ -1,32 +1,8 @@
 // The zip reader apks, jars and packed archives load through: index the central directory, inflate
-// an entry only when it is read. Also zlib's CRC-32 and Adler-32, which java.util.zip and libz share.
-import { inflateSync } from "fflate";
+// an entry only when it is read.
+import { inflate } from "./zlib.ts";
 import { utf8 } from "./jvm/abi.ts";
 import { readFully, type FileSource } from "./shell/lazyfile.ts";
-
-// ── CRC-32 (zlib's, slicing by 8) and Adler-32, as Java's signed int
-const CRC = Array.from({ length: 8 }, () => new Int32Array(256));
-for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ c >>> 1 : c >>> 1; CRC[0][n] = c; }
-for (let n = 0; n < 256; n++) for (let t = 1; t < 8; t++) CRC[t][n] = CRC[t - 1][n] >>> 8 ^ CRC[0][CRC[t - 1][n] & 255];
-export function crc32(crc: number, b: Uint8Array): number {
-  const [t0, t1, t2, t3, t4, t5, t6, t7] = CRC;
-  let c = ~crc, i = 0;
-  for (const end = b.length & ~7; i < end; i += 8) {
-    const lo = c ^ (b[i] | b[i + 1] << 8 | b[i + 2] << 16 | b[i + 3] << 24);
-    c = t7[lo & 255] ^ t6[lo >>> 8 & 255] ^ t5[lo >>> 16 & 255] ^ t4[lo >>> 24] ^ t3[b[i + 4]] ^ t2[b[i + 5]] ^ t1[b[i + 6]] ^ t0[b[i + 7]];
-  }
-  for (; i < b.length; i++) c = t0[(c ^ b[i]) & 255] ^ c >>> 8;
-  return ~c;
-}
-export function adler32(adler: number, b: Uint8Array): number {
-  let a = adler & 0xffff, s = adler >>> 16;
-  for (let i = 0; i < b.length;) {
-    // 5552 bytes keep the sums below 2^32 between reductions, as zlib's NMAX
-    for (const end = Math.min(b.length, i + 5552); i < end; i++) { a += b[i]; s += a; }
-    a %= 65521; s %= 65521;
-  }
-  return (s << 16 | a) | 0;
-}
 
 export interface ZEntry { name: string; method: number; csize: number; size: number; time: number; off: number; }
 function dosTime(date: number, time: number): number {
@@ -110,7 +86,7 @@ export function entryBytes(z: Uint8Array, e: ZEntry): Uint8Array {
 }
 export function inflateEntry(raw: Uint8Array, e: ZEntry): Uint8Array {
   if (e.method === 0) return raw;
-  if (e.method === 8) return inflateSync(raw);
+  if (e.method === 8) return inflate(raw, e.size, -15);
   throw new Error("Invalid compression method " + e.method + ": " + e.name);
 }
 

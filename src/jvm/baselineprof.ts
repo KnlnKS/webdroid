@@ -2,15 +2,15 @@
 // the methods its developers measured as hot or run at startup. A first launch's compile worker
 // emits their bodies first, so their first calls skip on-demand compiling and no tap waits on their
 // compile.
-import { unzlibSync } from "fflate";
+import { inflate } from "../zlib.ts";
 
 /** the profile's hot and startup methods, as method indices per dex name; null when unreadable */
 export function parseBaselineProfile(bytes: Uint8Array): Map<string, number[]> | null {
-  // "pro\0" "010\0", a dex count, then zlib data: per dex a line (key, class count, hot-region
-  // size, checksum, method count), then per dex its hot methods, classes and flag bitmap
+  // "pro\0" "010\0", a dex count, the data's inflated and deflated sizes, then zlib data: per dex a line (key,
+  // class count, hot-region size, checksum, method count), then per dex its hot methods, classes and flag bitmap
   if (new TextDecoder().decode(bytes.subarray(0, 8)) !== "pro\u0000010\u0000") return null;
   const head = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const data = unzlibSync(bytes.subarray(17, 17 + head.getUint32(13, true)));
+  const data = inflate(bytes.subarray(17, 17 + head.getUint32(13, true)), head.getUint32(9, true), 15);
   const v = new DataView(data.buffer, data.byteOffset, data.byteLength);
   const lines: { key: string; classes: number; hotSize: number; methods: number }[] = [];
   let p = 0;
