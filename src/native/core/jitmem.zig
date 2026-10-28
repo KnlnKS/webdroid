@@ -49,6 +49,7 @@ fn emitVlane(e: *Emit, w: u32) bool {
     }
     e.getSP(rn);
     e.address();
+    if (opcode < 6 and !Ld) e.rangeCheck(0, @as(u32, @intCast(regs)) << @intCast(esz));
     for (0..regs) |i| {
         const t: u8 = @intCast((rt + i) & 31);
         const off: u32 = @as(u32, @intCast(i)) << @intCast(esz);
@@ -58,7 +59,6 @@ fn emitVlane(e: *Emit, w: u32) bool {
         } else if (Ld) {
             b.emit(.{ get(L_CPU), get(L_A), mo(jit.LD[esz][0], off), mo(jit.ST[esz], voff(t) + (idx << @intCast(esz))) });
         } else {
-            e.storeCheck(off, @as(u32, 1) << @intCast(esz));
             b.get(L_A);
             vget(e, t);
             b.emit(.{ vm(S.store8_lane + @as(u8, @intCast(esz)), off), @as(u8, @intCast(idx)) });
@@ -83,9 +83,9 @@ fn vload(e: *Emit, t: u8, off: u32, sz: u32) void {
     b.i64c(0);
     b.memop(O.i64_store, voff(t) + 8);
 }
+/// the store of V`t` at L_A + off, which its caller's storeCheck or rangeCheck covers
 fn vstore(e: *Emit, t: u8, off: u32, sz: u32) void {
     const b = e.b;
-    e.storeCheck(off, @as(u32, 1) << @intCast(sz));
     b.get(L_A);
     vget(e, t);
     if (sz == 4) {
@@ -127,6 +127,7 @@ pub fn emitVmem(e: *Emit, w: u32, pc: u32, k: u32) void {
                     vput(e, @intCast((rt + reg) & 31), q);
                 }
             } else {
+                e.rangeCheck(0, if (q) 32 else 16);
                 for (0..if (q) @as(usize, 2) else 1) |chunk| {
                     const off: u32 = @intCast(chunk * 16);
                     var lanes: [16]u8 = undefined;
@@ -136,7 +137,6 @@ pub fn emitVmem(e: *Emit, w: u32, pc: u32, k: u32) void {
                         const reg = (pos / es) & 1;
                         lanes[i] = @intCast(reg * 16 + element * es + pos % es);
                     }
-                    e.storeCheck(off, 16);
                     b.get(L_A);
                     vget(e, rt);
                     vget(e, (rt + 1) & 31);
@@ -164,6 +164,7 @@ pub fn emitVmem(e: *Emit, w: u32, pc: u32, k: u32) void {
         const width = @as(u32, 1) << @intCast(sz);
         e.getSP(rn);
         e.address();
+        if (bits(w, 22, 1) == 0) e.rangeCheck(0, regs * width);
         for (0..regs) |i| {
             const t: u8 = @intCast((rt + i) & 31);
             const off = @as(u32, @intCast(i)) * width;
@@ -193,17 +194,18 @@ pub fn emitVmem(e: *Emit, w: u32, pc: u32, k: u32) void {
         e.getSP(rn);
         if (kind != 1 and off != 0) b.emit(.{ c64(off), O.i64_add });
         e.address();
-        if (kind == 1 or kind == 3) {
-            e.getSP(rn);
-            b.emit(.{ c64(off), O.i64_add });
-            e.setSP(rn);
-        }
         if (Ld) {
             vload(e, rt, 0, sz);
             vload(e, rt2, width, sz);
         } else {
+            e.rangeCheck(0, 2 * width);
             vstore(e, rt, 0, sz);
             vstore(e, rt2, width, sz);
+        }
+        if (kind == 1 or kind == 3) {
+            e.getSP(rn);
+            b.emit(.{ c64(off), O.i64_add });
+            e.setSP(rn);
         }
         return;
     }
@@ -233,16 +235,18 @@ pub fn emitVmem(e: *Emit, w: u32, pc: u32, k: u32) void {
         const imm9 = bt.sx(i64, bits(w, 12, 9), 9);
         if (kind == 1) post = imm9 else if (imm9 != 0) b.emit(.{ c64(imm9), O.i64_add });
     }
-    if (kind == 3) {
-        b.tee(jit.L_T0);
-        e.setSP(rn);
-        b.get(jit.L_T0);
-    }
     e.address();
-    if (post != 0) {
+    if (opc & 1 != 0) vload(e, rt, 0, scale) else {
+        e.storeCheck(0, @as(u32, 1) << @intCast(scale));
+        vstore(e, rt, 0, scale);
+    }
+    // address() leaves a pre-index's new base in L_T0
+    if (kind == 3) {
+        b.get(jit.L_T0);
+        e.setSP(rn);
+    } else if (post != 0) {
         e.getSP(rn);
         b.emit(.{ c64(post), O.i64_add });
         e.setSP(rn);
     }
-    if (opc & 1 != 0) vload(e, rt, 0, scale) else vstore(e, rt, 0, scale);
 }

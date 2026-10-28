@@ -44,6 +44,10 @@ export class ActivityStack {
   get rotation(): Rotation { return { sensor: this.sensor, natural: this.natural }; }
 
   get foreground(): number { return this.top; }
+  /** once the activity changes queued so far, and those they queue, are done */
+  async settled(): Promise<void> {
+    for (let queue: Promise<void> | null = null; queue !== this.queue;) await (queue = this.queue);
+  }
   shownEntries(): ProcessRecord[] { return this.layers.filter(pid => this.port.alive(pid)).map(pid => this.port.entry(pid)); }
   /** `pid` alone in front */
   setForeground(pid: number): void { this.top = pid; this.shownPids = new Set([pid]); this.layers = [pid]; }

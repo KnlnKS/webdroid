@@ -1,6 +1,6 @@
 // JNI over the Wasm tier (native/jnivm.ts): a Java object in a JNI table is the Wasm reference itself, a class is its key in the Program, and fields, methods
 // and arrays are reached through generated Wasm functions (Bridge.call, read, write, and the runtime functions of link/guest.ts), never through a facade.
-import { rt } from "../../jvm/runtime.ts";
+import { hostErrorDetail, rt } from "../../jvm/runtime.ts";
 import { PRIMS } from "../../jvm/abi.ts";
 import { allocInstance, newInstance, refOf, type Bridge } from "./bridge.ts";
 import { idOfClass } from "../link/classes.ts";
@@ -180,7 +180,7 @@ export function wasmJni(w: World): JniVm {
 
     throwable: (name, msg) => w.helpers.makeThrowable(name, msg),
     noClass: (name) => { rt.noteMissing("class " + name); return w.helpers.makeThrowable("java/lang/NoClassDefFoundError", `Failed resolution of: L${name};`); },
-    caught: (e) => w.throwable(w.boundary(e)) ?? w.helpers.makeThrowable("java/lang/InternalError", e instanceof Error ? e.message : String(e)),
+    caught: (e) => w.throwable(w.boundary(e)) ?? w.helpers.makeThrowable("java/lang/InternalError", hostErrorDetail(e)),
     raise: (t) => bridge.toHost(t),
     describe: (t) => bridge.toHost(call(t as object, "toString", "()Ljava/lang/String;")) as string,
     monitor(o, enter) {

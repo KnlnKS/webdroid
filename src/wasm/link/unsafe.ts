@@ -14,7 +14,7 @@ import { PRIMS } from "../../jvm/abi.ts";
 import type { Code } from "../compiler/code.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
 import type { World } from "./world.ts";
-import { memberArg, synthFamily } from "./synths.ts";
+import { classSynth, memberArg, synthFamily } from "./synths.ts";
 import { PerWorld } from "./perworld.ts";
 import { idOfClass } from "./classes.ts";
 
@@ -58,7 +58,7 @@ export function hostUnsafe(w: World, kind: number, a: number, b: number): number
   // Field accessor bodies are pure; they are installed before their slot is returned so linking cannot split a VarHandle update
   return w.synthSlot(`uf:${stat ? "s" : ""}${op}:${name}:${fieldIndex(a)}`, undefined, true);
 }
-synthFamily("alloc", (_w, name) => ({ params: [], ret: "L", body: (cx, c) => { cx.emitEnsure(c, name); cx.emitNew(c, name); } }), true);
+classSynth("alloc", (_w, name) => ({ params: [], ret: "L", body: (cx, c) => { cx.emitEnsure(c, name); cx.emitNew(c, name); } }));
 // uf:<op>:<class>:<field index>, op get, put or cas, or sget or sput for a static field
 synthFamily("uf", (w, arg) => {
   const at = arg.indexOf(":"), op = arg.slice(0, at), [name, index] = memberArg(arg.slice(at + 1)), f = w.prog.get(name)?.fields[index], k = f?.kind;

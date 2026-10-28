@@ -29,6 +29,7 @@ const maskLowHalf = vreg.maskLowHalf;
 
 fn setQIf(e: *Emit) void {
     const b = e.b;
+    b.unlikely();
     b.blockStart(O.if_, wasm.VOID);
     b.emit(.{ get(L_CPU), get(L_CPU), mo(O.i32_load, OFF_FPSR), c32(1 << 27), O.i32_or, mo(O.i32_store, OFF_FPSR), O.end });
 }

@@ -2,7 +2,7 @@
 // into the memory it imports. One instance per process; the memory grows as the guest's pages
 // come into use (mem.zig's back), within the native ABI's address space (mem.init).
 
-import { JIT_BUF, MEM_SIZE_INITIAL, MEM_SIZE_A64, STACK_BASE } from "./abi.ts";
+import { JIT_BUF, MEM_SIZE_INITIAL, MEM_SIZE_A64, PAGE_SHIFT, STACK_BASE, WINDOW_SIZE } from "./abi.ts";
 import { JIT_SLOTS, LIBC_FNS, TLS_KEYS, TLS_MODULES, TLS_BLOCKS } from "./core-abi.gen.ts";
 export { JIT_HEAT } from "./core-abi.gen.ts";
 import { perf } from "../perf.ts";
@@ -10,7 +10,7 @@ import { uptimeMillis, wallMillis } from "../guest-clock.ts";
 
 export { NativeFault, BadAddress } from "./faults.ts";
 import { NativeFault } from "./faults.ts";
-import { windowImports } from "./window.ts";
+import { attachedPool, windowImports } from "./window.ts";
 
 interface Core {
   __heap_base: WebAssembly.Global;
@@ -49,6 +49,7 @@ interface Core {
   cpu_alloc(tid: number, osTid: number, pid: number, a64: number): number;
   cpu_free(p: number): void;
   run_slice(cpu: number, budget: number): number;
+  slice_abort(): void;
   code_write(addr: number, size: number): number;
   invalidate_range(addr: number, size: number): void;
   invalidate_all(): void;
@@ -58,17 +59,16 @@ interface Core {
   host_bypass(on: number): void;
   libc_call(cpu: number, id: number): number;
   exec_word(cpu: number, word: number, pc: number): number;
-  on_store(cpu: number, addr: number, size: number): number;
   jit_pending(): number;
   jit_emit(out: number, cap: number): number;
   jit_count(): number;
   jit_entry(i: number): number;
   jit_fallback(lo: number, hi: number): void;
   jit_estimate32(x: number, sqrt: number): number;
-  jit_install(i: number, slot: number): void;
+  jit_install(i: number): number;
   jit_done(): void;
-  jit_kill(slot: number): void;
-  jit_evict(): void;
+  jit_flush(): void;
+  jit_reclaim(): number;
   jit_stat(): number;
   exec_word32(cpu: number, pc: number): number;
   exec_it_block32(cpu: number, pc: number, end: number): number;
@@ -82,7 +82,8 @@ interface Core {
   jit_fmaxnm64(a: number, b: number): number;
   jit_fminnm64(a: number, b: number): number;
   jit_fma64(a: number, b: number, c: number): number;
-  window_map(addr: number, size: number, prot: number): number;
+  window_map(addr: number, size: number, prot: number, poolOffset: number): number;
+  window_table_ptr(): number;
 }
 /** the ARM EABI's aligned variants, each served as the call it specializes */
 export const EABI_ALIASES: Record<string, string> = {
@@ -122,8 +123,7 @@ function imported(bytes: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer> {
   bytes[at + MEMORY_IMPORT.length - 1] = 0x03; // limits: shared, with a maximum
   return bytes;
 }
-/** the core's function table, which JIT regions are linked into above the core's own entries */
-const JIT_SLOT0 = 8192;
+/** the core's function table, which JIT regions are linked into above the core's own entries (JIT_SLOT0) */
 const table = new WebAssembly.Table({ initial: JIT_SLOTS, element: "anyfunc" });
 /** the core grew the memory */
 let grown = (): void => {};
@@ -162,41 +162,35 @@ const instance = await WebAssembly.instantiate(await load(), {
 });
 export const core = instance.exports as unknown as Core;
 if (core.__heap_base.value > STACK_BASE) throw new Error("[native] the core's data overruns the stack region");
+let flagsView = new Uint8Array(0);
+/** the core's page flags, one byte per page of the address space, over the memory's current buffer */
+export function pageFlags(): Uint8Array {
+  if (flagsView.buffer !== memory.buffer) flagsView = new Uint8Array(memory.buffer, core.flags_ptr(), 1 << (32 - PAGE_SHIFT));
+  return flagsView;
+}
 
 // ── the JIT: the core emits a module per batch of hot regions; each region function is linked
 // into the table and the core's slot maps route the dispatcher to it
 const JIT_CAP = 1 << 20; // the last MiB of the KERN region (abi.ts)
-const jitImports = { env: { memory, __indirect_function_table: table, exec: core.exec_word, exec32: core.exec_word32, store: core.on_store, fmax32: core.jit_fmax32, fmin32: core.jit_fmin32, fmaxnm32: core.jit_fmaxnm32, fminnm32: core.jit_fminnm32, fmax64: core.jit_fmax64, fmin64: core.jit_fmin64, fmaxnm64: core.jit_fmaxnm64, fminnm64: core.jit_fminnm64, fma64: core.jit_fma64, it32: core.exec_it_block32, tx: core.tx, estimate32: core.jit_estimate32 } };
+/** what an ARM32 module's window helpers reach while this realm has no pool, and so no window page */
+const noPool = new WebAssembly.Memory({ initial: 0, maximum: WINDOW_SIZE >>> 16, ...(shared && { shared: true }) });
+const jitImports = { env: { get pool() { return attachedPool() ?? noPool; }, memory, __indirect_function_table: table, exec: core.exec_word, exec32: core.exec_word32, fmax32: core.jit_fmax32, fmin32: core.jit_fmin32, fmaxnm32: core.jit_fmaxnm32, fminnm32: core.jit_fminnm32, fmax64: core.jit_fmax64, fmin64: core.jit_fmin64, fmaxnm64: core.jit_fmaxnm64, fminnm64: core.jit_fminnm64, fma64: core.jit_fma64, it32: core.exec_it_block32, estimate32: core.jit_estimate32 } };
 /** whether the engine has wasm tail calls: a region then hands off to the next region without returning to the dispatcher */
 const TAIL = WebAssembly.validate(new Uint8Array([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0, 1, 5, 1, 0x60, 0, 1, 0x7f, 3, 2, 1, 0, 10, 6, 1, 4, 0, 0x12, 0, 0x0b]));
 core.jit_config((TAIL ? 1 : 0) | (shared ? 2 : 0));
-let nextSlot = JIT_SLOT0;
-const freeSlots: number[] = [];
 /** whether this engine compiles synchronously (node does; Chrome's main thread refuses past 4 KB) */
 let syncCompile: boolean | null = null;
-/** the linked batches, oldest first, each with the table slots it holds */
-const instances: { inst: WebAssembly.Instance; slots: number[] }[] = [];
-export const jitStats = {
-  get regions(): number { return core.jit_stat(); }, get modules(): number { return instances.length; }, evictions: 0, async: 0, on: true, chain: TAIL,
-};
-/** the table is full: the oldest half of the batches go, and a region still hot re-heats and comes back */
-export function jitEvict(): void {
-  for (const { slots } of instances.splice(0, Math.ceil(instances.length / 2))) for (const s of slots) { table.set(s, null); core.jit_kill(s); freeSlots.push(s); }
-  core.jit_evict();
-  jitStats.evictions++;
-}
+export const jitStats = { get regions(): number { return core.jit_stat(); }, async: 0, on: true, chain: TAIL };
 /** debug: only regions whose entry lies in one of the [lo, hi) ranges are installed (set __wdJit before load: bisects a miscompile) */
 function jitLink(inst: WebAssembly.Instance, n: number, t0: number): void {
-  if (nextSlot + n > JIT_SLOTS && freeSlots.length < n) jitEvict();
   const jitRanges = (globalThis as { __wdJit?: [number, number][] }).__wdJit;
-  const slots: number[] = [];
+  for (let s; (s = core.jit_reclaim());) table.set(s, null);
   for (let i = 0; i < n; i++) {
     const pc = core.jit_entry(i) >>> 0;
     if (jitRanges && !jitRanges.some(([lo, hi]) => pc >= lo && pc < hi)) continue;
-    const slot = freeSlots.pop() ?? nextSlot++;
-    table.set(slot, inst.exports["r" + i] as (...a: unknown[]) => unknown); core.jit_install(i, slot); slots.push(slot);
+    const slot = core.jit_install(i);
+    if (slot) table.set(slot, inst.exports["r" + i] as (...a: unknown[]) => unknown);
   }
-  instances.push({ inst, slots });
   core.jit_done();
   perf.jitRegions += n; perf.jitMs += performance.now() - t0;
 }

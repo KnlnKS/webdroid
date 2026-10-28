@@ -8,6 +8,9 @@ pub const PAGE_SHIFT = 12;
 pub const PAGE_SIZE: u32 = 1 << PAGE_SHIFT;
 /// The first 64 KiB is never mapped: a null-ish pointer faults instead of reading zeros.
 pub const LOW: u32 = 0x1_0000;
+/// The running thread's Cpu, in that never-mapped first 64 KiB: run_slice copies a thread's state in
+/// and out, so a JIT region addresses it at constant offsets the engine folds into its accesses.
+pub const CPU_CUR: u32 = 0x1000;
 // Every fixed region sits at the bottom, each starting where the last ended. Above them the malloc
 // arena, mappings, ELF images and (ARM64) the planes' pool units share the pages, each taking the
 // lowest free run, so the memory grows from 256 MiB only as far as pages are in use, within the
@@ -44,6 +47,9 @@ pub const PAGE_MAPPED: u32 = 4;
 pub const PAGE_NOACCESS: u32 = 8;
 /// page_flags of a page mprotect left without PROT_WRITE, in a process's own memory or the window
 pub const PAGE_READONLY: u32 = 16;
+/// page_flags of a page the host watches: the first store to it clears the flag (cpu.code_write), so the
+/// host learns which pages changed since it last set it (host-visible Vulkan memory, vulkan/submit.ts)
+pub const PAGE_WATCH: u32 = 32;
 pub const STACK_SIZE: u32 = 0x10_0000;
 pub const STACK_GUARD: u32 = 0x1_0000;
 
@@ -53,8 +59,9 @@ pub const STACK_GUARD: u32 = 0x1_0000;
 pub const PAGE_INDEX_MAX: u32 = 1 << (32 - PAGE_SHIFT);
 /// One host-call trampoline per 8 bytes of the trampoline span.
 pub const TRAMP_SLOTS: u32 = (TRAMP_END - TRAMP_BASE) / 8;
-/// Entries in the host's `__indirect_function_table`.
+/// Entries in the host's `__indirect_function_table`, the core's own below JIT_SLOT0 and JIT regions' above.
 pub const JIT_SLOTS: u32 = 1 << 18;
+pub const JIT_SLOT0: u32 = 8192;
 
 // The kernel region, one table after another. Each base is the previous base plus what the
 // previous table needs, so widening an entry moves everything after it instead of overwriting it;
@@ -64,8 +71,8 @@ pub const KERN_PAGE_FLAGS: u32 = KERN_PAGES + PAGE_INDEX_MAX * 1;
 pub const KERN_BIG_LEN: u32 = KERN_PAGE_FLAGS + PAGE_INDEX_MAX * 1;
 pub const KERN_DECODED: u32 = KERN_BIG_LEN + PAGE_INDEX_MAX * 4;
 pub const KERN_SLOT_FN: u32 = KERN_DECODED + PAGE_INDEX_MAX * 4;
-pub const KERN_DEAD: u32 = KERN_SLOT_FN + 0x4_0000;
-pub const KERN_DEAD_END: u32 = KERN_DEAD + JIT_SLOTS * 1;
+pub const KERN_REFS: u32 = KERN_SLOT_FN + 0x4_0000;
+pub const KERN_REFS_END: u32 = KERN_REFS + JIT_SLOTS * 1;
 /// The JIT's emit buffer, carved off the top of the kernel region.
 pub const JIT_BUF: u32 = KERN_END - 0x0010_0000;
 
@@ -90,8 +97,8 @@ comptime {
     assert(ARENA_BASE < MEM_SIZE_A32);
     // The tables are the only thing between KERN_BASE and the emit buffer, and the emit buffer is
     // the only thing between them and KERN_END.
-    assert(KERN_SLOT_FN + TRAMP_SLOTS <= KERN_DEAD);
-    assert(KERN_DEAD_END <= JIT_BUF);
+    assert(KERN_SLOT_FN + TRAMP_SLOTS <= KERN_REFS);
+    assert(KERN_REFS_END <= JIT_BUF);
     assert(JIT_BUF < KERN_END);
     // Every guest address is a page index this table can hold, in either ABI.
     assert(MEM_SIZE_A64 >> PAGE_SHIFT <= PAGE_INDEX_MAX);

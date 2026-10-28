@@ -5,6 +5,7 @@
 // the buffer when it changes hands with the foreign queue family (submit.ts).
 
 import { mem } from "../mem.ts";
+import { PAGE_SIZE } from "../abi.ts";
 import { PTR, ldp, stp, type HostFn } from "../host.ts";
 import { bufferAt, acquire, release as releaseBuffer, vulkanFormat, type HardwareBuffer } from "../hardwarebuffer.ts";
 import { struct, stU64, WHOLE } from "../struct.ts";
@@ -36,6 +37,8 @@ export class Memory {
   /** the guest bytes of host-visible memory, 0 for device-local memory */
   host = 0;
   ahb: HardwareBuffer | null = null;
+  /** per page of host memory, a version that rises when a submit finds the page changed (submit.ts) */
+  versions: Uint32Array | null = null;
   readonly size: number;
   readonly type: number;
   constructor(size: number, type: number) { this.size = size; this.type = type; }
@@ -43,6 +46,8 @@ export class Memory {
 export class Buffer {
   memory: Memory | null = null;
   offset = 0;
+  /** per page of its host bytes, the version of its memory's page its GPUBuffer holds */
+  seen: Uint32Array | null = null;
   readonly gpu: GPUBuffer;
   readonly size: number;
   readonly usage: number;
@@ -214,8 +219,10 @@ export const DEVICE: Record<string, HostFn> = {
       acquire(b); m.ahb = b;
     } else if (links.has(S.EXPORT_MEMORY)) return R.INVALID_EXTERNAL_HANDLE;           // no AHardwareBuffer is made here
     if (MEMORY_TYPES[m.type] & HOST_VISIBLE) {
-      if (m.size > 2 ** 31 || !(m.host = mem.memalign(64, m.size))) return R.OUT_OF_HOST_MEMORY;
+      // whole pages, which no other allocation's stores mark changed
+      if (m.size > 2 ** 31 || !(m.host = mem.memalign(PAGE_SIZE, align(m.size, PAGE_SIZE)))) return R.OUT_OF_HOST_MEMORY;
       mem.memset(m.host, 0, m.size);
+      m.versions = new Uint32Array(Math.ceil(m.size / PAGE_SIZE)).fill(1);
     }
     stU64(out, objects.add(m));
     return R.SUCCESS;

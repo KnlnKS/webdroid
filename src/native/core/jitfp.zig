@@ -142,7 +142,7 @@ pub fn emitSimd(e: *Emit, w: u32, pc: u32, k: u32) void {
         switch (opcode) {
             0, 1, 2, 3 => b.byte(BINARY[opcode][f]),
             8 => b.emit(.{ F.mul[f], F.neg[f] }),
-            else => b.call(jit.F_FMAX32 + 4 * @as(u32, f) + (opcode - 4)),
+            else => e.callOut(jit.F_FMAX32 + 4 * @as(u32, f) + (opcode - 4)),
         }
         setF(e, rd, f);
         return;
@@ -165,7 +165,7 @@ pub fn emitSimd(e: *Emit, w: u32, pc: u32, k: u32) void {
         if (!dp) b.emit(.{ O.f64_promote_f32, O.f64_mul });
         getF(e, @intCast(bits(w, 10, 5)), f);
         if (o1) b.byte(F.neg[f]);
-        if (dp) b.call(jit.F_FMA64) else b.emit(.{ O.f64_promote_f32, O.f64_add, O.f32_demote_f64 });
+        if (dp) e.callOut(jit.F_FMA64) else b.emit(.{ O.f64_promote_f32, O.f64_add, O.f32_demote_f64 });
         setF(e, rd, f);
         return;
     }

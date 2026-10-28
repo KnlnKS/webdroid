@@ -92,16 +92,23 @@ export function attach(shell: Shell) {
       let started!: ReturnType<typeof broker.launch>;
       // the task goes with its process (ActivityRecord.handleAppDied removes an activity with no saved
       // state) and the launcher returns, under AppErrors' crash dialog when it showed one; opening the
-      // app again starts a new process for it while the other processes and the broker live on
+      // app again starts a new process for it while the other processes and the broker live on. The
+      // task lives on in another of its processes that is on top once the activity changes the death
+      // set off are done, as the one Chrome's restart starts in place of the one it killed.
+      const follow = (pid: number, shown: Promise<void>): Promise<void> => {
+        broker.watch(pid, death => void broker.activities.settled().then(() => {
+          const top = broker.activities.foreground;
+          if (broker.alive(top) && broker.entry(top).pkg === pkg) return follow(top, Promise.resolve());
+          shell.setState({ kind: "exited", file, label, crashed: death.crashed, crashDialog: death.crashed && death.repeated, retry: launch });
+        }));
+        // it runs from its first frame, which a process that dies first settles too
+        return shown.then(() => broker.presented(pid)).then(() => { if (broker.alive(pid)) shell.setState({ kind: "running", file, label }); })
+          .catch(error => shell.setState({ kind: "failed", file, error, retry: launch }));
+      };
       const launch = () => {
         shell.setState({ kind: "loading", file, stage: "attaching" });
         started = broker.launch(pkg, assets?.key ?? file, stage => shell.setState({ kind: "loading", file, stage }));
-        const { pid, shown } = started;
-        broker.watch(pid, death => shell.setState({ kind: "exited", file, label, crashed: death.crashed,
-          crashDialog: death.crashed && death.repeated, retry: launch }));
-        // it runs from its first frame, which a process that dies first settles too
-        return shown.then(() => broker.presented(pid)).then(() => { if (broker.alive(pid)) shell.setState({ kind: "running", file, label }); },
-          error => shell.setState({ kind: "failed", file, error, retry: launch }));
+        return follow(started.pid, started.shown);
       };
       // the app's process is sent its package before the system realm's Java takes the page
       const firstFrame = launch();

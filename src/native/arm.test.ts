@@ -49,6 +49,29 @@ describe("arm decoder", () => {
     expect(run1(target).w[0]).toBe(2);
   });
 
+  // a store whose last bytes alone reach a compiled page: misaligned, or a block's last register
+  test.each([
+    ["str", [0xe5821000, BXLR], 2],
+    ["stmia", [0xe8820003, BXLR], 4],
+    ["strd", [0xe1c200f0, BXLR], 4],
+    ["thumb stmia", [0xc203, 0x4770], 4],
+    ["thumb push", [0xb403, 0x4770], 4],
+    ["thumb strd", [0xe9c2, 0x0100, 0x4770], 4],
+  ] as const)("a compiled %s ending on a compiled page invalidates it", (name, code, below) => {
+    const thumb = name.startsWith("thumb"), base = mem.reserve(0x3000, 0x1000), target = base + 0x2000, data = base + 0x1102 - below / 2;
+    code.forEach((x, i) => thumb ? mem.st16(base + i * 2, x) : mem.st32(base + i * 4, x));
+    mem.st32(target, 0xe3a00001); mem.st32(target + 4, BXLR); // mov r0, #1; bx lr
+    // r0 and r1 at r2 (a push: below sp)
+    const store = (at: number, r1: number) => execute(base | +thumb, c => { c.w[0] = 0x11111111; c.w[2] = r1; c.w[4] = at; c.w[26] = at + 8; });
+    for (let i = 0; i < JIT_HEAT + 2; i++) {
+      store(data, i);
+      expect(execute(target, () => {}).w[0]).toBe(1);
+    }
+    expect(mem.ld32(data + 2 * below - 4)).toBe(JIT_HEAT + 1);
+    store(target - below, below === 2 ? 0x2_0000 : 0xe3a00002); // mov r0, #2
+    expect(execute(target, () => {}).w[0]).toBe(2);
+  });
+
   test.each([false, true])("a page-straddling Thumb instruction remains interpreted after its second half changes (entered before it: %s)", (prefix) => {
     const at = mem.reserve(0x2000, 0x1000) + 0xffe, entry = prefix ? at - 4 : at;
     mem.st16(at - 4, 0x2000); mem.st16(at - 2, 0x2800); // movs r0,#0; cmp r0,#0
@@ -1150,6 +1173,39 @@ describe("thumb decoder", () => {
       0xbdd0,         // return: pop {r4,r6,r7,pc}
     ], (cpu) => { cpu.w[0] = 20; });
     expect(c.w[0]).toBe(20);
+  });
+
+  test("an IT block ending in a branch takes it under its condition", () => {
+    const code = [
+      0xb510, // push {r4, lr}
+      0x2801, // cmp r0, #1
+      0xbf1c, // itt ne
+      0x2007, // movne r0, #7
+      0xe001, // bne 1f
+      0xbf08, // it eq
+      0xbd10, // popeq {r4, pc}
+      0x3001, // 1: adds r0, #1
+      0xbd10, // pop {r4, pc}
+    ];
+    expect(runThumb(code, (c) => { c.w[0] = 1; }).w[0]).toBe(1);
+    expect(runThumb(code, (c) => { c.w[0] = 2; }).w[0]).toBe(8);
+  });
+
+  test("a call and its return run within one compiled region", () => {
+    // push {lr}; bl double; add r0, #1; pop {pc}; (nop); double: lsl r0, #1; bx lr
+    const arm = [0xe52de004, 0xeb000001, 0xe2800001, 0xe49df004, 0xe1a00080, BXLR];
+    const thumb = [0xb500, 0xf000, 0xf803, 0x3001, 0xbd00, 0xbf00, 0x0040, 0x4770];
+    for (const c of both(arm, thumb, (c) => { c.w[0] = 5; })) expect(c.w[0]).toBe(11);
+  });
+
+  test("a store handed to the interpreter runs once, under its IT condition", () => {
+    // r2 addresses the code's own page, whose stores a compiled region hands to the interpreter:
+    // add r2, pc, #0x100; cmp r0, #0; streq r1, [r2], #4; movne r3, #7 (Thumb: ite eq)
+    const setup = (c: Cpu) => { c.w[2] = 0x55; c.w[6] = 1; };
+    for (const c of both([0xe28f2c01, 0xe3500000, 0x04821004, 0x13a03007, BXLR], [0xa240, 0x2800, 0xbf0c, 0xf842, 0x1b04, 0x2307, 0x4770], setup)) {
+      expect(c.w[6]).toBe(1);
+      expect(mem.u32[(c.w[4] - 4) >>> 2]).toBe(0x55);
+    }
   });
 
   test("tail chaining preserves multi-instruction IT state and flags", () => {

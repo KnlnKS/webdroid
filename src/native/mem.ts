@@ -2,9 +2,9 @@
 // allocator, page, plane and region calls forwarded to the core (mem.zig). See abi.ts for the
 // address map. The code-page flags let a store into executable pages invalidate the decoder.
 
-import { core, memory, shared, NativeFault, BadAddress, onMemoryGrown } from "./core.ts";
+import { core, memory, shared, NativeFault, BadAddress, onMemoryGrown, pageFlags } from "./core.ts";
 import { inWindow, poolOffset, pu8 } from "./window.ts";
-import { MEM_SIZE, MEM_SIZE_INITIAL, setMemSize, LOW, PAGE_SHIFT, PAGE_SIZE, MEM_SIZE_A32, MEM_SIZE_A64, PAGE_GUARD, PAGE_MAPPED, PAGE_NOACCESS, PAGE_READONLY } from "./abi.ts";
+import { MEM_SIZE, MEM_SIZE_INITIAL, setMemSize, LOW, PAGE_SHIFT, PAGE_SIZE, MEM_SIZE_A32, PAGE_GUARD, PAGE_MAPPED, PAGE_NOACCESS, PAGE_READONLY, PAGE_WATCH } from "./abi.ts";
 import { utf8 } from "../jvm/abi.ts";
 
 let buf: ArrayBuffer, u8: Uint8Array, i8: Int8Array, u16: Uint16Array, u32: Uint32Array, i32: Int32Array, f32: Float32Array, f64: Float64Array, dv: DataView, codePages: Uint8Array;
@@ -56,11 +56,11 @@ function storing(a: number, n: number): void {
   for (let pg = a >>> PAGE_SHIFT; pg <= end; pg++) if (codePages[pg] & PAGE_READONLY) badAddr(a);
   wrote(a, n);
 }
-/** Invalidate executed code before a host write that may partially trap, or after an atomic write. */
+/** Invalidate executed code, and mark watched pages written, before a host write that may partially trap or after an atomic write. */
 export function wrote(a: number, n: number): void {
   if (n <= 0) return;
   const end = Math.min((a >>> 0) + n - 1, 0xffffffff) >>> PAGE_SHIFT;
-  for (let pg = a >>> PAGE_SHIFT; pg <= end; pg++) if (codePages[pg] & 1) { core.code_write(a >>> 0, n); return; }
+  for (let pg = a >>> PAGE_SHIFT; pg <= end; pg++) if (codePages[pg] & (1 | PAGE_WATCH)) { core.code_write(a >>> 0, n); return; }
 }
 function badAddr(a: number): never {
   throw new BadAddress(BigInt(a >>> 0), `[native] bad address 0x${(a >>> 0).toString(16)}`);
@@ -71,7 +71,7 @@ function views(): void {
   u8 = new Uint8Array(buf); i8 = new Int8Array(buf); u16 = new Uint16Array(buf);
   u32 = new Uint32Array(buf); i32 = new Int32Array(buf); f32 = new Float32Array(buf); f64 = new Float64Array(buf);
   dv = new DataView(buf);
-  codePages = new Uint8Array(buf, core.flags_ptr(), MEM_SIZE_A64 >>> PAGE_SHIFT);
+  codePages = pageFlags();
   Object.assign(mem, { buf, u8, u16, u32, i32, f32 });
 }
 /** host state keyed by a guest object's address: the address the guest knows, which a move keeps */
@@ -128,6 +128,8 @@ export const mem = {
 
   /** a plane-0 address of a page the memory backs: not below LOW, nor past the pages in use */
   backed: (a: number): boolean => ((a >>> 0) - LOW) >>> 0 < SPAN,
+  /** whether a store reached page `pg` since the last call for it, which watches it again (PAGE_WATCH) */
+  takeChanged(pg: number): boolean { const f = codePages[pg]; codePages[pg] = f | PAGE_WATCH; return !(f & PAGE_WATCH); },
   /** a plane-0 page a guest store faults on: a stack's guard gap, the core's own data, one mprotect left read-only */
   writeProtected: (a: number): boolean => !!(codePages[a >>> PAGE_SHIFT] & (PAGE_GUARD | PAGE_READONLY)),
   malloc: (n: number): number => core.malloc(n >>> 0) >>> 0,

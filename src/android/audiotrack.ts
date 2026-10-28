@@ -5,10 +5,10 @@ import { rt, waits, type JObj } from "../jvm/runtime.ts";
 import { after } from "../jvm/natives/jentry.ts";
 import { type JBuffer, readBufferBytes } from "../jvm/natives/jnio.ts";
 import { uptimeMillis } from "../guest-clock.ts";
+import { popcount } from "../bits.ts";
 import { PCM_BYTES, PcmOutput, type PcmConfig, audioContext, minFrames, newAudioSessionId, outputSampleRate } from "./audio-output.ts";
 import { nativePeer, postNativeEvent } from "./media-native.ts";
 
-const bitCount = (mask: number) => { let n = 0; for (; mask; mask &= mask - 1) n++; return n; };
 const AT = "android/media/AudioTrack";
 /** a Java AudioTrack's native track, which posts position events back through its WeakReference */
 class Track extends PcmOutput {
@@ -67,7 +67,7 @@ rt.registerJnis(AT, {
     ref: JObj, _attributes: unknown, rate: Int32Array, channelMask: number, indexMask: number, format: number, bufBytes: number, mode: number, session: Int32Array) {
     // MODE_STATIC's shared-memory buffer is not modelled: AUDIOTRACK_ERROR_SETUP_NATIVEINITFAILED
     if (mode !== 1 || !PCM_BYTES[format]) return -20;
-    const tr = new Track(ref, { rate: rate[0] || outputSampleRate(), channels: bitCount(indexMask || channelMask), bytesPerSample: PCM_BYTES[format],
+    const tr = new Track(ref, { rate: rate[0] || outputSampleRate(), channels: popcount(indexMask || channelMask), bytesPerSample: PCM_BYTES[format],
       sessionId: session[0] ||= newAudioSessionId() }, bufBytes);
     rate[0] = tr.rate;
     tracks.attach(this, tr);

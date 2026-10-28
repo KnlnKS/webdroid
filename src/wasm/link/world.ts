@@ -317,7 +317,7 @@ export class World {
     if (aot) { this.classes.set(name, aot); this.classModules.repair(name); return aot; }
     const t0 = performance.now();
     const jc = this.prog.get(name), id = this.idOf(name), methods = jc?.methods ?? [];
-    const slotBase = this.slots.baseOf(name) ?? this.slots.numberBlock(name, methods.length + 1);
+    const slotBase = this.slots.blockFor(name, methods.length + 1);
     if (!this.instantiates) {
       // a class a build numbers after the platform's has its data in the build's module of them
       const layout = this.opts.build ? { mod: "g" + this.aot!.extraGroup, from: "platform" as const } : { mod: "c" + id, from: "own" as const };

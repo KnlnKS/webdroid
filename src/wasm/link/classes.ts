@@ -17,7 +17,7 @@ import { rt } from "../compiler/rtfns.ts";
 import type { Code } from "../compiler/code.ts";
 import type { Compiler, Intrinsic } from "../compiler/j2w.ts";
 import type { World } from "./world.ts";
-import { synthFamily } from "./synths.ts";
+import { classSynth, synthFamily } from "./synths.ts";
 import { PerWorld } from "./perworld.ts";
 import { fieldCookie } from "./unsafe.ts";
 import { Lookup, LOADER_OF_CLASS, emitClassAnswer } from "./loaders.ts";
@@ -96,13 +96,13 @@ synthFamily("new", (w, name) => {
   const ctor = w.prog.get(name)?.byKey.get("<init>()V");
   return ctor && { params: [], ret: "L", body: (cx, c) => cx.construct(c, ctor) };
 }, true);
-synthFamily("clone", (_w, name) => ({ params: ["L"], ret: "L", body: (cx, c) => {
+classSynth("clone", (_w, name) => ({ params: ["L"], ret: "L", body: (cx, c) => {
   const st = cx.structFor(name), src = c.newLocal(refNull(st)), o = c.newLocal(refNull(st));
   c.lget(0).refCast(st).lset(src); cx.emitNew(c, name); c.lset(o);
   cx.prog.layout(name).forEach((_, i) => c.lget(o).lget(src).structGet(st, i + 2).structSet(st, i + 2));
   c.lget(o);
-} }), true);
-synthFamily("newarray", (_w, name) => ({ params: ["I"], ret: "L", body: (cx, c) => cx.emitNewArray(c, name, () => c.lget(0)) }), true);
+} }));
+classSynth("newarray", (_w, name) => ({ params: ["I"], ret: "L", body: (cx, c) => cx.emitNewArray(c, name, () => c.lget(0)) }));
 
 // ---------- the pieces compiled code calls
 /** in System.arraycopy's reference-array case (src, sp, dst, dp, n are locals 0..4, bounds checked): a copy with store checks unless dst takes src's elements anyway */

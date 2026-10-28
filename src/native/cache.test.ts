@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vite-plus/test";
 import { codeStats, invalidateRange, setA64, SliceExit, type Cpu } from "./cpu.ts";
 import { mem } from "./mem.ts";
 import { execute, finish, RET, run } from "./a64.testkit.ts";
-import { JIT_HEAT, jitEvict, jitStats } from "./core.ts";
+import { JIT_HEAT, core, jitStats } from "./core.ts";
 import { LOW, RET_SENTINEL } from "./abi.ts";
 
 const movW0 = (v: number) => 0x52800000 | (v << 5);
@@ -178,7 +178,7 @@ describe("the decode cache", () => {
     expect(actual).toEqual(expected);
   });
 
-  test("an evicted region re-heats and comes back", () => {
+  test("a flushed region re-heats and comes back", () => {
     const at = mem.reserve(0x1000, 0x1000);
     mem.u32[at >>> 2] = movW0(9); mem.u32[(at >>> 2) + 1] = RET;
     const c = run([RET]);
@@ -186,7 +186,7 @@ describe("the decode cache", () => {
     let before = jitStats.regions;
     heat();
     expect(jitStats.regions).toBe(before + 1);
-    while (jitStats.modules) jitEvict();
+    core.jit_flush();
     before = jitStats.regions;
     heat();
     expect(jitStats.regions).toBe(before + 1);
@@ -221,6 +221,34 @@ describe("region discovery", () => {
     expect(run(words, (c) => { c.w[0] = 0; }).w[0]).toBe(0);
     expect(jitStats.regions).toBeGreaterThan(before);
   });
+
+  // A branch the run never takes still brings its target into the region, so whatever lies there
+  // must emit valid code: an UNDEFINED bitfield extract once left a constant no engine accepts, and
+  // an exit under a condition that reads some of the pending flags dropped the rest.
+  test("words no run reaches compile in every instruction set", () => {
+    let seed = 1;
+    const word = () => { seed = (Math.imul(seed, 1103515245) + 12345) >>> 0; return (seed ^ (seed >>> 15)) >>> 0; };
+    // cmp; a b.ne past the return, which never branches; return
+    const sets = {
+      a64: [0xeb00001f, 0x54000041, RET],
+      // then sbfx r0, r1, #4, #29; cmp r0, r1; addls pc, pc, r2, lsl #2; bx lr
+      arm: [0xe1500000, 0x1a000000, 0xe12fff1e, 0xe7bc0251, 0xe1500001, 0x908ff102, 0xe12fff1e],
+      thumb: [0x4280, 0xd100, 0x4770],
+    };
+    try {
+      for (const [isa, head] of Object.entries(sets)) {
+        setA64(isa === "a64");
+        const view = isa === "thumb" ? mem.u16 : mem.u32, shift = isa === "thumb" ? 1 : 2, before = jitStats.regions;
+        for (let p = 0; p < 32; p++) {
+          const at = mem.reserve(0x1000, 0x1000), base = at >>> shift;
+          view.set(head, base);
+          for (let i = head.length; i < 0x1000 >>> shift; i++) view[base + i] = word();
+          for (let i = 0; i < JIT_HEAT + 2; i++) execute(isa === "thumb" ? at | 1 : at, () => {});
+        }
+        expect(jitStats.regions - before).toBe(32);
+      }
+    } finally { setA64(true); }
+  });
 });
 
 test("compiled scalar and vector memory operations retain low-address faults", () => {
@@ -249,7 +277,7 @@ test("compiled scalar and vector memory operations retain low-address faults", (
 });
 
 describe("a branch to a null pointer", () => {
-  // Below LOW lies the core's own stack, not anything the guest may run, and a region hands its
+  // Below LOW lies only the running Cpu, nothing the guest may run, and a region hands its
   // target back to run_slice as a bare number: a null target has to fault in both tiers rather
   // than be decoded, or be read as a status and leave the pc where it was.
   const brX0 = 0xd61f0000;

@@ -1,3 +1,4 @@
+const std = @import("std");
 pub const Op = struct {
     pub const block: u8 = 0x02;
     pub const loop: u8 = 0x03;
@@ -8,7 +9,9 @@ pub const Op = struct {
     pub const br_if: u8 = 0x0d;
     pub const br_table: u8 = 0x0e;
     pub const return_: u8 = 0x0f;
+    pub const memory_size: u8 = 0x3f;
     pub const call: u8 = 0x10;
+    pub const call_indirect: u8 = 0x11;
     pub const return_call_indirect: u8 = 0x13;
     pub const drop: u8 = 0x1a;
     pub const select: u8 = 0x1b;
@@ -229,7 +232,8 @@ pub const Set = struct { l: u32 };
 pub const Tee = struct { l: u32 };
 pub const C32 = struct { v: i32 };
 pub const C64 = struct { v: i64 };
-pub const Mo = struct { op: u8, off: u32 };
+/// a memory access at off in memory `mem` (the pool, 1, being an ARM32 module's second)
+pub const Mo = struct { op: u8, off: u32, mem: u8 = 0 };
 pub const Call = struct { f: u32 };
 pub const Br = struct { depth: u32 };
 pub const BrIf = struct { depth: u32 };
@@ -276,6 +280,11 @@ pub const Buf = struct {
     nwatch: u32 = 0,
     reads: u32 = 0,
     writes: u32 = 0,
+    /// the watched locals' sets and tees so far
+    nwrites: u32 = 0,
+    /// where the `if`s and `br_if`s that rarely branch were written, for a branch hint section
+    cold: []u32 = &.{},
+    ncold: u32 = 0,
 
     pub fn init(base: u32, cap: u32) Buf {
         return .{ .p = @ptrFromInt(base), .len = 0, .cap = cap };
@@ -314,9 +323,13 @@ pub const Buf = struct {
         }
     }
     noinline fn local(b: *Buf, op: u8, l: u32) void {
-        if (l -% b.watch < b.nwatch) {
-            const m = @as(u32, 1) << @intCast(l - b.watch);
-            if (op == Op.local_get) b.reads |= m else b.writes |= m;
+        const k = l -% b.watch;
+        if (k < b.nwatch) {
+            const m = @as(u32, 1) << @intCast(k);
+            if (op == Op.local_get) b.reads |= m else {
+                b.writes |= m;
+                b.nwrites += 1;
+            }
         }
         b.byte(op);
         b.u(l);
@@ -337,7 +350,10 @@ pub const Buf = struct {
             },
             Mo => {
                 b.byte(x.op);
-                b.u(0);
+                if (x.mem != 0) {
+                    b.u(0x40);
+                    b.u(x.mem);
+                } else b.u(0);
                 b.u(x.off);
             },
             Call => {
@@ -392,6 +408,51 @@ pub const Buf = struct {
     }
     pub fn br(b: *Buf, depth: u32) void {
         b.emit(.{Br{ .depth = depth }});
+    }
+    /// the `if` or `br_if` written next rarely takes its branch
+    pub fn unlikely(b: *Buf) void {
+        if (b.ncold >= b.cold.len) return;
+        b.cold[b.ncold] = b.len;
+        b.ncold += 1;
+    }
+    /// The branch hint section for the code section at `code`, whose function bodies (indices from
+    /// `first_fn`) start at `bodies`, in front of it: the `unlikely` branches, each unlikely taken.
+    pub fn branchHints(b: *Buf, code: u32, bodies: []const u32, first_fn: u32) void {
+        if (b.ncold == 0 or b.overflow) return;
+        const hints = b.len;
+        b.byte(0);
+        const len = b.reserve();
+        const start = b.len;
+        const name = "metadata.code.branch_hint";
+        b.u(name.len);
+        b.bytes(name);
+        const cold = b.cold[0..b.ncold];
+        var nfn: u32 = 0;
+        var k: u32 = 0;
+        for (bodies, 0..) |_, i| {
+            const first = k;
+            while (k < cold.len and cold[k] < bodyEnd(bodies, i, hints)) k += 1;
+            nfn += @intFromBool(k != first);
+        }
+        b.u(nfn);
+        k = 0;
+        for (bodies, 0..) |body, i| {
+            const first = k;
+            while (k < cold.len and cold[k] < bodyEnd(bodies, i, hints)) k += 1;
+            if (k == first) continue;
+            b.u(first_fn + i);
+            b.u(k - first);
+            // the branch's offset in its body, counted from the locals, a size of 1, and 0 (unlikely)
+            for (cold[first..k]) |at| {
+                b.u(at - body);
+                b.bytes(&[_]u8{ 1, 0 });
+            }
+        }
+        b.patch(len, b.len - start);
+        if (!b.overflow) std.mem.rotate(u8, b.p[code..b.len], hints - code);
+    }
+    fn bodyEnd(bodies: []const u32, i: usize, end: u32) u32 {
+        return if (i + 1 < bodies.len) bodies[i + 1] else end;
     }
     pub fn blockStart(b: *Buf, kind: u8, ty: u8) void {
         b.emit(.{ kind, ty });

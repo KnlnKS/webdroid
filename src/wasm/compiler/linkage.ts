@@ -25,7 +25,7 @@ const declared = (prog: Program, cls: string, extra?: DexFile) => ` (declaration
 const fail = (thrower: LinkFailure["thrower"], message: string, absent?: string): LinkFailure => ({ thrower, message, absent });
 
 /** the class a type descriptor names, through arrays; undefined for a primitive */
-const classOfType = (d: string): string | undefined => { const e = d.replace(/^\[+/, ""); return e[0] === "L" ? descToName(e) : undefined; };
+export const classOfType = (d: string): string | undefined => { const e = d.replace(/^\[+/, ""); return e[0] === "L" ? descToName(e) : undefined; };
 
 const UNRESOLVED = "Failed resolution of: ";
 /** a type that does not resolve: its class (or an array's element class) is not loaded */

@@ -1,8 +1,8 @@
 // An ARM32 process's window (abi.WINDOW) onto the memory pool its processes share (shm.ts): the
 // pool, its views, the pool offset each window page shows, the mappings there, and the core's
 // imports that reach them. The core's page flags hold each window page's protection.
-import { MEM_SIZE, MEM_SIZE_A32, PAGE_SHIFT, PAGE_SIZE, WINDOW, WINDOW_SIZE, pages } from "./abi.ts";
-import { core } from "./core.ts";
+import { MEM_SIZE, MEM_SIZE_A32, PAGE_MAPPED, PAGE_SHIFT, PAGE_SIZE, WINDOW, WINDOW_SIZE, pages } from "./abi.ts";
+import { core, memory, pageFlags } from "./core.ts";
 import { BadAddress } from "./faults.ts";
 
 /** first-fit runs of `limit` bytes: the free runs below `top` by offset, and everything from `top` on */
@@ -57,9 +57,10 @@ export const attachedPool = (): WebAssembly.Memory | null => pool;
 /** the pool's bytes [off, off + n) */
 export function poolBytes(off: number, n: number): Uint8Array { poolTo(off + n); return pu8.subarray(off, off + n); }
 
-/** the pool offset each page of this process's window shows, -1 where none */
+/** the pool offset each page of this process's window shows: the core's table, which its JIT reads too */
 let windowPages: Int32Array | null = null;
 const pageOf = (va: number) => ((va >>> 0) - WINDOW) >>> PAGE_SHIFT;
+const mapped = (va: number) => (pageFlags()[(va >>> 0) >>> PAGE_SHIFT] & PAGE_MAPPED) !== 0;
 /** A mapping's run of the window, and a page past it that stays unmapped, so that the pages of any
  *  mapped stretch are one run of the pool. It holds its region until its last page is unmapped. */
 type Hold = { va: number; n: number; mapped: number; release(): unknown };
@@ -71,21 +72,20 @@ export function mapWindow(region: number, off: number, n: number, prot: number, 
   n = pages(n);
   const at = windowRuns.take(n + PAGE_SIZE);
   if (at === null) return null;
-  const va = WINDOW + at, table = windowPages ??= new Int32Array(WINDOW_SIZE >>> PAGE_SHIFT).fill(-1);
-  core.window_map(va, n, prot);
-  for (let i = 0; i < n >>> PAGE_SHIFT; i++) table[(at >>> PAGE_SHIFT) + i] = region + off + i * PAGE_SIZE;
+  const va = WINDOW + at;
+  if (!core.window_map(va, n, prot, region + off)) { windowRuns.give(at, n + PAGE_SIZE); return null; }
+  windowPages ??= new Int32Array(memory.buffer, core.window_table_ptr(), WINDOW_SIZE >>> PAGE_SHIFT);
   holds.push({ va, n, mapped: n >>> PAGE_SHIFT, release });
   return va;
 }
 /** munmap of [va, va + n) of the window */
 export function unmapWindow(va: number, n: number): void {
-  const end = Math.min(va + n, WINDOW + WINDOW_SIZE), table = windowPages;
-  if (!table || end <= va) return;
+  const end = Math.min(va + n, WINDOW + WINDOW_SIZE);
+  if (!windowPages || end <= va) return;
   for (const hold of holds) {
-    for (let a = Math.max(hold.va, va); a < Math.min(hold.va + hold.n, end); a += PAGE_SIZE) if (table[pageOf(a)] >= 0) hold.mapped--;
+    for (let a = Math.max(hold.va, va); a < Math.min(hold.va + hold.n, end); a += PAGE_SIZE) if (mapped(a)) hold.mapped--;
   }
-  table.fill(-1, pageOf(va), pageOf(end - 1) + 1);
-  core.window_map(va, end - va, -1);
+  core.window_map(va, end - va, -1, 0);
   holds = holds.filter((hold) => {
     if (hold.mapped) return true;
     windowRuns.give(hold.va - WINDOW, hold.n + PAGE_SIZE);
@@ -95,9 +95,8 @@ export function unmapWindow(va: number, n: number): void {
 }
 /** the pool offset of window address a, through n bytes on: a run the core has checked is mapped, all in one mapping */
 export function poolOffset(a: number, n: number): number {
-  const page = windowPages?.[pageOf(a)] ?? -1;
-  if (page < 0) throw new BadAddress(BigInt(a >>> 0), `[native] window address 0x${(a >>> 0).toString(16)} unmapped`);
-  const off = page + (a & (PAGE_SIZE - 1));
+  if (!windowPages || !mapped(a)) throw new BadAddress(BigInt(a >>> 0), `[native] window address 0x${(a >>> 0).toString(16)} unmapped`);
+  const off = windowPages[pageOf(a)] + (a & (PAGE_SIZE - 1));
   poolTo(off + n);
   return off;
 }

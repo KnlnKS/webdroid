@@ -1,6 +1,7 @@
 // Synthetic functions are made from their names: a runtime function's (rtfns.ts), or a family's and its argument, which names classes by name and members by index.
 // Any World over the same Program makes the function another World's code or demand names.
 import { rtfns, type Synth } from "../compiler/rtfns.ts";
+import { classOfType } from "../compiler/linkage.ts";
 import type { World } from "./world.ts";
 
 const families = new Map<string, { make: (w: World, arg: string) => Synth | undefined; asked: boolean }>();
@@ -8,6 +9,11 @@ const families = new Map<string, { make: (w: World, arg: string) => Synth | unde
 /** makes the functions named `family:arg`, or undefined when the Program lacks what `arg` names; `asked`: the host makes them when compiled code asks it
  *  (hostInfo), so a launch's demand records them for a build */
 export function synthFamily(family: string, make: (w: World, arg: string) => Synth | undefined, asked = false): void { families.set(family, { make, asked }); }
+
+/** a family whose argument is a class name, or an array's descriptor, whose class the Program must have: one a World numbered before it had the class */
+export function classSynth(family: string, make: (w: World, name: string) => Synth): void {
+  synthFamily(family, (w, name) => { const cls = name[0] === "[" ? classOfType(name) : name; return cls === undefined || w.prog.has(cls) ? make(w, name) : undefined; }, true);
+}
 
 const familyOf = (name: string) => { const at = name.indexOf(":"); return at < 0 ? undefined : families.get(name.slice(0, at)); };
 /** the definition of synthetic function `name`, if the Program has what it names */

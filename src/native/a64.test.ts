@@ -381,6 +381,11 @@ describe("a64 decoder: hints, atomics, the REV family and system registers", () 
     expect([b.w[2], b.w[4]]).toEqual([7, 3]);
   });
 
+  test("a block reads SP after a compare names register 31 as XZR", () => {
+    const c = run([0xf100041f, 0x910003e2, RET]); // cmp x0, #1; mov x2, sp
+    expect(c.w[4]).toBe(c.w[62]);
+  });
+
   test("a word the interpreter runs leaves the region's other registers alone", () => {
     // x0 is dirty in the region when scvtf d0 (a V destination numbered like it) falls back
     const c = run([

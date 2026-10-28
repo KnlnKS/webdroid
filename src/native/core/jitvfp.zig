@@ -182,16 +182,13 @@ fn loadStore(e: *Emit, w: u32) bool {
         b.i32c(@bitCast(if (add) base +% offset else base -% offset));
     } else b.emit(.{ get(jit.L_X + rn), c32(@intCast(offset)), if (add) O.i32_add else O.i32_sub });
     b.set(L_A);
-    e.checkLowAddress();
+    if (load_mem) e.checkLowAddress() else if (dp) e.rangeCheck(0, 8) else e.storeCheck(0, 4);
     for (0..(if (dp) @as(usize, 2) else 1)) |i| {
         const off: u32 = @intCast(i * 4);
         const reg_off = OFF_V + slot * 4 + off;
         if (load_mem) {
             b.emit(.{ get(L_CPU), get(L_A), mo(O.i32_load, off), mo(O.i32_store, reg_off) });
-        } else {
-            e.storeCheck(off, 4);
-            b.emit(.{ get(L_A), get(L_CPU), mo(O.i32_load, reg_off), mo(O.i32_store, off) });
-        }
+        } else b.emit(.{ get(L_A), get(L_CPU), mo(O.i32_load, reg_off), mo(O.i32_store, off) });
     }
     return true;
 }
@@ -216,17 +213,14 @@ fn loadStoreMultiple(e: *Emit, w: u32) bool {
     b.get(jit.L_X + rn);
     if (!U) b.emit(.{ c32(@intCast(nbytes)), O.i32_sub });
     b.set(L_A);
-    e.checkLowAddress();
+    if (load_mem) e.checkLowAddress() else e.rangeCheck(0, nbytes);
     const words: u32 = if (dp) 2 else 1;
     var off: u32 = 0;
     for (0..count) |i| for (0..words) |k| {
         const slot = if (dp) (d + @as(u32, @intCast(i))) * 2 + @as(u32, @intCast(k)) else d + @as(u32, @intCast(i));
         if (load_mem) {
             b.emit(.{ get(L_CPU), get(L_A), mo(O.i32_load, off), mo(O.i32_store, OFF_V + slot * 4) });
-        } else {
-            e.storeCheck(off, 4);
-            b.emit(.{ get(L_A), get(L_CPU), mo(O.i32_load, OFF_V + slot * 4), mo(O.i32_store, off) });
-        }
+        } else b.emit(.{ get(L_A), get(L_CPU), mo(O.i32_load, OFF_V + slot * 4), mo(O.i32_store, off) });
         off += 4;
     };
     if (W) b.emit(.{ get(jit.L_X + rn), c32(@intCast(nbytes)), if (U) O.i32_add else O.i32_sub, set(jit.L_X + rn) });

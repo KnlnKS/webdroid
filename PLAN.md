@@ -1,4 +1,4 @@
-# Webdroid status — 2026-10-26
+# Webdroid status — 2026-10-27
 
 This file tracks where the work stands and what is open. [AGENTS.md](AGENTS.md) defines the working and
 verification rules, [docs/architecture.md](docs/architecture.md) the design, [docs/performance.md](docs/performance.md)
@@ -48,6 +48,16 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
   2026-10-22). Measured and not levers: the engine code
   cache, GC (2–4% of heavy frames), nested inlining and guarded inlining of a virtual call's one loaded
   implementation. See [performance.md](docs/performance.md).
+  Native apps (2026-10-27): Pokémon TCG Pocket's dropdowns answer 88–103 ms after the tap. Chrome's menu taps on
+  vgpu.sh took about 330 ms (first taps 470–970 ms) beside other sessions' emulators, its renderer CPU-bound at
+  710–800M guest instr/s (history, "Calls as host calls, exits chained from their sites"); on a quiet host
+  (2026-10-28) it runs about 900M instr/s at 99% busy and taps after the first take a median 306–313 ms (first
+  387–488 ms). Its guest thread loses 47% of pipeline slots to instruction delivery: the size of its hot region code
+  bounds it, not transitions or calls, and cold code is already out of line (history, "Region code footprint",
+  "Region transitions and instruction delivery"). Cheaper store checks took 4.6% off the 256-function bench, within
+  Chrome's noise (history, "Store checks"). Passing a call's continuation and depth as region parameters, and exits
+  storing only the registers their path wrote, left both within noise (history, "Register traffic at region exits
+  and calls").
 - **Compatibility:** the original 20-APK scope and the 15-app open-source corpus all draw an initial frame; neither
   is established as fully usable. Feature paths were exercised for each corpus app except Thunderbird's account
   setup. Outside the corpus, NewPipe was exercised end to end on 2026-10-15, and Google Maps (2026-10-15) draws its
@@ -55,10 +65,10 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
   View. The `apks/new` XAPKs run on the Wasm tier (2026-10-16): Snapseed edits and exports, Yelp's onboarding, home,
   search, map and business page work, Walmart's flows and cart work, McDonald's reaches home, menu and the store
   locator, and Tubi plays non-DRM titles. APKPure (2026-10-25) searches, downloads and installs Pokémon TCG Pocket's
-  split XAPK, and the game (2026-10-26, Unity 6 over Vulkan) reaches its title screen; the terms, the 3.2 GB asset
+  split XAPK, and the game (Unity 6 over Vulkan) reaches its title screen 25 s after boot (2026-10-27); the terms, the 3.2 GB asset
   download and pack opening were reached before its driver was merged into Chrome's (history, Pokémon TCG Pocket). Google Chrome (2026-10-25) searches Google and loads pages such as vgpu.sh
-  across its browser, GPU and sandboxed renderer processes, compositing and rasterizing with Skia on the Vulkan driver (2026-10-26); YouTube's watch page plays (360p, about half of 60 fps frames dropped),
-  and vgpu.sh's WebGPU prism draws through the Vulkan driver over WebGPU (with chrome://flags#enable-unsafe-webgpu, about 3.6 frames/s).
+  across its browser, GPU and sandboxed renderer processes, compositing and rasterizing with Skia on the Vulkan driver (2026-10-26); YouTube's watch page plays with sound (about 29 frames/s of a 30 fps stream, 2026-10-27),
+  and vgpu.sh's WebGPU prism draws through the Vulkan driver over WebGPU (with chrome://flags#enable-unsafe-webgpu, 10.6–11.3 presentations/s).
   Bloons TD 6 (2026-10-26, Unity 6 IL2CPP over Vulkan) downloads its 598 MB of assets, and its tutorial plays through round 3 at about 56 frames/s:
   towers are placed, upgraded and pop bloons; Google Play Games sign-in is cancelled at launch.
 - **Deployment:** one Workers Builds build deploys the page to Pages and the backend, which is also the isolated
@@ -87,6 +97,17 @@ diffs unchanged (Calculator M 0.65%, FitNotes 2.94%, Mihon 22.08% and 10.95%).
 
 After the fourth code-quality pass (2026-10-26; history, "Fourth code-quality pass (2026-10-26)"): `pnpm check` passes in 81 s with
 the flows' content diffs within their usual range (Calculator M 0.65%, FitNotes 2.94%, Mihon 23.99% and 10.95%).
+
+After the region code density work (2026-10-27; history, "Region code density"): `pnpm check` passes in 108 s
+(Calculator M 0.65%, FitNotes 2.92%, Mihon 21.87% and 10.95%), with 2,227 native unit tests.
+
+After the native JIT, Vulkan upload and AAudio work (2026-10-27; history, CPU cores and JIT): `pnpm check` passes in
+107 s (Calculator M 0.65%, FitNotes 2.92%, Mihon 24.23% and 10.95%), with 2,227 native unit tests. Every gated `lat`
+tap passes (at most 76 ms); Mihon's launch again meets its live "New version available!" dialog, as on `main`.
+
+After calls as host calls and per-site chaining (2026-10-27; history, "Calls as host calls, exits chained from their
+sites"): `pnpm check` passes in 104 s (Calculator M 0.65%, FitNotes 2.92%, Mihon 24.16% and 10.95%), with 2,228 native
+unit tests.
 
 `pnpm check` (2026-10-24) runs the typecheck, three unit-test shards, each part of `wasm all` and the seven
 deterministic flows as one pool in 83–89 s on an M4 Pro beside other sessions' load (three runs); `--corpus` adds a
@@ -139,7 +160,10 @@ on both tiers (a notification-permission request and live content); do not raise
    - *YouTube:* search, thumbnails, playback, fullscreen and Shorts work; the fullscreen crash (about 1 in 9
      walks) was a stale handle long naming a reused slot (history, YouTube). The reference's video-open tap is a
      coordinate that can land on a live Short; webdroid's run taps the title.
-   - *Chrome:* YouTube plays at 360p with about half of a 60 fps source's frames dropped. WebGPU needs the
+   - *Chrome:* menu taps take about 330 ms on vgpu.sh (YouTube's comments sheet, 565–1245 ms before the region work, is
+     not re-measured) with the renderer CPU-bound; a browser-process SIGTRAP (CHECK at
+     libchrome+0x3e12d34) hits about 7 in 16 launches whose first navigation starts soon after the renderer appears
+     (1 in 10 on the starting commit, none after a 30 s wait). WebGPU needs the
      unsafe-WebGPU flag (the Android blocklist names Apple's vendor ID). chrome://media-internals and the other
      developer pages wait for Chrome's on-demand `dev_ui` module, which the XAPK lacks and microG's companion never
      delivers. The Vulkan driver has no sparse resources or clamp-to-border colours (history, Google Chrome).
@@ -183,8 +207,8 @@ Unranked; each needs a measurement or a check against the current code before wo
   whole root display list (no damage tracking); measure raster time on a hardware GPU first.
 - **GLES:** `keepsClean` validation excludes draws, uniforms and state setters, so `gl.getError` follows them;
   Google Maps' two `getError`s per frame come through the untracked Java bindings (history, EGL/GLES).
-- **ARM JIT:** ARM32 regions now cross pages at observed entries, avoiding transfers on direct branches;
-  calls and returns still spill and reload. Cross-page loop gains are large, Doodle Jump's frame rate unchanged
+- **ARM JIT:** ARM32 regions cross pages at observed entries and keep window accesses inside a region; calls run
+  the callee's region as a host call and go on at the continuation; registers store through, so exits spill nothing. Cross-page loop gains are large, Doodle Jump's frame rate unchanged
   ([measurements and further designs](docs/performance-design.md)); broader CPU-bound games remain unmeasured.
 - **Native:** only ARM32 native mappings of pooled ashmem share memory between processes; A64 processes and Java
   mappings copy. `AndroidBitmap_lockPixels` copies and converts the whole bitmap per lock; a file read compares a

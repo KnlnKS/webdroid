@@ -240,8 +240,7 @@ export class Runtime {
         return this.mkThrowable("java/lang/NegativeArraySizeException", e.message);
       }
     }
-    if (e instanceof Error) return this.mkThrowable("java/lang/InternalError", e.message + "\n" + e.stack);
-    return this.mkThrowable("java/lang/InternalError", String(e));
+    return this.mkThrowable("java/lang/InternalError", hostErrorDetail(e));
   }
 
   oom(bytes: number): unknown {
@@ -252,6 +251,11 @@ export class Runtime {
 }
 
 export const rt = new Runtime();
+/** a host error's message and stack, which V8's stack begins with and JavaScriptCore's does not */
+export function hostErrorDetail(e: unknown): string {
+  if (!(e instanceof Error)) return String(e);
+  return e.stack?.includes(e.message) ? e.stack : `${e.message}\n${e.stack ?? ""}`;
+}
 
 const declaredFields = new Map<string, string>();
 /** the property holding `cls`'s instance field `name`, whether a spec maps it or bytecode keeps it;

@@ -60,6 +60,15 @@ export class SlotTable {
     this.addBlock(name, size, base);
     return base;
   }
+  /** the slots of class `name`, whose block holds `size` (its methods and `ensure`): those it is numbered with, or a new block. A replayed numbering
+   *  may have a block of another size for the name, from a World that numbered the name before it had the class (a class of a loader that World
+   *  lacked); the class's slots cannot be that block's. */
+  blockFor(name: string, size: number): number {
+    const base = this.baseOf(name);
+    if (base !== undefined && this.blockSize[this.blockOf(base)] === size) return base;
+    this.preassigned.delete(name);
+    return this.numberBlock(name, size);
+  }
   /** makes reservations `tail` at once, as many as the platform's classes or an app build's (tens of thousands); `block` sees each class's base */
   private reserveAll(tail: readonly Tail[], block?: (name: string, base: number) => void): void {
     let top = this.reserve(tail.reduce((n, t) => n + (typeof t === "string" ? 1 : t[1]), 0));

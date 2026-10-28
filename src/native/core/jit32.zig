@@ -80,11 +80,23 @@ fn emitWideMove(e: *Emit, move: WideMove) void {
     if (move.top) b.emit(.{ get(L_X + move.d), c32(0xffff), O.i32_and, c32(@bitCast(move.imm << 16)), O.i32_or }) else b.i32c(@bitCast(move.imm));
     setR(e, move.d);
 }
-const ItOp = struct { pc: u32, cc: u8, body: thumbarm.ItBody };
-const ItBlock = struct { end: u32, count: u32, ops: ?[4]ItOp };
+const ItOp = struct { pc: u32, it: u8, body: thumbarm.ItBody };
+const Branch = union(enum) { direct: u32, indirect };
+/// last: the branch that ends the block, as only its last body may
+const ItBlock = struct { end: u32, count: u32, ops: ?[4]ItOp, last: ?Branch = null };
+fn itBranch(pc: u32, h: u32, h2: u32) ?Branch {
+    if (h >= 0xe800) {
+        if (h & 0xf800 == 0xf000 and h2 & 0xd000 == 0x9000) return .{ .direct = pc +% 4 +% thumbOffset(h, h2) };
+        return if (thumbCall(h, h2) or thumbBranch(h, h2) or thumbLoadsPc(h, h2)) .indirect else null;
+    }
+    if (h & 0xf800 == 0xe000) return .{ .direct = pc +% 4 +% @as(u32, @bitCast(bt.sx(i32, h & 0x7ff, 11) * 2)) };
+    const d = (h & 7) | ((h >> 4) & 8);
+    return if (h & 0xff00 == 0xbd00 or h & 0xff00 == 0x4700 or (h & 0xfc00 == 0x4400 and bits(h, 8, 2) != 1 and d == 15)) .indirect else null;
+}
 fn itBlock(pc: u32, h: u32) ?ItBlock {
     if (h & 0xff00 != 0xbf00 or h & 15 == 0 or bits(h, 4, 4) >= 14 or jit.forcedFallback(pc)) return null;
     const count: u32 = 4 - @ctz(@as(u4, @truncate(h)));
+    var block: ItBlock = .{ .end = 0, .count = count, .ops = undefined };
     var ops: [4]ItOp = undefined;
     var compiled = true;
     var at = pc + 2;
@@ -95,18 +107,21 @@ fn itBlock(pc: u32, h: u32) ?ItBlock {
         const len: u32 = if (word & 0xf800 >= 0xe800) 4 else 2;
         if ((at & (abi.PAGE_SIZE - 1)) > abi.PAGE_SIZE - len or (len == 4 and jit.forcedFallback(at + 2))) return null;
         if (compiled) {
-            const body: ?thumbarm.ItBody = if (len == 2) thumbarm.itBody16(word) else blk: {
-                const h2: u32 = mem.ld(u16, at + 2);
-                // no branches, PC loads, table branches or ISB, which end a block
-                break :blk if (thumbCall(word, h2) or thumbBranch(word, h2) or thumbCondBranch(word, h2) or thumbLoadsPc(word, h2) or (word == 0xf3bf and h2 & 0xfff0 == 0x8f60) or
-                    (word & 0xfe10 == 0xf810 and h2 >> 12 == 15) or (word & 0xfff0 == 0xe8d0 and h2 & 0xffe0 == 0xf000)) null else .thumb;
-            };
-            if (body) |x| ops[i] = .{ .pc = at, .cc = @intCast(state >> 4), .body = x } else compiled = false;
+            const h2: u32 = if (len == 4) mem.ld(u16, at + 2) else 0;
+            // a branch only as the last body, as the architecture allows; otherwise no branches,
+            // PC loads, ISB or PLD, which end a block or have no compiled form here
+            if (i == count - 1) block.last = itBranch(at, word, h2);
+            const body: ?thumbarm.ItBody = if (block.last != null) .thumb else if (len == 2) thumbarm.itBody16(word) else if (thumbCall(word, h2) or thumbBranch(word, h2) or
+                thumbCondBranch(word, h2) or thumbLoadsPc(word, h2) or (word == 0xf3bf and h2 & 0xfff0 == 0x8f60) or (word & 0xfe10 == 0xf810 and h2 >> 12 == 15)) null else .thumb;
+            if (body) |x| ops[i] = .{ .pc = at, .it = @intCast(state), .body = x } else compiled = false;
         }
         at += len;
         state = if (state & 7 == 0) 0 else (state & 0xe0) | ((state << 1) & 0x1f);
     }
-    return if (state == 0) .{ .end = at, .count = count, .ops = if (compiled) ops else null } else null;
+    if (state != 0) return null;
+    block.end = at;
+    block.ops = if (compiled) ops else null;
+    return block;
 }
 
 pub fn rwArm(w: u32) jit.RW {
@@ -214,17 +229,21 @@ pub fn scanArm(r: *Region, i: u32, page: *cpu.Page, pc: u32) Scan {
     const cc = w >> 28;
     const next = pc + 4;
     const b = &r.blocks[i];
-    if (cc == 15) return .{ .len = 4, .ends = (w & 0x0e000000) == 0x0a000000 or w & 0xfffffff0 == 0xf57ff060 };
+    if (cc == 15) {
+        if ((w & 0x0e000000) == 0x0a000000) jit.addCall(r, i, next);
+        return .{ .len = 4, .ends = (w & 0x0e000000) == 0x0a000000 or w & 0xfffffff0 == 0xf57ff060 };
+    }
     const top = bits(w, 25, 3);
     const rd = bits(w, 12, 4);
     var ends = false;
     switch (top) {
         5 => {
-            if (w & (1 << 24) == 0) b.taken = jit.blockFor(r, pc +% 8 +% @as(u32, @bitCast(@as(i32, @bitCast(w << 8)) >> 6)));
+            if (w & (1 << 24) != 0) jit.addCall(r, i, next) else b.taken = jit.blockFor(r, pc +% 8 +% @as(u32, @bitCast(@as(i32, @bitCast(w << 8)) >> 6)));
             ends = true;
         },
         0, 1 => {
             if (top == 0 and ((w & 0x0ff000f0) == 0x01200010 or (w & 0x0ff000f0) == 0x01200030 or (w & 0x0ff000f0) == 0x01200070)) ends = true;
+            if (top == 0 and (w & 0x0ff000f0) == 0x01200030) jit.addCall(r, i, next);
             if (top == 0 and (w & 0x0e000090) == 0x00000090 and rd == 15 and w & (1 << 20) != 0) ends = true;
             const dp = !((w & 0x0f0000f0) == 0x00000090 and top == 0) and !((w & 0x0db0f000) == 0x0120f000) and !((w & 0x0fb00000) == 0x03000000 and top == 1);
             const o = bits(w, 21, 4);
@@ -258,6 +277,7 @@ pub fn scanThumb(r: *Region, i: u32, page: *cpu.Page, pc: u32) Scan {
             b.fall = jit.blockFor(r, pc + 4);
         }
         if (h & 0xf800 == 0xf000 and h2 & 0xd000 == 0x9000) b.taken = jit.blockFor(r, pc +% 4 +% thumbOffset(h, h2));
+        if (thumbCall(h, h2)) jit.addCall(r, i, pc + 4);
         return .{ .len = 4, .ends = conditional or thumbCall(h, h2) or thumbBranch(h, h2) or
             thumbLoadsPc(h, h2) or (h == 0xf3bf and h2 & 0xfff0 == 0x8f60) };
     }
@@ -265,6 +285,7 @@ pub fn scanThumb(r: *Region, i: u32, page: *cpu.Page, pc: u32) Scan {
         4 => if ((h & 0xfc00) == 0x4400) {
             const o = (h >> 8) & 3;
             const d = (h & 7) | ((h >> 4) & 8);
+            if (o == 3 and h & 0x80 != 0) jit.addCall(r, i, next);
             if (o == 3 or ((o == 0 or o == 2) and d == 15)) return .{ .len = 2, .ends = true };
         },
         11 => {
@@ -272,6 +293,9 @@ pub fn scanThumb(r: *Region, i: u32, page: *cpu.Page, pc: u32) Scan {
                 if (itBlock(pc, h)) |block| {
                     cpu.cover(page, pc, block.end - 2);
                     b.fall = jit.blockFor(r, block.end);
+                    if (block.last) |l| if (l == .direct) {
+                        b.taken = jit.blockFor(r, l.direct);
+                    };
                 }
                 return .{ .len = 2, .ends = true };
             }
@@ -310,7 +334,7 @@ inline fn setR(e: *Emit, n: u32) void {
 fn bxExit(e: *Emit, k: u32) void {
     e.b.set(jit.L_RET);
     e.countIc(k);
-    e.exitRet();
+    e.exit();
 }
 fn shiftByReg(e: *Emit, kind: u32, carry: bool) void {
     const b = e.b;
@@ -377,10 +401,14 @@ fn emitImm(e: *Emit, imm: Imm, carry: bool) void {
 fn load(e: *Emit, o: u8, off: u32) void {
     e.b.emit(.{ get(L_A), mo(o, off) });
 }
+/// the new base in L_B into Rn, after the access's last check (Emit.interpretHere)
+fn writeBase(e: *Emit, rn: u32) void {
+    e.b.emit(.{ get(L_B), set(L_X + rn) });
+}
+/// the store of the value on the stack at L_A + off
 fn store(e: *Emit, o: u8, off: u32) void {
     e.b.set(L_R);
-    e.storeCheck(off, switch (o) { O.i32_store8 => 1, O.i32_store16 => 2, else => 4 });
-    e.b.emit(.{ get(L_A), get(L_R), mo(o, off) });
+    e.storeTo(o, off);
 }
 
 pub fn emitArm(e: *Emit, pc: u32, k: u32) bool {
@@ -390,8 +418,8 @@ pub fn emitArm(e: *Emit, pc: u32, k: u32) bool {
     if (cc == 15) {
         if ((w & 0x0e000000) == 0x0a000000) {
             const off: u32 = @bitCast((@as(i32, @bitCast(w << 8)) >> 6) | @as(i32, @intCast((w >> 23) & 2)));
-            b.emit(.{ c32(@bitCast(pc + 4)), set(L_X + 14), c32(@bitCast(((pc +% 8 +% off) & ~@as(u32, 1)) | 1)) });
-            bxExit(e, k);
+            b.emit(.{ c32(@bitCast(pc + 4)), set(L_X + 14) });
+            e.call(((pc +% 8 +% off) & ~@as(u32, 1)) | 1, pc + 4, k);
             return true;
         }
         if ((w & 0x0d70f000) == 0x0550f000 or (w & 0x0ff000f0) == 0x05700040 or (w & 0x0ff000f0) == 0x05700050 or (w & 0x0ff000f0) == 0x05700060) return false;
@@ -432,10 +460,12 @@ fn armBody(e: *Emit, t: Thumb2, pc: u32, k: u32) bool {
     switch (top) {
         5 => {
             const target = pc +% 8 +% @as(u32, @bitCast(@as(i32, @bitCast(w << 8)) >> 6));
-            if (w & (1 << 24) != 0) {
-                b.emit(.{ c32(@bitCast(pc + 4)), set(L_X + 14) });
-                e.transfer(-1, target, k);
-            } else e.transfer(e.r.blocks[e.blk].taken, target, k);
+            if (w & (1 << 24) == 0) {
+                e.transfer(e.r.blocks[e.blk].taken, target, k);
+                return true;
+            }
+            b.emit(.{ c32(@bitCast(pc + 4)), set(L_X + 14) });
+            e.call(target, pc + 4, k);
             return true;
         },
         0, 1 => return dataProcessing(e, t, pc, k, top, rn, rd, rs, rm),
@@ -451,19 +481,18 @@ fn armBody(e: *Emit, t: Thumb2, pc: u32, k: u32) bool {
             b.emit(.{ if (U) O.i32_add else O.i32_sub, set(L_B) });
             if (P) b.get(L_B) else getR(e, rn, pc, false);
             b.set(L_A);
-            if (Ld) e.checkLowAddress();
-            if (Wb or !P) b.emit(.{ get(L_B), set(L_X + rn) });
-            if (Ld) {
-                load(e, if (B) O.i32_load8_u else O.i32_load, 0);
-                if (rd == 15) {
-                    bxExit(e, k);
-                    return true;
-                }
-                setR(e, rd);
-            } else {
+            if (Ld) e.loadFrom(if (B) O.i32_load8_u else O.i32_load, 0) else {
                 getR(e, rd, pc, false);
                 store(e, if (B) O.i32_store8 else O.i32_store, 0);
             }
+            // before a load's destination, which may be the base
+            if (Wb or !P) writeBase(e, rn);
+            if (!Ld) return false;
+            if (rd == 15) {
+                bxExit(e, k);
+                return true;
+            }
+            setR(e, rd);
             return false;
         },
         4 => {
@@ -479,7 +508,7 @@ fn armBody(e: *Emit, t: Thumb2, pc: u32, k: u32) bool {
                 if (P) b.emit(.{ c32(4), O.i32_add });
             } else b.emit(.{ c32(@intCast(if (P) 4 * n else 4 * n - 4)), O.i32_sub });
             b.set(L_A);
-            e.checkLowAddress();
+            if (Ld) e.checkLowAddress() else e.rangeCheck(0, 4 * n);
             if (Wb and Ld) blockWriteback(e, rn, U, n);
             var off: u32 = 0;
             for (0..16) |i| if (list & (@as(u32, 1) << @intCast(i)) != 0) {
@@ -491,8 +520,9 @@ fn armBody(e: *Emit, t: Thumb2, pc: u32, k: u32) bool {
                     }
                     setR(e, @intCast(i));
                 } else {
+                    b.get(L_A);
                     getR(e, @intCast(i), pc, false);
-                    store(e, O.i32_store, off);
+                    b.memop(O.i32_store, off);
                 }
                 off += 4;
             };
@@ -511,8 +541,10 @@ fn dataProcessing(e: *Emit, t: Thumb2, pc: u32, k: u32, top: u32, rn: u32, rd: u
     if (top == 0) {
         if ((w & 0x0ff000f0) == 0x01200010 or (w & 0x0ff000f0) == 0x01200030) {
             getR(e, rm, pc, false);
-            if ((w & 0x0ff000f0) == 0x01200030) b.emit(.{ c32(@bitCast(pc + 4)), set(L_X + 14) });
-            bxExit(e, k);
+            if ((w & 0x0ff000f0) == 0x01200030) {
+                b.emit(.{ set(jit.L_RET), c32(@bitCast(pc + 4)), set(L_X + 14) });
+                e.call(null, pc + 4, k);
+            } else bxExit(e, k);
             return true;
         }
         if ((w & 0x0fff0ff0) == 0x016f0f10) {
@@ -573,24 +605,28 @@ fn dataProcessing(e: *Emit, t: Thumb2, pc: u32, k: u32, top: u32, rn: u32, rd: u
             b.emit(.{ if (U) O.i32_add else O.i32_sub, set(L_B) });
             if (P) b.get(L_B) else getR(e, rn, pc, false);
             b.set(L_A);
-            if (Ld or sh == 2) e.checkLowAddress();
-            if (Wb or !P) b.emit(.{ get(L_B), set(L_X + rn) });
             if (Ld) {
-                switch (sh) {
-                    1 => load(e, O.i32_load16_u, 0),
-                    2 => load(e, O.i32_load8_s, 0),
-                    3 => load(e, O.i32_load16_s, 0),
+                e.loadFrom(switch (sh) {
+                    1 => O.i32_load16_u,
+                    2 => O.i32_load8_s,
+                    3 => O.i32_load16_s,
                     else => {
                         e.fallback(pc, k);
                         return false;
                     },
-                }
+                }, 0);
+                if (Wb or !P) writeBase(e, rn);
                 if (rd == 15) {
                     bxExit(e, k);
                     return true;
                 }
                 setR(e, rd);
-            } else switch (sh) {
+                return false;
+            }
+            const stores = sh != 2;
+            if (!stores) e.checkLowAddress() else if (sh == 3) e.rangeCheck(0, 8);
+            if (!stores and (Wb or !P)) writeBase(e, rn);
+            switch (sh) {
                 1 => {
                     getR(e, rd, pc, false);
                     store(e, O.i32_store16, 0);
@@ -602,16 +638,19 @@ fn dataProcessing(e: *Emit, t: Thumb2, pc: u32, k: u32, top: u32, rn: u32, rd: u
                     setR(e, rd + 1);
                 },
                 3 => {
+                    b.get(L_A);
                     getR(e, rd, pc, false);
-                    store(e, O.i32_store, 0);
+                    b.memop(O.i32_store, 0);
+                    b.get(L_A);
                     getR(e, rd + 1, pc, false);
-                    store(e, O.i32_store, 4);
+                    b.memop(O.i32_store, 4);
                 },
                 else => {
                     e.fallback(pc, k);
                     return false;
                 },
             }
+            if (stores and (Wb or !P)) writeBase(e, rn);
             return false;
         }
     }
@@ -676,7 +715,7 @@ fn dataProcessing(e: *Emit, t: Thumb2, pc: u32, k: u32, top: u32, rn: u32, rd: u
 /// The sticky Q flag lives only in CPSR, which spillFlags keeps: set it when the value on the stack
 /// is nonzero.
 fn setQIf(e: *Emit) void {
-    e.ifv();
+    e.coldIf();
     e.b.emit(.{ get(L_CPU), get(L_CPU), mo(O.i32_load, OFF_CPSR), c32(1 << 27), O.i32_or, mo(O.i32_store, OFF_CPSR) });
     e.endif();
 }
@@ -732,6 +771,11 @@ fn media(e: *Emit, w: u32, pc: u32, k: u32, rd: u32, rn: u32, rm: u32) bool {
     if ((w & 0x0fa00070) == 0x07a00050) {
         const lsb = bits(w, 7, 5);
         const width = bits(w, 16, 5) + 1;
+        // a field past bit 31 is UNDEFINED, which the interpreter raises
+        if (lsb + width > 32) {
+            e.fallback(pc, k);
+            return false;
+        }
         getR(e, rm, pc, false);
         if (w & (1 << 22) != 0) {
             b.emit(.{ c32(@intCast(lsb)), O.i32_shr_u });
@@ -847,13 +891,15 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
                 // each body under its condition, as a conditional ARM instruction: flags it reads
                 // settle first, and all of them when it writes any
                 for (ops[0..block.count], k + 1..) |op, kb| {
-                    e.cond(op.cc);
-                    e.pc = op.pc;
+                    e.cond(op.it >> 4);
+                    e.begin(op.pc);
+                    e.it = op.it;
                     const rw = switch (op.body) {
                         .arm => |w| rwArm(w),
                         .thumb => rwThumb(op.pc),
                     };
-                    e.ifc(if (rw.fw != 0) 15 else rw.fr);
+                    // a branch leaves under its condition with nothing pending, as a conditional ARM one
+                    e.ifc(if (rw.fw != 0 or (block.last != null and kb == k + block.count)) 15 else rw.fr);
                     _ = switch (op.body) {
                         .arm => |w| armBody(e, .{ .w = w }, op.pc, @intCast(kb)),
                         .thumb => emitThumb(e, op.pc, @intCast(kb)),
@@ -861,6 +907,7 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
                     e.endif();
                 }
                 e.pc = pc;
+                e.it = 0;
                 e.transfer(e.r.blocks[e.blk].fall, block.end | 1, k + block.count);
             } else {
                 e.fallbackIt(pc, block.end, k);
@@ -882,7 +929,7 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
         if (thumbCall(h, h2)) {
             const off = thumbOffset(h, h2);
             b.emit(.{ c32(@bitCast(pc +% 5)), set(L_X + 14) });
-            if (h2 & 0x1000 != 0) e.transfer(-1, (pc +% 4 +% off) | 1, k) else e.transfer(-1, ((pc +% 4) & ~@as(u32, 3)) +% (off & ~@as(u32, 3)), k);
+            e.call(if (h2 & 0x1000 != 0) (pc +% 4 +% off) | 1 else ((pc +% 4) & ~@as(u32, 3)) +% (off & ~@as(u32, 3)), (pc + 4) | 1, k);
             return true;
         }
         if (h & 0xf800 == 0xf000 and h2 & 0xd000 == 0x9000) {
@@ -902,6 +949,8 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
             bxExit(e, k);
             return true;
         }
+        // PLD/PLI hints do not access memory, as arm_thumb
+        if (h & 0xfe10 == 0xf810 and bits(h, 5, 2) < 2 and h2 >> 12 == 15) return false;
         if (thumbarm.asArm(pc, h, h2)) |a| return armBody(e, a, pc, k);
         if (jit32mem.emitThumb(e, h, h2)) return false;
         if (h >= 0xec00 and h < 0xef00 and jitvfp.emit(e, h << 16 | h2)) return false;
@@ -914,19 +963,17 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
             if (n < 15 and t < 15 and t2 < 15) {
                 b.emit(.{ get(L_X + n), c32(@intCast((h2 & 255) * 4)), if (h & 0x80 != 0) O.i32_add else O.i32_sub, set(L_B) });
                 b.emit(.{ get(if (h & 0x100 != 0) L_B else L_X + n), set(L_A) });
-                e.checkLowAddress();
                 if (h & 0x10 != 0) {
+                    e.checkLowAddress();
                     load(e, O.i32_load, 0);
                     setR(e, t);
                     load(e, O.i32_load, 4);
                     setR(e, t2);
                 } else {
-                    b.get(L_X + t);
-                    store(e, O.i32_store, 0);
-                    b.get(L_X + t2);
-                    store(e, O.i32_store, 4);
+                    e.rangeCheck(0, 8);
+                    b.emit(.{ get(L_A), get(L_X + t), mo(O.i32_store, 0), get(L_A), get(L_X + t2), mo(O.i32_store, 4) });
                 }
-                if (h & 0x20 != 0) b.emit(.{ get(L_B), set(L_X + n) });
+                if (h & 0x20 != 0) writeBase(e, n);
                 return false;
             }
         }
@@ -954,8 +1001,7 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
                 if (immOffset) b.i32c(@intCast(h2 & 0xfff)) else if (indexed) b.i32c(if (h2 & 0x400 != 0) offset else 0) else b.emit(.{ get(L_X + (h2 & 15)), c32(@intCast(bits(h2, 4, 2))), O.i32_shl });
                 b.emit(.{ O.i32_add, set(L_A) });
                 if (reading) {
-                    e.checkLowAddress();
-                    load(e, op, 0);
+                    e.loadFrom(op, 0);
                     setR(e, d);
                 } else {
                     b.get(L_X + d);
@@ -1072,8 +1118,10 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
                 switch (o) {
                     3 => {
                         getR(e, m, pc, true);
-                        if (h & 0x80 != 0) b.emit(.{ c32(@bitCast(pc +% 3)), set(L_X + 14) });
-                        bxExit(e, k);
+                        if (h & 0x80 != 0) {
+                            b.emit(.{ set(jit.L_RET), c32(@bitCast(pc +% 3)), set(L_X + 14) });
+                            e.call(null, pc +% 3, k);
+                        } else bxExit(e, k);
                         return true;
                     },
                     0 => {
@@ -1115,8 +1163,7 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
                 b.get(L_X + rd);
                 store(e, T_STORES[o], 0);
             } else {
-                e.checkLowAddress();
-                load(e, T_LOADS[o - 3], 0);
+                e.loadFrom(T_LOADS[o - 3], 0);
                 setR(e, rd);
             }
         },
@@ -1126,8 +1173,7 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
             const off = if (B) imm else if (top == 8) imm * 2 else imm * 4;
             b.emit(.{ get(L_X + rn), set(L_A) });
             if (h & (1 << 11) != 0) {
-                e.checkLowAddress();
-                load(e, if (B) O.i32_load8_u else if (top == 8) O.i32_load16_u else O.i32_load, off);
+                e.loadFrom(if (B) O.i32_load8_u else if (top == 8) O.i32_load16_u else O.i32_load, off);
                 setR(e, rd);
             } else {
                 b.get(L_X + rd);
@@ -1157,16 +1203,13 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
             const n8 = (h >> 8) & 7;
             const list = h & 255;
             b.emit(.{ get(L_X + n8), set(L_A) });
-            if (Ld) e.checkLowAddress();
+            if (Ld) e.checkLowAddress() else e.rangeCheck(0, 4 * @as(u32, @popCount(list)));
             var off: u32 = 0;
             for (0..8) |i| if (list & (@as(u32, 1) << @intCast(i)) != 0) {
                 if (Ld) {
                     load(e, O.i32_load, off);
                     setR(e, @intCast(i));
-                } else {
-                    b.get(L_X + @as(u32, @intCast(i)));
-                    store(e, O.i32_store, off);
-                }
+                } else b.emit(.{ get(L_A), get(L_X + @as(u32, @intCast(i))), mo(O.i32_store, off) });
                 off += 4;
             };
             if (!Ld or list & (@as(u32, 1) << @intCast(n8)) == 0) b.emit(.{ get(L_A), c32(@intCast(off)), O.i32_add, set(L_X + n8) });
@@ -1202,13 +1245,15 @@ fn thumbMisc(e: *Emit, h: u32, pc: u32, k: u32, rd: u32, rn: u32) bool {
     }
     if ((h & 0xfe00) == 0xb400) {
         const list = (h & 255) | ((h & 0x100) << 6);
-        b.emit(.{ get(L_X + 13), c32(@intCast(@as(u32, @popCount(list)) * 4)), O.i32_sub, tee(L_A), set(L_X + 13) });
+        const bytes = @as(u32, @popCount(list)) * 4;
+        b.emit(.{ get(L_X + 13), c32(@intCast(bytes)), O.i32_sub, set(L_A) });
+        e.rangeCheck(0, bytes);
         var off: u32 = 0;
         for (0..16) |i| if (list & (@as(u32, 1) << @intCast(i)) != 0) {
-            b.get(L_X + @as(u32, @intCast(i)));
-            store(e, O.i32_store, off);
+            b.emit(.{ get(L_A), get(L_X + @as(u32, @intCast(i))), mo(O.i32_store, off) });
             off += 4;
         };
+        b.emit(.{ get(L_A), set(L_X + 13) });
         return false;
     }
     if ((h & 0xfe00) == 0xbc00) {

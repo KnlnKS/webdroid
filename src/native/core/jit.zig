@@ -31,39 +31,57 @@ pub const HEAT = abi.JIT_HEAT;
 const MAX_BLOCKS = 40;
 const MAX_INSTR = 640;
 const MAX_REGIONS = 64;
-const MAX_RETURNS = 4;
+/// calls a region runs as host calls, nested, within the host's stack
+const MAX_DEPTH = 32;
+/// A module's function types, by index. A region's: (cpu, entry block, ret_to, depth) -> the pc to go
+/// on at, or a RegionExit.
+const Ty = enum(u8) { ii_i, iii_i, ff_f, dd_d, ddd_d, region };
+const TYPES = [_][]const u8{
+    &.{ 0x60, 2, wasm.I32, wasm.I32, 1, wasm.I32 },
+    &.{ 0x60, 3, wasm.I32, wasm.I32, wasm.I32, 1, wasm.I32 },
+    &.{ 0x60, 2, wasm.F32, wasm.F32, 1, wasm.F32 },
+    &.{ 0x60, 2, wasm.F64, wasm.F64, 1, wasm.F64 },
+    &.{ 0x60, 3, wasm.F64, wasm.F64, wasm.F64, 1, wasm.F64 },
+    &.{ 0x60, 4, wasm.I32, wasm.I32, wasm.I32, wasm.I32, 1, wasm.I32 },
+};
+const T_REGION = @intFromEnum(Ty.region);
 
 pub const L_CPU = 0;
 const L_ENTRY = 1;
-pub const L_X = 2;
-pub const L_N = 34;
-pub const L_Z = 35;
-pub const L_C = 36;
-pub const L_V = 37;
-pub const L_T0 = 38;
-pub const L_T1 = 39;
-pub const L_T2 = 40;
-pub const L_T3 = 41;
-pub const L_A = 42;
-pub const L_B = 43;
-pub const L_R = 44;
-pub const L_NEXT = 45;
-pub const L_RET = 46;
-pub const L_SC = 47;
-pub const L_IC = 48;
-pub const L_LIMIT = 49;
-pub const L_F0 = 50;
-pub const L_F1 = 51;
-pub const L_FA64 = 52;
-pub const L_FB64 = 53;
-pub const L_FR64 = 54;
-pub const L_FA32 = 55;
-pub const L_FB32 = 56;
-pub const L_FR32 = 57;
-pub const L_VA = 58;
-pub const L_VB = 59;
-pub const L_VC = 60;
-pub const L_VREG = 61;
+/// the continuation of the innermost call this region runs within, and how many calls nest there
+const L_RET_TO = 2;
+const L_DEPTH = 3;
+// The locals, in the groups of one type emitRegionAs declares.
+pub const L_X = L_DEPTH + 1;
+pub const L_N = L_X + 32;
+pub const L_Z = L_N + 1;
+pub const L_C = L_N + 2;
+pub const L_V = L_N + 3;
+pub const L_T0 = L_N + 4;
+pub const L_T1 = L_T0 + 1;
+pub const L_T2 = L_T0 + 2;
+pub const L_T3 = L_T0 + 3;
+pub const L_A = L_T0 + 4;
+pub const L_B = L_A + 1;
+pub const L_R = L_A + 2;
+pub const L_NEXT = L_A + 3;
+pub const L_RET = L_A + 4;
+pub const L_SC = L_A + 5;
+pub const L_IC = L_A + 6;
+pub const L_LIMIT = L_IC + 1;
+pub const L_F0 = L_IC + 2;
+pub const L_F1 = L_F0 + 1;
+pub const L_FA64 = L_F0 + 2;
+pub const L_FB64 = L_FA64 + 1;
+pub const L_FR64 = L_FA64 + 2;
+pub const L_FA32 = L_FA64 + 3;
+pub const L_FB32 = L_FA32 + 1;
+pub const L_FR32 = L_FA32 + 2;
+pub const L_VA = L_FA32 + 3;
+pub const L_VB = L_VA + 1;
+pub const L_VC = L_VA + 2;
+/// A64's V registers
+pub const L_VREG = L_VA + 3;
 pub const FN: u4 = 8;
 pub const FZ: u4 = 4;
 pub const FC: u4 = 2;
@@ -82,14 +100,12 @@ pub fn condReads(cc: u8) u4 {
     };
 }
 const F_EXEC = 0;
-const F_STORE = 1;
-const F_EXEC32 = 2;
-pub const F_FMAX32 = 3;
-pub const F_FMA64 = 11;
-const F_IT32 = 12;
-const F_TX = 13;
-pub const F_ESTIMATE32 = 14;
-const N_IMPORTS = 15;
+const F_EXEC32 = 1;
+pub const F_FMAX32 = 2;
+pub const F_FMA64 = 10;
+const F_IT32 = 11;
+pub const F_ESTIMATE32 = 12;
+const N_IMPORTS = 13;
 const FP_NAMES = [_][]const u8{ "fmax", "fmin", "fmaxnm", "fminnm" };
 fn fpThunk(comptime F: type, comptime k: u2) *const fn (F, F) callconv(.c) F {
     return &struct {
@@ -118,22 +134,18 @@ comptime {
     @export(&estimate32, .{ .name = "jit_estimate32" });
 }
 comptime {
-    // jit_install packs the block index into the low byte of page.slot, the table slot above it.
-    assert(MAX_BLOCKS <= 256);
+    // jit_install packs the block index into the low byte of page.slot, the table slot above it, and
+    // a slot's entries are counted in a byte (cpu.refs).
+    assert(MAX_BLOCKS < 256);
 }
 
 const OFF_X = @offsetOf(Cpu, "x");
 const OFF_CPSR = @offsetOf(Cpu, "cpsr");
 const OFF_IC = @offsetOf(Cpu, "ic");
 const OFF_LIMIT = @offsetOf(Cpu, "ic_limit");
-const OFF_BPC = @offsetOf(Cpu, "bpc");
-const OFF_EXIT = @offsetOf(Cpu, "exit");
-const OFF_FAULT_WORD = @offsetOf(Cpu, "fault_word");
-const OFF_FAULT_ADDR = @offsetOf(Cpu, "fault_addr");
 const OFF_EXCL = @offsetOf(Cpu, "excl");
 const OFF_TLS = @offsetOf(Cpu, "tls");
 const OFF_SLOT = @offsetOf(cpu.Page, "slot");
-const FLAGS_BASE = @intFromPtr(mem.page_flags);
 /// bit 0: the engine has tail calls; bit 1: the host's memory is shared
 var chain: bool = false;
 var shared: bool = false;
@@ -144,19 +156,13 @@ export fn jit_config(c: u32) void {
 
 pub const Isa = enum(u8) { a64 = 0, arm = 1, thumb = 2 };
 /// epoch: its page's when it was scanned; installation and cross-page edges validate it.
-/// ret: it ends in a RET, which may continue at any of the region's returns.
-pub const Block = struct { pc: u32, epoch: u32, n: u32, taken: i32, fall: i32, exits: bool, ret: bool = false };
+/// cont: the block a call that ends it goes on at when the callee returns.
+pub const Block = struct { pc: u32, epoch: u32, n: u32, taken: i32, fall: i32, exits: bool, cont: i32 = -1 };
 pub const Region = struct {
     entry: u32,
     isa: Isa,
     nblocks: u32,
     blocks: [MAX_BLOCKS]Block,
-    /// the continuations of the calls into the region
-    returns: [MAX_RETURNS]i32 = undefined,
-    nreturns: u32 = 0,
-    fn isReturn(r: *const Region, block: i32) bool {
-        return std.mem.indexOfScalar(i32, r.returns[0..r.nreturns], block) != null;
-    }
 };
 var regions: [MAX_REGIONS]Region = undefined;
 var nregions: u32 = 0;
@@ -196,25 +202,35 @@ export fn jit_entry(i: u32) u32 {
 export fn jit_stat() u32 {
     return regions_installed;
 }
-export fn jit_install(i: u32, slot: u32) void {
+/// Enters region i's blocks in a free table slot and returns it, for the host to link the region there:
+/// 0 when a block's page changed since it was compiled, or no block has an instruction. A full table
+/// is flushed first (cpu.freeSlot), uninstalling every region, this batch's earlier ones included.
+export fn jit_install(i: u32) u32 {
     abi.require(i < nregions, "jit_install: region index out of range");
-    // The slot is packed above the block index here and read back as an index into cpu.zig's dead
-    // map, which is sized for the host's table.
-    abi.require(slot < abi.JIT_SLOTS, "jit_install: table slot out of range");
     const r = &regions[i];
-    for (r.blocks[0..r.nblocks]) |b| if ((blockPage(b) orelse return).epoch != b.epoch) return;
+    for (r.blocks[0..r.nblocks]) |b| if ((blockPage(b) orelse return 0).epoch != b.epoch) return 0;
     // An empty block only exits to its own pc, so installing one would hand that pc straight back
     // to a region that cannot advance it.
+    for (r.blocks[0..r.nblocks]) |b| {
+        if (b.n != 0) break;
+    } else return 0;
+    const slot = cpu.freeSlot();
     for (r.blocks[0..r.nblocks], 0..) |b, k| if (b.n != 0) {
-        blockPage(b).?.slot[(b.pc & (abi.PAGE_SIZE - 1)) >> 1] = (slot << 8) | @as(u32, @intCast(k));
+        cpu.setSlot(&blockPage(b).?.slot[(b.pc & (abi.PAGE_SIZE - 1)) >> 1], (slot << 8) | @as(u32, @intCast(k)));
     };
     regions_installed += 1;
+    return slot;
 }
 export fn jit_done() void {
     in_flight = false;
     nregions = 0;
 }
 
+/// whether the interpreter has entered pc or a region holds it
+fn observed(page: *cpu.Page, pc: u32) bool {
+    const at = (pc & (abi.PAGE_SIZE - 1)) >> 1;
+    return page.heat[at] != 0 or page.slot[at] != 0;
+}
 fn blockPage(b: Block) ?*cpu.Page {
     return cpu.decodedPage(b.pc >> abi.PAGE_SHIFT);
 }
@@ -226,13 +242,16 @@ pub fn blockFor(r: *Region, pc: u32) i32 {
     const page = cpu.decodedPage(pc >> abi.PAGE_SHIFT) orelse return -1;
     // A decoded page may contain cold branch targets. Cross it only at an observed entry,
     // rather than increasing ARM32's register and code footprint for paths that never ran.
-    if (r.isa != .a64 and (pc ^ r.entry) >> abi.PAGE_SHIFT != 0) {
-        const at = (pc & (abi.PAGE_SIZE - 1)) >> 1;
-        if (page.heat[at] == 0 and page.slot[at] == 0) return -1;
-    }
+    if (r.isa != .a64 and (pc ^ r.entry) >> abi.PAGE_SHIFT != 0 and !observed(page, pc)) return -1;
     r.blocks[r.nblocks] = .{ .pc = pc, .epoch = page.epoch, .n = 0, .taken = -2, .fall = -2, .exits = false };
     r.nblocks += 1;
     return @intCast(r.nblocks - 1);
+}
+/// A call brings in its continuation rather than its callee, which runs in a region of its own,
+/// once a return has reached it: what follows a call that never returns is data or other code.
+pub fn addCall(r: *Region, i: u32, next: u32) void {
+    const page = cpu.decodedPage(next >> abi.PAGE_SHIFT) orelse return;
+    if (observed(page, next)) r.blocks[i].cont = blockFor(r, next);
 }
 fn scanA64(r: *Region, i: u32, page: *cpu.Page, pc: u32) jit32.Scan {
     const o = a64.opAt(page, pc);
@@ -241,15 +260,7 @@ fn scanA64(r: *Region, i: u32, page: *cpu.Page, pc: u32) jit32.Scan {
         // ISB must redispatch after a store invalidates the active region's source page.
         .nop => mem.ld(u32, pc) & 0xfffff0ff == 0xd50330df,
         .b => blk: {
-            r.blocks[i].taken = blockFor(r, @truncate(o.imm));
-            // a call into the region brings in its continuation, for the callee's RET to branch to
-            if (o.a != 0 and r.blocks[i].taken >= 0 and r.nreturns < MAX_RETURNS) {
-                const ret = blockFor(r, next);
-                if (ret >= 0) {
-                    r.returns[r.nreturns] = ret;
-                    r.nreturns += 1;
-                }
-            }
+            if (o.a != 0) addCall(r, i, next) else r.blocks[i].taken = blockFor(r, @truncate(o.imm));
             break :blk true;
         },
         .bcond, .cbz, .tbz => blk: {
@@ -258,7 +269,7 @@ fn scanA64(r: *Region, i: u32, page: *cpu.Page, pc: u32) jit32.Scan {
             break :blk true;
         },
         .br => blk: {
-            r.blocks[i].ret = o.a == 2;
+            if (o.a == 1) addCall(r, i, next);
             break :blk true;
         },
         .svc, .fault => true,
@@ -378,9 +389,10 @@ pub fn Emit(comptime wide: bool) type {
         r: *Region,
         blk: u32,
         pc: u32 = 0,
-        used: u32,
-        written: u32,
-        wcur: u32,
+        /// the registers the region reads or writes, which its locals hold from the prologue on
+        used: u32 = 0,
+        /// those it writes, which the epilogue stores
+        dirty: u32 = 0,
         rw: RW,
         chain_depth: u32,
         nest: u32,
@@ -390,11 +402,38 @@ pub fn Emit(comptime wide: bool) type {
         pw: bool = false,
         pdirty: u4 = 0,
         vloaded: u32 = 0,
+        /// the ITSTATE of the compiled IT body being emitted, which a hand-back gives the interpreter
+        it: u8 = 0,
+        /// b.nwrites when the instruction at pc began
+        wstart: u32 = 0,
         vcachedWrite: bool = false,
 
+        const A = @import("jitaccess.zig").Access(wide);
+        pub const checkAddress = A.checkAddress;
+        pub const checkLowAddress = A.checkLowAddress;
+        pub const address = A.address;
+        pub const storeCheck = A.storeCheck;
+        pub const rangeCheck = A.rangeCheck;
+        pub const storeTo = A.storeTo;
+        pub const loadFrom = A.loadFrom;
+
+        /// the instruction at pc begins
+        pub fn begin(e: *Self, pc: u32) void {
+            e.pc = pc;
+            e.wstart = e.b.nwrites;
+        }
         pub fn ifv(e: *Self) void {
-            e.b.blockStart(O.if_, wasm.VOID);
+            e.ifOf(wasm.VOID);
+        }
+        /// an `if` of result type `ty`, which endif closes
+        pub fn ifOf(e: *Self, ty: u8) void {
+            e.b.blockStart(O.if_, ty);
             e.nest += 1;
+        }
+        /// an `if` whose body runs rarely (a hand-back or exit), which the engine lays out of line
+        pub fn coldIf(e: *Self) void {
+            e.b.unlikely();
+            e.ifv();
         }
         pub fn ifc(e: *Self, mask: u4) void {
             e.settle(mask);
@@ -521,6 +560,18 @@ pub fn Emit(comptime wide: bool) type {
         pub fn setSP(e: *Self, n: u8) void {
             e.b.set(L_X + n);
         }
+        fn addSP(e: *Self, n: u8, imm: u64) void {
+            e.getSP(n);
+            e.b.emit(.{ c64(@bitCast(imm)), O.i64_add });
+            e.setSP(n);
+        }
+        /// a pre-index's new base, the untranslated address address() left in L_T0, or a post-index's
+        fn ldstWriteback(e: *Self, o: *const Op) void {
+            if (o.a == 2) {
+                e.b.get(L_T0);
+                e.setSP(o.rn);
+            } else if (o.a == 1) e.addSP(o.rn, o.imm);
+        }
         pub fn setW(e: *Self, n: u8) void {
             e.b.byte(O.i64_extend_i32_u);
             e.setX(n);
@@ -545,23 +596,33 @@ pub fn Emit(comptime wide: bool) type {
         fn storeIc(e: *Self) void {
             e.b.emit(.{ get(L_CPU), get(L_IC), mo(O.i64_store, OFF_IC) });
         }
-        // A spill or reload is not a use of the register by the region's code.
-        fn spillRegs(e: *Self, mask: u32) void {
+        /// the used registers from memory into their locals, or the dirty ones back; neither is a
+        /// use of a register by the region's code
+        fn moveRegs(e: *Self, comptime dir: enum { load, store }) void {
             const watched = e.b.nwatch;
             defer e.b.nwatch = watched;
             e.b.nwatch = 0;
+            const mask = if (dir == .load) e.used else e.dirty;
             var n: u8 = 0;
-            while (n < 32) : (n += 1) if (mask & bit(n) != 0) e.b.emit(.{ get(L_CPU), get(L_X + n), mo(W(wide, O.i32_store), OFF_X + 8 * @as(u32, n)) });
+            while (n < 32) : (n += 1) if (mask & bit(n) != 0) {
+                const off = OFF_X + 8 * @as(u32, n);
+                if (dir == .load) e.b.emit(.{ get(L_CPU), mo(W(wide, O.i32_load), off), set(L_X + n) }) else e.b.emit(.{ get(L_CPU), get(L_X + n), mo(W(wide, O.i32_store), off) });
+            };
         }
-        fn loadRegs(e: *Self, mask: u32) void {
-            const watched = e.b.nwatch;
-            defer e.b.nwatch = watched;
-            e.b.nwatch = 0;
-            var n: u8 = 0;
-            while (n < 32) : (n += 1) if (mask & bit(n) != 0) e.b.emit(.{ get(L_CPU), mo(W(wide, O.i32_load), OFF_X + 8 * @as(u32, n)), set(L_X + n) });
+        /// A call out of the region keeps no register local live across it, which would make the
+        /// engine spill that local at every definition: the written ones are stored before and all
+        /// reloaded after, which a helper that executes an instruction needs anyway.
+        pub fn callOut(e: *Self, f: u32) void {
+            e.moveRegs(.store);
+            e.b.call(f);
+            e.moveRegs(.load);
         }
+        /// NZCV and, on ARM32, the T bit of this region's state: a chain from a region of the other
+        /// state leaves it stale until here, where anything that reads it next comes after
         fn spillFlags(e: *Self) void {
-            e.b.emit(.{ get(L_CPU), get(L_CPU), mo(O.i32_load, OFF_CPSR), c32(0x0fff_ffff), O.i32_and, get(L_N), c32(31), O.i32_shl, O.i32_or, get(L_Z), c32(30), O.i32_shl, O.i32_or, get(L_C), c32(29), O.i32_shl, O.i32_or, get(L_V), c32(28), O.i32_shl, O.i32_or, mo(O.i32_store, OFF_CPSR) });
+            e.b.emit(.{ get(L_CPU), get(L_CPU), mo(O.i32_load, OFF_CPSR), c32(if (wide) 0x0fff_ffff else 0x0fff_ffdf), O.i32_and });
+            if (!wide and e.r.isa == .thumb) e.b.emit(.{ c32(1 << 5), O.i32_or });
+            e.b.emit(.{ get(L_N), c32(31), O.i32_shl, O.i32_or, get(L_Z), c32(30), O.i32_shl, O.i32_or, get(L_C), c32(29), O.i32_shl, O.i32_or, get(L_V), c32(28), O.i32_shl, O.i32_or, mo(O.i32_store, OFF_CPSR) });
         }
         fn loadFlags(e: *Self, mask: u4) void {
             if (mask == 0) return;
@@ -572,47 +633,49 @@ pub fn Emit(comptime wide: bool) type {
         fn edge(e: *Self, t: i32) u4 {
             return if (t >= 0) e.lin[@intCast(t)] else 15;
         }
-        /// to the epilogue, which spills the flag locals: a pending compare's flags are written to
-        /// them first, without settling it for the code that goes on past this exit
+        /// to the region's one epilogue, which spills the flag locals: a pending compare's flags
+        /// are written to them first, without settling it for the code that goes on past this exit
         pub fn exit(e: *Self) void {
+            e.writePending();
+            e.b.br(e.chain_depth + 1 + e.nest);
+        }
+        fn writePending(e: *Self) void {
             if (e.pdirty != 0) {
                 if (wide and e.pw) e.flagsOf(true, e.pk, e.pdirty) else e.flagsOf(false, e.pk, e.pdirty);
             }
-            e.b.br(e.chain_depth + 1 + e.nest);
         }
-        pub fn exitRet(e: *Self) void {
-            e.settle(15);
-            e.spillRegs(e.wcur);
+        /// A branch out of the region to `pc` chains from here rather than from the shared epilogue:
+        /// the lookup reads constant addresses, and the engine predicts each site's indirect call
+        /// from that site alone.
+        fn leave(e: *Self, pc: u32) void {
+            const b = e.b;
+            if (!chain) return e.exitTo(pc);
+            e.moveRegs(.store);
             e.spillFlags();
-            e.b.br(e.chain_depth + e.nest);
+            e.storeIc();
+            b.emit(.{ O.block, wasm.VOID, get(L_IC), get(L_LIMIT), O.i64_ge_s, wasm.brIf(0), get(L_RET_TO), c32(@bitCast(pc)), O.i32_eq, wasm.brIf(0) });
+            slotOf(b, wide, pc);
+            callSlot(b, null);
+            b.emit(.{ O.end, c32(@bitCast(pc)), O.return_ });
         }
         pub fn exitTo(e: *Self, pc: u32) void {
             e.b.emit(.{ c32(@bitCast(pc)), set(L_RET) });
-            e.exitRet();
+            e.exit();
         }
         pub fn exitToInterpreter(e: *Self, pc: u32, k: u32) void {
             e.settle(15);
-            e.spillRegs(e.wcur);
-            e.spillFlags();
             e.countIc(k);
-            e.b.emit(.{ get(L_CPU), c64(pc & ~@as(u32, 1)), mo(O.i64_store, @offsetOf(cpu.Cpu, "pc")) });
-            e.exitStatus(1);
-        }
-        pub fn exitStatus(e: *Self, s: u32) void {
-            e.b.emit(.{ c32(@intCast(s)), set(L_RET) });
+            e.b.emit(.{ get(L_CPU), c64(pc & ~@as(u32, 1)), mo(O.i64_store, @offsetOf(cpu.Cpu, "pc")), c32(@intFromEnum(cpu.RegionExit.jump)), set(L_RET) });
             e.exit();
         }
         pub fn transfer(e: *Self, target: i32, pc: u32, k: u32) void {
             e.settle(e.edge(target));
             e.countIc(k);
-            if (target < 0) return e.exitTo(pc);
+            if (target < 0) return e.leave(pc);
             const to = e.r.blocks[@intCast(target)];
-            // A store may since have dropped the page the target was compiled from. A callee may
-            // also have rewritten its caller's continuation on its own page.
-            if ((to.pc ^ e.r.blocks[e.blk].pc) >> abi.PAGE_SHIFT != 0 or e.r.isReturn(target)) {
-                const page = @intFromPtr(blockPage(to).?);
-                e.b.emit(.{ c32(0), mo(O.i32_load, cpu.DECODED + (to.pc >> abi.PAGE_SHIFT) * 4), c32(@bitCast(page)), O.i32_ne,
-                    c32(0), mo(O.i32_load, page + @offsetOf(cpu.Page, "epoch")), c32(@bitCast(to.epoch)), O.i32_ne, O.i32_or });
+            // A store may since have dropped the page the target was compiled from.
+            if ((to.pc ^ e.r.blocks[e.blk].pc) >> abi.PAGE_SHIFT != 0) {
+                e.stale(to);
                 e.guardedExit(pc);
             }
             const blk: i32 = @intCast(e.blk);
@@ -623,9 +686,56 @@ pub fn Emit(comptime wide: bool) type {
             e.b.emit(.{ c32(target), set(L_NEXT) });
             e.b.br(e.chain_depth - 1 + e.nest);
         }
+        /// whether the page block `to` was compiled from has since been dropped or changed
+        fn stale(e: *Self, to: Block) void {
+            const page = @intFromPtr(blockPage(to).?);
+            e.b.emit(.{ c32(0), mo(O.i32_load, cpu.DECODED + (to.pc >> abi.PAGE_SHIFT) * 4), c32(@bitCast(page)), O.i32_ne,
+                c32(0), mo(O.i32_load, page + @offsetOf(cpu.Page, "epoch")), c32(@bitCast(to.epoch)), O.i32_ne, O.i32_or });
+        }
+        /// A call to `target`, or to L_RET's address when null, runs the callee's region as a host
+        /// call with the continuation `ret` as its ret_to, which the regions it chains to pass on
+        /// and return at: the host's call and return then predict the guest's, and the region goes
+        /// on at its continuation block. Without a region for the callee, budget or depth it leaves.
+        pub fn call(e: *Self, target: ?u32, ret: u32, k: u32) void {
+            const b = e.b;
+            e.settle(15);
+            e.countIc(k);
+            if (target) |t| b.emit(.{ c32(@bitCast(t)), set(L_RET) });
+            const c = e.r.blocks[e.blk].cont;
+            if (c < 0 or e.r.blocks[@intCast(c)].n == 0) return e.exit();
+            const to = e.r.blocks[@intCast(c)];
+            e.moveRegs(.store);
+            e.spillFlags();
+            e.storeIc();
+            b.emit(.{ O.block, wasm.VOID });
+            e.nest += 1;
+            slotOf(b, wide, null);
+            b.emit(.{ get(L_IC), get(L_LIMIT), O.i64_ge_s, wasm.brIf(0), get(L_DEPTH), c32(MAX_DEPTH), O.i32_ge_u, wasm.brIf(0) });
+            callSlot(b, ret);
+            b.set(L_RET);
+            // Anywhere else, or code the callee rewrote, is the outer frames' to go on at: they hold
+            // no state the callee's regions have not stored.
+            b.emit(.{ get(L_RET), c32(@bitCast(ret)), O.i32_ne });
+            e.stale(to);
+            b.byte(O.i32_or);
+            b.unlikely();
+            b.emit(.{ O.if_, wasm.VOID, get(L_RET), O.return_, O.end });
+            e.moveRegs(.load);
+            e.loadFlags(e.lin[@intCast(c)]);
+            b.emit(.{ get(L_CPU), mo(O.i64_load, OFF_IC), set(L_IC) });
+            e.vloaded = 0;
+            const blk: i32 = @intCast(e.blk);
+            if (c > blk) b.br(@as(u32, @intCast(c - blk - 1)) + e.nest) else {
+                b.emit(.{ c32(c), set(L_NEXT) });
+                b.br(e.chain_depth - 1 + e.nest);
+            }
+            e.nest -= 1;
+            b.byte(O.end);
+            e.exit();
+        }
         /// exit to pc if the condition on the stack holds
         fn guardedExit(e: *Self, pc: u32) void {
-            e.ifv();
+            e.coldIf();
             // The exit may settle flags the target does not read; the path past it reads none.
             const term = e.term;
             e.term = true;
@@ -635,11 +745,13 @@ pub fn Emit(comptime wide: bool) type {
         }
         pub fn fallback(e: *Self, pc: u32, k: u32) void {
             const b = e.b;
-            if (e.rw.fr | e.rw.fw != 0) e.settle(15);
-            e.spillRegs((e.rw.r | e.rw.w) & e.used);
-            if (e.rw.fr | e.rw.fw != 0) e.spillFlags();
-            if (wide) b.emit(.{ get(L_CPU), c32(@bitCast(mem.ld(u32, pc))), c32(@bitCast(pc)), call(F_EXEC), set(L_R) }) else b.emit(.{ get(L_CPU), c32(@bitCast(pc)), call(F_EXEC32), set(L_R) });
-            e.loadRegs(e.rw.w & e.used);
+            if (e.rw.fr | e.rw.fw != 0) {
+                e.settle(15);
+                e.spillFlags();
+            }
+            if (wide) b.emit(.{ get(L_CPU), c32(@bitCast(mem.ld(u32, pc))), c32(@bitCast(pc)) }) else b.emit(.{ get(L_CPU), c32(@bitCast(pc)) });
+            e.callOut(if (wide) F_EXEC else F_EXEC32);
+            b.set(L_R);
             e.vloaded = 0;
             if (e.rw.fw != 0) {
                 e.loadFlags(15);
@@ -655,12 +767,12 @@ pub fn Emit(comptime wide: bool) type {
         pub fn fallbackIt(e: *Self, pc: u32, end: u32, k: u32) void {
             const b = e.b;
             e.settle(15);
-            e.spillRegs((e.rw.r | e.rw.w) & e.used);
             e.spillFlags();
             e.countIc(k - 1);
             e.storeIc();
-            b.emit(.{ get(L_CPU), c32(@bitCast(pc)), c32(@bitCast(end)), call(F_IT32), set(L_R) });
-            e.loadRegs(e.rw.w & e.used);
+            b.emit(.{ get(L_CPU), c32(@bitCast(pc)), c32(@bitCast(end)) });
+            e.callOut(F_IT32);
+            b.set(L_R);
             e.loadFlags(15);
             e.eager(15);
             b.emit(.{ get(L_CPU), mo(O.i64_load, OFF_IC), set(L_IC), get(L_R) });
@@ -669,49 +781,18 @@ pub fn Emit(comptime wide: bool) type {
             e.exit();
             e.endif();
         }
-        fn faultExit(e: *Self) void {
-            e.b.emit(.{ get(L_CPU), c32(@bitCast(e.r.blocks[e.blk].pc)), mo(O.i32_store, OFF_BPC), get(L_CPU), c64(e.pc), mo(O.i64_store, @offsetOf(Cpu, "pc")) });
-            e.exitStatus(2);
-        }
-        pub fn checkLowAddress(e: *Self) void {
-            e.checkAddress(0);
-        }
-        /// L_A faults as bad_address below LOW, past ARM32's 2 GiB (signed, as arm.addr) or, with
-        /// a nonzero mask, when misaligned.
-        pub fn checkAddress(e: *Self, align_mask: u32) void {
-            const b = e.b;
-            b.emit(.{ get(L_A), c32(abi.LOW), O.i32_lt_s });
-            if (align_mask != 0) b.emit(.{ get(L_A), c32(@intCast(align_mask)), O.i32_and, O.i32_or });
-            e.ifv();
-            b.emit(.{ get(L_CPU), c32(@intFromEnum(cpu.Fault.bad_address)), mo(O.i32_store, OFF_EXIT),
-                get(L_CPU), c32(@bitCast(mem.ld(u32, e.pc))), mo(O.i32_store, OFF_FAULT_WORD),
-                get(L_CPU), get(L_A), O.i64_extend_i32_u, mo(O.i64_store, OFF_FAULT_ADDR) });
-            e.faultExit();
-            e.endif();
-        }
-        pub fn address(e: *Self) void {
-            const b = e.b;
-            // Top Byte Ignore: Linux runs arm64 user space with TBI0, so a tag in bits 56-63 is not address
-            b.emit(.{ c64(a64.TBI_MASK), O.i64_and, tee(L_T0), c64(32), O.i64_shr_u, O.i32_wrap_i64, tee(L_B), O.i32_eqz, O.if_, wasm.I32, get(L_T0), O.i32_wrap_i64, O.else_ });
-            b.emit(.{ get(L_B), c32(255), O.i32_and, c32(2), O.i32_shl, set(L_NEXT), get(L_T0), O.i32_wrap_i64, get(L_NEXT), mo(O.i32_load, @intFromPtr(&mem.L)), O.i32_sub, tee(L_R), get(L_NEXT), mo(O.i32_load, @intFromPtr(&mem.S)), O.i32_lt_u, get(L_B), c32(256), O.i32_lt_u, O.i32_and, O.if_, wasm.I32, get(L_NEXT), mo(O.i32_load, @intFromPtr(&mem.P)), get(L_R), O.i32_add, O.else_, get(L_B), get(L_T0), O.i32_wrap_i64, call(F_TX), O.end, O.end, tee(L_A), c32(abi.LOW), O.i32_lt_u });
-            e.ifv();
-            b.emit(.{ get(L_CPU), c32(@intFromEnum(cpu.Fault.bad_address)), mo(O.i32_store, OFF_EXIT), get(L_CPU), c32(@bitCast(mem.ld(u32, e.pc))), mo(O.i32_store, OFF_FAULT_WORD), get(L_CPU), get(L_T0), mo(O.i64_store, OFF_FAULT_ADDR) });
-            e.faultExit();
-            e.endif();
-        }
-        /// a store's page flags at L_A + off, its first and last bytes ORed: any flag goes to on_store
-        pub fn storeCheck(e: *Self, off: u32, size: u32) void {
-            const b = e.b;
-            const a: u32 = if (off != 0) L_NEXT else L_A;
-            if (off != 0) b.emit(.{ get(L_A), c32(@bitCast(off)), O.i32_add, set(L_NEXT) });
-            b.emit(.{ get(a), c32(abi.PAGE_SHIFT), O.i32_shr_u, mo(O.i32_load8_u, FLAGS_BASE) });
-            if (size > 1) b.emit(.{ get(a), c32(@intCast(size - 1)), O.i32_add, c32(abi.PAGE_SHIFT), O.i32_shr_u, mo(O.i32_load8_u, FLAGS_BASE), O.i32_or });
-            e.ifv();
-            b.emit(.{ get(L_CPU), get(a), c32(@intCast(size)), call(F_STORE) });
-            e.ifv();
-            e.faultExit();
-            e.endif();
-            e.endif();
+        /// to the interpreter at this instruction, which repeats its access and faults, translates
+        /// or invalidates as the access needs: the epilogue stores the registers' locals, so the
+        /// instruction must write none before its last check (a store's writeback comes after it)
+        pub fn interpretHere(e: *Self) void {
+            assert(e.b.nwrites == e.wstart);
+            e.writePending();
+            if (e.it != 0) {
+                const it: u32 = e.it;
+                e.b.emit(.{ get(L_CPU), get(L_CPU), mo(O.i32_load, OFF_CPSR), c32(~@as(i32, 0x3f << 10 | 3 << 25)), O.i32_and, c32(@intCast((it >> 2) << 10 | (it & 3) << 25)), O.i32_or, mo(O.i32_store, OFF_CPSR) });
+            }
+            e.b.emit(.{ c32(@bitCast(e.pc)), set(L_RET) });
+            e.b.br(e.chain_depth + e.nest);
         }
         pub fn cond(e: *Self, cc: u8) void {
             const b = e.b;
@@ -901,11 +982,13 @@ pub fn Emit(comptime wide: bool) type {
                     }
                 },
                 .b => {
-                    if (o.a != 0) {
-                        b.i64c(pc + 4);
-                        e.setX(30);
+                    if (o.a == 0) {
+                        e.transfer(e.r.blocks[e.blk].taken, @truncate(o.imm), k);
+                        return true;
                     }
-                    e.transfer(e.r.blocks[e.blk].taken, @truncate(o.imm), k);
+                    b.i64c(pc + 4);
+                    e.setX(30);
+                    e.call(@truncate(o.imm), pc + 4, k);
                     return true;
                 },
                 .bcond, .cbz, .tbz => {
@@ -928,22 +1011,14 @@ pub fn Emit(comptime wide: bool) type {
                 .br => {
                     e.getX(o.rn);
                     b.emit(.{ O.i32_wrap_i64, set(L_RET) });
-                    if (o.a == 1) {
-                        b.i64c(pc + 4);
-                        e.setX(30);
+                    if (o.a != 1) {
+                        e.countIc(k);
+                        e.exit();
+                        return true;
                     }
-                    if (o.a == 2) {
-                        e.settle(15);
-                        for (e.r.returns[0..e.r.nreturns]) |target| {
-                            const to = e.r.blocks[@intCast(target)];
-                            b.emit(.{ get(L_RET), c32(@bitCast(to.pc)), O.i32_eq });
-                            e.ifv();
-                            e.transfer(target, to.pc, k);
-                            e.endif();
-                        }
-                    }
-                    e.countIc(k);
-                    e.exitRet();
+                    b.i64c(pc + 4);
+                    e.setX(30);
+                    e.call(null, pc + 4, k);
                     return true;
                 },
                 .ldrlit => if (o.b <= 2) {
@@ -953,30 +1028,27 @@ pub fn Emit(comptime wide: bool) type {
                 .ldp => {
                     const kind = o.a & 3;
                     const opc = o.a >> 3;
+                    const load = o.a & 4 != 0;
+                    const writeback = kind == 1 or kind == 3;
                     e.getSP(o.rn);
                     if (kind != 1 and o.imm != 0) b.emit(.{ c64(@bitCast(o.imm)), O.i64_add });
                     e.address();
-                    if (kind == 1 or kind == 3) {
-                        e.getSP(o.rn);
-                        b.emit(.{ c64(@bitCast(o.imm)), O.i64_add });
-                        e.setSP(o.rn);
-                    }
                     const sz: u32 = if (opc == 2) 3 else 2;
-                    const load = o.a & 4 != 0;
-                    const paired = !load and sz == 3;
-                    if (paired) e.storeCheck(0, 16);
+                    if (!load) e.rangeCheck(0, @as(u32, 2) << @intCast(sz));
+                    // a load's base before its destinations, a store's after its sources
+                    if (writeback and load) e.addSP(o.rn, o.imm);
                     for ([_]u8{ o.rd, o.rm }, 0..) |t, i| {
                         const off = (@as(u32, 1) << @intCast(sz)) * @as(u32, @intCast(i));
                         if (load) {
                             b.emit(.{ get(L_A), mo(LD[sz][@intFromBool(opc == 1)], off) });
                             e.setX(t);
                         } else {
-                            if (!paired) e.storeCheck(off, @as(u32, 1) << @intCast(sz));
                             b.get(L_A);
                             e.getX(t);
                             b.memop(ST[sz], off);
                         }
                     }
+                    if (writeback and !load) e.addSP(o.rn, o.imm);
                 },
                 .ldst => {
                     const size: u5 = @intCast(o.b >> 2);
@@ -996,25 +1068,18 @@ pub fn Emit(comptime wide: bool) type {
                         },
                         else => {},
                     }
-                    if (o.a == 2) {
-                        b.tee(L_T0);
-                        e.setSP(o.rn);
-                        b.get(L_T0);
-                    }
                     e.address();
-                    if (o.a == 1) {
-                        e.getSP(o.rn);
-                        b.emit(.{ c64(@bitCast(o.imm)), O.i64_add });
-                        e.setSP(o.rn);
-                    }
                     if (opc == 0 or (size == 3 and opc == 2)) {
                         e.storeCheck(0, @as(u32, 1) << size);
                         b.get(L_A);
                         e.getX(o.rd);
                         b.memop(ST[size], 0);
+                        e.ldstWriteback(o);
                     } else {
                         b.emit(.{ get(L_A), mo(LD[size][@intFromBool(opc != 1)], 0) });
                         if (opc == 3 and size < 3) b.emit(.{ c64(0xffff_ffff), O.i64_and });
+                        // before the destination, which may be the base
+                        e.ldstWriteback(o);
                         e.setX(o.rd);
                     }
                 },
@@ -1076,7 +1141,7 @@ pub fn Emit(comptime wide: bool) type {
                         } else {
                             b.emit(.{ get(L_CPU), mo(O.i32_load, OFF_EXCL) });
                             e.ifv();
-                            e.storeCheck(0, 2 * step);
+                            e.rangeCheck(0, 2 * step);
                             b.get(L_A);
                             e.getX(o.rd);
                             b.memop(ST[size], 0);
@@ -1257,17 +1322,13 @@ fn emitRegion(b: *Buf, r: *Region) void {
 }
 fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region) void {
     const wide = isa == .a64;
-    var e = Emit(wide){ .b = b, .r = r, .blk = 0, .used = 0, .written = 0, .wcur = 0, .rw = if (wide) ALL else ALL32, .chain_depth = 0, .nest = 0 };
+    var e = Emit(wide){ .b = b, .r = r, .blk = 0, .rw = if (wide) ALL else ALL32, .chain_depth = 0, .nest = 0 };
     const n = r.nblocks;
-    var writes: [MAX_BLOCKS]u32 = undefined;
-    var wb: [MAX_BLOCKS]u32 = undefined;
     var base: [MAX_BLOCKS]u32 = undefined;
     var fr: [MAX_INSTR]u4 = undefined;
     var fk: [MAX_INSTR]u4 = undefined;
     var t: u32 = 0;
     for (r.blocks[0..n], 0..) |blk, i| {
-        writes[i] = 0;
-        wb[i] = 0;
         base[i] = t;
         const page = blockPage(blk).?;
         var pc = blk.pc;
@@ -1279,15 +1340,12 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region) void {
                 .thumb => jit32.rwThumb(pc),
             };
             if (forcedFallback(pc)) rw = if (wide) ALL else ALL32;
-            writes[i] |= rw.w;
-            e.used |= rw.r | rw.w;
             assert(t < fr.len);
             fr[t] = rw.fr;
             fk[t] = if (rw.cond) 0 else rw.fw;
             t += 1;
             pc += ilen(isa, pc);
         }
-        e.written |= writes[i];
     }
     var lin: [MAX_BLOCKS]u4 = [_]u4{0} ** MAX_BLOCKS;
     var changed = true;
@@ -1313,47 +1371,26 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region) void {
     e.lin = lin;
     var live: u4 = 0;
     for (lin[0..n]) |l| live |= l;
-    if (!wide) {
-        // The ARM emitters name registers only through their locals, so emitting each block once
-        // into a buffer that keeps nothing finds the registers it reads and writes.
-        var dry = Buf.init(abi.LOW, 0);
-        dry.watch = L_X;
-        dry.nwatch = 15;
-        var d = e;
-        d.b = &dry;
-        e.used = 0;
-        e.written = 0;
-        for (0..n) |i| {
-            dry.reads = 0;
-            dry.writes = 0;
-            emitBlock(isa, &d, @intCast(i));
-            writes[i] = dry.writes;
-            e.used |= dry.reads | dry.writes;
-            e.written |= dry.writes;
-        }
-    }
-    {
-        changed = true;
-        while (changed) {
-            changed = false;
-            for (r.blocks[0..n], 0..) |blk, i| {
-                const out = wb[i] | writes[i];
-                const branches = [_]i32{ blk.taken, blk.fall };
-                const returns: []const i32 = if (blk.ret) r.returns[0..r.nreturns] else &.{};
-                for ([_][]const i32{ &branches, returns }) |edges| for (edges) |x| if (x >= 0) {
-                    const j: usize = @intCast(x);
-                    if (wb[j] | out != wb[j]) {
-                        wb[j] |= out;
-                        changed = true;
-                    }
-                };
-            }
-        }
-    }
-    b.emit(.{ if (wide) @as(u8, 10) else 9, 32, if (wide) wasm.I64 else wasm.I32, 4, wasm.I32, 4, wasm.I64, 6, wasm.I32, 2, wasm.I64, 2, wasm.F64, 3, wasm.I64, 3, wasm.I32, 3, wasm.V128 });
+    // The registers the region uses live in locals from the prologue to the epilogue, which stores
+    // those it writes; a helper that executes an instruction gets them stored first. The emitters
+    // name registers only through their locals (XZR is a constant), so emitting each block once into
+    // a buffer that keeps nothing finds them.
+    var dry = Buf.init(abi.LOW, 0);
+    dry.watch = L_X;
+    dry.nwatch = if (wide) 32 else 15;
+    var d = e;
+    d.b = &dry;
+    for (0..n) |i| emitBlock(isa, &d, @intCast(i));
+    e.used = dry.reads | dry.writes;
+    e.dirty = dry.writes;
+    b.emit(.{ if (wide) @as(u8, 10) else 9, L_N - L_X, if (wide) wasm.I64 else wasm.I32, L_T0 - L_N, wasm.I32, L_A - L_T0, wasm.I64, L_IC - L_A, wasm.I32, L_F0 - L_IC, wasm.I64, L_FA64 - L_F0, wasm.F64, L_FA32 - L_FA64, wasm.I64, L_VA - L_FA32, wasm.I32, L_VREG - L_VA, wasm.V128 });
     if (wide) b.emit(.{ 32, wasm.V128 });
-    e.loadRegs(e.used);
+    b.watch = L_X;
+    b.nwatch = if (wide) 32 else 15;
+    // run_slice passes the running Cpu, which is always CPU_CUR: as a constant it folds into offsets
+    b.emit(.{ c32(abi.CPU_CUR), set(L_CPU) });
     e.loadFlags(live);
+    e.moveRegs(.load);
     b.emit(.{ get(L_CPU), mo(O.i64_load, OFF_IC), set(L_IC), get(L_CPU), mo(O.i64_load, OFF_LIMIT), set(L_LIMIT), get(L_ENTRY), set(L_NEXT), O.block, wasm.VOID, O.block, wasm.VOID, O.loop, wasm.VOID });
     for (0..n) |_| b.blockStart(O.block, wasm.VOID);
     b.emit(.{ get(L_NEXT), O.br_table });
@@ -1362,17 +1399,14 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region) void {
     b.u(0);
     for (0..n) |i| {
         b.byte(O.end);
-        // ARM instructions' register sets are known per block only
-        e.wcur = wb[i] | (if (wide) 0 else writes[i]);
         emitBlock(isa, &e, @intCast(i));
     }
-    b.emit(.{ O.end, O.end });
-    e.storeIc();
-    if (chain) chainTo(wide, &e);
-    b.emit(.{ get(L_RET), O.return_, O.end });
-    e.spillRegs(e.written);
+    // an instruction the interpreter takes over from, its pc in L_RET
+    b.emit(.{ wasm.Br{ .depth = 2 }, O.end, O.end, get(L_CPU), get(L_RET), O.i64_extend_i32_u, mo(O.i64_store, @offsetOf(Cpu, "pc")), c32(@intFromEnum(cpu.RegionExit.interpret)), set(L_RET), O.end });
+    e.moveRegs(.store);
     e.spillFlags();
     e.storeIc();
+    if (chain) chainTo(b, wide);
     b.emit(.{ get(L_RET), O.end });
 }
 fn emitBlock(comptime isa: Isa, e: *Emit(isa == .a64), i: u32) void {
@@ -1388,13 +1422,10 @@ fn emitBlock(comptime isa: Isa, e: *Emit(isa == .a64), i: u32) void {
     var j: u32 = 0;
     var ended = false;
     while (j < blk.n) : (j += 1) {
-        e.pc = pc;
+        e.begin(pc);
         const len = ilen(isa, pc);
         const o = &page.ops[(pc & (abi.PAGE_SIZE - 1)) >> 2];
-        if (wide) {
-            e.rw = rwOf(o);
-            e.wcur |= e.rw.w;
-        }
+        if (wide) e.rw = rwOf(o);
         if (forcedFallback(pc)) {
             if (wide) e.rw = ALL;
             e.fallback(pc, j + 1);
@@ -1409,19 +1440,36 @@ fn emitBlock(comptime isa: Isa, e: *Emit(isa == .a64), i: u32) void {
     }
     if (!ended) e.transfer(blk.fall, if (isa == .thumb) pc | 1 else pc, blk.n);
 }
-fn chainTo(comptime wide: bool, e: *Emit(wide)) void {
-    const b = e.b;
-    b.emit(.{ O.block, wasm.VOID, get(L_RET), c32(abi.LOW), O.i32_lt_u, wasm.brIf(0), get(L_IC), get(L_LIMIT), O.i64_ge_s, wasm.brIf(0), get(L_RET), c32(abi.PAGE_SHIFT - 2), O.i32_shr_u, c32(-4), O.i32_and, mo(O.i32_load, cpu.DECODED), tee(L_A), O.i32_eqz, wasm.brIf(0), get(L_A), get(L_RET), c32(if (wide) abi.PAGE_SIZE - 1 else abi.PAGE_SIZE - 2), O.i32_and, c32(1), O.i32_shl, O.i32_add, mo(O.i32_load, OFF_SLOT), tee(L_B), O.i32_eqz, wasm.brIf(0) });
-    if (!wide) b.emit(.{ get(L_CPU), get(L_CPU), mo(O.i32_load, OFF_CPSR), c32(~@as(i32, 1 << 5)), O.i32_and, get(L_RET), c32(1), O.i32_and, c32(5), O.i32_shl, O.i32_or, mo(O.i32_store, OFF_CPSR) });
-    b.emit(.{ get(L_CPU), get(L_B), c32(255), O.i32_and, get(L_B), c32(8), O.i32_shr_u, O.return_call_indirect, 0, 0, O.end });
+/// The page.slot entry of the region holding `pc`, or L_RET's address when null, into L_B (its table
+/// slot above its block), or out of the enclosing block when none does. A known pc reads constant
+/// addresses.
+fn slotOf(b: *Buf, comptime wide: bool, pc: ?u32) void {
+    const mask = if (wide) abi.PAGE_SIZE - 1 else abi.PAGE_SIZE - 2;
+    if (pc) |p| b.emit(.{ c32(0), mo(O.i32_load, cpu.DECODED + (p >> abi.PAGE_SHIFT) * 4), tee(L_A), O.i32_eqz, wasm.brIf(0), get(L_A), mo(O.i32_load, OFF_SLOT + ((p & mask) << 1)) }) else b.emit(.{ get(L_RET), c32(abi.PAGE_SHIFT - 2), O.i32_shr_u, c32(-4), O.i32_and, mo(O.i32_load, cpu.DECODED), tee(L_A), O.i32_eqz, wasm.brIf(0), get(L_A), get(L_RET), c32(mask), O.i32_and, c32(1), O.i32_shl, O.i32_add, mo(O.i32_load, OFF_SLOT) });
+    b.emit(.{ tee(L_B), O.i32_eqz, wasm.brIf(0) });
+}
+/// The region in L_B's slot at its block: a tail call within this region's call, or a call one
+/// deeper whose continuation is `ret`.
+fn callSlot(b: *Buf, ret: ?u32) void {
+    b.emit(.{ get(L_CPU), get(L_B), c32(255), O.i32_and });
+    if (ret) |r| b.emit(.{ c32(@bitCast(r)), get(L_DEPTH), c32(1), O.i32_add }) else b.emit(.{ get(L_RET_TO), get(L_DEPTH) });
+    b.emit(.{ get(L_B), c32(8), O.i32_shr_u, if (ret != null) O.call_indirect else O.return_call_indirect, T_REGION, 0 });
+}
+/// A status, or the continuation of the call that runs this region, returns; another pc goes on
+/// in its region within the budget.
+fn chainTo(b: *Buf, comptime wide: bool) void {
+    b.emit(.{ O.block, wasm.VOID, get(L_RET), c32(abi.LOW), O.i32_lt_u, wasm.brIf(0), get(L_RET), get(L_RET_TO), O.i32_eq, wasm.brIf(0), get(L_IC), get(L_LIMIT), O.i64_ge_s, wasm.brIf(0) });
+    slotOf(b, wide, null);
+    callSlot(b, null);
+    b.byte(O.end);
 }
 
-fn importFn(b: *Buf, name: []const u8, ty: u8) void {
+fn importFn(b: *Buf, name: []const u8, ty: Ty) void {
     b.u(3);
     b.bytes("env");
     b.u(@intCast(name.len));
     b.bytes(name);
-    b.emit(.{ 0, ty });
+    b.emit(.{ 0, @intFromEnum(ty) });
 }
 export fn jit_emit(out: u32, cap: u32) u32 {
     if (in_flight) return 0;
@@ -1429,6 +1477,8 @@ export fn jit_emit(out: u32, cap: u32) u32 {
     var q: u32 = 0;
     while (q < nrequests) : (q += 1) {
         const pc = requests[q];
+        // A block that heated while its function's entry waited here is already in that region.
+        if (inBatch(pc)) continue;
         const r = &regions[nregions];
         r.* = .{ .entry = pc, .isa = request_isa[q], .nblocks = 0, .blocks = undefined };
         if (blockFor(r, pc) == 0 and discover(r)) nregions += 1;
@@ -1449,16 +1499,22 @@ export fn jit_emit(out: u32, cap: u32) u32 {
     nregions = 0;
     return 0;
 }
+fn inBatch(pc: u32) bool {
+    for (regions[0..nregions]) |*r| for (r.blocks[0..r.nblocks]) |b| if (b.pc == pc and b.n != 0) return true;
+    return false;
+}
 fn emitModule(b: *Buf, n: u32) void {
+    const window = mem.hasWindow();
     b.bytes(&[_]u8{ 0, 'a', 's', 'm', 1, 0, 0, 0, 1 });
     const type_len = b.reserve();
     const type_start = b.len;
-    b.bytes(&[_]u8{ 5, 0x60, 2, wasm.I32, wasm.I32, 1, wasm.I32, 0x60, 3, wasm.I32, wasm.I32, wasm.I32, 1, wasm.I32, 0x60, 2, wasm.F32, wasm.F32, 1, wasm.F32, 0x60, 2, wasm.F64, wasm.F64, 1, wasm.F64, 0x60, 3, wasm.F64, wasm.F64, wasm.F64, 1, wasm.F64 });
+    b.u(TYPES.len);
+    inline for (TYPES) |t| b.bytes(t);
     b.patch(type_len, b.len - type_start);
     b.byte(2);
     const imp_len = b.reserve();
     const imp_start = b.len;
-    b.u(2 + N_IMPORTS);
+    b.u(2 + N_IMPORTS + @as(u32, @intFromBool(window)));
     b.u(3);
     b.bytes("env");
     b.u(6);
@@ -1470,19 +1526,25 @@ fn emitModule(b: *Buf, n: u32) void {
     b.u(25);
     b.bytes("__indirect_function_table");
     b.bytes(&[_]u8{ 0x01, 0x70, 0x00, 0 });
-    importFn(b, "exec", 1);
-    importFn(b, "store", 1);
-    importFn(b, "exec32", 0);
-    inline for ([_][]const u8{ "32", "64" }, 2..) |sfx, ty| inline for (FP_NAMES) |nm| importFn(b, nm ++ sfx, ty);
-    importFn(b, "fma64", 4);
-    importFn(b, "it32", 1);
-    importFn(b, "tx", 0);
-    importFn(b, "estimate32", 0);
+    importFn(b, "exec", .iii_i);
+    importFn(b, "exec32", .ii_i);
+    inline for ([_][]const u8{ "32", "64" }, [_]Ty{ .ff_f, .dd_d }) |sfx, ty| inline for (FP_NAMES) |nm| importFn(b, nm ++ sfx, ty);
+    importFn(b, "fma64", .ddd_d);
+    importFn(b, "it32", .iii_i);
+    importFn(b, "estimate32", .ii_i);
+    if (window) {
+        // the pool that window pages show (window.ts), up to WINDOW_SIZE
+        b.u(3);
+        b.bytes("env");
+        b.u(4);
+        b.bytes("pool");
+        b.bytes(if (shared) &[_]u8{ 0x02, 0x03, 0, 0xff, 0xff, 0x01 } else &[_]u8{ 0x02, 0x01, 0, 0xff, 0xff, 0x01 });
+    }
     b.patch(imp_len, b.len - imp_start);
     b.byte(3);
     b.u(1 + n);
     b.u(n);
-    for (0..n) |_| b.byte(0);
+    for (0..n) |_| b.byte(T_REGION);
     b.byte(7);
     const exp_len = b.reserve();
     const exp_start = b.len;
@@ -1497,15 +1559,21 @@ fn emitModule(b: *Buf, n: u32) void {
         b.u(N_IMPORTS + i);
     }
     b.patch(exp_len, b.len - exp_start);
+    const code = b.len;
     b.byte(10);
     const code_len = b.reserve();
     const code_start = b.len;
     b.u(n);
-    for (regions[0..n]) |*r| {
+    b.cold = &cold;
+    b.ncold = 0;
+    var body: [MAX_REGIONS]u32 = undefined;
+    for (regions[0..n], 0..) |*r, i| {
         const body_len = b.reserve();
-        const body_start = b.len;
+        body[i] = b.len;
         emitRegion(b, r);
-        b.patch(body_len, b.len - body_start);
+        b.patch(body_len, b.len - body[i]);
     }
     b.patch(code_len, b.len - code_start);
+    b.branchHints(code, body[0..n], N_IMPORTS);
 }
+var cold: [1 << 15]u32 = undefined;

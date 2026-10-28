@@ -31,6 +31,10 @@ pub extern "env" fn shm_copy(d: u32, s: u32, n: u32) void;
 pub extern "env" fn shm_fill(d: u32, v: u32, n: u32) void;
 /// where this process's window starts: past every address in a 64-bit process, whose memory goes on there
 pub var window: u32 = 0xffff_ffff;
+/// an ARM32 process's: a window onto the pool its processes share
+pub fn hasWindow() bool {
+    return window != 0xffff_ffff;
+}
 /// whether this process maps the n bytes at window address a, with the access (storing, when `write`)
 pub fn windowed(a: u32, n: u32, write: bool) bool {
     if (a < window) return false;
@@ -63,11 +67,33 @@ pub fn windowStore(comptime T: type, a: u32, v: T) void {
 fn windowProt(prot: u32) u8 {
     return @intCast(abi.PAGE_GUARD | abi.PAGE_MAPPED | (if (prot & 3 == 0) abi.PAGE_NOACCESS else 0) | (if (prot & 2 == 0) abi.PAGE_READONLY else 0));
 }
-/// mmap's placement of a mapping at [a, a + n) of the window under protection `prot`, or munmap's
-/// (prot < 0); false outside the window
-export fn window_map(a: u32, n: u32, prot: i32) u32 {
+/// the pool offset each window page shows, reserved with the first mapping and guarded from guest
+/// stores. JIT code reads it for any address at (address >> PAGE_SHIFT) % WINDOW_PAGES, the window
+/// being the address space's top half.
+pub var window_table: u32 = 0;
+pub const WINDOW_PAGES = abi.PAGE_INDEX_MAX >> 1;
+comptime {
+    std.debug.assert(abi.WINDOW == WINDOW_PAGES << PAGE_SHIFT);
+}
+export fn window_table_ptr() u32 {
+    return window_table;
+}
+/// mmap's placement of a mapping at [a, a + n) of the window under protection `prot` showing the
+/// pool from offset `off`, or munmap's (prot < 0); false outside the window or without room for the table
+export fn window_map(a: u32, n: u32, prot: i32, off: u32) u32 {
     if (a < window or n == 0 or @as(u64, a) + n > @as(u64, abi.WINDOW) + abi.WINDOW_SIZE) return 0;
-    @memset(page_flags[pageOf(a)..pageOf(a + (n - 1)) + 1], if (prot < 0) abi.PAGE_GUARD else windowProt(@intCast(prot)));
+    const first = pageOf(a) % WINDOW_PAGES;
+    const count = pageOf(a + (n - 1)) + 1 - pageOf(a);
+    if (prot >= 0) {
+        if (window_table == 0) {
+            window_table = reserve(WINDOW_PAGES * 4, PAGE_SIZE);
+            if (window_table == 0) return 0;
+            @memset(page_flags[pageOf(window_table)..][0 .. WINDOW_PAGES * 4 >> PAGE_SHIFT], abi.PAGE_GUARD);
+        }
+        const table: [*]u32 = @ptrFromInt(window_table);
+        for (table[first..][0..count], 0..) |*t, i| t.* = off + @as(u32, @intCast(i)) * PAGE_SIZE;
+    }
+    @memset(page_flags[pageOf(a)..][0..count], if (prot < 0) abi.PAGE_GUARD else windowProt(@intCast(prot)));
     return 1;
 }
 fn fill(a: u32, v: u8, n: u32) void {

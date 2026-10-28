@@ -114,7 +114,7 @@ pub const TLS_MODULES = 64;
 pub const TLS_BLOCKS = 8 * TLS_KEYS;
 pub const slot_fn: [*]u8 = @ptrFromInt(abi.KERN_SLOT_FN);
 comptime {
-    assert(@sizeOf(@TypeOf(slot_fn[0])) * abi.TRAMP_SLOTS <= abi.KERN_DEAD - abi.KERN_SLOT_FN);
+    assert(@sizeOf(@TypeOf(slot_fn[0])) * abi.TRAMP_SLOTS <= abi.KERN_REFS - abi.KERN_SLOT_FN);
     // An id is stored as one byte per slot, so the table has to stay addressable by that byte.
     assert(@typeInfo(Fn).@"enum".fields.len <= 256);
 }

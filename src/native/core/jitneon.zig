@@ -34,7 +34,7 @@ const F32_NE: u8 = 0x42;
 pub fn emit(e: *Emit, w: u32) bool {
     const b = e.b;
     if (is(w, 0xfe800010, 0xf2800010) and w & 0x00380080 != 0) return shift(b, w);
-    if (is(w, 0xffb00010, 0xf3b00000)) return misc(b, w);
+    if (is(w, 0xffb00010, 0xf3b00000)) return misc(e, w);
     if (is(w, 0xfe800000, 0xf2000000) or is(w, 0xffb00010, 0xf2b00000) or is(w, 0xfe800050, 0xf2800040)) return same(b, w);
     if (is(w, 0xfe800050, 0xf2800000)) return long(b, w);
     if (is(w, 0xfeb00010, 0xf2800010)) return immediate(b, w);
@@ -336,7 +336,8 @@ fn variableShift(b: *Buf, d: u32, n: u32, m: u32, q: bool, size: u32, unsigned: 
     store(b, d, q);
 }
 
-fn misc(b: *Buf, w: u32) bool {
+fn misc(e: *Emit, w: u32) bool {
+    const b = e.b;
     if (is(w, 0xffb30e10, 0xf3b20000)) return permute(b, w);
     const d = reg(w, 22, 12);
     const m = reg(w, 5, 0);
@@ -364,7 +365,7 @@ fn misc(b: *Buf, w: u32) bool {
         for (0..(if (q) @as(u8, 4) else 2)) |li| {
             const i: u8 = @intCast(li);
             b.emit(.{ get(VA), sv(S.extract_s[2]), i, c32(@intCast(bits(w, 7, 1))) });
-            b.call(jit.F_ESTIMATE32);
+            e.callOut(jit.F_ESTIMATE32);
             b.emit(.{ sv(S.replace[2]), i });
         }
     } else if (is(w, 0xffb30810, 0xf3b10000)) {

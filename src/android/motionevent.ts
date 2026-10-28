@@ -5,6 +5,7 @@
 import { rt, type JObj, declaredField, peerField } from "../jvm/runtime.ts";
 import { ownedHandle, deref } from "./handles.ts";
 import { matrixOf } from "./matrix.ts";
+import { popcount } from "../bits.ts";
 import { readInt, readLong, writeInt, writeLong, readFloat, writeFloat, type NativeParcel, nativeParcel } from "./parcel.ts";
 import { ACTION_CANCEL, ACTION_DOWN, ACTION_MOVE, ACTION_POINTER_DOWN, ACTION_POINTER_UP, ACTION_UP, AXIS_ORIENTATION, AXIS_PRESSURE,
   AXIS_RELATIVE_X, AXIS_RELATIVE_Y, AXIS_SIZE, AXIS_TOOL_MAJOR, AXIS_TOOL_MINOR, AXIS_TOUCH_MAJOR, AXIS_TOUCH_MINOR, AXIS_X, AXIS_Y,
@@ -80,7 +81,6 @@ class Coords {
   /** the set axes in ascending order */
   *axes(): Generator<number> { for (let i = 0; i < 64; i++) if (this.has(i)) yield i; }
 }
-const popcount = (n: number) => { n = n - ((n >>> 1) & 0x55555555); n = (n & 0x33333333) + ((n >>> 2) & 0x33333333); return ((n + (n >>> 4) & 0xf0f0f0f) * 0x1010101) >>> 24; };
 function scaleAxis(c: Coords, axis: number, s: number) { if (c.has(axis)) c.v[axis] = f32(c.v[axis] * s); }
 /** PointerCoords::transform: the point, relative motion (rotation only) and orientation */
 function transformCoords(c: Coords, t: Xform) {

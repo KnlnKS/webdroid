@@ -2,6 +2,7 @@
 //! CLREX, NEON VLD1/VST1 of whole registers and single lanes, and barriers. Anything else falls
 //! back to the interpreter.
 const cpu = @import("cpu.zig");
+const mem = @import("mem.zig");
 const jit = @import("jit.zig");
 const wasm = @import("wasm.zig");
 const bits = @import("bits.zig").bits;
@@ -18,9 +19,10 @@ const L_A = jit.L_A;
 const OFF_EXCL = @offsetOf(cpu.Cpu, "excl");
 const OFF_V = @offsetOf(cpu.Cpu, "v");
 
-/// The unconditional (cc = 15) ARM space: CLREX and NEON VLD1/VST1.
+/// The unconditional (cc = 15) ARM space: CLREX, barriers and NEON VLD1/VST1.
 pub fn emitArmUnconditional(e: *Emit, w: u32) bool {
     if (w == 0xf57f_f01f) return clearExclusive(e);
+    if (w & 0xffff_ffe0 == 0xf57f_f040) return barrier(e);
     return w & 0xff10_0000 == 0xf400_0000 and neonOne(e, w);
 }
 fn neonOne(e: *Emit, w: u32) bool {
@@ -42,7 +44,7 @@ pub fn armExclusive(e: *Emit, w: u32) bool {
 }
 
 /// Thumb's exclusives and CLREX, NEON whole-register loads and stores (the ARM word under Thumb's
-/// top byte), and DSB/DMB/ISB, which order nothing on one host thread.
+/// top byte), and barriers.
 pub fn emitThumb(e: *Emit, h: u32, h2: u32) bool {
     const ld = h & 0x10 != 0;
     const rn = h & 15;
@@ -69,7 +71,14 @@ pub fn emitThumb(e: *Emit, h: u32, h2: u32) bool {
     }
     if (h & 0xff10 == 0xf900) return neonOne(e, 0xf400_0000 | (h & 0xff) << 16 | h2);
     if (h == 0xf3bf and h2 & 0xfff0 == 0x8f20) return clearExclusive(e);
-    return h == 0xf3bf and (h2 & 0xfff0 == 0x8f40 or h2 & 0xfff0 == 0x8f50 or h2 & 0xfff0 == 0x8f60);
+    if (h == 0xf3bf and h2 & 0xffe0 == 0x8f40) return barrier(e);
+    return h == 0xf3bf and h2 & 0xfff0 == 0x8f60;
+}
+/// DSB or DMB: the window's pool is shared with other processes' threads, which run on host threads
+/// whose order the host's loads and stores keep only across a fence. ISB orders nothing here.
+fn barrier(e: *Emit) bool {
+    if (mem.hasWindow()) e.b.bytes(&[_]u8{ 0xfe, 0x03, 0x00 });
+    return true;
 }
 
 fn clearExclusive(e: *Emit) bool {
@@ -94,12 +103,9 @@ fn exclusive(e: *Emit, ld: bool, size: u32, rn: u32, rt: u32, rt2: u32, status: 
     }
     b.emit(.{ get(L_CPU), mo(O.i32_load, OFF_EXCL) });
     e.ifc(15);
-    e.storeCheck(0, switch (size) { 2 => 1, 3 => 2, else => 4 });
+    if (size == 1) e.rangeCheck(0, 8) else e.storeCheck(0, switch (size) { 2 => 1, 3 => 2, else => 4 });
     b.emit(.{ get(L_A), get(L_X + rt), mo(switch (size) { 2 => O.i32_store8, 3 => O.i32_store16, else => O.i32_store }, 0) });
-    if (size == 1) {
-        e.storeCheck(4, 4);
-        b.emit(.{ get(L_A), get(L_X + rt2), mo(O.i32_store, 4) });
-    }
+    if (size == 1) b.emit(.{ get(L_A), get(L_X + rt2), mo(O.i32_store, 4) });
     e.endif();
     b.emit(.{ get(L_CPU), mo(O.i32_load, OFF_EXCL), c32(1), O.i32_xor, set(L_X + status), get(L_CPU), c32(0), mo(O.i32_store, OFF_EXCL) });
 }
@@ -123,15 +129,13 @@ fn neonWhole(e: *Emit, w: u32) bool {
     const b = e.b;
     b.emit(.{ get(L_X + n), set(L_A) });
     e.checkAddress(if (alignment != 0) (@as(u32, 4) << @intCast(alignment)) - 1 else 0);
+    if (w & (1 << 21) == 0) e.rangeCheck(0, @intCast(regs * 8));
     for (0..regs) |i| {
         const off: u32 = @intCast(i * 8);
         const reg = OFF_V + (d + @as(u32, @intCast(i))) * 8;
         if (w & (1 << 21) != 0) {
             b.emit(.{ get(L_CPU), get(L_A), mo(O.i64_load, off), mo(O.i64_store, reg) });
-        } else {
-            e.storeCheck(off, 8);
-            b.emit(.{ get(L_A), get(L_CPU), mo(O.i64_load, reg), mo(O.i64_store, off) });
-        }
+        } else b.emit(.{ get(L_A), get(L_CPU), mo(O.i64_load, reg), mo(O.i64_store, off) });
     }
     if (m == 13) b.emit(.{ get(L_X + n), c32(@intCast(regs * 8)), O.i32_add, set(L_X + n) }) else if (m != 15) b.emit(.{ get(L_X + n), get(L_X + m), O.i32_add, set(L_X + n) });
     return true;

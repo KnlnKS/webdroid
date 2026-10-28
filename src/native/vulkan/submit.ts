@@ -3,6 +3,7 @@
 // resolves once the device has done its work and host-visible memory it wrote holds the results.
 
 import { mem } from "../mem.ts";
+import { PAGE_SHIFT, PAGE_SIZE } from "../abi.ts";
 import { PTR, ldp, type HostFn } from "../host.ts";
 import { closeFd } from "../fd.ts";
 import { fence, fenceOf, syncFileFd } from "../syncfile.ts";
@@ -31,9 +32,28 @@ const FenceInfo = struct("sType:u32 pNext:ptr flags:u32");
 const GetFd = struct("sType:u32 pNext:ptr semaphore:u64 handleType:u32");
 const ImportFd = struct("sType:u32 pNext:ptr semaphore:u64 flags:u32 handleType:u32 fd:i32");
 
-/** host-visible buffers' bytes into their GPUBuffers */
+let version = 1;
+/** host-visible buffers' changed pages into their GPUBuffers: those stores reached since a submit last
+ *  looked, and those another buffer of the memory took since this one last did. Commands track only
+ *  buffers with host bytes (commands.ts), whose memory has versions. */
 function upload(dev: Device, buffers: Iterable<Buffer>): void {
-  for (const b of buffers) dev.gpu.queue.writeBuffer(b.gpu, 0, mem.bytes(b.host, Math.ceil(b.size / 4) * 4));
+  for (const b of buffers) {
+    const versions = b.memory!.versions!, start = b.host, end = start + Math.ceil(b.size / 4) * 4;
+    const base = b.memory!.host >>> PAGE_SHIFT, first = start >>> PAGE_SHIFT, last = (end - 1) >>> PAGE_SHIFT;
+    const seen = b.seen ??= new Uint32Array(last - first + 1);
+    const send = (from: number, to: number) => {
+      const lo = Math.max(start, from * PAGE_SIZE), hi = Math.min(end, to * PAGE_SIZE);
+      dev.gpu.queue.writeBuffer(b.gpu, lo - start, mem.bytes(lo, hi - lo));
+    };
+    let run = -1;
+    for (let pg = first; pg <= last; pg++) {
+      const i = pg - base;
+      if (mem.takeChanged(pg)) versions[i] = ++version;
+      if (seen[pg - first] !== versions[i]) { seen[pg - first] = versions[i]; if (run < 0) run = pg; }
+      else if (run >= 0) { send(run, pg); run = -1; }
+    }
+    if (run >= 0) send(run, last + 1);
+  }
 }
 /** copies of buffers the work wrote, read back into their guest bytes once it is done */
 function readbacks(dev: Device, enc: GPUCommandEncoder, buffers: Iterable<Buffer>): (() => Promise<void>)[] {

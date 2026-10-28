@@ -46,6 +46,12 @@ pub const Cpu = extern struct {
 
 pub const Exit = enum(u32) { budget = 0, host = 1, ret = 2, fault = 3, syscall = 4 };
 pub const Status = enum(u8) { next, jump, fault, syscall };
+/// What a JIT region returns below LOW (any other value is the pc to go on at). jump, fault and
+/// syscall are also what exec_word and exec_word32 return, as Status, and a region passes on.
+pub const RegionExit = enum(u32) { jump = 1, fault = 2, syscall = 3, interpret = 4 };
+comptime {
+    for ([_]Status{ .jump, .fault, .syscall }) |s| assert(@intFromEnum(s) == @intFromEnum(@field(RegionExit, @tagName(s))));
+}
 
 pub const Fault = enum(u32) {
     unimplemented = 0,
@@ -155,24 +161,59 @@ pub fn pageFor(pc: u32) ?*Page {
     }
     return @ptrFromInt(p);
 }
-const dead: [*]u8 = @ptrFromInt(abi.KERN_DEAD);
+/// Per table slot, the page.slot entries that name its region: a slot none names is free. A dropped
+/// page releases its entries, so code the guest rewrites gives its slots back as it goes.
+const refs: [*]u8 = @ptrFromInt(abi.KERN_REFS);
 comptime {
-    assert(@sizeOf(@TypeOf(dead[0])) * abi.JIT_SLOTS <= abi.KERN_DEAD_END - abi.KERN_DEAD);
+    assert(@sizeOf(@TypeOf(refs[0])) * abi.JIT_SLOTS <= abi.KERN_REFS_END - abi.KERN_REFS);
 }
-export fn jit_kill(slot: u32) void {
-    abi.require(slot < abi.JIT_SLOTS, "jit_kill: table slot out of range");
-    dead[slot] = 1;
+/// a page.slot entry now names `v` (slot << 8 | block, or 0 for none)
+pub fn setSlot(e: *u32, v: u32) void {
+    if (e.* != 0) release(e.* >> 8);
+    if (v != 0) refs[v >> 8] += 1;
+    e.* = v;
 }
-export fn jit_evict() void {
+/// Slots that lost their last entry, for the host to unlink so their module can be collected. One
+/// the queue has no room for keeps its function until the slot is reused.
+var freed: [4096]u32 = undefined;
+var nfreed: u32 = 0;
+fn release(slot: u32) void {
+    refs[slot] -= 1;
+    if (refs[slot] != 0 or nfreed == freed.len) return;
+    freed[nfreed] = slot;
+    nfreed += 1;
+}
+/// a freed slot still free, or 0 once there are none; called before installing a batch, whose
+/// slots may be ones freed since
+export fn jit_reclaim() u32 {
+    while (nfreed != 0) {
+        nfreed -= 1;
+        if (refs[freed[nfreed]] == 0) return freed[nfreed];
+    }
+    return 0;
+}
+var cursor: u32 = abi.JIT_SLOT0;
+/// a slot no entry names, taken round the table so a freed one is reused last; when live regions fill
+/// the table every one goes, and those still hot re-heat and come back
+pub fn freeSlot() u32 {
+    for (abi.JIT_SLOT0..abi.JIT_SLOTS) |_| {
+        const s = cursor;
+        cursor = if (s + 1 == abi.JIT_SLOTS) abi.JIT_SLOT0 else s + 1;
+        if (refs[s] == 0) return s;
+    }
+    jit_flush();
+    return freeSlot();
+}
+export fn jit_flush() void {
     var pg: u32 = 0;
     while (pg < (abi.MEM_SIZE_A64 >> abi.PAGE_SHIFT)) : (pg += 1) if (decoded[pg] != 0) {
         const page: *Page = @ptrFromInt(decoded[pg]);
-        for (&page.slot, &page.heat) |*s, *h| if (s.* != 0 and dead[s.* >> 8] != 0) {
+        for (&page.slot, &page.heat) |*s, *h| if (s.* != 0) {
             s.* = 0;
             h.* = 0;
         };
     };
-    @memset(dead[0..abi.JIT_SLOTS], 0);
+    @memset(refs[0..abi.JIT_SLOTS], 0);
 }
 
 export fn exec_word(cp: u32, w: u32, pc: u32) u32 {
@@ -185,26 +226,16 @@ export fn exec_word(cp: u32, w: u32, pc: u32) u32 {
         cover(page, pc, pc);
     }
     c.bpc = pc;
-    switch (a64.exec(c, o, pc)) {
-        .next => return 0,
-        .jump => return 1,
-        .fault => {
-            c.pc = pc;
-            return 2;
-        },
-        .syscall => return 3,
-    }
+    const s = a64.exec(c, o, pc);
+    if (s == .fault) c.pc = pc;
+    return @intFromEnum(s);
 }
 export fn exec_word32(cp: u32, pc: u32) u32 {
     const c: *Cpu = @ptrFromInt(cp);
     c.bpc = pc;
     const len: u32 = if (c.cpsr & (1 << 5) != 0 and (mem.ptr(u16, pc).* & 0xf800) < 0xe800) 2 else 4;
-    return switch (arm.step(c, pc)) {
-        .next => @intFromBool(@as(u32, @truncate(c.pc)) != pc +% len),
-        .jump => 1,
-        .fault => 2,
-        .syscall => 3,
-    };
+    const s = arm.step(c, pc);
+    return if (s == .next) @intFromBool(@as(u32, @truncate(c.pc)) != pc +% len) else @intFromEnum(s);
 }
 export fn exec_it_block32(cp: u32, pc: u32, end: u32) u32 {
     const c: *Cpu = @ptrFromInt(cp);
@@ -268,7 +299,7 @@ fn windowStore(comptime T: type, c: *Cpu, a: u32, v: T) bool {
     mem.windowStore(T, a, v);
     return true;
 }
-export fn on_store(cp: u32, a: u32, n: u32) u32 {
+fn on_store(cp: u32, a: u32, n: u32) u32 {
     const c: *Cpu = @ptrFromInt(cp);
     const last = a +% (n - 1);
     for ([_]u32{ a, last }) |at| if (mem.page_flags[at >> abi.PAGE_SHIFT] & (abi.PAGE_GUARD | abi.PAGE_READONLY) != 0) {
@@ -284,6 +315,7 @@ fn dropPage(pg: u32) void {
     if (p == 0) return;
     decoded[pg] = 0;
     mem.page_flags[pg] &= ~@as(u8, 1);
+    for (&@as(*Page, @ptrFromInt(p)).slot) |s| if (s != 0) release(s >> 8);
     if (nfree < free_blocks.len) {
         free_blocks[nfree] = p;
         nfree += 1;
@@ -295,6 +327,7 @@ pub export fn code_write(addr: u32, size: u32) u32 {
     const last: u32 = @intCast(@min(@as(u64, addr) + size, 0x1_0000_0000) - 1);
     var dropped: u32 = 0;
     for (addr >> abi.PAGE_SHIFT..(last >> abi.PAGE_SHIFT) + 1) |pg| {
+        mem.page_flags[pg] &= ~@as(u8, abi.PAGE_WATCH);
         const page = decodedPage(@intCast(pg)) orelse continue;
         const lo = @max(addr, pg * abi.PAGE_SIZE) & (abi.PAGE_SIZE - 1);
         const hi = @min(last, (pg * abi.PAGE_SIZE) | (abi.PAGE_SIZE - 1)) & (abi.PAGE_SIZE - 1);
@@ -341,10 +374,26 @@ pub inline fn isTramp(pc: u32) bool {
     return pc >= abi.TRAMP_BASE and pc < abi.TRAMP_END;
 }
 
+comptime {
+    assert(abi.CPU_CUR % @alignOf(Cpu) == 0 and abi.CPU_CUR + @sizeOf(Cpu) <= abi.LOW);
+}
+/// the thread whose state CPU_CUR holds, which run_slice copies back on return
+var running: ?*Cpu = null;
+/// after a trap unwound run_slice: its thread's state back from CPU_CUR
+export fn slice_abort() void {
+    if (running) |own| own.* = @as(*Cpu, @ptrFromInt(abi.CPU_CUR)).*;
+    running = null;
+}
 export fn run_slice(cp: u32, budget: u32) u32 {
-    const c: *Cpu = @ptrFromInt(cp);
+    abi.require(running == null, "run_slice: nested");
+    const own: *Cpu = @ptrFromInt(cp);
+    const c: *Cpu = @ptrFromInt(abi.CPU_CUR);
+    c.* = own.*;
+    running = own;
+    defer slice_abort();
     const limit = c.ic + budget;
     c.ic_limit = limit;
+    var interpret = false;
     while (true) {
         const pc: u32 = @truncate(c.pc);
         if (isTramp(pc)) {
@@ -370,9 +419,9 @@ export fn run_slice(cp: u32, budget: u32) u32 {
             if (c.a64 != 0) c.pc = lr else setPc32(c, lr);
             continue;
         }
-        // The first 64 KiB is never mapped, and below it lies the core's own stack rather than
-        // anything the guest may run: a null-ish branch target faults here instead of being
-        // decoded, for either ISA, as does one past the end of the memory.
+        // The first 64 KiB is never mapped and holds only the running Cpu (CPU_CUR), nothing the
+        // guest may run: a null-ish branch target faults here instead of being decoded, for either
+        // ISA, as does one past the end of the memory.
         if (pc < abi.LOW or pc >= mem.mem_size) {
             c.fault_addr = pc;
             _ = raise(c, .null_page, pc);
@@ -385,27 +434,21 @@ export fn run_slice(cp: u32, budget: u32) u32 {
         };
         const i = (pc & (abi.PAGE_SIZE - 1)) >> 1;
         const s = page.slot[i];
-        const thumbIt = c.a64 == 0 and c.cpsr & (1 << 5) != 0 and ((((c.cpsr >> 8) & 0xfc) | ((c.cpsr >> 25) & 3)) != 0);
-        if (s != 0 and !thumbIt) {
-            const f: *const fn (u32, u32) callconv(.c) u32 = @ptrFromInt(s >> 8);
-            const r = f(cp, s & 255);
+        // the interpreter takes an instruction a region handed back, and one inside a Thumb IT block
+        const interpreted = interpret or (c.a64 == 0 and c.cpsr & (1 << 5) != 0 and ((((c.cpsr >> 8) & 0xfc) | ((c.cpsr >> 25) & 3)) != 0));
+        if (s != 0 and !interpreted) {
+            const f: *const fn (u32, u32, u32, u32) callconv(.c) u32 = @ptrFromInt(s >> 8);
+            const r = f(abi.CPU_CUR, s & 255, 0, 0);
             // A region returns either the pc to go on at or one of the statuses below. Telling them
             // apart by LOW rather than by a bound of their own is what keeps a wild target from
             // being read as a status and leaving the pc where it was, which advances nothing.
             if (r >= abi.LOW) {
                 if (c.a64 != 0) c.pc = r else setPc32(c, r);
             } else switch (r) {
-                1 => {},
-                // compiled code reaches the window through the interpreter, one instruction at a time
-                2 => if (c.a64 == 0 and c.exit == @intFromEnum(Fault.bad_address) and mem.windowed(@truncate(c.fault_addr), 1, false)) {
-                    c.ic += 1;
-                    switch (exec_word32(cp, @truncate(c.pc))) {
-                        0, 1 => {},
-                        3 => return @intFromEnum(Exit.syscall),
-                        else => return @intFromEnum(Exit.fault),
-                    }
-                } else return @intFromEnum(Exit.fault),
-                3 => return @intFromEnum(Exit.syscall),
+                @intFromEnum(RegionExit.jump) => {},
+                @intFromEnum(RegionExit.fault) => return @intFromEnum(Exit.fault),
+                @intFromEnum(RegionExit.syscall) => return @intFromEnum(Exit.syscall),
+                @intFromEnum(RegionExit.interpret) => interpret = true,
                 else => {
                     // the branch was taken: the pc is the target, as an instruction abort reports it
                     if (c.a64 != 0) c.pc = r else setPc32(c, r);
@@ -415,7 +458,7 @@ export fn run_slice(cp: u32, budget: u32) u32 {
                 },
             }
         } else {
-            // Thumb IT can force interpretation even when this entry already has a JIT slot.
+            interpret = false;
             if (s == 0) {
                 const h = page.heat[i] +% 1;
                 page.heat[i] = h;
