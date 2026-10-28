@@ -4,7 +4,9 @@ export const COMPUTE = {
   arm: { shape: "VM.Standard.A1.Flex", ocpus: 1, memoryGb: 6, arch: "arm64" },
   micro: { shape: "VM.Standard.E2.1.Micro", ocpus: 0.125, memoryGb: 1, arch: "x64" },
 } as const;
-export const DISK_GB = 50;
+export const DISK_GB = 50, EGRESS_MBIT = 20;
+/** the tenancy's Always Free allowance */
+export const LIMITS = { ocpus: 2, memoryGb: 12, diskGb: 200, micro: 2 };
 
 export async function freeTierInventory(tenancy: string, region: string, owner: string, profile: keyof typeof COMPUTE) {
   const regions = await oci.identity.getRegionSubscriptions({ tenancyId: tenancy });
@@ -29,13 +31,16 @@ export async function freeTierInventory(tenancy: string, region: string, owner: 
     compartmentId: i.compartmentId, availabilityDomain: i.availabilityDomain, instanceId: i.id,
   })));
   const ownedBoots = new Set(attachments.flatMap(a => a.bootVolumeAttachments.filter(b => b.state === "ATTACHED").map(b => b.bootVolumeId)));
-  const arm = instances.filter(i => i.shape === COMPUTE.arm.shape && !owned.includes(i));
-  const cores = arm.reduce((sum, i) => sum + i.shapeConfigs[0].ocpus, profile === "arm" ? COMPUTE.arm.ocpus : 0);
-  const memory = arm.reduce((sum, i) => sum + i.shapeConfigs[0].memoryInGbs, profile === "arm" ? COMPUTE.arm.memoryGb : 0);
-  const storage = volumes.filter(v => !ownedBoots.has(v.id)).reduce((sum, v) => sum + Number(v.sizeInGbs), DISK_GB);
-  const micro = instances.filter(i => i.shape === COMPUTE.micro.shape && !owned.includes(i)).length + (profile === "micro" ? 1 : 0);
-  if (micro > 2) throw new Error(`Always Free micro capacity exceeded: ${micro}/2 instances`);
-  if (cores > 2 || memory > 12 || storage > 200)
-    throw new Error(`Always Free capacity exceeded: ${cores}/2 OCPUs, ${memory}/12 GB RAM, ${storage}/200 GB disk`);
-  return { domains: domains.availabilityDomains, cores, memory, storage, micro };
+  // every other instance, and this stack's as `profile` describes it
+  const planned = [...instances.filter(i => !owned.includes(i))
+    .map(i => ({ shape: i.shape, ocpus: i.shapeConfigs[0].ocpus, memoryGb: i.shapeConfigs[0].memoryInGbs })), COMPUTE[profile]];
+  const arm = planned.filter(i => i.shape === COMPUTE.arm.shape);
+  const used = {
+    ocpus: arm.reduce((sum, i) => sum + i.ocpus, 0), memoryGb: arm.reduce((sum, i) => sum + i.memoryGb, 0),
+    diskGb: volumes.filter(v => !ownedBoots.has(v.id)).reduce((sum, v) => sum + Number(v.sizeInGbs), DISK_GB),
+    micro: planned.filter(i => i.shape === COMPUTE.micro.shape).length,
+  };
+  const allocation = `${used.ocpus}/${LIMITS.ocpus} OCPUs, ${used.memoryGb}/${LIMITS.memoryGb} GB RAM, ${used.diskGb}/${LIMITS.diskGb} GB disk, ${used.micro}/${LIMITS.micro} micro VMs`;
+  if (Object.entries(LIMITS).some(([name, limit]) => used[name as keyof typeof LIMITS] > limit)) throw new Error(`Always Free capacity exceeded: ${allocation}`);
+  return { domains: domains.availabilityDomains, allocation };
 }

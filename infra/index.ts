@@ -3,7 +3,7 @@ import * as oci from "@pulumi/oci";
 import * as cloudflare from "@pulumi/cloudflare";
 import { isIPv4 } from "node:net";
 import { readFileSync } from "node:fs";
-import { freeTierInventory, COMPUTE, DISK_GB } from "./free-tier.ts";
+import { freeTierInventory, COMPUTE, DISK_GB, EGRESS_MBIT } from "./free-tier.ts";
 import { bootstrap } from "./bootstrap.ts";
 
 const config = new pulumi.Config(), oracle = new pulumi.Config("oci");
@@ -13,7 +13,7 @@ const profile = config.get("compute") ?? "arm";
 if (profile !== "arm" && profile !== "micro") throw new Error("Only Always Free arm and micro compute profiles are supported");
 const compute = COMPUTE[profile];
 const inventory = await freeTierInventory(tenancy, region, owner, profile);
-pulumi.log.info(`Always Free allocation after apply: ${inventory.cores}/2 OCPUs, ${inventory.memory}/12 GB RAM, ${inventory.storage}/200 GB disk, ${inventory.micro}/2 micro VMs`);
+pulumi.log.info(`Always Free allocation after apply: ${inventory.allocation}`);
 const compartmentId = config.get("compartmentId") ?? tenancy;
 const availabilityDomain = config.get("availabilityDomain") ?? inventory.domains[0].name;
 const accountId = config.require("cloudflareAccountId"), project = config.get("pagesProject") ?? "webdroid";
@@ -52,7 +52,7 @@ export const publicIp = instance.publicIp;
 export const backendOrigin = pulumi.interpolate`https://webdroid.${instance.publicIp}.sslip.io`;
 export const frontendOrigin = appOrigin;
 export const instanceId = instance.id;
-export const freeTier = { shape: compute.shape, ocpus: compute.ocpus, memoryGb: compute.memoryGb, diskGb: DISK_GB, egressMbps: 20 };
+export const freeTier = { shape: compute.shape, ocpus: compute.ocpus, memoryGb: compute.memoryGb, diskGb: DISK_GB, egressMbps: EGRESS_MBIT };
 const environment = { compatibilityDate: "2026-10-28", envVars: { BACKEND_ORIGIN: { type: "plain_text", value: backendOrigin } }, serviceBindings: {} };
 const pagesProvider = new cloudflare.Provider("default", {});
 new cloudflare.PagesProject("frontend", { accountId, name: project, productionBranch: "main",
