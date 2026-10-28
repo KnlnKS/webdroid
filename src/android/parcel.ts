@@ -3,7 +3,7 @@
 // cells, UTF-16 strings, 24-byte flat objects) so dataSize/dataPosition agree with a device. What
 // has no byte form here — a binder, a descriptor — rides in a side table keyed by its position.
 import { JObj, rt, getDeclared, ranged } from "../jvm/runtime.ts";
-import { utf8, u8, encodeModifiedUtf8 } from "../jvm/abi.ts";
+import { utf8, u8, encodeModifiedUtf8, decodeModifiedUtf8, charsToString } from "../jvm/abi.ts";
 import { scall, iof } from "../jvm/natives/jentry.ts";
 import { fdInt, mkFd } from "../jvm/natives/jio.ts";
 import { closeFd, dupFd } from "../native/fd.ts";
@@ -99,10 +99,9 @@ export function readString(p: NativeParcel): string | null {
     for (let i = 0; i < len; i++) s += String.fromCharCode(p.view.getUint16(at + i * 2, true));
     return s;
   }
-  // fromCharCode keeps lone surrogates, which TextDecoder would replace; the host is little-endian.
+  // the host is little-endian
   const units = at & 1 ? new Uint16Array(p.buf.slice(at, at + len * 2).buffer) : new Uint16Array(p.buf.buffer, at, len);
-  for (let i = 0; i < len; i += 8192) s += String.fromCharCode.apply(null, units.subarray(i, i + 8192) as unknown as number[]);
-  return s;
+  return charsToString(units, 0, len);
 }
 function writeString8(p: NativeParcel, s: string | null) {
   if (s === null) return writeInt(p, -1);
@@ -118,15 +117,7 @@ function readString8(p: NativeParcel): string | null {
   if (at === null) return null;
   const bytes = p.buf.subarray(at, at + len);
   if (!bytes.includes(0xc0) && !bytes.includes(0xed)) return utf8.dec.decode(bytes);
-  let s = "";
-  for (let i = 0; i < bytes.length;) {
-    const c = bytes[i++];
-    if (c < 0x80) s += String.fromCharCode(c);
-    else if (c < 0xe0) s += String.fromCharCode((c & 31) << 6 | bytes[i++] & 63);
-    else if (c < 0xf0) s += String.fromCharCode((c & 15) << 12 | (bytes[i++] & 63) << 6 | bytes[i++] & 63);
-    else s += String.fromCodePoint((c & 7) << 18 | (bytes[i++] & 63) << 12 | (bytes[i++] & 63) << 6 | bytes[i++] & 63);
-  }
-  return s;
+  return decodeModifiedUtf8(bytes);
 }
 /** libbinder's writeCString: UTF-8 and a NUL, in place */
 export function writeCString(p: NativeParcel, s: string) {
