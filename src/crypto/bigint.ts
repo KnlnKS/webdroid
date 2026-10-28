@@ -1,20 +1,15 @@
 // bigint arithmetic and byte conversions for the public-key algorithms, DER and NativeBN.
 
+import { hexBytes } from "../jvm/abi.ts";
+
 /** unsigned big-endian bytes ↔ bigint */
-export function bytesToBig(b: Uint8Array): bigint {
-  if (!b.length) return 0n;
-  let hex = "";
-  for (const x of b) hex += (x < 16 ? "0" : "") + x.toString(16);
-  return BigInt("0x" + hex);
-}
-/** `v` as `len` big-endian bytes (minimal when len is omitted) */
+export const bytesToBig = (b: Uint8Array): bigint => b.length ? BigInt("0x" + b.toHex()) : 0n;
+/** `v` as `len` big-endian bytes, its high bytes cut or zeros added (minimal when len is omitted) */
 export function bigToBytes(v: bigint, len?: number): Uint8Array {
-  let hex = v.toString(16);
+  let hex = v ? v.toString(16) : "";
   if (hex.length & 1) hex = "0" + hex;
-  if (v === 0n) hex = "";
-  const n = len ?? hex.length / 2, out = new Uint8Array(n);
-  for (let i = 0, o = n - hex.length / 2; i < hex.length; i += 2, o++) if (o >= 0) out[o] = parseInt(hex.slice(i, i + 2), 16);
-  return out;
+  if (len !== undefined) { hex = hex.padStart(2 * len, "0"); hex = hex.slice(hex.length - 2 * len); }
+  return hexBytes(hex);
 }
 /** a⁻¹ mod m */
 export function modInverse(a: bigint, m: bigint): bigint {
