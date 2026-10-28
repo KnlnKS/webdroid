@@ -117,6 +117,5 @@ export function struct<S extends string, N extends Nested = Record<never, Layout
 export function list<T>(p: number, n: number, size: number, read: (at: number) => T): T[] {
   return Array.from({ length: p ? n : 0 }, (_, i) => read(p + i * size));
 }
-export const u32s = (p: number, n: number): number[] => list(p, n, 4, (a) => mem.ld32(a) >>> 0);
 export const ptrs = (p: number, n: number): number[] => list(p, n, PTR, ldp);
 export const u64s = (p: number, n: number): number[] => list(p, n, 8, ldU64);

@@ -14,7 +14,6 @@ import { AOSP, localPlatformData, platformJarBytes } from "../aosp.ts";
 const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer), f64 = new Float64Array(1), u64 = new BigUint64Array(f64.buffer);
 /** float/double results and arguments cross harnesses as raw bits */
 export const fb = (x: number) => (f32[0] = x, BigInt(u32[0] | 0)), db = (x: number) => (f64[0] = x, BigInt.asIntN(64, u64[0]));
-export const bitsOf = (k: string, v: any): bigint => k === "F" ? fb(v) : k === "D" ? db(v) : k === "Z" ? BigInt(+v) : BigInt(v);
 /** NaN payloads differ between engines without being observable, so all NaNs compare equal */
 export const fmt = (k: string, v: bigint) => {
   if (k === "F") { u32[0] = Number(BigInt.asUintN(32, v)); return isNaN(f32[0]) ? "NaN" : String(v); }
