@@ -9,6 +9,7 @@ import { sandboxDocument } from "./src/shell/proxy.ts";
 import { openInstall } from "./src/shell/install.ts";
 import { gzipHeaders, mimeOf } from "./src/mime.ts";
 import { backendHost, attachSockets } from "./backend/server.ts";
+import { localNetwork } from "./backend/network.ts";
 import { prepareSystemPackages } from "./scripts/system-packages.ts";
 import { aotFile, aotManifest } from "./scripts/aot-serve.ts";
 import { bundle } from "./scripts/bundle.ts";
@@ -78,10 +79,11 @@ const ROUTES: [RegExp, Route][] = [
   [/^\/apks\/([^/]+)$/, (req, _, [name]) => serveFile(req, apkDirectory, decodeURIComponent(name))],
 ];
 const host = backendHost({
+  network: localNetwork,
+  // a browser resolves every *.localhost name to this loopback server, each its own site
   webviewOrigin: (url) => process.env.WEBDROID_WEBVIEW_ORIGIN
     ?? (url.hostname === "localhost" || url.hostname === "127.0.0.1" ? `${url.protocol}//*.localhost:${url.port}` : null),
   isApp: (origin, url) => origin === url.origin,
-  publicOnly: false,
 });
 export function devServer(): Plugin {
   return {

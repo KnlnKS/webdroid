@@ -1,33 +1,23 @@
+// Raw TCP and UDP for the page, each over its own WebSocket (tcpwire.ts). A page cannot open a socket, but every Java networking
+// stack ultimately wants one, so the server lends it its own. Java sockets can ask the relay to terminate TLS; native stacks
+// pass their own TLS bytes through the same relay unchanged. Like /proxy, these are outbound proxies for whatever the emulated
+// app asks for: the server opens them only to the app's own pages (fromApp), and `network` bounds where they lead.
 import dgram from "node:dgram";
-import dns from "node:dns/promises";
 import net from "node:net";
 import tls from "node:tls";
-import type { LookupFunction } from "node:net";
-import type { LookupAddress } from "node:dns";
 import type { WebSocket } from "ws";
 import { closeReason, MAX_PENDING_TCP_BYTES, TCP_CONNECT_FAILED, TCP_HANDSHAKE_FAILED, TCP_TOO_SLOW, tcpReady, udpFrame, type TcpTarget } from "../src/shell/tcpwire.ts";
+import type { Network } from "./network.ts";
 
-type Resolve = (host: string, family?: number) => Promise<LookupAddress[]>;
-
-export async function relayTcp(ws: WebSocket, { host, port, alpn, secure }: TcpTarget, resolve?: Resolve): Promise<void> {
-  let lookup: LookupFunction | undefined;
-  if (resolve) {
-    ws.pause();
-    try {
-      const addresses = await resolve(host);
-      lookup = (_name, options, callback) => {
-        if (options.all) callback(null, addresses);
-        else callback(null, addresses[0].address, addresses[0].family);
-      };
-    }
-    catch (error) { ws.close(TCP_CONNECT_FAILED, closeReason(String(error))); ws.resume(); return; }
-    if (ws.readyState !== ws.OPEN) return;
-  }
+export function relayTcp(ws: WebSocket, { host, port, alpn, secure }: TcpTarget, { reachable, lookup }: Network): void {
+  if (!reachable(host)) return void ws.close(TCP_CONNECT_FAILED, "ECONNREFUSED not reachable from this server");
   let ready = false, connected = false, shut = false, pendingBytes = 0;
   const pending: Buffer[] = [];
   const socket: net.Socket = secure
     ? tls.connect({ host, port, lookup, servername: net.isIP(host) ? undefined : host, ALPNProtocols: alpn.length ? alpn : undefined })
     : net.connect({ host, port, lookup });
+  // A TLS socket is ready at its handshake, not the TCP open: the ready control frame goes out
+  // only once the socket can carry bytes, and anything that arrives before then is queued.
   const open = () => {
     ready = true;
     socket.setTimeout(0);
@@ -39,6 +29,7 @@ export async function relayTcp(ws: WebSocket, { host, port, alpn, secure }: TcpT
   socket.setTimeout(30_000, () => socket.destroy(Object.assign(new Error("Connect timeout"), { code: "ETIMEDOUT" })));
   socket.once("connect", () => { connected = true; if (!secure) open(); });
   if (secure) socket.once("secureConnect", open);
+  // the upstream waits for the WebSocket to take each chunk
   socket.on("data", chunk => {
     if (ws.readyState !== ws.OPEN) return;
     socket.pause();
@@ -51,6 +42,7 @@ export async function relayTcp(ws: WebSocket, { host, port, alpn, secure }: TcpT
     else ws.close();
   });
   ws.on("message", (data, binary) => {
+    // the client's shutdown(SHUT_WR), once what it wrote before has gone
     if (!binary) { if (data.toString() === "shutdown") { shut = true; if (ready) socket.end(); } return; }
     if (shut) return;
     const chunk = data as Buffer;
@@ -69,16 +61,20 @@ export async function relayTcp(ws: WebSocket, { host, port, alpn, secure }: TcpT
       socket.once("close", () => clearTimeout(deadline));
     }
   });
-  if (resolve) ws.resume();
 }
 
-export function relayUdp(ws: WebSocket, resolve: Resolve = (host, family) => dns.lookup(host, { family, all: true })): void {
+const utf8 = new TextEncoder();
+export function relayUdp(ws: WebSocket, { lookup }: Network): void {
+  const resolve = (host: string) => new Promise<string>((ok, fail) =>
+    lookup(host, { family: 4 }, (error, address) => error ? fail(error) : ok(address as string)));
+  // a reply names its source as the guest dialed it (the address is this server's resolution of the name, which the guest
+  // never saw), framed as a request is; a source the guest has not sent to gets nothing through
   const addresses = new Map<string, Promise<string>>(), peers = new Map<string, string>();
   const socket = dgram.createSocket("udp4");
   socket.on("message", (bytes, { port, address }) => {
     const name = peers.get(`${address}:${port}`);
     if (name && ws.readyState === ws.OPEN && ws.bufferedAmount < MAX_PENDING_TCP_BYTES)
-      ws.send(udpFrame(new TextEncoder().encode(name), port, bytes));
+      ws.send(udpFrame(utf8.encode(name), port, bytes));
   });
   let bound = false, closed = false, pending = 0;
   socket.on("error", () => { if (!bound) ws.close(4000, "UDP bind failed"); });
@@ -98,7 +94,7 @@ export function relayUdp(ws: WebSocket, resolve: Resolve = (host, family) => dns
       let resolved = addresses.get(host);
       if (!resolved) {
         if (addresses.size >= 256) addresses.clear();
-        resolved = resolve(host, 4).then(result => result[0].address);
+        resolved = resolve(host);
         addresses.set(host, resolved);
       }
       const address = await resolved;
