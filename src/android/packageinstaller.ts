@@ -15,7 +15,7 @@ import { ownedBy, packages } from "./packages.ts";
 import { checkUidPermission } from "./permissions.ts";
 import { deleteObserver, deleteVersioned, mayDeletePackages } from "./appdata.ts";
 import { notHeld } from "./permissions.ts";
-import { putExtra, type JIntent } from "./intent.ts";
+import { putExtra, type JIntent, newIntent } from "./intent.ts";
 import { installFailed, INSTALL_SUCCEEDED, type InstallResult } from "./installpackage.ts";
 
 const PI = "android/content/pm/PackageInstaller", S = "Ljava/lang/String;";
@@ -171,7 +171,7 @@ rt.register({ name: "webdroid/PackageInstallerService", ctor: class extends JObj
     }
     if (record.sdk.target >= 28 && (yield checkUidPermission("android.permission.REQUEST_DELETE_PACKAGES", uid)) !== 0)
       throw notHeld(uid, "android.permission.REQUEST_DELETE_PACKAGES");
-    const intent: JIntent = yield newObj("android/content/Intent", `(${S})V`, "android.intent.action.UNINSTALL_PACKAGE");
+    const intent: JIntent = yield newIntent("android.intent.action.UNINSTALL_PACKAGE");
     yield vcall(intent, "setData", "(Landroid/net/Uri;)Landroid/content/Intent;", yield scall("android/net/Uri", "fromParts", `(${S}${S}${S})Landroid/net/Uri;`, "package", pkg, null));
     yield putExtra(intent, "android.content.pm.extra.CALLBACK", yield newObj("android/content/pm/PackageManager$UninstallCompleteCallback", "(Landroid/os/IBinder;)V", observer), "Landroid/os/Parcelable;");
     yield putExtra(intent, "android.content.pm.extra.DELETE_FLAGS", flags, "I");

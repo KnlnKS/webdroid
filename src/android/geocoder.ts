@@ -3,14 +3,14 @@
 // here), bound by the platform itself.
 
 import { awaited, rt, JObj, driven, type Gen } from "../jvm/runtime.ts";
-import { newObj, scall, vcall } from "../jvm/natives/jentry.ts";
+import { scall, vcall } from "../jvm/natives/jentry.ts";
 import { once } from "../jvm/suspend.ts";
 import { newArrayList } from "../jvm/natives/jcoll.ts";
 import type { JLocale } from "../jvm/natives/jvalues.ts";
 import { newStub } from "./binder.ts";
 import { resolveService } from "./pm.ts";
 import { bindAsSystem } from "./server/activeservices.ts";
-import type { JIntent, JComponentName } from "./intent.ts";
+import { newIntent, mkComponentName, type JIntent, type JComponentName } from "./intent.ts";
 import { procIdentity } from "../shell/procfs.ts";
 
 // the provider library's GeocoderParams: the request's locale and caller
@@ -72,9 +72,9 @@ rt.register({
 // no provider answers onError(null)
 const PROVIDER_ACTION = "com.android.location.service.GeocodeProvider";
 function* providerComponent(): Gen<JComponentName | null> {
-  const intent: JIntent = yield newObj("android/content/Intent", "(Ljava/lang/String;)V", PROVIDER_ACTION);
+  const intent: JIntent = yield newIntent(PROVIDER_ACTION);
   const first = yield* awaited(resolveService(intent));
-  return first ? yield newObj("android/content/ComponentName", "(Ljava/lang/String;Ljava/lang/String;)V", first.owner.pkg, first.name) : null;
+  return first ? yield mkComponentName(first.owner.pkg, first.name) : null;
 }
 /** the provider's IGeocodeProvider, bound as the platform keeps it bound; a failed call drops the binding (its process may have died), as ServiceWatcher rebinds */
 const bindProvider = () => once(driven(function* (): Gen<{ geocoder: JObj; unbind: () => unknown }> {

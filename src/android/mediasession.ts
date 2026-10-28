@@ -6,6 +6,7 @@ import { after, newObj, scall, vcall } from "../jvm/natives/jentry.ts";
 import { lambda } from "../jvm/natives/jlambda.ts";
 import { callingIdentity, hostService, newStub, onCallerDeath, oneway } from "./binder.ts";
 import { setStreamVolume, streamMaxVolume, streamVolume } from "./audio.ts";
+import { newIntent } from "./intent.ts";
 
 const MS = "android/media/session/", S = "Ljava/lang/String;", B = "Landroid/os/Bundle;";
 const PS = MS + "PlaybackState", PI = MS + "MediaController$PlaybackInfo", AA = "Landroid/media/AudioAttributes;";
@@ -109,7 +110,7 @@ const TRANSPORT: [string, string, string][] = [
 rt.register({ name: "webdroid/MediaSessionController", ctor: recordBinder(), sup: MS + "ISessionController$Stub", methods: {
   ...Object.fromEntries(TRANSPORT.map(([name, callback, rest]) => [`${name}(${S}${rest})V`, R((r, ...a: [string]) => relay(r, callback, rest, ...a))])),
   [`sendMediaButton(${S}Landroid/view/KeyEvent;)Z`]: driven(function* sendMediaButton$(this: JRecordBinder, pkg: string, event: JObj): Gen {
-    const intent = yield newObj("android/content/Intent", `(${S})V`, "android.intent.action.MEDIA_BUTTON");
+    const intent = yield newIntent("android.intent.action.MEDIA_BUTTON");
     yield vcall(intent, "putExtra", `(${S}Landroid/os/Parcelable;)Landroid/content/Intent;`, "android.intent.extra.KEY_EVENT", event);
     relay(this.r, "onMediaButtonFromController", "Landroid/content/Intent;", pkg, intent);
     return 1;

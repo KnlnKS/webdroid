@@ -8,6 +8,7 @@ import { awaited, JObj, getDeclared, setDeclared, noops, driven, type Gen } from
 import { newObj, scall, staticField, vcall } from "../jvm/natives/jentry.ts";
 import { checkCallingPackage, parceledList, hostService, serviceContext } from "./binder.ts";
 import { GET_META_DATA, MATCH_DIRECT_BOOT_AWARE, MATCH_DIRECT_BOOT_UNAWARE } from "./packages.ts";
+import { newIntent, mkComponentName } from "./intent.ts";
 
 const S = "Ljava/lang/String;", CN = "Landroid/content/ComponentName;", RV = "Landroid/widget/RemoteViews;";
 const INFO = "android/appwidget/AppWidgetProviderInfo";
@@ -39,7 +40,7 @@ function* parseProvider(pm: JObj, activity: JObj): Gen<JObj | null> {
     const pkg = getDeclared<string>(activity, "android/content/pm/PackageItemInfo", "packageName");
     const info = yield newObj(INFO);
     setDeclared(info, INFO, {
-      provider: yield newObj("android/content/ComponentName", `(${S}${S})V`, pkg, getDeclared<string>(activity, "android/content/pm/PackageItemInfo", "name")),
+      provider: yield mkComponentName(pkg, getDeclared<string>(activity, "android/content/pm/PackageItemInfo", "name")),
       providerInfo: activity,
     });
     const app = getDeclared<JObj>(activity, "android/content/pm/ComponentInfo", "applicationInfo");
@@ -55,7 +56,7 @@ function* parseProvider(pm: JObj, activity: JObj): Gen<JObj | null> {
       } else values[name] = yield* awaited(read(a, kind, index, fallbackValue));
     }
     const configure: string | null = yield vcall(a, "getString", `(I)${S}`, 5);
-    if (configure) setDeclared(info, INFO, { configure: yield newObj("android/content/ComponentName", `(${S}${S})V`, pkg, configure) });
+    if (configure) setDeclared(info, INFO, { configure: yield mkComponentName(pkg, configure) });
     setDeclared(info, INFO, { label: String(yield vcall(yield vcall(activity, "loadLabel", "(Landroid/content/pm/PackageManager;)Ljava/lang/CharSequence;", pm), "toString", `()${S}`)) });
     setDeclared(info, INFO, { icon: yield vcall(activity, "getIconResource", "()I") });
     for (const [index, name, kind, fallback] of LATE_ATTRIBUTES) values[name] = yield* awaited(read(a, kind, index, fallback));
@@ -69,7 +70,7 @@ function* parseProvider(pm: JObj, activity: JObj): Gen<JObj | null> {
 function* installedProviders(): Gen<JObj[]> {
   const pm = yield vcall(yield* awaited(serviceContext()), "getPackageManager", "()Landroid/content/pm/PackageManager;");
   const receivers = yield vcall(pm, "queryBroadcastReceivers", "(Landroid/content/Intent;I)Ljava/util/List;",
-    yield newObj("android/content/Intent", `(${S})V`, "android.appwidget.action.APPWIDGET_UPDATE"), GET_META_DATA | MATCH_DIRECT_BOOT_AWARE | MATCH_DIRECT_BOOT_UNAWARE);
+    yield newIntent("android.appwidget.action.APPWIDGET_UPDATE"), GET_META_DATA | MATCH_DIRECT_BOOT_AWARE | MATCH_DIRECT_BOOT_UNAWARE);
   const providers: JObj[] = [];
   for (const ri of (yield vcall(receivers, "toArray", "()[Ljava/lang/Object;")) as JObj[]) {
     const info = yield* parseProvider(pm, getDeclared<JObj>(ri, "android/content/pm/ResolveInfo", "activityInfo"));
