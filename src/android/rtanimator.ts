@@ -355,26 +355,19 @@ abstract class Holder {
     return i >= n ? d[n] : evaluate(d[i], d[i + 1], pos - i);
   }
 }
-class GroupHolder extends Holder {
-  readonly group: Group; readonly id: number; readonly from: number; readonly to: number;
-  constructor(group: Group, id: number, from: number, to: number) { super(); this.group = group; this.id = id; this.from = from; this.to = to; }
-  set(f: number): void { this.group.set(this.id, this.value(this.from, this.to, f, lerp)); }
+/** a group's, path's or the tree's property: `apply` gives it each value */
+class ValueHolder extends Holder {
+  readonly from: number; readonly to: number; readonly evaluate: Evaluator; readonly apply: (v: number) => void;
+  constructor(from: number, to: number, evaluate: Evaluator, apply: (v: number) => void) { super(); this.from = from; this.to = to; this.evaluate = evaluate; this.apply = apply; }
+  set(f: number): void { this.apply(this.value(this.from, this.to, f, this.evaluate)); }
 }
-class PathHolder extends Holder {
-  readonly path: FullPath; readonly id: number; readonly from: number; readonly to: number; readonly color: boolean;
-  constructor(path: FullPath, id: number, from: number, to: number, color: boolean) { super(); this.path = path; this.id = id; this.from = from; this.to = to; this.color = color; }
-  set(f: number): void { this.path.animate(this.id, this.value(this.from, this.to, f, this.color ? colorLerp : lerp), this.color); }
-}
+const pathHolder = (path: FullPath, id: number, from: number, to: number, color: boolean) =>
+  handle(new ValueHolder(from, to, color ? colorLerp : lerp, (v) => path.animate(id, v, color)));
 class PathDataHolder extends Holder {
   readonly path: VPath; readonly from: PathData; readonly to: PathData;
   private readonly out = new PathData();
   constructor(path: VPath, from: PathData, to: PathData) { super(); this.path = path; this.from = from; this.to = to; }
   set(f: number): void { interpolatePaths(this.out, this.from, this.to, f); this.path.setData(this.out); }
-}
-class RootAlphaHolder extends Holder {
-  readonly tree: Tree; readonly from: number; readonly to: number;
-  constructor(tree: Tree, from: number, to: number) { super(); this.tree = tree; this.from = from; this.to = to; }
-  set(f: number): void { this.tree.alpha = this.value(this.from, this.to, f, lerp); }
 }
 
 // ── PropertyValuesAnimatorSet.cpp
@@ -451,15 +444,21 @@ rt.registerJnis("android/graphics/drawable/AnimatedVectorDrawable", {
     void animatorSet(s).animators.push(new PropertyAnimator(take<Holder>(h), take<Interpolator>(interp), Number(delay), Number(duration), repeat, mode)),
   "nSetPropertyHolderData(J[FI)V": (h: bigint, data: Float32Array, n: number) => { deref<Holder>(h).data = Array.from(data.subarray(0, n)); },
   "nSetPropertyHolderData(J[II)V": (h: bigint, data: Int32Array, n: number) => { deref<Holder>(h).data = Array.from(data.subarray(0, n)); },
-  "nCreateGroupPropertyHolder(JIFF)J": (g: bigint, id: number, from: number, to: number) => handle(new GroupHolder(node<Group>(g), id, from, to)),
+  "nCreateGroupPropertyHolder(JIFF)J": (g: bigint, id: number, from: number, to: number) => {
+    const group = node<Group>(g);
+    return handle(new ValueHolder(from, to, lerp, (v) => group.set(id, v)));
+  },
   "nCreatePathDataPropertyHolder(JJJ)J": (p: bigint, from: bigint, to: bigint) => {
     const a = new PathData(), b = new PathData();
     a.copy(deref<PathData>(from)); b.copy(deref<PathData>(to));
     return handle(new PathDataHolder(node<VPath>(p), a, b));
   },
-  "nCreatePathColorPropertyHolder(JIII)J": (p: bigint, id: number, from: number, to: number) => handle(new PathHolder(node<FullPath>(p), id, from, to, true)),
-  "nCreatePathPropertyHolder(JIFF)J": (p: bigint, id: number, from: number, to: number) => handle(new PathHolder(node<FullPath>(p), id, from, to, false)),
-  "nCreateRootAlphaPropertyHolder(JFF)J": (t: bigint, from: number, to: number) => handle(new RootAlphaHolder(deref<Tree>(t), from, to)),
+  "nCreatePathColorPropertyHolder(JIII)J": (p: bigint, id: number, from: number, to: number) => pathHolder(node<FullPath>(p), id, from, to, true),
+  "nCreatePathPropertyHolder(JIFF)J": (p: bigint, id: number, from: number, to: number) => pathHolder(node<FullPath>(p), id, from, to, false),
+  "nCreateRootAlphaPropertyHolder(JFF)J": (t: bigint, from: number, to: number) => {
+    const tree = deref<Tree>(t);
+    return handle(new ValueHolder(from, to, lerp, (v) => { tree.alpha = v; }));
+  },
   [`nStart(J${RT}I)V`]: (s: bigint, java: object, id: number) => animatorSet(s).play(java, id, false),
   [`nReverse(J${RT}I)V`]: (s: bigint, java: object, id: number) => animatorSet(s).play(java, id, true),
   "nEnd(J)V": (s: bigint) => animatorSet(s).request(END, FINISHED),
