@@ -5,7 +5,7 @@ import tls from "node:tls";
 import type { LookupFunction } from "node:net";
 import type { LookupAddress } from "node:dns";
 import type { WebSocket } from "ws";
-import { closeReason, MAX_PENDING_TCP_BYTES, TCP_CONNECT_FAILED, TCP_HANDSHAKE_FAILED, TCP_TOO_SLOW, tcpReady, udpFrame, type TcpTarget } from "./src/shell/tcpwire.ts";
+import { closeReason, MAX_PENDING_TCP_BYTES, TCP_CONNECT_FAILED, TCP_HANDSHAKE_FAILED, TCP_TOO_SLOW, tcpReady, udpFrame, type TcpTarget } from "../src/shell/tcpwire.ts";
 
 type Resolve = (host: string, family?: number) => Promise<LookupAddress[]>;
 

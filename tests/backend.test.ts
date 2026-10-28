@@ -5,7 +5,7 @@ import net from "node:net";
 import dgram from "node:dgram";
 import dns from "node:dns/promises";
 import { WebSocket, WebSocketServer } from "ws";
-import { relayTcp } from "../socket-relays.ts";
+import { relayTcp } from "../backend/relays.ts";
 import { backendHost, attachSockets } from "../backend/server.ts";
 import { publicFetch, resolvePublic } from "../backend/network.ts";
 import { parseTcpReady, udpFrame } from "../src/shell/tcpwire.ts";

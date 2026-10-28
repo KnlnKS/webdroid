@@ -5,7 +5,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { WebRelay } from "../src/shell/webrelay.ts";
 import { bridgeSocket, fromApp, type ServeHost } from "../src/shell/serve-routes.ts";
 import { tcpTarget, MAX_PENDING_TCP_BYTES } from "../src/shell/tcpwire.ts";
-import { relayTcp, relayUdp } from "../socket-relays.ts";
+import { relayTcp, relayUdp } from "./relays.ts";
 import { fetchEncoded, publicFetch, resolvePublic } from "./network.ts";
 
 type Host = ServeHost & { relay: WebRelay; publicOnly: boolean };
