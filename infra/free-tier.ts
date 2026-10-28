@@ -25,10 +25,14 @@ export async function freeTierInventory(tenancy: string, region: string, owner: 
   const instances = inventory.flatMap(i => i.instances), volumes = inventory.flatMap(i => i.volumes);
   const owned = instances.filter(i => i.freeformTags["webdroid-stack"] === owner);
   if (owned.length > 1) throw new Error("Multiple backend instances found; refusing to allocate more resources");
+  const attachments = await Promise.all(owned.map(i => oci.core.getBootVolumeAttachments({
+    compartmentId: i.compartmentId, availabilityDomain: i.availabilityDomain, instanceId: i.id,
+  })));
+  const ownedBoots = new Set(attachments.flatMap(a => a.bootVolumeAttachments.filter(b => b.state === "ATTACHED").map(b => b.bootVolumeId)));
   const arm = instances.filter(i => i.shape === COMPUTE.arm.shape && !owned.includes(i));
   const cores = arm.reduce((sum, i) => sum + i.shapeConfigs[0].ocpus, profile === "arm" ? COMPUTE.arm.ocpus : 0);
   const memory = arm.reduce((sum, i) => sum + i.shapeConfigs[0].memoryInGbs, profile === "arm" ? COMPUTE.arm.memoryGb : 0);
-  const storage = volumes.filter(v => !owned.some(i => i.bootVolumeId === v.id)).reduce((sum, v) => sum + Number(v.sizeInGbs), DISK_GB);
+  const storage = volumes.filter(v => !ownedBoots.has(v.id)).reduce((sum, v) => sum + Number(v.sizeInGbs), DISK_GB);
   const micro = instances.filter(i => i.shape === COMPUTE.micro.shape && !owned.includes(i)).length + (profile === "micro" ? 1 : 0);
   if (micro > 2) throw new Error(`Always Free micro capacity exceeded: ${micro}/2 instances`);
   if (cores > 2 || memory > 12 || storage > 200)
