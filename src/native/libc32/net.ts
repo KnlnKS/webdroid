@@ -17,23 +17,20 @@ import { record } from "../socket/core.ts";
 import { AI_CANONNAME, addrinfoCandidates } from "../socket/daemons.ts";
 import { recvfrom, sendto } from "../socket/syscalls.ts";
 import { nativePoll, nativeSelect } from "../poll.ts";
+import { struct } from "../struct.ts";
 
 const AI_PASSIVE = 1;
 const EAI_SYSTEM = 11, EAI_OVERFLOW = 14;
 
-/** the ARM32 struct ifaddrs: its size and the offsets of what getifaddrs fills */
-const IFADDRS = { size: 28, name: 4, flags: 8, addr: 12, netmask: 16 };
+const Ifaddrs = struct("next:ptr name:ptr flags:u32 addr:ptr netmask:ptr broadaddr:ptr data:ptr");
 function getifaddrs(cpu: Cpu, result: number): number {
   if (!result) return fail(cpu, E.FAULT);
-  const size = IFADDRS.size;
+  const size = Ifaddrs.size();
   const entry = mem.malloc(size + 35);
   if (!entry) return fail(cpu, E.NOMEM);
   mem.memset(entry, 0, size + 35);
   const lo = INTERFACES[0], address = entry + size, netmask = address + 16, name = netmask + 16;
-  stp(entry + IFADDRS.name, name);
-  mem.st32(entry + IFADDRS.flags, lo.flags);
-  stp(entry + IFADDRS.addr, address);
-  stp(entry + IFADDRS.netmask, netmask);
+  Ifaddrs.write(entry, { name, flags: lo.flags, addr: address, netmask });
   mem.st16(address, AF_INET); mem.u8.set(V4_LOOPBACK, address + 4);
   mem.st16(netmask, AF_INET); mem.u8.set([255, 0, 0, 0], netmask + 4);
   mem.u8.set([...utf8.enc.encode(lo.name), 0], name);
@@ -41,16 +38,12 @@ function getifaddrs(cpu: Cpu, result: number): number {
   return 0;
 }
 
-/** the ARM32 struct addrinfo: its size and the offsets of its fields */
-const ADDRINFO = { size: 32, flags: 0, family: 4, socktype: 8, protocol: 12, addrlen: 16, canon: 20, addr: 24, next: 28 };
+const Addrinfo = struct("flags:i32 family:i32 socktype:i32 protocol:i32 addrlen:u32 canon:ptr addr:ptr next:ptr");
 /** getaddrinfo(3): one allocation holding the list, every address for each socket type, the
  *  canonical name on the first */
 function getaddrinfo(cpu: Cpu, nodePtr: number, servicePtr: number, hints: number, result: number): PromiseOrVal<number> {
   if (!result) { fail(cpu, E.FAULT); return EAI_SYSTEM; }
-  const flags = hints ? mem.ld32(hints + ADDRINFO.flags) : 0;
-  const family = hints ? mem.ld32(hints + ADDRINFO.family) : AF_UNSPEC;
-  const socktype = hints ? mem.ld32(hints + ADDRINFO.socktype) : 0;
-  const protocol = hints ? mem.ld32(hints + ADDRINFO.protocol) : 0;
+  const { flags, family, socktype, protocol } = hints ? Addrinfo.read(hints) : { flags: 0, family: AF_UNSPEC, socktype: 0, protocol: 0 };
   const v6 = family === AF_INET6;
   const node = nodePtr ? mem.cstr(nodePtr) : flags & AI_PASSIVE ? v6 ? "::" : "0.0.0.0" : v6 ? "::1" : "127.0.0.1";
   const service = servicePtr ? mem.cstr(servicePtr) : null;
@@ -64,24 +57,19 @@ function getaddrinfo(cpu: Cpu, nodePtr: number, servicePtr: number, hints: numbe
     const sockaddrs = found.map((address) => sockaddrOf(familyOf(address), { address, port }));
     const canon = flags & AI_CANONNAME ? utf8.enc.encode(node) : null;
     let size = canon ? canon.length + 1 : 0;
-    for (const sockaddr of sockaddrs) size += (ADDRINFO.size + sockaddr.length) * kinds.length;
+    for (const sockaddr of sockaddrs) size += (Addrinfo.size() + sockaddr.length) * kinds.length;
     const allocation = mem.malloc(size);
     if (!allocation) { fail(cpu, E.NOMEM); return EAI_SYSTEM; }
     mem.memset(allocation, 0, size);
     let at = allocation, previous = 0;
     for (let i = 0; i < found.length; i++) for (const [type, proto] of kinds) {
       const sockaddr = sockaddrs[i];
-      if (previous) stp(previous + ADDRINFO.next, at);
-      mem.st32(at + ADDRINFO.flags, flags);
-      mem.st32(at + ADDRINFO.family, familyOf(found[i]));
-      mem.st32(at + ADDRINFO.socktype, type);
-      mem.st32(at + ADDRINFO.protocol, proto);
-      mem.st32(at + ADDRINFO.addrlen, sockaddr.length);
-      stp(at + ADDRINFO.addr, at + ADDRINFO.size);
-      mem.write(at + ADDRINFO.size, sockaddr);
-      previous = at; at += ADDRINFO.size + sockaddr.length;
+      if (previous) Addrinfo.write(previous, { next: at });
+      Addrinfo.write(at, { flags, family: familyOf(found[i]), socktype: type, protocol: proto, addrlen: sockaddr.length, addr: at + Addrinfo.size() });
+      mem.write(at + Addrinfo.size(), sockaddr);
+      previous = at; at += Addrinfo.size() + sockaddr.length;
     }
-    if (canon) { mem.u8.set(canon, at); stp(allocation + ADDRINFO.canon, at); }
+    if (canon) { mem.u8.set(canon, at); Addrinfo.write(allocation, { canon: at }); }
     stp(resultAt(), allocation);
     record(`resolved ${node} -> ${addressText(found[0])} result=${mem.va(allocation).toString()}`);
     return 0;
@@ -107,8 +95,7 @@ function getnameinfo(sockaddr: number, length: number, host: number, hostLength:
   return copyText(resolved ?? addressText(ep.address), host, hostLength) && copyText(String(ep.port), service, serviceLength) ? 0 : EAI_OVERFLOW;
 }
 
-/** the ARM32 struct hostent: h_name, h_aliases, h_addrtype, h_length, then h_addr_list */
-const HOSTENT = { size: 20, aliases: 4, type: 8, length: 12, list: 16 };
+const Hostent = struct("name:ptr aliases:ptr type:i32 length:i32 list:ptr");
 const NO_RECOVERY = 3;
 /** gethostbyname and gethostbyaddr, and the h_errno they set: one for the process, where bionic keeps one per thread */
 function hostLookups(): Record<string, HostFn> {
@@ -118,15 +105,13 @@ function hostLookups(): Record<string, HostFn> {
   /** the answer, in the storage the next lookup replaces */
   const hostent = (name: string, addresses: number[][]): number => {
     const text = utf8.enc.encode(name + "\0"), length = addresses[0].length;
-    const list = HOSTENT.size + 4, bytes = list + 4 * (addresses.length + 1), size = bytes + length * addresses.length + text.length;
+    const list = Hostent.size() + 4, bytes = list + 4 * (addresses.length + 1), size = bytes + length * addresses.length + text.length;
     if (entry) mem.free(entry);
     const at = entry = mem.malloc(size);
     if (!at) return noHost(NO_RECOVERY);
     mem.memset(at, 0, size);
-    mem.write(at + size - text.length, text); stp(at, at + size - text.length);
-    stp(at + HOSTENT.aliases, at + HOSTENT.size);
-    mem.st32(at + HOSTENT.type, familyOf(addresses[0])); mem.st32(at + HOSTENT.length, length);
-    stp(at + HOSTENT.list, at + list);
+    mem.write(at + size - text.length, text);
+    Hostent.write(at, { name: at + size - text.length, aliases: at + Hostent.size(), type: familyOf(addresses[0]), length, list: at + list });
     addresses.forEach((address, i) => { stp(at + list + 4 * i, at + bytes + length * i); mem.write(at + bytes + length * i, address); });
     return at;
   };
