@@ -23,15 +23,21 @@ try {
   writeFileSync(join(temporary, "Caddyfile"), `${new URL(output.backendOrigin).hostname} {\n  reverse_proxy 127.0.0.1:8787\n}\n`);
   ssh("sudo cloud-init status --wait");
   execFileSync("scp", [...options, "dist-backend/server.mjs", join(temporary, "webdroid.env"), join(temporary, "Caddyfile"), `${target}:/home/ubuntu/`], { stdio: "inherit" });
-  ssh("sudo install -m 644 /home/ubuntu/webdroid.env /etc/webdroid.env && sudo install -m 644 /home/ubuntu/Caddyfile /etc/caddy/Caddyfile && sudo /usr/local/bin/node --check /home/ubuntu/server.mjs && sudo install -o webdroid -g webdroid -m 644 /home/ubuntu/server.mjs /opt/webdroid/server.mjs.next && sudo mv /opt/webdroid/server.mjs.next /opt/webdroid/server.mjs && sudo systemctl enable caddy && sudo systemctl restart webdroid caddy && rm /home/ubuntu/server.mjs /home/ubuntu/webdroid.env /home/ubuntu/Caddyfile");
+  ssh([
+    "sudo install -m 644 /home/ubuntu/webdroid.env /etc/webdroid.env",
+    "sudo install -m 644 /home/ubuntu/Caddyfile /etc/caddy/Caddyfile",
+    "sudo /usr/local/bin/node --check /home/ubuntu/server.mjs",
+    "sudo install -o webdroid -g webdroid -m 644 /home/ubuntu/server.mjs /opt/webdroid/server.mjs.next",
+    "sudo mv /opt/webdroid/server.mjs.next /opt/webdroid/server.mjs",
+    "sudo systemctl enable caddy",
+    "sudo systemctl restart webdroid caddy",
+    "rm /home/ubuntu/server.mjs /home/ubuntu/webdroid.env /home/ubuntu/Caddyfile",
+  ].join(" && "));
   let healthy = false;
-  for (const deadline = Date.now() + 60_000; Date.now() < deadline;) {
-    healthy = await fetch(`${output.backendOrigin}/health`, { signal: AbortSignal.timeout(5000) }).then(async r => {
-      const result = await r.json();
-      return r.ok && result.status === "ok";
-    }, () => false).catch(() => false);
-    if (healthy) break;
-    await new Promise(resolve => setTimeout(resolve, 2000));
+  for (const deadline = Date.now() + 60_000; !healthy && Date.now() < deadline;) {
+    healthy = await fetch(`${output.backendOrigin}/health`, { signal: AbortSignal.timeout(5000) })
+      .then(async r => r.ok && (await r.json()).status === "ok").catch(() => false);
+    if (!healthy) await new Promise(resolve => setTimeout(resolve, 2000));
   }
   if (!healthy) throw new Error("Backend HTTPS health check failed; inspect systemctl status webdroid caddy");
   console.log(`Backend deployed: ${output.backendOrigin}`);
