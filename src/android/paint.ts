@@ -249,6 +249,8 @@ function setLocales(p: NativePaint, id: number) {
 // ── natives
 export const paintAt = (h: bigint) => deref<NativePaint>(h);
 const flag = (bit: number) => (h: bigint, v: number) => paintAt(h).setFlag(bit, !!v);
+const get = <K extends keyof NativePaint>(key: K) => (h: bigint) => paintAt(h)[key];
+const set = <K extends keyof NativePaint>(key: K) => (h: bigint, v: NativePaint[K]) => { paintAt(h)[key] = v; };
 /** the SkFont flags MinikinPaint compares: anti-aliasing, fake bold, linear metrics and subpixel positioning */
 const FONT_FLAGS = AA | FAKE_BOLD_TEXT | LINEAR | SUBPIXEL;
 /** a run's direction under Paint's bidi flags: BIDI_RTL and BIDI_FORCE_RTL, or the default
@@ -278,23 +280,19 @@ rt.registerJnis(PAINT, {
   "nReset(J)V": (h: bigint) => { const p = paintAt(h), fresh = new NativePaint(); copyTextState(p, fresh); copyPaint(fresh, p); },
   "nSet(JJ)V": (h: bigint, src: bigint) => copyPaint(paintAt(src), paintAt(h)),
 
-  "nSetColor(JI)V": (h: bigint, c: number) => { paintAt(h).color = c; },
+  "nSetColor(JI)V": set("color"),
   "nSetColor(JJJ)V": (h: bigint, cs: bigint, c: bigint) => { paintAt(h).color = colorLongAt(c, cs); },
   "nSetAlpha(JI)V": (h: bigint, a: number) => paintAt(h).setAlpha(a),
-  "nSetStyle(JI)V": (h: bigint, v: number) => { paintAt(h).style = v; },
-  "nGetStyle(J)I": (h: bigint) => paintAt(h).style,
+  "nSetStyle(JI)V": set("style"), "nGetStyle(J)I": get("style"),
   // SkPaint ignores a negative width or miter
-  "nSetStrokeWidth(JF)V": (h: bigint, w: number) => { if (w >= 0) paintAt(h).strokeWidth = w; },
-  "nGetStrokeWidth(J)F": (h: bigint) => paintAt(h).strokeWidth,
-  "nSetStrokeMiter(JF)V": (h: bigint, m: number) => { if (m >= 0) paintAt(h).strokeMiter = m; },
-  "nGetStrokeMiter(J)F": (h: bigint) => paintAt(h).strokeMiter,
+  "nSetStrokeWidth(JF)V": (h: bigint, w: number) => { if (w >= 0) paintAt(h).strokeWidth = w; }, "nGetStrokeWidth(J)F": get("strokeWidth"),
+  "nSetStrokeMiter(JF)V": (h: bigint, m: number) => { if (m >= 0) paintAt(h).strokeMiter = m; }, "nGetStrokeMiter(J)F": get("strokeMiter"),
   "nSetStrokeCap(JI)V": (h: bigint, v: number) => { paintAt(h).strokeCapN = CAPS[v] ?? "butt"; },
   "nGetStrokeCap(J)I": (h: bigint) => Math.max(0, CAPS.indexOf(paintAt(h).strokeCapN)),
   "nSetStrokeJoin(JI)V": (h: bigint, v: number) => { paintAt(h).strokeJoinN = JOINS[v] ?? "miter"; },
   "nGetStrokeJoin(J)I": (h: bigint) => Math.max(0, JOINS.indexOf(paintAt(h).strokeJoinN)),
 
-  "nSetFlags(JI)V": (h: bigint, f: number) => { paintAt(h).flags = f & FLAG_MASK; },
-  "nGetFlags(J)I": (h: bigint) => paintAt(h).flags,
+  "nSetFlags(JI)V": (h: bigint, f: number) => { paintAt(h).flags = f & FLAG_MASK; }, "nGetFlags(J)I": get("flags"),
   "nSetAntiAlias(JZ)V": flag(AA),
   "nSetFilterBitmap(JZ)V": flag(2),
   "nSetDither(JZ)V": flag(4),
@@ -303,8 +301,7 @@ rt.registerJnis(PAINT, {
   "nSetFakeBoldText(JZ)V": flag(FAKE_BOLD_TEXT),
   "nSetLinearText(JZ)V": flag(LINEAR),
   "nSetSubpixelText(JZ)V": flag(SUBPIXEL),
-  "nSetHinting(JI)V": (h: bigint, mode: number) => { paintAt(h).hinting = mode ? 1 : 0; },
-  "nGetHinting(J)I": (h: bigint) => paintAt(h).hinting,
+  "nSetHinting(JI)V": (h: bigint, mode: number) => { paintAt(h).hinting = mode ? 1 : 0; }, "nGetHinting(J)I": get("hinting"),
 
   // each effect setter answers the handle it was given, which Paint keeps
   "nSetShader(JJ)J": (h: bigint, sh: bigint) => { paintAt(h).shader = sh ? deref<NativeShader>(sh) : null; return sh; },
@@ -322,27 +319,18 @@ rt.registerJnis(PAINT, {
   "nHasShadowLayer(J)Z": (h: bigint) => +(paintAt(h).shadowRadius > 0),
 
   "nSetTypeface(JJ)V": (h: bigint, t: bigint) => { paintAt(h).tf = t ? deref<NativeTypeface>(t) : null; },
-  "nSetTextSize(JF)V": (h: bigint, v: number) => { if (v >= 0) paintAt(h).textSize = v; },
-  "nGetTextSize(J)F": (h: bigint) => paintAt(h).textSize,
-  "nSetTextScaleX(JF)V": (h: bigint, v: number) => { paintAt(h).textScaleX = v; },
-  "nGetTextScaleX(J)F": (h: bigint) => paintAt(h).textScaleX,
-  "nSetTextSkewX(JF)V": (h: bigint, v: number) => { paintAt(h).textSkewX = v; },
-  "nGetTextSkewX(J)F": (h: bigint) => paintAt(h).textSkewX,
-  "nSetTextAlign(JI)V": (h: bigint, v: number) => { paintAt(h).textAlignN = v; },
-  "nGetTextAlign(J)I": (h: bigint) => paintAt(h).textAlignN,
-  "nSetLetterSpacing(JF)V": (h: bigint, v: number) => { paintAt(h).letterSpacingEm = v; },
-  "nGetLetterSpacing(J)F": (h: bigint) => paintAt(h).letterSpacingEm,
-  "nSetWordSpacing(JF)V": (h: bigint, v: number) => { paintAt(h).wordSpacing = v; },
-  "nGetWordSpacing(J)F": (h: bigint) => paintAt(h).wordSpacing,
+  "nSetTextSize(JF)V": (h: bigint, v: number) => { if (v >= 0) paintAt(h).textSize = v; }, "nGetTextSize(J)F": get("textSize"),
+  "nSetTextScaleX(JF)V": set("textScaleX"), "nGetTextScaleX(J)F": get("textScaleX"),
+  "nSetTextSkewX(JF)V": set("textSkewX"), "nGetTextSkewX(J)F": get("textSkewX"),
+  "nSetTextAlign(JI)V": set("textAlignN"), "nGetTextAlign(J)I": get("textAlignN"),
+  "nSetLetterSpacing(JF)V": set("letterSpacingEm"), "nGetLetterSpacing(J)F": get("letterSpacingEm"),
+  "nSetWordSpacing(JF)V": set("wordSpacing"), "nGetWordSpacing(J)F": get("wordSpacing"),
   "nSetFontFeatureSettings(JLjava/lang/String;)V": (h: bigint, v: string | null) => { paintAt(h).fontFeatureSettings = v || null; },
   "nSetTextLocales(JLjava/lang/String;)I": (h: bigint, tags: string) => { const id = localeListId(tags); setLocales(paintAt(h), id); return id; },
   "nSetTextLocalesByMinikinLocaleListId(JI)V": (h: bigint, id: number) => setLocales(paintAt(h), id),
-  "nSetElegantTextHeight(JI)V": (h: bigint, v: number) => { paintAt(h).elegant = v; },
-  "nGetElegantTextHeight(J)I": (h: bigint) => paintAt(h).elegant,
-  "nSetStartHyphenEdit(JI)V": (h: bigint, v: number) => { paintAt(h).startHyphenEdit = v; },
-  "nGetStartHyphenEdit(J)I": (h: bigint) => paintAt(h).startHyphenEdit,
-  "nSetEndHyphenEdit(JI)V": (h: bigint, v: number) => { paintAt(h).endHyphenEdit = v; },
-  "nGetEndHyphenEdit(J)I": (h: bigint) => paintAt(h).endHyphenEdit,
+  "nSetElegantTextHeight(JI)V": set("elegant"), "nGetElegantTextHeight(J)I": get("elegant"),
+  "nSetStartHyphenEdit(JI)V": set("startHyphenEdit"), "nGetStartHyphenEdit(J)I": get("startHyphenEdit"),
+  "nSetEndHyphenEdit(JI)V": set("endHyphenEdit"), "nGetEndHyphenEdit(J)I": get("endHyphenEdit"),
 
   "nAscent(J)F": (h: bigint) => fontAscent(paintAt(h)),
   "nDescent(J)F": (h: bigint) => fontDescent(paintAt(h)),
