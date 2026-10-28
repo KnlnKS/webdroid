@@ -2,6 +2,7 @@
 import { createServer } from "node:http";
 import { respond } from "../scripts/serve.ts";
 import { sharedRoute } from "../src/shell/serve-routes.ts";
+import { hold } from "../src/shell/pages-hop.ts";
 import { publicNetwork } from "./network.ts";
 import { attachSockets, backendHost } from "./server.ts";
 
@@ -16,11 +17,11 @@ function isApp(origin: string): boolean {
 }
 const host = backendHost({ network: publicNetwork, webviewOrigin: () => renderer.origin, isApp });
 // behind the TLS proxy, a request arrives as plain HTTP for the renderer's origin
-const server = createServer((req, res) => void respond(req, res, request => {
+const server = createServer((req, res) => void respond(req, res, async request => {
   const url = new URL(request.url);
   if (url.pathname === "/health") return Response.json({ status: "ok" });
   const route = sharedRoute(url, host);
-  return route ? route(request) : url.pathname === "/" ? Response.redirect(app.origin, 308) : new Response("not found", { status: 404 });
+  return route ? hold(request, await route(request)) : url.pathname === "/" ? Response.redirect(app.origin, 308) : new Response("not found", { status: 404 });
 }, renderer.protocol));
 const sockets = attachSockets(server, host);
 server.listen(Number(process.env.PORT ?? 8787), process.env.HOST ?? "127.0.0.1", () => console.log(`Backend listening on ${JSON.stringify(server.address())}`));
