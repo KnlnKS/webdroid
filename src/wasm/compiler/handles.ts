@@ -46,18 +46,11 @@ export function emitMethodType(cx: Compiler, c: Code, ret: string, params: strin
   cx.callNamed(c, MT, "methodType", `(L${CLASS};[L${CLASS};)L${MT};`);
 }
 
-export function emitTypeConstant(mc: MC, index: number): void {
-  if (emitTypeValue(mc.cx, mc.code, mc.dex, index)) mc.set("L");
-}
 export function emitTypeValue(cx: Compiler, c: Code, dex: DexFile, index: number): boolean {
   const p = dex.proto(index), types = cx.prog.typesOf(dex);
   return emitType(cx, c, types.type(p.ret), p.params.map(t => types.type(t)));
 }
 
-/** const-method-handle uses the referring loader, member access checks and ART's direct handle kinds. */
-export function emitHandleConstant(mc: MC, index: number): void {
-  if (emitHandleValue(mc.cx, mc.code, mc.m, index)) mc.set("L");
-}
 type HandleMember = { field: FieldInfo } | { method: MethodInfo; cls: string; invoke: Invoke };
 type HandleFailure = LinkFailure | { errorClass: string; message: string };
 
@@ -90,6 +83,7 @@ export function resolveHandleMember(prog: Program, referrer: MethodInfo, index: 
   return { method: m, cls, invoke };
 }
 
+/** const-method-handle uses the referring loader, member access checks and ART's direct handle kinds. */
 export function emitHandleValue(cx: Compiler, c: Code, referrer: MethodInfo, index: number): boolean {
   const dex = referrer.dex, prog = cx.prog, h = dex.methodHandle(index), K = handleKinds(prog);
   const member = resolveHandleMember(prog, referrer, index);

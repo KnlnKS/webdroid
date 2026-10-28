@@ -38,15 +38,15 @@ export function compileSymbolicSite(w: LinkEnv, m: MethodInfo, ins: PreparedInst
     const mc = new SymbolicMC(cx, m, inputs); mc.root = mc.code = c;
     mc.tmpL = c.newLocal(T.anyref);
     if (output !== "V") mc.outputLocal = c.newLocal(kindVT(output));
-    const entry = c.newLocal(T.i32), thrown = c.newLocal(T.anyref), weights = cx.emitEnter(c, entry);
+    const entry = c.newLocal(T.i32), thrown = c.newLocal(T.anyref), weight = cx.emitEnter(c, entry);
     c.block().block(T.anyref).tryTable(null, [[0, cx.tag, 0]]);
     mc.emit(ins);
-    cx.emitLeave(c, entry, false); c.br(2);
+    cx.emitLeave(c, entry); c.br(2);
     c.end().unreachable().end();
-    c.lset(thrown); cx.emitLeave(c, entry, false); c.lget(thrown).throw_(cx.tag);
+    c.lset(thrown); cx.emitLeave(c, entry); c.lget(thrown).throw_(cx.tag);
     c.end();
     if (output !== "V") c.lget(mc.outputLocal);
-    for (const at of weights) c.patch(at, 4 + c.nparams + c.localTypes.length);
+    c.patch(weight, 4 + c.nparams + c.localTypes.length);
   }, output);
   return { cx, built };
 }

@@ -236,11 +236,9 @@ export class Outliner {
       c.lget(this.stateLocal).refIsNull().if_().gc(1, this.stateType).lset(this.stateLocal).end();
       this.saveState(c, ch.locals);
       // Charge the dispatcher and chunk only while their native frames are active.
-      const weights = cx.emitEnter(c, ch.entry);
-      const size = ch.code.localTypes.length;
-      for (const at of weights) c.patch(at, 12 + size);
+      c.patch(cx.emitEnter(c, ch.entry), 12 + ch.code.localTypes.length);
       c.lget(this.stateLocal).refAsNonNull().call(ch.dispatch).lset(this.controlLocal);
-      cx.emitLeave(c, ch.entry, false);
+      cx.emitLeave(c, ch.entry);
       this.loadState(c, ch.locals);
     });
     c.lget(this.controlLocal).i32(ChunkStatus.Again).raw(OP.i32_eq).brIf(0);

@@ -432,17 +432,17 @@ export class Compiler implements Base {
     return n;
   }
   /** a method that calls something counts its frame (exc.ts MAX_DEPTH): `entry` takes the depth before it, which is restored on return and at a handler */
-  emitEnter(c: Code, entry: number): number[] {
+  emitEnter(c: Code, entry: number): number {
     const weight = c.i32Patched();
     c.call(this.defineFn("enter", [T.i32], [T.i32], (b) => {
       const g = this.global("rt", "depth", T.i32, true), depth = b.newLocal(T.i32);
       b.gget(g).ltee(depth).i32(MAX_DEPTH).raw(OP.i32_ge_s).if_(); this.callThrower(b, "soe"); b.end();
       b.lget(depth).lget(0).raw(OP.i32_add).gset(g).lget(depth);
     }, true)).lset(entry);
-    return [weight];
+    return weight;
   }
   /** sets the depth to what it was before the frame (`frame` false) or with the frame counted (the weight, patched in at the end of the method) */
-  emitLeave(c: Code, entry: number, frame: boolean): number[] {
+  emitLeave(c: Code, entry: number, frame = false): number[] {
     c.lget(entry);
     const weight = frame ? [c.i32Patched()] : [];
     if (frame) c.raw(OP.i32_add);

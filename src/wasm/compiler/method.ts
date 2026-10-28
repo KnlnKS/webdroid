@@ -11,7 +11,7 @@ import type { DexTypes } from "../../jvm/dex.ts";
 import { argRegisters, ifTarget, switchCases, type PreparedInstruction as Ins, type PreparedMethod } from "../../jvm/prepared.ts";
 import { type Flow, Go, structureAny } from "./structure.ts";
 import { emitPolymorphic } from "./poly.ts";
-import { emitCustom, emitHandleConstant, emitTypeConstant } from "./handles.ts";
+import { emitCustom, emitHandleValue, emitTypeValue } from "./handles.ts";
 import { bindInvoke, failed, invokeSite, resolveFieldRef, typeFailure, type InvokeSite, type LinkFailure } from "./linkage.ts";
 import { MethodFacts, cloneFacts, newFacts, shadowKey, type Facts } from "./facts.ts";
 import { isStackOverflow } from "./exc.ts";
@@ -205,7 +205,7 @@ export class MC {
   /** the method's frame, counter and regions */
   private emitMethod(): void {
     const { m, cx, code: c, prepared, typing, flow } = this;
-    if (this.frame.whole) this.weights.push(...cx.emitEnter(c, this.entryDepth = c.newLocal(T.i32)));
+    if (this.frame.whole) this.weights.push(cx.emitEnter(c, this.entryDepth = c.newLocal(T.i32)));
     // a deferred loop's iterations count toward the method's budget when it returns
     if (this.loops?.deferred) this.fuelLocal = c.newLocal(T.i32);
     if (cx.counting) {
@@ -248,7 +248,7 @@ export class MC {
   fuel(tick?: () => void) { this.cx.emitFuel(this.code, this.fuelLocal >= 0 ? this.fuelLocal : (this.fuelLocal = this.code.newLocal(T.i32)), tick); }
   /** where the frame's weight (exc.ts MAX_DEPTH) goes in the code, known once the locals are */
   private weights: number[] = [];
-  private leave() { if (this.entryDepth >= 0) this.cx.emitLeave(this.code, this.entryDepth, false); }
+  private leave() { if (this.entryDepth >= 0) this.cx.emitLeave(this.code, this.entryDepth); }
   /** gives the frame the weight of its parameters and locals */
   weigh(): Code {
     const types = [...(this.m.isStatic ? [] : [T.anyref]), ...this.m.params.map((p) => kindVT(kindOf(p))), ...this.root.localTypes];
@@ -261,8 +261,8 @@ export class MC {
   }
   /** how the method counts its frame (depth.ts) */
   private frame: DepthPlan = WHOLE_FRAME;
-  private enterSite() { this.weights.push(...this.cx.emitEnter(this.code, this.scratchLocal("site", T.i32))); }
-  private leaveSite() { this.cx.emitLeave(this.code, this.scratchLocal("site", T.i32), false); }
+  private enterSite() { this.weights.push(this.cx.emitEnter(this.code, this.scratchLocal("site", T.i32))); }
+  private leaveSite() { this.cx.emitLeave(this.code, this.scratchLocal("site", T.i32)); }
   private scratchLocals = new Map<string, number>();
   /** the local made on first use under `key`, for a value that one instruction's translation keeps */
   scratchLocal(key: string, vt: VT): number {
@@ -505,8 +505,8 @@ export class MC {
       case Family.Sget: case Family.Sput: return this.emitStatic(ins);
       case Family.Invoke: return this.emitInvoke(ins);
       case Family.Unary: case Family.Binop: case Family.Binop2addr: case Family.BinopLit: return this.emitArith(ins);
-      case Family.ConstMethodHandle: emitHandleConstant(this, b); return;
-      case Family.ConstMethodType: emitTypeConstant(this, b); return;
+      case Family.ConstMethodHandle: if (emitHandleValue(this.cx, this.code, this.m, b)) this.set("L"); return;
+      case Family.ConstMethodType: if (emitTypeValue(this.cx, this.code, this.dex, b)) this.set("L"); return;
     }
     throw new Error(`no translation of ${ins.name} at ${ins.pc}`);
   }
