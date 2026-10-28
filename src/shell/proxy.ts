@@ -34,8 +34,9 @@ export interface ProxyOptions {
 
 /** The class of an upstream fetch failure, so the Java side can throw what a socket would. */
 function failureKind(error: unknown): string {
-  const e = error as { code?: string; name?: string };
-  const tag = `${e?.code ?? ""} ${e?.name ?? ""} ${error}`;
+  // Node's fetch fails as "fetch failed", with what failed as its cause
+  const e = ((error as { cause?: unknown })?.cause ?? error) as { code?: string; name?: string };
+  const tag = `${e?.code ?? ""} ${e?.name ?? ""} ${e}`;
   if (/ENOTFOUND|EAI_|getaddrinfo|DNS/i.test(tag)) return "host";
   if (/Refused|ECONNREFUSED/i.test(tag)) return "refused";
   if (/Timeout|ETIMEDOUT/i.test(tag)) return "timeout";
