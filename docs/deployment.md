@@ -1,38 +1,159 @@
 # Deployment
 
-`pnpm dev` serves the page and its backend on one origin and lists `apks/`. `pnpm build:prod` creates `dist/`, the shell page for Cloudflare Pages; it ships no APKs, so users pick packages in the browser (read from `File` objects, WebView assets served by `webview-worker.js`).
+The frontend and every platform asset stay on **Cloudflare Pages**. The HTTP proxy, DNS,
+TCP/UDP WebSocket relays and WebView callback bridge run in **Node 24 on Oracle Always Free
+compute**. `infra/` provisions the network, VM and Pages configuration with TypeScript and
+Pulumi. Wrangler is used only to compile/upload Pages Functions, never to run a server.
 
-- **Frontend, Cloudflare Pages** (`wrangler.jsonc`, project `webdroid`): static `dist/` plus one Function (`functions/[[path]].ts`) for the paths in `dist/_routes.json`. It answers platform files in byte ranges, inflates microg downloads and forwards the backend routes (`/proxy`, `/dns`, `/dns-query`, `/tcp`, `/webview-socket`, `/webview-origin`) on the page's origin.
-- **Backend, Worker `webdroid-backend`** (`worker/wrangler.jsonc`, passed with `-c`): HTTP proxy, DNS, TCP WebSocket relay and the WebView callback bridge, whose Durable Object holds one session per WebView session ID. It is also the WebView renderer's origin. No user package reaches it.
+## Local development and checks
 
-Backend calls stay same-origin, so they need no CORS preflight. Production forwards through the `BACKEND` service binding. A binding cannot select a branch preview, so previews forward by `BACKEND_ORIGIN` to `https://<alias>-webdroid-backend.kunalan-k-subagaran.workers.dev`, the alias Pages gives the branch. A deployment's unique hash host does not name its branch, so `scripts/deploy.ts` writes the alias into each preview as `preview-alias.txt`.
+`pnpm dev` serves the frontend, local assets and the shared Node backend. It can reach the
+developer's network; the production backend checks resolved addresses and refuses private
+networks, including cloud metadata. Both use the same socket relays and WebView bridge.
 
-## Build and check
-
-With Node 24 (`.node-version`), pnpm and Zig 0.16:
-
-```bash
+```sh
 pnpm install
 pnpm typecheck
+pnpm test tests/backend.test.ts
 pnpm deploy:check
+pnpm check
 ```
 
-`deploy:check` dry-runs the Worker deploy and compiles the Function. The production build requires `vendor/aosp` (`pnpm gen-framework`). Cloudflare's asset serving ignores `Range`, so platform files and certificates pass through the Function, which serves ranges from the sizes in `asset-sizes.json` and streams files over the 25 MiB asset limit from parts. A platform build in `vendor/wasm-aot` (`pnpm aot`) is copied to `aot/` with immutable caching; one built from other sources fails the build.
+`pnpm backend:dev` starts only the production backend on loopback port 8787. Set `APP_ORIGIN`
+and `WEBVIEW_ORIGIN` to the frontend and renderer origins. `pnpm backend:build` produces the
+standalone `dist-backend/server.mjs`; no APK, platform binary or user state goes to the VM.
 
-Locally, run `pnpm worker:dev` beside `pnpm pages:dev`. Plain `wrangler dev` ignores ranges, which stalls the page's chunked reads.
+## Free-tier constraints
 
-## Deploying
+The default `arm` profile uses one `VM.Standard.A1.Flex` instance, **1 OCPU, 6 GB RAM, 50 GB boot disk**, and
+an Ubuntu platform image. If ARM capacity is unavailable, `pulumi -C infra config set compute micro`
+selects the other Always Free shape, `VM.Standard.E2.1.Micro` (1/8 OCPU, 1 GB RAM, 50 GB disk).
+These are the only accepted profiles; micro allocation is also checked against its two-instance
+free limit. The micro profile has less CPU headroom for concurrent WebView script rewriting.
+The program verifies the tenancy's home region and inventories instances,
+boot volumes and block volumes across every active compartment before creating resources.
+It refuses allocations exceeding **2 OCPUs / 12 GB RAM / 200 GB combined disk**. Failure to
+read inventory aborts deployment. Replacement requires explicitly removing Pulumi protection,
+then deletes the old VM before creating its replacement; its boot disk is not preserved.
+There is no paid-shape fallback when ARM capacity is unavailable.
 
-`pnpm build:prod && pnpm release` deploys one build (`scripts/deploy.ts`; branch from `WORKERS_CI_BRANCH` or Git). On `main` it deploys the Worker, then Pages production. On other branches it deploys a Pages preview, then a Worker preview named by that alias with `PREVIEW_ALIAS` set. Pages checks the `BACKEND` binding on publish, so `webdroid-backend` must be deployed once before the first branch build.
+These are the [current Oracle Always Free limits](https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm),
+checked 2026-10-28. The older 4-OCPU/24-GB allowance must not be assumed. Keep the account
+unupgraded: trial credit is not a reason to create paid resources. The stack creates no load
+balancer, NAT gateway, reserved IP, backup, paid image or paid logging service.
 
-Workers Builds connects `webdroid-backend` (its name must match `worker/wrangler.jsonc`, or previews land on the connected Worker) to `KnlnKS/webdroid`: build `sh scripts/build-cloudflare.sh`, deploy and preview command `pnpm release`, and variables `PNPM_VERSION=11.0.8`, `WEBDROID_AOSP_URL` and `WEBDROID_AOSP_SHA256` for both production and preview. Its API token needs Workers Scripts and Cloudflare Pages edit. A `GITHUB_TOKEN` secret (fine-grained, this repository, Deployments read and write) lets a branch build report its Pages preview as a GitHub deployment, which links it on the branch's PRs. The Pages project is direct-upload with no Git integration (`pnpm exec wrangler pages project create webdroid --production-branch main`), so page and backend come from one commit.
+The VM's egress is paced at **20 Mbit/s** by Linux `tc`, less than 7 TB even when saturated
+for 31 days, below the 10-TB monthly free allowance. This limits proxy throughput; static
+frontend downloads bypass OCI entirely. Other resources share the tenancy's free allowances.
+The inventory check is not an account-wide spending lock and cannot prevent concurrent or
+out-of-band provisioning or changes to Oracle's pricing. Do not run concurrent applies or
+add other paid workloads. Oracle may reclaim idle Always Free instances.
 
-The build script fetches pinned Zig 0.16.0 and the `vendor/aosp` archive, which a build machine cannot generate: `WEBDROID_AOSP_URL` names `tar -C vendor -czhf aosp.tar.gz aosp` and `WEBDROID_AOSP_SHA256` pins it. Generated assets stay out of Git.
+## Provision
 
-## Sites and configuration
+Install the [Pulumi CLI](https://www.pulumi.com/docs/install/) and configure an OCI API signing
+key in `~/.oci/config`. Keep all private keys out of the repository. Use a Cloudflare API token
+with Account/Pages edit permission and the appropriate account scope in `CLOUDFLARE_API_TOKEN`.
 
-WebView runs on a separate site so loaded pages cannot reach the app's window and storage and synchronous JavaScript interface calls cannot block its event loop. The app is on `webdroid.pages.dev`, the renderer on `webdroid-backend.kunalan-k-subagaran.workers.dev`; both suffixes are public, so these are separate sites. Two hosts under one `workers.dev` account subdomain are same-site in Chromium and can deadlock, so the renderer needs a different registrable domain. `WEBVIEW_ORIGIN` and `APP_ORIGIN` name the two origins; in the preview `WEBVIEW_ORIGIN` `*` stands for the alias. A `*` label in a production `WEBVIEW_ORIGIN` (wildcard DNS and route) gives each app install its own renderer storage. Development uses `*.localhost`. `/webview-origin` returns 503 when the origins match.
+```sh
+pulumi login --local
+pulumi -C infra stack init oci
+pulumi -C infra config set oci:tenancyOcid <tenancy-ocid>
+pulumi -C infra config set oci:region <home-region>
+pulumi -C infra config set cloudflareAccountId <account-id>
+pulumi -C infra config set sshPublicKeyPath /absolute/path/to/key.pub
+pulumi -C infra config set sshCidr <your-public-ip>/32
+```
 
-The Worker accepts relay and bridge WebSockets only from `APP_ORIGIN` and its deployments' hosts (`*.webdroid.pages.dev`) and redirects `/` to the app. The public proxy and relay reach whatever loaded apps request, so add rate limits and access policy before exposing them.
+An existing Pages project must be imported once, preserving its identity:
 
-Cloudflare sockets expose no ALPN selection or reliable local endpoint, so TLS sockets use default negotiation and the relay sends the legacy `ok` frame. Verify networking on the deployed site; local Wrangler differs from the edge.
+```sh
+pulumi -C infra import cloudflare:index/pagesProject:PagesProject frontend <account-id>/webdroid --generate-code=false
+pulumi -C infra preview
+pulumi -C infra up --target 'urn:pulumi:oci::webdroid::oci:**'
+```
+
+The targeted first apply provisions OCI without changing Pages. Substitute the stack name for
+`oci` in the URN if using another stack. Deploy and verify the backend before a full apply points
+Pages at it. For a new project, omit the import. `pagesProject` defaults to `webdroid`; `compartmentId`
+defaults to the tenancy root. `availabilityDomain` can select another domain in the home region
+when free ARM capacity is unavailable. Pulumi state and stack configuration are ignored by
+Git; back up the state and its encryption passphrase separately. An unavailable free shape
+is a deployment blocker, not permission to upgrade or choose paid compute.
+
+The VM uses an ephemeral public IP and the free hostname `webdroid.<ip>.sslip.io`. Caddy obtains
+and renews its free TLS certificate. A replacement VM changes the hostname; reapply and
+redeploy both components. DNS and certificate issuance depend on sslip.io and the certificate
+authority. SSH is restricted to the configured IPv4 /32; Node listens only on loopback behind
+Caddy. The instance has no OCI instance-principal policy.
+
+## Release
+
+```sh
+export WEBDROID_SSH_KEY=/absolute/path/to/private-key
+pnpm backend:deploy
+pulumi -C infra up
+pnpm build:prod
+pnpm release
+```
+
+`backend:deploy` waits for cloud-init, installs the bundle and configuration over SSH, restarts
+Node/Caddy, and checks HTTPS health. SSH trusts a previously unseen host key on first use and
+rejects changes thereafter. Verify its fingerprint through the OCI console for a first deployment.
+`PULUMI_BIN` can name a CLI outside `PATH`. Backend updates restart live sockets and bridge
+sessions; reload active apps after an update. The VM holds no durable application state.
+
+Verify the preview, then use `CF_PAGES_BRANCH=main pnpm release` to publish the same build to production.
+`release` uploads only the frontend to Pages. `main` publishes production; other branches
+publish previews. `CF_PAGES_BRANCH` overrides the Git branch; `CLOUDFLARE_PAGES_PROJECT` overrides the project name.
+There is no Wrangler config file: a file with empty bindings would override Pulumi's Pages variables on upload. Both environments point to the
+same OCI backend, configured by Pulumi's `BACKEND_ORIGIN` variable. Previews therefore test
+against the deployed backend version; this stack does not allocate a VM for each branch.
+Optional `GITHUB_TOKEN` and `GITHUB_SHA` report preview deployments to GitHub.
+
+The build requires Node 24, pnpm, Zig 0.16 and `vendor/aosp` from `pnpm gen-framework`.
+`scripts/build-cloudflare.sh` can build in CI using a pinned AOSP archive supplied through
+`WEBDROID_AOSP_URL` and `WEBDROID_AOSP_SHA256`. There is no Workers Builds runtime or backend
+preview dependency. Backend releases use SSH; frontend releases use Pages direct uploads.
+This setup has no automatic Git-triggered deployment.
+
+## Assets, origins and transport
+
+Pages serves `dist/`, including fonts, Wasm, reference framework files and optional AOT builds.
+Its small Function answers byte ranges, streams files larger than the 25-MiB asset limit from
+parts, serves gzip-encoded microG packages, and forwards the backend routes without buffering
+their bodies. `/udp` and `/tcp` upgrade to WebSockets; the VM opens the actual outbound UDP/TCP
+sockets. No public UDP listener or inbound TCP port range is needed. TLS termination for Java
+sockets includes ALPN negotiation and reports the real local socket endpoint; native TLS
+stacks continue to send their own bytes unchanged.
+
+The app remains on `webdroid.pages.dev`; WebView runs on the separate sslip.io site so its
+pages cannot access the app's window/storage or deadlock synchronous JavaScript callbacks.
+The app's own networking remains same-origin through Pages. Browser socket requests must
+come from the app origin or its Pages preview hosts. Origin validation is browser isolation,
+not user authentication: non-browser clients can forge it. This remains a public outbound
+proxy with bounded egress, not a private access service.
+
+## Current installation (2026-10-28)
+
+Stack `oci` runs the micro profile in `us-sanjose-1`, because the ARM create request returned
+`Out of host capacity`. The backend is `https://webdroid.163.192.4.18.sslip.io`; the frontend remains
+`https://webdroid.pages.dev`. No subscription was upgraded and no paid resource was provisioned.
+The former `webdroid-backend` Worker was deleted after production verification. The older all-in-one
+`webdroid` Worker's public and preview endpoints are disabled; it is retained as an inactive archive.
+
+On the provisioning machine, the Pulumi CLI is `~/.pulumi/bin/pulumi`, its state is in
+`~/.local/share/webdroid/pulumi`, and its passphrase file is `~/.oci/webdroid-pulumi-passphrase`.
+The OCI API key is configured in `~/.oci/config`; the SSH key is `~/.ssh/webdroid-oci`.
+Use the same state backend rather than initializing a second stack:
+
+```sh
+export PATH="$HOME/.pulumi/bin:$PATH"
+export PULUMI_BACKEND_URL="file://$HOME/.local/share/webdroid/pulumi"
+export PULUMI_CONFIG_PASSPHRASE_FILE="$HOME/.oci/webdroid-pulumi-passphrase"
+export WEBDROID_SSH_KEY="$HOME/.ssh/webdroid-oci"
+```
+
+Cloudflare changes also require `CLOUDFLARE_API_TOKEN`. Back up state, the ignored stack configuration,
+passphrase and keys securely; none are committed. If the administrator's public IP changes,
+update `sshCidr` through Pulumi before deploying over SSH.

@@ -71,9 +71,13 @@ failure mechanisms, measurements and rejected experiments. Superseded plans and 
   and vgpu.sh's WebGPU prism draws through the Vulkan driver over WebGPU (with chrome://flags#enable-unsafe-webgpu, 10.6–11.3 presentations/s).
   Bloons TD 6 (2026-10-26, Unity 6 IL2CPP over Vulkan) downloads its 598 MB of assets, and its tutorial plays through round 3 at about 56 frames/s:
   towers are placed, upgraded and pop bloons; Google Play Games sign-in is cancelled at launch.
-- **Deployment:** one Workers Builds build deploys the page to Pages and the backend, which is also the isolated
-  WebView renderer's origin, to a Worker from `main`, and paired previews from other branches. Not yet deployed
-  from this layout. See [deployment.md](docs/deployment.md).
+- **Deployment:** the OCI migration replaces the backend Worker and Durable Object with one
+  Node backend on OCI Always Free compute, provisioned by TypeScript/Pulumi. Cloudflare Pages still
+  serves the frontend and every platform asset. TCP and UDP share the development server's relay;
+  Wrangler only compiles/uploads Pages Functions. The backend is deployed in `us-sanjose-1` on an
+  Always Free micro VM (1 GB RAM, 50 GB disk); ARM capacity was unavailable. HTTPS, TCP/TLS/ALPN,
+  UDP DNS and the WebView callback bridge pass through production Pages. Egress is capped at 20 Mbit/s.
+  See [deployment.md](docs/deployment.md).
 
 ## Gate state
 
@@ -108,6 +112,12 @@ tap passes (at most 76 ms); Mihon's launch again meets its live "New version ava
 After calls as host calls and per-site chaining (2026-10-27; history, "Calls as host calls, exits chained from their
 sites"): `pnpm check` passes in 104 s (Calculator M 0.65%, FitNotes 2.92%, Mihon 24.16% and 10.95%), with 2,228 native
 unit tests.
+
+After the OCI migration (2026-10-28; history, "OCI backend migration"): `pnpm check` passes in 97 s,
+7/7 flows and zero reported gaps (content 0.65%, 2.92%, 22.58% and 10.95%). Production FitNotes launches
+with complete page/app/microG diagnostics and no observed missing APIs, native requirements or errors.
+Live HTTP, TCP/TLS/ALPN, UDP DNS, callback routing and Cloudflare asset byte ranges pass; broader live APK
+network coverage and backend concurrency/load measurements remain untested.
 
 `pnpm check` (2026-10-24) runs the typecheck, three unit-test shards, each part of `wasm all` and the seven
 deterministic flows as one pool in 83–89 s on an M4 Pro beside other sessions' load (three runs); `--corpus` adds a
@@ -181,7 +191,7 @@ on both tiers (a notification-permission request and live content); do not raise
      still leave native locks held.
    - *Games:* Among Us completes a live online match through the dev server's relay at its own 30/s target; a cold Skeld
      start once exceeded the host's client-load wait, so map-load time (about 6.4 s cold) is the reliability margin,
-     and the deployed Worker has no UDP endpoint. FMOD stream decoding needs a device comparison with audio.
+     and the OCI backend now has a UDP endpoint (live application coverage pending). FMOD stream decoding needs a device comparison with audio.
      Subway Surfers reaches an active run; its background Firebase initialization still throws. Genshin Impact
      (outside the matrix) reaches the Geetest captcha, which needs the account owner; its data exceeds the app pane's
      4.7 GB quota.
