@@ -103,8 +103,9 @@ function drop(h: number, s: Surf): void {
 
 // ── the display
 let refs = 0;
-/** whether `dpy` is the display, initialized, as each call that takes one requires */
-export function ready(t: object, dpy: number): boolean {
+/** begins a call that takes a display (begin), answering whether `dpy` is the display, initialized, as such a call requires */
+export function enter(t: object, dpy: number): boolean {
+  begin(t);
   if (dpy !== DISPLAY) return fail(t, BAD_DISPLAY, false);
   return refs > 0 || fail(t, NOT_INITIALIZED, false);
 }
@@ -134,8 +135,7 @@ const STRINGS: Record<number, string> = { 0x3053: "webdroid", 0x3054: "1.5", 0x3
   0x3055: "EGL_ANDROID_get_native_client_buffer EGL_ANDROID_image_native_buffer EGL_ANDROID_native_fence_sync EGL_ANDROID_presentation_time EGL_KHR_create_context EGL_KHR_fence_sync "
     + "EGL_KHR_image_base EGL_KHR_surfaceless_context EGL_KHR_wait_sync" };
 export function queryString(t: object, dpy: number, n: number): string | null {
-  begin(t);
-  return ready(t, dpy) ? STRINGS[n] ?? fail(t, BAD_PARAMETER, null) : null;
+  return enter(t, dpy) ? STRINGS[n] ?? fail(t, BAD_PARAMETER, null) : null;
 }
 
 // ── configs: the attributes of EGL 1.5's table 3.1, 0x3020 (BUFFER_SIZE) to 0x3042 (CONFORMANT), then RECORDABLE_ANDROID and
@@ -159,11 +159,10 @@ const selects = (c: Attribs, want: Attribs): boolean => [...c].every(([k, have])
   const v = wanted(want, k);
   return v === DONT_CARE || IGNORED.has(k) || (AT_LEAST.has(k) ? have >= v : MASK.has(k) ? (have & v) === v : have === v);
 });
-export function getConfigs(t: object, dpy: number): number[] | null { begin(t); return ready(t, dpy) ? CONFIGS.map((c) => c.get(0x3028)!) : null; }
+export function getConfigs(t: object, dpy: number): number[] | null { return enter(t, dpy) ? CONFIGS.map((c) => c.get(0x3028)!) : null; }
 /** the configs `want` selects, in 3.4.1.2's order: more of the color bits it asks for, then the smaller buffer, then fewer samples */
 export function chooseConfig(t: object, dpy: number, want: Attribs): number[] | null {
-  begin(t);
-  if (!ready(t, dpy)) return null;
+  if (!enter(t, dpy)) return null;
   for (const k of want.keys()) if (!CONFIGS[0].has(k) && k !== MATCH_NATIVE_PIXMAP) return fail(t, BAD_ATTRIBUTE, null);
   const id = want.get(0x3028) ?? DONT_CARE;
   if (id !== DONT_CARE) return configOf(id) ? [id] : [];
@@ -172,8 +171,7 @@ export function chooseConfig(t: object, dpy: number, want: Attribs): number[] | 
   return CONFIGS.filter((c) => selects(c, want)).sort((a, b) => bits(b) - bits(a) || a.get(0x3020)! - b.get(0x3020)! || a.get(0x3031)! - b.get(0x3031)!).map((c) => c.get(0x3028)!);
 }
 export function getConfigAttrib(t: object, dpy: number, config: number, attr: number): number | null {
-  begin(t);
-  if (!ready(t, dpy)) return null;
+  if (!enter(t, dpy)) return null;
   const c = configOf(config);
   return !c ? fail(t, BAD_CONFIG, null) : c.get(attr) ?? fail(t, BAD_ATTRIBUTE, null);
 }
@@ -181,8 +179,7 @@ export function getConfigAttrib(t: object, dpy: number, config: number, attr: nu
 // ── contexts
 /** ES 1.0, 1.1, 2.0 and 3.0, as EGL_CONTEXT_CLIENT_VERSION (EGL_CONTEXT_MAJOR_VERSION) and EGL_CONTEXT_MINOR_VERSION ask */
 export function createContext(t: object, dpy: number, config: number, share: number, want: Attribs): number {
-  begin(t);
-  if (!ready(t, dpy)) return 0;
+  if (!enter(t, dpy)) return 0;
   if (!configOf(config)) return fail(t, BAD_CONFIG, 0);
   const shared = share ? contexts.get(share) : null, major = want.get(0x3098) ?? 1, minor = want.get(0x30fb) ?? 0;
   if (shared === undefined) return fail(t, BAD_CONTEXT, 0);
@@ -193,8 +190,7 @@ export function createContext(t: object, dpy: number, config: number, share: num
 }
 /** a context current somewhere stays current until released */
 export function destroyContext(t: object, dpy: number, h: number): boolean {
-  begin(t);
-  if (!ready(t, dpy)) return false;
+  if (!enter(t, dpy)) return false;
   const c = contexts.get(h);
   if (!c) return fail(t, BAD_CONTEXT, false);
   contexts.delete(h);
@@ -219,8 +215,7 @@ export function makeCurrent(t: object, dpy: number, draw: number, read: number, 
 }
 export function releaseThread(t: object): boolean { begin(t); EglContext.release(t); return true; }
 export function queryContext(t: object, dpy: number, h: number, attr: number): number | null {
-  begin(t);
-  if (!ready(t, dpy)) return null;
+  if (!enter(t, dpy)) return null;
   const c = contexts.get(h);
   if (!c) return fail(t, BAD_CONTEXT, null);
   switch (attr) {
@@ -243,14 +238,12 @@ export function getCurrentSurface(t: object, which: number): number {
 
 // ── surfaces
 export function createWindowSurface(t: object, dpy: number, config: number, window: GlSurface | null): number {
-  begin(t);
-  if (!ready(t, dpy)) return 0;
+  if (!enter(t, dpy)) return 0;
   if (!configOf(config)) return fail(t, BAD_CONFIG, 0);
   return window ? name(surfaces, window, { surface: window, config }) : fail(t, BAD_NATIVE_WINDOW, 0);
 }
 export function createPbufferSurface(t: object, dpy: number, config: number, want: Attribs): number {
-  begin(t);
-  if (!ready(t, dpy)) return 0;
+  if (!enter(t, dpy)) return 0;
   if (!configOf(config)) return fail(t, BAD_CONFIG, 0);
   const width = want.get(0x3057) ?? 0, height = want.get(0x3056) ?? 0;
   if (width < 0 || height < 0) return fail(t, BAD_PARAMETER, 0);
@@ -260,8 +253,7 @@ export function createPbufferSurface(t: object, dpy: number, config: number, wan
 }
 /** a surface current somewhere stays current until released */
 export function destroySurface(t: object, dpy: number, h: number): boolean {
-  begin(t);
-  if (!ready(t, dpy)) return false;
+  if (!enter(t, dpy)) return false;
   const s = surfaces.get(h);
   if (!s) return fail(t, BAD_SURFACE, false);
   drop(h, s);
@@ -269,12 +261,10 @@ export function destroySurface(t: object, dpy: number, h: number): boolean {
 }
 /** what no surface here supports: pixmaps and copies to them, binding as a texture, client buffers; `h` names the surface it is asked of */
 export function unsupported(t: object, dpy: number, error: number, h?: number): boolean {
-  begin(t);
-  return ready(t, dpy) && fail(t, h === undefined || surfaces.has(h) ? error : BAD_SURFACE, false);
+  return enter(t, dpy) && fail(t, h === undefined || surfaces.has(h) ? error : BAD_SURFACE, false);
 }
 export function querySurface(t: object, dpy: number, h: number, attr: number): number | null {
-  begin(t);
-  if (!ready(t, dpy)) return null;
+  if (!enter(t, dpy)) return null;
   const s = surfaces.get(h);
   if (!s) return fail(t, BAD_SURFACE, null);
   switch (attr) {
@@ -292,8 +282,7 @@ export function querySurface(t: object, dpy: number, h: number, attr: number): n
 }
 /** the attributes a surface can be set to are those it has: no preserved swaps, box resolves or mipmaps */
 export function surfaceAttrib(t: object, dpy: number, h: number, attr: number, value: number): boolean {
-  begin(t);
-  if (!ready(t, dpy)) return false;
+  if (!enter(t, dpy)) return false;
   if (!surfaces.has(h)) return fail(t, BAD_SURFACE, false);
   if (attr === 0x3093) return value === 0x3095 || fail(t, value === 0x3094 ? BAD_MATCH : BAD_PARAMETER, false);
   if (attr === 0x3099) return value === 0x309a || fail(t, value === 0x309b ? BAD_MATCH : BAD_PARAMETER, false);
@@ -302,16 +291,14 @@ export function surfaceAttrib(t: object, dpy: number, h: number, attr: number, v
 /** a window's frame goes to its consumer, after which the caller waits for vsync unless its swap interval is 0; a pbuffer has no
  *  front buffer, so its swap does nothing */
 export function swapBuffers(t: object, dpy: number, h: number): PromiseOrVal<boolean> {
-  begin(t);
-  if (!ready(t, dpy)) return false;
+  if (!enter(t, dpy)) return false;
   const s = surfaces.get(h), c = currentContext(t);
   if (!s || !c || c.target !== s.surface) return fail(t, BAD_SURFACE, false);
   if (pbuffers.has(s.surface)) return true;
   return c.swap().then((ok) => ok || fail(t, CONTEXT_LOST, false));
 }
 export function swapInterval(t: object, dpy: number, interval: number): boolean {
-  begin(t);
-  if (!ready(t, dpy)) return false;
+  if (!enter(t, dpy)) return false;
   const c = currentContext(t);
   if (!c) return fail(t, BAD_CONTEXT, false);
   if (!c.target) return fail(t, BAD_SURFACE, false);
@@ -320,8 +307,7 @@ export function swapInterval(t: object, dpy: number, interval: number): boolean 
 }
 /** EGL_ANDROID_presentation_time: the time the surface's next frame carries to its consumer */
 export function presentationTime(t: object, dpy: number, h: number, nanos: bigint): boolean {
-  begin(t);
-  if (!ready(t, dpy)) return false;
+  if (!enter(t, dpy)) return false;
   const s = surfaces.get(h);
   if (!s) return fail(t, BAD_SURFACE, false);
   s.surface.presentationTimeNanos = nanos;

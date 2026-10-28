@@ -77,8 +77,7 @@ function configs(t: object, found: number[] | null, out: number, size: number, n
 
 /** eglGetSyncAttribKHR's (EGLint) or EGL 1.5's eglGetSyncAttrib's (EGLAttrib) answer about a fence */
 function syncAttrib(t: object, display: number, h: number, attribute: number, out: number, store: (p: number, v: number) => void): number {
-  egl.begin(t);
-  if (!egl.ready(t, display)) return 0;
+  if (!egl.enter(t, display)) return 0;
   const s = syncs.find(h);
   if (!s) return egl.fail(t, egl.BAD_PARAMETER, 0);
   // EGL_SYNC_TYPE_KHR, EGL_SYNC_CONDITION_KHR, EGL_SYNC_STATUS_KHR: EGL_SIGNALED_KHR or EGL_UNSIGNALED_KHR
@@ -92,8 +91,7 @@ function syncAttrib(t: object, display: number, h: number, attribute: number, ou
 /** a fence (EGL_SYNC_FENCE_KHR) without attributes, as EGL_KHR_fence_sync and EGL 1.5 make it, or a native fence of the GL
  *  commands before it or of the sync_file EGL_SYNC_NATIVE_FENCE_FD_ANDROID passes, which EGL then owns */
 function createSync(t: object, display: number, type: number, want: egl.Attribs): number {
-  egl.begin(t);
-  if (!egl.ready(t, display)) return 0;
+  if (!egl.enter(t, display)) return 0;
   const allowed = type === NATIVE ? [NATIVE_FD] : type === 0x30f9 ? [] : null, fd = want.get(NATIVE_FD) ?? -1;
   if (!allowed || [...want.keys()].some((k) => !allowed.includes(k))) return egl.fail(t, egl.BAD_ATTRIBUTE, 0);
   if (fd !== -1) {
@@ -110,8 +108,7 @@ function createSync(t: object, display: number, type: number, want: egl.Attribs)
 }
 /** EGL_KHR_wait_sync's and EGL 1.5's wait: the current context's later commands wait for the fence */
 function waitSync(t: object, display: number, h: number, flags: number): PromiseOrVal<number> {
-  egl.begin(t);
-  if (!egl.ready(t, display)) return 0;
+  if (!egl.enter(t, display)) return 0;
   const s = syncs.find(h), gl = activate(t)?.gl;
   if (!s || flags) return egl.fail(t, egl.BAD_PARAMETER, 0);
   if (!gl) return egl.fail(t, egl.BAD_MATCH, 0);
@@ -123,8 +120,7 @@ export const imageBuffer = (h: number): HardwareBuffer | undefined => images.fin
 /** EGL_KHR_image_base's image of EGL_ANDROID_image_native_buffer's client buffer, an ANativeWindowBuffer, taken without a context;
  *  EGL_IMAGE_PRESERVED_KHR is the one attribute, and a buffer's pixels are always preserved */
 function createImageOf(t: object, display: number, context: number, target: number, buffer: number, want: egl.Attribs): number {
-  egl.begin(t);
-  if (!egl.ready(t, display)) return 0;
+  if (!egl.enter(t, display)) return 0;
   if (target !== 0x3140) return egl.fail(t, egl.BAD_PARAMETER, 0);
   if (context) return egl.fail(t, egl.BAD_CONTEXT, 0);
   const b = clientBuffer(buffer);
@@ -199,8 +195,7 @@ export function eglInit(): void {
     eglCreateSync: (cpu, a) => createSync(cpu.jthread, a.i(), a.i(), attribs(a.p())),
     eglDestroySyncKHR: (cpu, a) => {
       const t = cpu.jthread;
-      egl.begin(t);
-      if (!egl.ready(t, a.i())) return 0;
+      if (!egl.enter(t, a.i())) return 0;
       const s = syncs.delete(a.i());
       if (!s) return egl.fail(t, egl.BAD_PARAMETER, 0);
       s.destroy();
@@ -209,8 +204,7 @@ export function eglInit(): void {
     // EGL_CONDITION_SATISFIED or EGL_TIMEOUT_EXPIRED; the flush bit is GL's
     eglClientWaitSyncKHR: (cpu, a) => {
       const t = cpu.jthread;
-      egl.begin(t);
-      if (!egl.ready(t, a.i())) return 0;
+      if (!egl.enter(t, a.i())) return 0;
       const s = syncs.find(a.i()), flags = a.i(), timeout = a.ul();
       if (!s) return egl.fail(t, egl.BAD_PARAMETER, 0);
       return after(s.clientWait(flags & 1, timeout), (r) => r ?? egl.fail(t, egl.BAD_PARAMETER, 0));
@@ -222,8 +216,7 @@ export function eglInit(): void {
     },
     eglDestroyImageKHR: (cpu, a) => {
       const t = cpu.jthread;
-      egl.begin(t);
-      if (!egl.ready(t, a.i())) return 0;
+      if (!egl.enter(t, a.i())) return 0;
       const b = images.delete(a.i());
       if (!b) return egl.fail(t, egl.BAD_PARAMETER, 0);
       release(b);
@@ -239,8 +232,7 @@ export function eglInit(): void {
     // a sync_file of a native fence, EGL_NO_NATIVE_FENCE_FD_ANDROID for any other sync
     eglDupNativeFenceFDANDROID: (cpu, a) => {
       const t = cpu.jthread;
-      egl.begin(t);
-      if (!egl.ready(t, a.i())) return -1;
+      if (!egl.enter(t, a.i())) return -1;
       const fence = syncs.find(a.i())?.fence;
       return fence ? syncFileFd(fence) : egl.fail(t, egl.BAD_PARAMETER, -1);
     },
