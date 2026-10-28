@@ -342,15 +342,14 @@ function pkcs1SignPad(k: number, digestName: string | null, digest: Uint8Array):
   em[0] = 0; em[1] = 1; em[k - t.length - 1] = 0; em.set(t, k - t.length);
   return em;
 }
-function mgf1(make: () => Hash, seed: Uint8Array, len: number): Uint8Array {
-  const out = new Uint8Array(len), c = new Uint8Array(4);
-  for (let i = 0, at = 0; at < len; i++) {
+/** MGF1 of `seed`, XORed into `target` */
+function mgf1(make: () => Hash, seed: Uint8Array, target: Uint8Array): void {
+  const c = new Uint8Array(4);
+  for (let i = 0, at = 0; at < target.length; i++) {
     new DataView(c.buffer).setUint32(0, i);
-    const h = make(); h.update(seed); h.update(c);
-    const d = h.digest();
-    out.set(d.subarray(0, Math.min(d.length, len - at)), at); at += d.length;
+    const d = hashOf(make, seed, c);
+    for (let j = 0; j < d.length && at < target.length; j++) target[at++] ^= d[j];
   }
-  return out;
 }
 /** EMSA-PSS-ENCODE (RFC 8017 §9.1.1) */
 function pssEncode(mHash: Uint8Array, emBits: number, hash: () => Hash, mgf: () => Hash, saltLen: number): Uint8Array | null {
@@ -360,8 +359,7 @@ function pssEncode(mHash: Uint8Array, emBits: number, hash: () => Hash, mgf: () 
   const H = hashOf(hash, new Uint8Array(8), mHash, salt);
   const db = new Uint8Array(emLen - hLen - 1);
   db[db.length - saltLen - 1] = 1; db.set(salt, db.length - saltLen);
-  const mask = mgf1(mgf, H, db.length);
-  for (let i = 0; i < db.length; i++) db[i] ^= mask[i];
+  mgf1(mgf, H, db);
   db[0] &= 0xff >> (8 * emLen - emBits);
   return concat([db, H, Uint8Array.of(0xbc)]);
 }
@@ -372,8 +370,7 @@ function pssVerify(mHash: Uint8Array, em: Uint8Array, emBits: number, hash: () =
   if (emLen < hLen + 2 || em[emLen - 1] !== 0xbc) return false;
   const db = em.slice(0, emLen - hLen - 1), H = em.subarray(emLen - hLen - 1, emLen - 1);
   if (db[0] & ~(0xff >> (8 * emLen - emBits)) & 0xff) return false;
-  const mask = mgf1(mgf, H, db.length);
-  for (let i = 0; i < db.length; i++) db[i] ^= mask[i];
+  mgf1(mgf, H, db);
   db[0] &= 0xff >> (8 * emLen - emBits);
   let i = 0;
   while (i < db.length && db[i] === 0) i++;
@@ -389,20 +386,16 @@ function oaepEncode(k: number, m: Uint8Array, hash: () => Hash, mgf: () => Hash,
   const db = new Uint8Array(k - hLen - 1);
   db.set(lHash); db[db.length - m.length - 1] = 1; db.set(m, db.length - m.length);
   const seed = crypto.getRandomValues(new Uint8Array(hLen));
-  const dbMask = mgf1(mgf, seed, db.length);
-  for (let i = 0; i < db.length; i++) db[i] ^= dbMask[i];
-  const seedMask = mgf1(mgf, db, hLen);
-  for (let i = 0; i < hLen; i++) seed[i] ^= seedMask[i];
+  mgf1(mgf, seed, db);
+  mgf1(mgf, db, seed);
   return concat([Uint8Array.of(0), seed, db]);
 }
 function oaepDecode(k: number, em: Uint8Array, hash: () => Hash, mgf: () => Hash, label: Uint8Array): Uint8Array | null {
   const lHash = hashOf(hash, label), hLen = lHash.length;
   if (em.length !== k || k < 2 * hLen + 2 || em[0] !== 0) return null;
   const seed = em.slice(1, 1 + hLen), db = em.slice(1 + hLen);
-  const seedMask = mgf1(mgf, db, hLen);
-  for (let i = 0; i < hLen; i++) seed[i] ^= seedMask[i];
-  const dbMask = mgf1(mgf, seed, db.length);
-  for (let i = 0; i < db.length; i++) db[i] ^= dbMask[i];
+  mgf1(mgf, db, seed);
+  mgf1(mgf, seed, db);
   if (!sameBytes(db.subarray(0, hLen), lHash)) return null;
   let i = hLen;
   while (i < db.length && db[i] === 0) i++;
