@@ -2,6 +2,7 @@ import dgram from "node:dgram";
 import dns from "node:dns/promises";
 import net from "node:net";
 import tls from "node:tls";
+import type { LookupFunction } from "node:net";
 import type { LookupAddress } from "node:dns";
 import type { WebSocket } from "ws";
 import { closeReason, MAX_PENDING_TCP_BYTES, TCP_CONNECT_FAILED, TCP_HANDSHAKE_FAILED, TCP_TOO_SLOW, tcpReady, udpFrame, type TcpTarget } from "./src/shell/tcpwire.ts";
@@ -9,18 +10,24 @@ import { closeReason, MAX_PENDING_TCP_BYTES, TCP_CONNECT_FAILED, TCP_HANDSHAKE_F
 type Resolve = (host: string, family?: number) => Promise<LookupAddress[]>;
 
 export async function relayTcp(ws: WebSocket, { host, port, alpn, secure }: TcpTarget, resolve?: Resolve): Promise<void> {
-  let address = host;
+  let lookup: LookupFunction | undefined;
   if (resolve) {
     ws.pause();
-    try { address = (await resolve(host))[0].address; }
+    try {
+      const addresses = await resolve(host);
+      lookup = (_name, options, callback) => {
+        if (options.all) callback(null, addresses);
+        else callback(null, addresses[0].address, addresses[0].family);
+      };
+    }
     catch (error) { ws.close(TCP_CONNECT_FAILED, closeReason(String(error))); ws.resume(); return; }
     if (ws.readyState !== ws.OPEN) return;
   }
   let ready = false, connected = false, shut = false, pendingBytes = 0;
   const pending: Buffer[] = [];
   const socket: net.Socket = secure
-    ? tls.connect({ host: address, port, servername: net.isIP(host) ? undefined : host, ALPNProtocols: alpn.length ? alpn : undefined })
-    : net.connect({ host: address, port });
+    ? tls.connect({ host, port, lookup, servername: net.isIP(host) ? undefined : host, ALPNProtocols: alpn.length ? alpn : undefined })
+    : net.connect({ host, port, lookup });
   const open = () => {
     ready = true;
     socket.setTimeout(0);

@@ -4,7 +4,8 @@ import { createServer } from "node:http";
 import net from "node:net";
 import dgram from "node:dgram";
 import dns from "node:dns/promises";
-import { WebSocket } from "ws";
+import { WebSocket, WebSocketServer } from "ws";
+import { relayTcp } from "../socket-relays.ts";
 import { backendHost, attachSockets } from "../backend/server.ts";
 import { publicFetch, resolvePublic } from "../backend/network.ts";
 import { parseTcpReady, udpFrame } from "../src/shell/tcpwire.ts";
@@ -42,6 +43,19 @@ test("UDP preserves datagrams and the requested peer name", async () => {
   const frame = udpFrame(new TextEncoder().encode("localhost"), upstream.address().port, new Uint8Array([1, 2, 3]));
   ws.send(frame);
   expect((await once(ws, "message"))[0]).toEqual(Buffer.from(frame));
+});
+
+test("TCP tries the remaining checked DNS addresses when the first is unavailable", async () => {
+  const upstream = net.createServer(socket => socket.end("connected"));
+  cleanup.push(() => upstream.close()); upstream.listen(0, "127.0.0.1"); await once(upstream, "listening");
+  const server = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+  cleanup.push(() => server.close()); await once(server, "listening");
+  server.on("connection", ws => void relayTcp(ws, { host: "checked.example", port: (upstream.address() as net.AddressInfo).port, secure: false, alpn: [] },
+    async () => [{ address: "127.0.0.2", family: 4 }, { address: "127.0.0.1", family: 4 }]));
+  const ws = peer(`ws://127.0.0.1:${(server.address() as net.AddressInfo).port}`), messages: Buffer[] = [];
+  ws.on("message", bytes => messages.push(bytes as Buffer));
+  await once(ws, "close");
+  expect(messages.at(-1)?.toString()).toBe("connected");
 });
 
 test("production blocks private sockets and foreign browser origins", async () => {
