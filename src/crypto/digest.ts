@@ -333,7 +333,5 @@ export function digestBytes(algorithm: string, data: Uint8Array): PromiseOrVal<U
   const { make, web } = DIGESTS[name];
   // the browser takes a whole message of any size, as a copy, since it refuses a shared buffer's view
   if (web && data.length >= WEB_MIN && globalThis.crypto?.subtle) return crypto.subtle.digest(web, data.slice()).then((r) => new Uint8Array(r));
-  const h = make();
-  h.update(data);
-  return h.digest();
+  return hashOf(make, data);
 }

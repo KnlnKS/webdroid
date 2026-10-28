@@ -95,8 +95,7 @@ export async function localDataOffset(source: FileSource, e: ZEntry): Promise<nu
 }
 /** an entry's bytes, reading only that entry of the archive */
 export async function entryBytesOf(source: FileSource, e: ZEntry): Promise<Uint8Array> {
-  const raw = await readFully(source, await localDataOffset(source, e), e.csize);
-  return e.method === 0 ? raw : inflateEntry(raw, e);
+  return inflateEntry(await readFully(source, await localDataOffset(source, e), e.csize), e);
 }
 /** the path of an archive's entry, "base.apk!/lib/arm64-v8a/libx.so", as the linker and class loaders name it */
 export const archivePath = (archive: string, entry: string): string => `${archive}!/${entry}`;
