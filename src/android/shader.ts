@@ -22,6 +22,21 @@ export abstract class NativeShader {
   /** the pattern is the shader, so a fill can draw with it; a fill by any other is clipped to the
    *  shape and painted by fillClip */
   get direct(): boolean { return true; }
+  private rastered: CanvasPattern | null = null;
+  private rasterKey = "";
+  /** what `paint` draws over a canvas the target's size by its transform, as a pattern, painted again when the size, transform
+   *  or `key` changes */
+  protected rasterized(ctx: Ctx2D, key: string, paint: (c: OffscreenCanvasRenderingContext2D, matrix: DOMMatrix) => void): CanvasPattern {
+    const matrix = ctx.getTransform(), { width, height } = ctx.canvas;
+    key = `${key}:${width},${height}:${matrix.toString()}:${this.local}`;
+    if (this.rastered && key === this.rasterKey) return this.rastered;
+    const c = new OffscreenCanvas(width, height).getContext("2d")!;
+    paint(c, matrix);
+    const pattern = ctx.createPattern(c.canvas, "no-repeat")!;
+    pattern.setTransform(matrix.inverse());
+    this.rasterKey = key;
+    return this.rastered = pattern;
+  }
   /** everything `ctx` can show painted with the shader; the transform and fill style may change */
   fillClip(ctx: Ctx2D): void {
     const style = this.pattern(ctx);
@@ -38,8 +53,6 @@ const bitmapShaderTiles = new WeakMap<NativeBitmap, { generation: number; tiles:
 /** tileX/tileY: Shader.TileMode's nativeInt (CLAMP, REPEAT, MIRROR, DECAL) */
 export class NativeBitmapShader extends NativeShader {
   readonly bitmap: NativeBitmap; readonly tileX: number; readonly tileY: number;
-  private cached: CanvasPattern | null = null;
-  private cacheKey = "";
   constructor(local: Affine | null, bitmap: NativeBitmap, tileX: number, tileY: number) { super(local); this.bitmap = bitmap; this.tileX = tileX; this.tileY = tileY; }
   // its pattern() covers the target's canvas
   override get atReplay(): boolean { return true; }
@@ -88,44 +101,26 @@ export class NativeBitmapShader extends NativeShader {
       ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
     }
   }
+  // Strokes and text cannot clip a Canvas2D path to its stroked outline.
   override pattern(ctx: Ctx2D): CanvasPattern {
-    const matrix = ctx.getTransform(), local = this.local;
-    const key = `${this.bitmap.genId}:${ctx.canvas.width},${ctx.canvas.height}:${matrix.toString()}:${local}`;
-    if (this.cached && key === this.cacheKey) return this.cached;
-    // Strokes and text cannot clip a Canvas2D path to its stroked outline.
-    const surface = new OffscreenCanvas(ctx.canvas.width, ctx.canvas.height), c = surface.getContext("2d")!;
-    c.setTransform(matrix);
-    this.fillClip(c);
-    const pattern = ctx.createPattern(surface, "no-repeat")!;
-    pattern.setTransform(matrix.inverse());
-    this.cacheKey = key;
-    return this.cached = pattern;
+    return this.rasterized(ctx, String(this.bitmap.genId), (c, matrix) => { c.setTransform(matrix); this.fillClip(c); });
   }
 }
 /** ComposeShader: `src` blended onto `dst` by the mode, rasterized over the target once per transform */
 export class NativeComposeShader extends NativeShader {
   readonly dst: NativeShader; readonly src: NativeShader; readonly op: GlobalCompositeOperation | null;
-  private cached: CanvasPattern | null = null;
-  private cacheKey = "";
   /** `op` is null for DST, which keeps the destination shader alone */
   constructor(local: Affine | null, dst: NativeShader, src: NativeShader, op: GlobalCompositeOperation | null) { super(local); this.dst = dst; this.src = src; this.op = op; }
   override pattern(ctx: Ctx2D): CanvasPattern {
-    const matrix = ctx.getTransform(), { width, height } = ctx.canvas;
-    const key = `${width},${height}:${matrix.toString()}:${this.local}`;
-    if (this.cached && key === this.cacheKey) return this.cached;
-    const c = new OffscreenCanvas(width, height).getContext("2d")!;
-    const base = this.local ? matrix.multiply(new DOMMatrix(this.local)) : matrix;
-    c.setTransform(base);
-    this.dst.fillClip(c);
-    if (this.op) {
+    return this.rasterized(ctx, "", (c, matrix) => {
+      const base = this.local ? matrix.multiply(new DOMMatrix(this.local)) : matrix;
+      c.setTransform(base);
+      this.dst.fillClip(c);
+      if (!this.op) return;
       c.setTransform(base);
       c.globalCompositeOperation = this.op;
       this.src.fillClip(c);
-    }
-    const pattern = ctx.createPattern(c.canvas, "no-repeat")!;
-    pattern.setTransform(matrix.inverse());
-    this.cacheKey = key;
-    return this.cached = pattern;
+    });
   }
 }
 /** a gradient's style: a CanvasGradient, or the pattern of a tiled one, which carries the local matrix */
