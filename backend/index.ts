@@ -1,3 +1,4 @@
+// The public backend: what the shell page on Pages forwards here (functions/), and the WebView renderer's origin.
 import { createServer } from "node:http";
 import { respond } from "../scripts/serve.ts";
 import { sharedRoute } from "../src/shell/serve-routes.ts";
@@ -7,12 +8,14 @@ import { attachSockets, backendHost } from "./server.ts";
 const app = new URL(process.env.APP_ORIGIN ?? "https://webdroid.pages.dev");
 const renderer = new URL(process.env.WEBVIEW_ORIGIN ?? "http://localhost:8787");
 if (app.origin === renderer.origin) throw new Error("WebView must use a separate site");
-const host = backendHost({ network: publicNetwork, webviewOrigin: () => renderer.origin,
-  isApp: origin => {
-    const page = URL.parse(origin);
-    return page?.protocol === app.protocol && (page.host === app.host || app.hostname.endsWith(".pages.dev") && page.hostname.endsWith(`.${app.hostname}`) && page.port === app.port);
-  },
-});
+/** whether `origin` is the Pages site, or for a pages.dev project one of its branch aliases or deployments */
+function isApp(origin: string): boolean {
+  const page = URL.parse(origin);
+  if (page?.protocol !== app.protocol || page.port !== app.port) return false;
+  return page.hostname === app.hostname || app.hostname.endsWith(".pages.dev") && page.hostname.endsWith(`.${app.hostname}`);
+}
+const host = backendHost({ network: publicNetwork, webviewOrigin: () => renderer.origin, isApp });
+// behind the TLS proxy, a request arrives as plain HTTP for the renderer's origin
 const server = createServer((req, res) => void respond(req, res, request => {
   const url = new URL(request.url);
   if (url.pathname === "/health") return Response.json({ status: "ok" });
