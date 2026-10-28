@@ -96,18 +96,18 @@ export function imeInput(text: string, start = text.length, end = start, composi
     mirrorInput();
   }()));
 }
-export function imeSelection(start: number, end: number, expectedGeneration?: number) {
+export function imeSelection(start: number, end: number, expectedGeneration: number) {
   return onMain(() => rt.drive(function* (): Gen<void> {
     const session = served;
-    if (!session || expectedGeneration !== undefined && expectedGeneration !== generation || start + session.offset === session.start && end + session.offset === session.end) return;
+    if (!session || expectedGeneration !== generation || start + session.offset === session.start && end + session.offset === session.end) return;
     yield session.call("setSelection", "II", start + session.offset, end + session.offset);
     session.start = start + session.offset; session.end = end + session.offset;
     mirrorInput();
   }()));
 }
-export const imeFinishComposition = (expectedGeneration?: number) => onMain(() => rt.drive(function* (): Gen<void> {
-  if (served && (expectedGeneration === undefined || expectedGeneration === generation)) { yield served.call("finishComposingText", ""); served.compStart = served.compEnd = -1; }
+export const imeFinishComposition = (expectedGeneration: number) => onMain(() => rt.drive(function* (): Gen<void> {
+  if (served && expectedGeneration === generation) { yield served.call("finishComposingText", ""); served.compStart = served.compEnd = -1; }
 }()));
-export const imeAction = (expectedGeneration?: number) => onMain(() => rt.drive(function* (): Gen<boolean> {
-  return (expectedGeneration === undefined || expectedGeneration === generation) && !!served && !!(yield served.call("performEditorAction", "I", served.actionId || served.imeOptions & 0xff));
+export const imeAction = (expectedGeneration: number) => onMain(() => rt.drive(function* (): Gen<boolean> {
+  return expectedGeneration === generation && !!served && !!(yield served.call("performEditorAction", "I", served.actionId || served.imeOptions & 0xff));
 }()));
