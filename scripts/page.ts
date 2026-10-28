@@ -1,6 +1,7 @@
 // The Chrome every harness drives, and webdroid opened in it: one way to open the page, boot an APK, decide that its app is up and read
 // what each realm reports (tests/e2e/lib/processes.ts holds the halves that run in the page).
 import { chromium, type Page } from "playwright";
+import { deadline } from "./util.ts";
 import { ERROR_LINE, appUp, pageDiagnostics, workerDiagnostics, workerRows, type ProcessSnapshot } from "../tests/e2e/lib/processes.ts";
 
 export const BASE_URL = process.env.WEBDROID_URL ?? "http://localhost:4080";
@@ -77,14 +78,9 @@ export async function bootApp(page: Page, apk: string, options?: UpOptions): Pro
 }
 
 /** `read`, or a failure when it throws or takes over 6 s */
-async function bounded<T>(read: Promise<T>): Promise<T | { status: "failure"; message: string }> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([read.catch(error => ({ status: "failure" as const, message: String(error) })),
-      new Promise<{ status: "failure"; message: string }>(resolve => {
-        timer = setTimeout(() => resolve({ status: "failure", message: "diagnostic timeout" }), 6000);
-      })]);
-  } finally { clearTimeout(timer); }
+function bounded<T>(read: Promise<T>): Promise<T | { status: "failure"; message: string }> {
+  const failure = (message: string) => ({ status: "failure" as const, message });
+  return deadline(read.catch((error) => failure(String(error))), 6000).catch(() => failure("diagnostic timeout"));
 }
 /** Diagnostics from the page's realm and every process Worker. */
 export async function readProcesses(page: Page): Promise<ProcessSnapshot[]> {

@@ -3,6 +3,9 @@
  *  class whose file name matches `tests`) */
 type Suite = { maven: string[]; source?: { archive: string; root: string; tests: RegExp; include?: RegExp; exclude?: RegExp; resources?: string[] }; classes?: string[]; testng?: boolean };
 const JUNIT = ["junit:junit:4.13.2", "org.hamcrest:hamcrest-core:1.3"];
+/** libcore at Android 14, from LineageOS's mirror, pinned */
+const LINEAGE_COMMIT = "81bfea828bc7dc432103cec1331bd6587d98f0a1";
+const LINEAGE_LIBCORE = { archive: `https://codeload.github.com/LineageOS/android_libcore/tar.gz/${LINEAGE_COMMIT}`, root: `android_libcore-${LINEAGE_COMMIT}` };
 export const SUITES: Record<string, Suite> = {
   guava: {
     maven: ["com.google.guava:guava-testlib:33.3.1-jre", "com.google.guava:guava:33.3.1-jre", "com.google.guava:failureaccess:1.0.2",
@@ -21,8 +24,7 @@ export const SUITES: Record<string, Suite> = {
   "luni-io": {
     maven: JUNIT,
     source: {
-      archive: "https://codeload.github.com/LineageOS/android_libcore/tar.gz/81bfea828bc7dc432103cec1331bd6587d98f0a1",
-      root: "android_libcore-81bfea828bc7dc432103cec1331bd6587d98f0a1",
+      ...LINEAGE_LIBCORE,
       include: /^((harmony-tests\/src\/test\/java\/org\/apache\/harmony\/tests\/java|luni\/src\/test\/java\/libcore\/java)\/(io|util\/zip)|support\/src\/test\/java\/(tests\/support|org\/apache\/harmony\/testframework|libcore\/testing\/io)|test-rules\/src\/main\/java\/libcore\/junit)\/|\/libcore\/libcore\/util\/SerializationTester\.java$/,
       tests: /^(?!Support_|Abstract)\w+Test\.java$/,
       // these name platform members android.jar lacks, jdk.internal, mockito or junitparams
@@ -35,8 +37,7 @@ export const SUITES: Record<string, Suite> = {
   "luni-net": {
     maven: ["com.google.mockwebserver:mockwebserver:20130706", ...JUNIT],
     source: {
-      archive: "https://codeload.github.com/LineageOS/android_libcore/tar.gz/81bfea828bc7dc432103cec1331bd6587d98f0a1",
-      root: "android_libcore-81bfea828bc7dc432103cec1331bd6587d98f0a1",
+      ...LINEAGE_LIBCORE,
       include: /^((harmony-tests\/src\/test\/java\/org\/apache\/harmony\/tests\/java|luni\/src\/test\/java\/libcore\/java)\/net|support\/src\/test\/java\/(tests\/support|org\/apache\/harmony\/testframework|libcore\/testing\/io)|test-rules\/src\/main\/java\/libcore\/junit)\/|\/libcore\/libcore\/util\/SerializationTester\.java$/,
       tests: /^(?!Support_|Abstract)\w+Test\.java$/,
       exclude: /\/net\/(\w*(JarURLConnection|URLClassLoader)\w*|OldUnixSocketTest|ServerSocketConcurrentCloseTest|FtpURLConnectionTest|URLConnectionTest|DelegatingSocketFactory|OldCookieHandlerTest)\.java$|libcore\/java\/net\/(InetAddress|NetworkInterface|DatagramSocket|Socket|SocketTimeout)Test\.java$|harmony\/tests\/java\/net\/(URLDecoder|DatagramSocket|ServerSocket)Test\.java$|EnableDeprecatedBouncyCastleAlgorithmsRule\.java$/,
@@ -47,8 +48,7 @@ export const SUITES: Record<string, Suite> = {
   "luni-security": {
     maven: ["org.bouncycastle:bcprov-jdk15on:1.68", "org.bouncycastle:bcpkix-jdk15on:1.68", ...JUNIT],
     source: {
-      archive: "https://codeload.github.com/LineageOS/android_libcore/tar.gz/81bfea828bc7dc432103cec1331bd6587d98f0a1",
-      root: "android_libcore-81bfea828bc7dc432103cec1331bd6587d98f0a1",
+      ...LINEAGE_LIBCORE,
       include: /^(luni\/src\/test\/java\/(libcore\/java\/security|libcore\/javax\/(crypto|security)|tests\/security)|support\/src\/test\/java\/(tests\/support|org\/apache\/harmony\/(testframework|security\/tests\/support)|libcore\/testing\/io|libcore\/java\/(security|io)|libcore\/javax\/net\/ssl)|test-rules\/src\/main\/java\/libcore\/junit)\/|\/libcore\/libcore\/util\/SerializationTester\.java$/,
       tests: /^(?!Support_|Abstract)\w+Test\.java$/,
       resources: ["support/src/test/java", "luni/src/test/resources"],
@@ -60,8 +60,7 @@ export const SUITES: Record<string, Suite> = {
   "luni-nio-file": {
     maven: JUNIT,
     source: {
-      archive: "https://codeload.github.com/LineageOS/android_libcore/tar.gz/81bfea828bc7dc432103cec1331bd6587d98f0a1",
-      root: "android_libcore-81bfea828bc7dc432103cec1331bd6587d98f0a1",
+      ...LINEAGE_LIBCORE,
       include: /^(luni\/src\/test\/java\/(libcore|tests)\/java\/nio\/file|test-rules\/src\/main\/java\/libcore\/junit)\/|\/libcore\/libcore\/util\/SerializationTester\.java$/,
       tests: /^\w+Test\.java$/,
       exclude: /\/nio\/file\/(Files2?Test|SimpleFileVisitorTest|DefaultFileSystemProvider2Test|FileSystemsTest|LinuxFileSystemTest|LinuxPathTest|spi\/FileTypeDetectorTest)\.java$|EnableDeprecatedBouncyCastleAlgorithmsRule\.java$/,
@@ -72,8 +71,7 @@ export const SUITES: Record<string, Suite> = {
   "luni-nio": {
     maven: JUNIT,
     source: {
-      archive: "https://codeload.github.com/LineageOS/android_libcore/tar.gz/81bfea828bc7dc432103cec1331bd6587d98f0a1",
-      root: "android_libcore-81bfea828bc7dc432103cec1331bd6587d98f0a1",
+      ...LINEAGE_LIBCORE,
       include: /^((harmony-tests\/src\/test\/java\/org\/apache\/harmony\/tests|luni\/src\/test\/java\/libcore)\/java\/nio\/(\w+\.java|charset|channels\/(\w*(File|Channels|MapMode)\w*|\w+Exception\w*)\.java)|support\/src\/test\/java\/(tests\/support|org\/apache\/harmony\/testframework|libcore\/testing\/io)|test-rules\/src\/main\/java\/libcore\/junit)\/?|\/libcore\/libcore\/util\/SerializationTester\.java$/,
       tests: /^(?!Abstract|Support_)\w+Test\.java$/,
       // these name hidden platform classes, mockito or junitparams
@@ -85,8 +83,7 @@ export const SUITES: Record<string, Suite> = {
   "luni-util": {
     maven: JUNIT,
     source: {
-      archive: "https://codeload.github.com/LineageOS/android_libcore/tar.gz/81bfea828bc7dc432103cec1331bd6587d98f0a1",
-      root: "android_libcore-81bfea828bc7dc432103cec1331bd6587d98f0a1",
+      ...LINEAGE_LIBCORE,
       include: /^((harmony-tests\/src\/test\/java\/org\/apache\/harmony\/tests\/java|luni\/src\/test\/java\/libcore\/java)\/util(?!\/zip\/|\/concurrent\/)|support\/src\/test\/java\/(tests\/(support|util)|org\/apache\/harmony\/testframework|libcore\/(testing\/io|java\/lang\/ref))|test-rules\/src\/main\/java\/libcore\/junit)\/|\/libcore\/libcore\/util\/SerializationTester\.java$/,
       tests: /^(?!Support_|Abstract)\w+Test\.java$/,
       exclude: /EnableDeprecatedBouncyCastleAlgorithmsRule\.java$|(harmony\/tests\/java\/util\/ArraysTest|harmony\/tests\/java\/util\/CollectionsTest|harmony\/tests\/java\/util\/DateTest|harmony\/tests\/java\/util\/ScannerParseLargeFileBenchmarkTest|harmony\/tests\/java\/util\/ResourceBundleTest|harmony\/tests\/java\/util\/jar\/JarEntryTest|harmony\/tests\/java\/util\/prefs\/AbstractPreferencesTest|harmony\/tests\/java\/util\/prefs\/FilePreferencesImplTest|harmony\/tests\/java\/util\/prefs\/PreferencesTest|libcore\/java\/util\/ArraysTest|libcore\/java\/util\/CollectionsTest|libcore\/java\/util\/FormatterTest|libcore\/java\/util\/HashMapTest|libcore\/java\/util\/HashSetTest|libcore\/java\/util\/LegacyLocalesTest|libcore\/java\/util\/LinkedHashMapTest|libcore\/java\/util\/LinkedHashSetTest|libcore\/java\/util\/ListOfTest|libcore\/java\/util\/LocaleInternalsTest|libcore\/java\/util\/LocaleTest|libcore\/java\/util\/OldTimeZoneTest|libcore\/java\/util\/RandomTest|libcore\/java\/util\/SequencedCollectionTest|libcore\/java\/util\/TimeZoneTest|libcore\/java\/util\/UUIDTest|libcore\/java\/util\/jar\/Pack200Test|libcore\/java\/util\/prefs\/OldAbstractPreferencesTest|libcore\/java\/util\/prefs\/OldFilePreferencesImplTest|libcore\/java\/util\/prefs\/OldNodeChangeEventTest|libcore\/java\/util\/prefs\/OldPreferenceChangeEventTest|libcore\/java\/util\/prefs\/OldPreferencesTest|libcore\/java\/util\/prefs\/PreferencesTest|libcore\/java\/util\/random\/RandomGeneratorFactoryTest|libcore\/java\/util\/regex\/MatcherTest)\.java$/,
