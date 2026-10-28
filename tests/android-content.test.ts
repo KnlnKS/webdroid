@@ -416,9 +416,7 @@ describe("pending-intents", () => {
     const context = await app(), intent = await newIntent();
     const broker = new ProcessBroker(), { pid } = broker.register(PKG, PKG, 4321);
     const client = callProxy<BrokerCalls>(broker.brokerPort(pid), brokerMethods), records = client.endpoint;
-    let release!: () => void, entered!: () => void;
-    const waiting = new Promise<void>(resolve => { entered = resolve; });
-    const acknowledgment = new Promise<void>(resolve => { release = resolve; });
+    const { promise: waiting, resolve: entered } = Promise.withResolvers<void>(), { promise: acknowledgment, resolve: release } = Promise.withResolvers<void>();
     const restore = useTestBroker({ pending: { ...records.pending, cancel: async (id: number) => { entered(); await acknowledgment; await records.pending.cancel(id); } } });
     useAlarmIntents(broker.intents);
     try {

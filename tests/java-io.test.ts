@@ -292,10 +292,8 @@ describe("file-descriptor", () => {
       expect(await b.stat(fd)).toBe(-E.BADF);
       const stagedLate = await a.stage(fd);
       const late = await owner.receive(1001,stagedLate,1002), channel = new MessageChannel();
-      let enter!: () => void, release!: () => void, dispose!: () => void;
-      const entered = new Promise<void>(resolve => { enter=resolve; });
-      const waiting = new Promise<void>(resolve => { release=resolve; });
-      const disposed = new Promise<void>(resolve => { dispose=resolve; });
+      const { promise: entered, resolve: enter } = Promise.withResolvers<void>(), { promise: waiting, resolve: release } = Promise.withResolvers<void>();
+      const { promise: disposed, resolve: dispose } = Promise.withResolvers<void>();
       const stop = serveCalls(channel.port1,{reply:async () => { enter();await waiting;return late; }},undefined,
         {reply:async value => { await owner.discard(1002,value,false);dispose(); }});
       const pending = callProxy<{reply():Promise<number>}>(channel.port2,["reply"]);
@@ -326,9 +324,7 @@ describe("file-descriptor", () => {
 
   test("canonical descriptor death retires pending replies without closing another process's shared open file", async () => {
     const path = "/data/data/test/fd/pending.bin", owner = new FileDescriptors();
-    let release!: () => void, entered!: () => void;
-    const waiting = new Promise<void>(resolve => { release=resolve; });
-    const started = new Promise<void>(resolve => { entered=resolve; });
+    const { promise: waiting, resolve: release } = Promise.withResolvers<void>(), { promise: started, resolve: entered } = Promise.withResolvers<void>();
     vfs.mount(path,{size:4,read:async (offset,length) => { entered(); await waiting; return Uint8Array.of(1,2,3,4).slice(offset,offset+length); }});
     const a = owner.session(1001,() => 0), b = owner.session(1002,() => 0);
     try {

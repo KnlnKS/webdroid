@@ -45,8 +45,7 @@ beforeAll(async () => {
 describe("settings-provider", () => {
   test("the provider awaits canonical reads and mutation acknowledgment", async () => {
     const store = settingsStore(), channel = new MessageChannel(), key = "webdroid_async_setting";
-    let release!: () => void, began!: () => void;
-    const gate = new Promise<void>(resolve => release = resolve), entered = new Promise<void>(resolve => began = resolve);
+    const { promise: gate, resolve: release } = Promise.withResolvers<void>(), { promise: entered, resolve: began } = Promise.withResolvers<void>();
     const stop = serveCalls<Calls<SettingsAccess>>(channel.port1, {
       get: async (table, name) => store.get(table, name),
       entries: async table => store.entries(table),

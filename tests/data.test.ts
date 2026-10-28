@@ -43,8 +43,7 @@ test("permission checks deny pending grants and Java calls await the canonical o
     if (target !== pkg) throw rt.mkThrowable("java/lang/SecurityException", "foreign permission grant");
   });
   const { port1, port2 } = new MessageChannel();
-  let entered!: () => void, release!: () => void;
-  const waiting = new Promise<void>(resolve => entered = resolve), blocked = new Promise<void>(resolve => release = resolve);
+  const { promise: waiting, resolve: entered } = Promise.withResolvers<void>(), { promise: blocked, resolve: release } = Promise.withResolvers<void>();
   const stop = serveCalls<Calls<PermissionAccess>>(port1, { ...owner,
     permissionGrant: async (target, names) => { entered(); await blocked; return owner.permissionGrant(target, names); },
   } as Calls<PermissionAccess>);
@@ -95,10 +94,9 @@ test("Worker activity commands retain local results across reentrant replies and
   await bootApp(owner);
   type Calls = Pick<BrokerCalls,"activity"|"exitRecords">;
   const {port1,port2} = new MessageChannel();
-  let entered!:()=>void, release!:()=>void, request = 0, launches = 0, completed = false;
-  const waiting = new Promise<void>(resolve=>entered=resolve), blocked = new Promise<void>(resolve=>release=resolve);
-  let readEntered!:()=>void, readRelease!:()=>void;
-  const readWaiting = new Promise<void>(resolve=>readEntered=resolve), readBlocked = new Promise<void>(resolve=>readRelease=resolve);
+  let request = 0, launches = 0, completed = false;
+  const { promise: waiting, resolve: entered } = Promise.withResolvers<void>(), { promise: blocked, resolve: release } = Promise.withResolvers<void>();
+  const { promise: readWaiting, resolve: readEntered } = Promise.withResolvers<void>(), { promise: readBlocked, resolve: readRelease } = Promise.withResolvers<void>();
   const received: unknown[] = [], results: unknown[] = [];
   const intent = await newIntent("org.webdroid.test.LAUNCH");
   const stop = serveCalls<Calls>(port1, {
@@ -161,9 +159,9 @@ test("ClipboardService keeps one clip, which only the focused uid reads", async 
 test("CookieManager waits for canonical mutation before its main-looper callback", async () => {
   await bootApp(await packageRecord("org.webdroid.test.cookies"));
   const jar = new WebCookies("org.webdroid.test.cookies");
-  let entered!: () => void, release!: () => void, received!: (value: JObj) => void, called = false;
-  const waiting = new Promise<void>(resolve => entered = resolve), blocked = new Promise<void>(resolve => release = resolve);
-  const callback = new Promise<JObj>(resolve => received = resolve);
+  let called = false;
+  const { promise: waiting, resolve: entered } = Promise.withResolvers<void>(), { promise: blocked, resolve: release } = Promise.withResolvers<void>();
+  const { promise: callback, resolve: received } = Promise.withResolvers<JObj>();
   rt.register({ name: "test/CookieValueCallback", ctor: class extends JObj {}, ifaces: ["android/webkit/ValueCallback"], methods: {
     "onReceiveValue(Ljava/lang/Object;)V": (value: JObj) => { called = true; received(value); },
   } });
@@ -332,8 +330,7 @@ describe("sqlite", () => {
       const path = "/data/data/test.sqlite/databases/late-open.db", sql = await loadSql(), seed = new sql.Database();
       seed.exec("CREATE TABLE marker (id INTEGER)");
       const bytes = seed.export(); seed.close();
-      let unblock!: () => void, entered!: () => void;
-      const gate = new Promise<void>(resolve => unblock = resolve), reading = new Promise<void>(resolve => entered = resolve);
+      const { promise: gate, resolve: unblock } = Promise.withResolvers<void>(), { promise: reading, resolve: entered } = Promise.withResolvers<void>();
       vfs.mount(path, { size: bytes.length, read: async (offset, length) => { entered(); await gate; return bytes.slice(offset, offset + length); } });
       const dying = createSQLiteSession(), pending = thrown(() => call(dying, openMethod, path, 0x10000000));
       await reading;

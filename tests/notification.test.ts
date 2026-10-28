@@ -163,8 +163,7 @@ test("stored notification descriptors share offsets and release on replacement, 
     await notificationStore.clear(pkg, packageUid(pkg), {fromApp: true, keepState: false});
     expect(file.references).toBe(1);
     const capture = notificationStore.capture;
-    let entered!: () => void, release!: () => void;
-    const waiting = new Promise<void>(resolve => entered = resolve), blocked = new Promise<void>(resolve => release = resolve);
+    const { promise: waiting, resolve: entered } = Promise.withResolvers<void>(), { promise: blocked, resolve: release } = Promise.withResolvers<void>();
     notificationStore.capture = async function(n) { const data = await capture.call(this, n); entered(); await blocked; return data; };
     try {
       const pending = vcallAsync(manager, "notify", `(I${N})V`, 98, await make());
