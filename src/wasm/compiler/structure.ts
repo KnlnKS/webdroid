@@ -12,7 +12,7 @@ export const Go = { Next: 0, Break: 1, Continue: 2, Dispatch: 3 } as const;
 export type Go = (typeof Go)[keyof typeof Go];
 
 /** The flow has a cycle with more than one entry; `heads` are the start pcs of the targets of its retreating edges. */
-export class Irreducible extends Error {
+class Irreducible extends Error {
   readonly heads: number[];
   constructor(heads: number[]) { super("irreducible"); this.heads = heads; }
 }

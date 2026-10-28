@@ -1,16 +1,13 @@
 // Instruction-sequence fuzzer: random verifiable int/long/float/double/array/field/branch/switch/try code is generated as Java, compiled with
 // javac and d8 (so the DEX is what d8 emits for it), and every generated method runs as Wasm and on the JDK; results must be bit-identical.
-// Run from the repository root: pnpm wasm fuzz [--seed N] [--methods N] [--cases N] [--depth N] [--debug] [--file F.java] [--irreducible]
-// (--debug: d8 without --release; --file: run an edited copy of a reported source, e.g. while reducing a mismatch; --irreducible: methods of random block graphs, see irfuzz.ts)
+// Run from the repository root: pnpm wasm fuzz [--seed N] [--methods N] [--cases N] [--depth N] [--debug] [--file F.java]
+// (--debug: d8 without --release; --file: run an edited copy of a reported source, e.g. while reducing a mismatch)
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { world } from "./lib.ts";
 import { caseLine, compare, genCases } from "./cases.ts";
 import { mountPlatform } from "./harness.ts";
 import { ACC } from "../../src/wasm/compiler/program.ts";
-import { irreducibleClass } from "./irfuzz.ts";
-import { Irreducible, Flow } from "../../src/wasm/compiler/structure.ts";
-import { prepareMethod } from "../../src/jvm/prepared.ts";
 import { JAVA, ROOT, platformJars } from "./paths.ts";
 import { checker } from "./tools.ts";
 import { fixture, onJdk, tempDir } from "../java.ts";
@@ -19,9 +16,9 @@ import { cli } from "../args.ts";
 /** only the first LEAVES methods are called, and they call nothing: their cost is not multiplied along a chain of calls */
 const LEAVES = 8;
 let cur = 0;
-const { values: opts } = cli("pnpm wasm fuzz [--seed n] [--methods n] [--cases n] [--depth n] [--file F.java] [--irreducible] [--debug]", {
+const { values: opts } = cli("pnpm wasm fuzz [--seed n] [--methods n] [--cases n] [--depth n] [--file F.java] [--debug]", {
   seed: { type: "string", default: "1" }, methods: { type: "string", default: "200" }, cases: { type: "string", default: "12" }, depth: { type: "string", default: "3" },
-  file: { type: "string" }, irreducible: { type: "boolean" }, debug: { type: "boolean" },
+  file: { type: "string" }, debug: { type: "boolean" },
 });
 const seed = +opts.seed, count = +opts.methods, perMethod = +opts.cases, depth = +opts.depth;
 let state = seed >>> 0 || 1;
@@ -132,23 +129,17 @@ const generated = `public class F {
 }\n`;
 
 const out = tempDir("j2w-fuzz-");
-const { file, irreducible } = opts;
-if (irreducible) writeFileSync(join(out, "F.class"), irreducibleClass("F", count, rnd));
-else writeFileSync(join(out, "F.java"), file === undefined ? generated : readFileSync(file, "utf8"));
-fixture({ out, sources: [...irreducible ? [] : [join(out, "F.java")], join(JAVA, "Ref.java")], debug: opts.debug, classes: /^F(\$.*)?\.class$/ });
+writeFileSync(join(out, "F.java"), opts.file === undefined ? generated : readFileSync(opts.file, "utf8"));
+fixture({ out, sources: [join(out, "F.java"), join(JAVA, "Ref.java")], debug: opts.debug, classes: /^F(\$.*)?\.class$/ });
 
 const dex = join(out, "classes.dex"), hit: string[] = [];
 await mountPlatform(ROOT);
 const w = world([dex, ...platformJars("core-oj", "core-libart")]);
 w.onGap = (gap) => hit.push(gap);
 const methods = w.prog.require("F").methods.filter((m) => m.isStatic && m.codeOff && m.flags & ACC.PUBLIC || m.isStatic && m.name.startsWith("m") && m.codeOff);
-const cyclic = irreducible ? methods.filter((m) => {
-  const item = m.dex.code(m.codeOff);
-  try { new Flow(prepareMethod(item), item); return false; } catch (e) { return e instanceof Irreducible; }
-}).length : 0;
 const entries = new Map(methods.map((m) => [m, w.entry(m.cls, m.name, m.desc)]));
 const cases = genCases(methods, {}, perMethod);
 const jdk = onJdk(out, cases.map(caseLine));
 const suite = checker(`fuzz seed ${seed}`), { threw } = await compare(suite, cases, (m) => entries.get(m)!, jdk, hit);
 if (suite.failed) console.log(`source: ${join(out, "F.java")}`);
-suite.done(`${cases.length} cases match the JDK across ${methods.length} generated methods; ${threw} threw; compiled ${w.stats.methods} methods, ${w.stats.units} modules${irreducible ? `; ${cyclic} irreducible` : ""}`);
+suite.done(`${cases.length} cases match the JDK across ${methods.length} generated methods; ${threw} threw; compiled ${w.stats.methods} methods, ${w.stats.units} modules`);
