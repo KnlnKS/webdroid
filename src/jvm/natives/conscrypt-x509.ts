@@ -7,7 +7,7 @@ import { concat, i8, jarray, u8, sameBytes } from "../abi.ts";
 import { vcall } from "./jentry.ts";
 import { boxInt } from "./jbox.ts";
 import { region } from "./jmemory.ts";
-import { nc, sslError, keyOf, newKey, parsing, type Key } from "./conscrypt.ts";
+import { nc, live, sslError, keyOf, newKey, parsing, type Key } from "./conscrypt.ts";
 import { parseX509, X509, SIG_ALGS, bitBooleans, basicConstraints, keyUsageBits, exFlags, generalNames, extKeyUsage, tbsWithout, nameRfc2253,
   signedDataCertificates, KEY_USAGE, EXT_KEY_USAGE, BASIC_CONSTRAINTS, SUBJECT_ALT_NAME, ISSUER_ALT_NAME, type Time } from "../../crypto/x509.ts";
 import { parsePublicKey, rsaApply, rsaBytes, emsaVerify, ecdsaVerify, bitLength, encodePoint, EVP_PKEY_RSA, EVP_PKEY_EC, type RsaPad } from "../../crypto/pkey.ts";
@@ -16,11 +16,7 @@ import { bytesToBig, bigToBytes } from "../../crypto/bigint.ts";
 import { DIGESTS, digestOfOid, hashOf, sha1 } from "../../crypto/digest.ts";
 
 const X = "Lcom/android/org/conscrypt/OpenSSLX509Certificate;";
-const x509Of = (h: bigint): X509 => {
-  const x = deref<X509>(h);
-  if (!(x instanceof X509)) throw rt.mkThrowable("java/lang/NullPointerException", "x509 == null");
-  return x;
-};
+const x509Of = (h: bigint): X509 => live<X509>(h, (x) => x instanceof X509, "x509");
 const ASN1 = 12;
 const decodeError = () => sslError("java/lang/RuntimeException", ASN1, 109, "DECODE_ERROR");
 const parse = (der: Uint8Array): X509 => orDer(() => parseX509(der), decodeError);

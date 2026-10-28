@@ -9,6 +9,7 @@ import { jarray, u8 } from "../abi.ts";
 import { vcall, scall, newObj, after, iof, curThread, mainThread, type JThread, linkClass } from "./jentry.ts";
 import type { JThrowable } from "./jthrowable.ts";
 import { checkFromIndexSize } from "./jlang.ts";
+import { region } from "./jmemory.ts";
 import { is64BitProcess } from "./jvmruntime.ts";
 import { fdInt, setFdInt, mkFd, bytesOf } from "./jio.ts";
 import { type JBuffer, isBuffer, readBufferBytes, writeBufferBytes, capacity, elementShift } from "./jnio.ts";
@@ -149,14 +150,8 @@ const files: Record<string, (...args: never[]) => unknown> = {
     "stat(Ljava/lang/String;)Landroid/system/StructStat;": (path: string) => existing("stat", path, statOf),
     // the VFS has no symbolic links, so no path names one
     "lstat(Ljava/lang/String;)Landroid/system/StructStat;": (path: string) => existing("lstat", path, statOf),
-    "chmod(Ljava/lang/String;I)V": (path: string, mode: number) => {
-      if (path === null) rt.npe();
-      return after(filePaths(path).fileSetAttributes(path,{mode}), result => { sys("chmod",result); });
-    },
-    "chown(Ljava/lang/String;II)V": (path: string, uid: number, gid: number) => {
-      if (path === null) rt.npe();
-      return after(filePaths(path).fileSetAttributes(path,{uid,gid}), result => { sys("chown",result); });
-    },
+    "chmod(Ljava/lang/String;I)V": (path: string, mode: number) => onPath("chmod", path, (paths) => paths.fileSetAttributes(path, { mode })),
+    "chown(Ljava/lang/String;II)V": (path: string, uid: number, gid: number) => onPath("chown", path, (paths) => paths.fileSetAttributes(path, { uid, gid })),
     // the VFS keeps no extended attributes, as a filesystem without xattr support
     "setxattr(Ljava/lang/String;Ljava/lang/String;[BI)V": (path: string, name: string) => {
       if (path === null || name === null) rt.npe();
@@ -168,16 +163,10 @@ const files: Record<string, (...args: never[]) => unknown> = {
       return structStatVfs();
     },
     "readlink(Ljava/lang/String;)Ljava/lang/String;": (path: string) => { if (path === null) rt.npe(); return after(linkTarget(path), (target) => { if (typeof target === "number") throw errno("readlink", -target); return target; }); },
-    "access(Ljava/lang/String;I)Z": (path: string, mode: number) => {
-      if (path === null) rt.npe();
-      return after(filePaths(path).fileAccess(path, mode), result => { sys("access", result); return 1; });
-    },
-    "remove(Ljava/lang/String;)V": (path: string) => { if (path === null) rt.npe(); return after(filePaths(path).fileRemove(path), n => sys("remove", n)); },
+    "access(Ljava/lang/String;I)Z": (path: string, mode: number) => after(onPath("access", path, (paths) => paths.fileAccess(path, mode)), () => 1),
+    "remove(Ljava/lang/String;)V": (path: string) => onPath("remove", path, (paths) => paths.fileRemove(path)),
     // a new directory takes the default mode, not `mode`
-    "mkdir(Ljava/lang/String;I)V": (path: string) => {
-      if (path === null) rt.npe();
-      return after(filePaths(path).fileMkdir(path), result => { sys("mkdir", result); });
-    },
+    "mkdir(Ljava/lang/String;I)V": (path: string) => onPath("mkdir", path, (paths) => paths.fileMkdir(path)),
     "rename(Ljava/lang/String;Ljava/lang/String;)V": (from: string, to: string) => {
       if (from === null || to === null) rt.npe();
       return after(filePaths(from, to).fileRename(from,to), n => sys("rename", n));
@@ -185,26 +174,26 @@ const files: Record<string, (...args: never[]) => unknown> = {
 };
 /** a -errno result as the ErrnoException libcore's Os methods throw */
 export function sys(fn: string, result: number): void { if (result < 0) throw errno(fn, -result); }
+/** Os call `fn` on `path`, by the file layer that holds it */
+const onPath = (fn: string, path: string, op: (paths: ReturnType<typeof filePaths>) => PromiseOrVal<number>): PromiseOrVal<void> => {
+  if (path === null) rt.npe();
+  return after(op(filePaths(path)), (result) => sys(fn, result));
+};
 export const ioResult = (fn: string, result: number): number => { sys(fn, result); return result; };
 /** sendfile moves at most this much a call, which its callers loop over as Linux allows */
 const SENDFILE_CHUNK = 1 << 20;
 /** the Object readBytes and its kin take: a byte[], or a direct ByteBuffer addressed from its start */
 type IoBuffer = Int8Array | JBuffer | null;
-function ioRegion(buffer: Int8Array | null, offset: number, count: number): Uint8Array {
-  if (buffer === null) return rt.npe();
-  checkFromIndexSize(offset, count, buffer.byteLength, "java/lang/ArrayIndexOutOfBoundsException");
-  return new Uint8Array(buffer.buffer, buffer.byteOffset + offset, count);
-}
 /** Read a buffer's bytes through its canonical owner before writing them. */
 export function writeBytes<T>(buffer: IoBuffer, offset: number, count: number, write: (bytes: Uint8Array) => T): PromiseOrVal<T> {
-  if (!isBuffer(buffer)) return write(ioRegion(buffer, offset, count));
+  if (!isBuffer(buffer)) return write(region(buffer, offset, count));
   checkFromIndexSize(offset,count,capacity(buffer) * 2 ** elementShift(buffer),"java/lang/ArrayIndexOutOfBoundsException");
   return after(readBufferBytes(buffer,offset,count),write);
 }
 /** A direct buffer may live in guest memory, which can move while a read waits: it takes the
  *  bytes once they have arrived. */
 export function readBytes(fn: string, buffer: IoBuffer, offset: number, count: number, read: (target: Uint8Array) => PromiseOrVal<number>) {
-  if (!isBuffer(buffer)) return after(read(ioRegion(buffer, offset, count)), (n) => ioResult(fn, n));
+  if (!isBuffer(buffer)) return after(read(region(buffer, offset, count)), (n) => ioResult(fn, n));
   checkFromIndexSize(offset,count,capacity(buffer) * 2 ** elementShift(buffer),"java/lang/ArrayIndexOutOfBoundsException");
   const scratch = new Uint8Array(count);
   return after(read(scratch),n => n > 0 ? after(writeBufferBytes(buffer,scratch.subarray(0,n),offset),() => ioResult(fn,n)) : ioResult(fn,n));

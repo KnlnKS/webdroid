@@ -24,6 +24,12 @@ import { bigToBytes } from "../../crypto/bigint.ts";
 
 const NC = "com/android/org/conscrypt/NativeCrypto";
 export const nc = (sig: string, fn: (...a: never[]) => unknown) => rt.registerJni(NC, sig, fn);
+/** the object `h` holds, which `ok` accepts: NativeCrypto's null check names it `what` */
+export function live<T>(h: bigint, ok: (o: T) => unknown, what: string): T {
+  const o = deref<T>(h);
+  if (!o || !ok(o)) throw rt.mkThrowable("java/lang/NullPointerException", `${what} == null`);
+  return o;
+}
 rt.claimNativeLib("javacrypto");
 
 const address = peerField<bigint>("com/android/org/conscrypt/NativeRef", "address");
@@ -67,11 +73,7 @@ nc("RAND_bytes([B)V", (b: Int8Array | null) => {
 type MdDesc = { name: string; make: () => Hash; size: number; block: number };
 const mdByName = new Map<string, MdDesc>();
 for (const [name, { make }] of Object.entries(DIGESTS)) { const h = make(); mdByName.set(name, { name, make, size: h.size, block: h.block }); }
-const mdOf = (h: bigint): MdDesc => {
-  const md = deref<MdDesc>(h);
-  if (!md?.make) throw rt.mkThrowable("java/lang/NullPointerException", "md == null");
-  return md;
-};
+const mdOf = (h: bigint): MdDesc => live<MdDesc>(h, (md) => md.make, "md");
 nc("EVP_get_digestbyname(Ljava/lang/String;)J", (name: string) => {
   if (name == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
   const md = mdByName.get(name.toLowerCase());
@@ -144,11 +146,7 @@ for (const bits of [128, 192, 256]) for (const mode of ["ecb", "cbc", "ctr"] as 
 }
 for (const [name, keyLen] of [["des-cbc", 8], ["des-ede-cbc", 16], ["des-ede3-cbc", 24]] as const) cipherByName.set(name, { name, keyLen, ivLen: 8, block: 8, mode: "cbc", make: des });
 cipherByName.set("rc4", { name: "rc4", keyLen: 16, ivLen: 0, block: 1, mode: "stream", make: () => { throw new Error("rc4 has no block cipher"); } });
-const cipherOf = (h: bigint): CipherDesc => {
-  const c = deref<CipherDesc>(h);
-  if (!c?.mode) throw rt.mkThrowable("java/lang/NullPointerException", "cipher == null");
-  return c;
-};
+const cipherOf = (h: bigint): CipherDesc => live<CipherDesc>(h, (c) => c.mode, "cipher");
 nc("EVP_get_cipherbyname(Ljava/lang/String;)J", (name: string) => {
   if (name == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
   const c = cipherByName.get(name.toLowerCase());
@@ -258,11 +256,7 @@ const AEADS: Record<string, AeadDesc> = {
   chacha20_poly1305: { name: "chacha20-poly1305", keyLens: [32], nonce: 12, fixedNonce: true, make: (k) => new ChaCha20Poly1305(k) },
 };
 for (const [n, d] of Object.entries(AEADS)) nc(`EVP_aead_${n}()J`, () => handle(d));
-const aeadOf = (h: bigint): AeadDesc => {
-  const a = deref<AeadDesc>(h);
-  if (!a?.keyLens) throw rt.mkThrowable("java/lang/NullPointerException", "aead == null");
-  return a;
-};
+const aeadOf = (h: bigint): AeadDesc => live<AeadDesc>(h, (a) => a.keyLens, "aead");
 nc("EVP_AEAD_max_overhead(J)I", (h: bigint) => (aeadOf(h), 16));
 nc("EVP_AEAD_nonce_length(J)I", (h: bigint) => aeadOf(h).nonce);
 function aeadFor(h: bigint, key: Int8Array | null, tagLen: number, nonce: Int8Array | null): Aead {
@@ -428,11 +422,7 @@ nc("RSA_private_decrypt(I[B[BLcom/android/org/conscrypt/NativeRef$EVP_PKEY;I)I",
 nc("RSA_private_encrypt(I[B[BLcom/android/org/conscrypt/NativeRef$EVP_PKEY;I)I", rsaRaw("privenc"));
 nc("RSA_public_decrypt(I[B[BLcom/android/org/conscrypt/NativeRef$EVP_PKEY;I)I", rsaRaw("pubdec"));
 
-const params = (h: bigint): RsaParams => {
-  const p = deref<RsaParams>(h);
-  if (!p?.key) throw rt.mkThrowable("java/lang/NullPointerException", "ctx == null");
-  return p;
-};
+const params = (h: bigint): RsaParams => live<RsaParams>(h, (p) => p.key, "ctx");
 nc("EVP_PKEY_encrypt_init(Lcom/android/org/conscrypt/NativeRef$EVP_PKEY;)J", (ref: JObj) => ownedHandle(pkeyCtx(keyOf(ref))));
 nc("EVP_PKEY_decrypt_init(Lcom/android/org/conscrypt/NativeRef$EVP_PKEY;)J", (ref: JObj) => ownedHandle(pkeyCtx(keyOf(ref))));
 nc("EVP_PKEY_CTX_free(J)V", (h: bigint) => release(h));
