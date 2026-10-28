@@ -29,6 +29,9 @@ type OpenedApk = { source: FileSource; manifest: XmlNode | null; split: Split | 
 );
 
 const flag = (manifest: XmlNode, name: string) => !!attr(manifest, name)?.data;
+/** an apk's own manifest, resource table and signature, which a merged install takes from the base alone */
+const isApkMeta = (path: string) => path === "AndroidManifest.xml" || path === "resources.arsc" || path.startsWith("META-INF/");
+const NOT_AN_INSTALL = "no AndroidManifest.xml and no apks inside: not an apk or a split install";
 function parseSplit(manifest: XmlNode | null): Split | null {
   const name = manifest && attrStr(manifest, "split");
   if (!manifest || !name) return null;
@@ -54,12 +57,12 @@ export function mergeInstall(opened: OpenedApk[], base?: Pick<Install, "zip" | "
   for (const o of opened) {
     const ownCode = isolated && !!o.split?.feature;
     if (o.kind === "resident") zipTree(o.bytes, merged, (path) => {
-      const target = path === "AndroidManifest.xml" || path === "resources.arsc" || path.startsWith("META-INF/") ? null
+      const target = isApkMeta(path) ? null
         : isDexEntry(path) ? ownCode ? null : `classes${1000 + extra++}.dex` : path;
       return target && !lazyEntries.has(target) ? target : null;
     });
     else for (const [path, entry] of o.entries) {
-      if (path === "AndroidManifest.xml" || path === "resources.arsc" || path.startsWith("META-INF/") || path.endsWith("/")) continue;
+      if (isApkMeta(path) || path.endsWith("/")) continue;
       if (Object.hasOwn(merged, path) || lazyEntries.has(path)) continue;
       lazyEntries.set(path, new ZipEntryFile(o.source, entry));
     }
@@ -73,7 +76,7 @@ export function openInstall(bytes: Uint8Array): Install {
   const outer = zipTree(bytes);
   if (outer["AndroidManifest.xml"]) return { zip: outer, lazyEntries: new Map(), base: bytes, splits: [] };
   const apks = Object.keys(outer).filter((n) => n.endsWith(".apk"));
-  if (!apks.length) throw new Error("no AndroidManifest.xml and no apks inside: not an apk or a split install");
+  if (!apks.length) throw new Error(NOT_AN_INSTALL);
   const opened = apks.map((n) => outer[n]).map((b): OpenedApk => {
     const z = zipTree(b), m = z["AndroidManifest.xml"], manifest = m ? parseAXML(m) : null;
     return { kind: "resident", source: new BytesFile(b), bytes: b, zip: z, manifest, split: parseSplit(manifest) };
@@ -121,7 +124,7 @@ async function openInstallSource(source: FileSource): Promise<Install> {
   const entries = await centralDirOfSource(source);
   if (entries.has("AndroidManifest.xml")) return openInstall(await readFully(source));
   const apks = [...entries.values()].filter((entry) => entry.name.endsWith(".apk"));
-  if (!apks.length) throw new Error("no AndroidManifest.xml and no apks inside: not an apk or a split install");
+  if (!apks.length) throw new Error(NOT_AN_INSTALL);
   return openInstallApks(await Promise.all(apks.map((entry) => entrySource(source, entry))));
 }
 
