@@ -14,7 +14,7 @@
 
 import { rt, driven, type Gen } from "../runtime.ts";
 import { newObj } from "./jentry.ts";
-import { handle, deref, release } from "../../android/handles.ts";
+import { handle, deref, FINALIZER } from "../../android/handles.ts";
 import { UNICODE_BLOCKS } from "./unicode-blocks.ts";
 
 interface Derived { find: RegExp; sticky: RegExp; whole: RegExp }
@@ -600,7 +600,6 @@ function settle(m: MatcherState): void {
 
 const matcher = (address: bigint) => deref<MatcherState>(address);
 const nextIndex = (s: string, i: number) => i + ((s.codePointAt(i) ?? 0) > 0xffff ? 2 : 1);
-const FREE = handle((address: bigint) => release(address));
 
 const patternNatives: Record<string, (...args: never[]) => unknown> = {
   "compileImpl(Ljava/lang/String;I)J": driven(function* (source: string, flags: number): Gen {
@@ -611,7 +610,7 @@ const patternNatives: Record<string, (...args: never[]) => unknown> = {
   "openMatcherImpl(J)J": (address: bigint) => handle({ pattern: deref<CompiledPattern>(address), input: "", regionStart: 0, regionEnd: 0,
     transparent: false, last: null, next: 0, matched: false, base: Op.None, finds: 0, forced: false, pendingBase: false,
     evaluated: 0, evalFrom: 0, hitEnd: false, requireEnd: false, found: null, probe: null } satisfies MatcherState),
-  "getNativeFinalizer()J": () => FREE,
+  "getNativeFinalizer()J": () => FINALIZER,
 };
 rt.registerJnis("com/android/icu/util/regex/PatternNative", patternNatives);
 
@@ -653,7 +652,7 @@ const matcherNatives: Record<string, (...args: never[]) => unknown> = {
   // anchoring bounds are what a region search gets, since it searches the region's text
   "useAnchoringBoundsImpl(JZ)V": () => {},
   "useTransparentBoundsImpl(JZ)V": (address: bigint, value: number) => { const m = matcher(address); m.transparent = !!value; m.probe = null; },
-  "getNativeFinalizer()J": () => FREE,
+  "getNativeFinalizer()J": () => FINALIZER,
 };
 rt.registerJnis("com/android/icu/util/regex/MatcherNative", matcherNatives);
 

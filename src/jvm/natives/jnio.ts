@@ -8,10 +8,10 @@ import { after, scall, newObj, vcall, iof, classNameOf } from "./jentry.ts";
 import { mem } from "../../native/mem.ts";
 import { syncShared } from "../../native/mappings.ts";
 import { jarray } from "../abi.ts";
-import { handle, deref, release } from "../../android/handles.ts";
+import { handle, deref, release, FINALIZER } from "../../android/handles.ts";
 import { CHARSETS, Converter, charsetNamed, covers, encodeString, U_BUFFER_OVERFLOW_ERROR, U_TRUNCATED_CHAR_FOUND, U_INVALID_CHAR_FOUND, U_ILLEGAL_CHAR_FOUND } from "../charset.ts";
 import { isExternal, pagesIn, externalBytes, guestAddress, isResident, mapExternal, unmapExternal, physical, memoryAt, writeAt } from "./jmemory.ts";
-import { BytesFile, type FileSource } from "../../shell/lazyfile.ts";
+import { BytesFile } from "../../shell/lazyfile.ts";
 export { isExternal };
 
 /** a java.nio.Buffer */
@@ -123,20 +123,14 @@ export function allocateDirectNow(n: number): JBuffer {
   return b;
 }
 const unmappers = new FinalizationRegistry<() => PromiseOrVal<void>>((unmap) => { const pending = unmap(); if (pending) void pending.catch(console.error); });
-/** a MappedByteBuffer over a mapping at `address`, which `unmap` releases once no buffer shares it */
-function mappedBuffer(address: number | bigint, size: number, fd: JObj | null, readOnly: boolean, unmap: () => PromiseOrVal<void>): PromiseOrVal<JBuffer> {
-  return after(newObj("java/nio/DirectByteBuffer", "(IJLjava/io/FileDescriptor;Ljava/lang/Runnable;Z)V", size, BigInt(address), fd, null, +readOnly), (b) => {
-    unmappers.register(getDeclared<object>(b, "java/nio/DirectByteBuffer", "memoryRef"), unmap);
+/** a read-only MappedByteBuffer over `bytes`, paged in as it is read and unmapped once no buffer shares it */
+export function readOnlyBuffer(bytes: Uint8Array): PromiseOrVal<JBuffer> {
+  const address = mapExternal(new BytesFile(bytes), 0, bytes.length);
+  return after(newObj("java/nio/DirectByteBuffer", "(IJLjava/io/FileDescriptor;Ljava/lang/Runnable;Z)V", bytes.length, BigInt(address), null, null, 1), (b) => {
+    unmappers.register(getDeclared<object>(b, "java/nio/DirectByteBuffer", "memoryRef"), () => unmapExternal(address));
     return b;
   });
 }
-
-/** a read-only MappedByteBuffer over an immutable source, paged in as it is read */
-function readOnlyMapping(source: FileSource, offset: number, size: number, fd: JObj | null = null): PromiseOrVal<JBuffer> {
-  const address = mapExternal(source, offset, size);
-  return mappedBuffer(address, size, fd, true, () => unmapExternal(address));
-}
-export const readOnlyBuffer = (bytes: Uint8Array): PromiseOrVal<JBuffer> => readOnlyMapping(new BytesFile(bytes), 0, bytes.length);
 
 rt.registerJnis("java/nio/MappedByteBuffer", {
   "isLoaded0(JJJ)Z": function (address: bigint, length: bigint) { return +(!isExternal(address) || isResident(address, Number(length))); },
@@ -147,7 +141,6 @@ rt.registerJnis("java/nio/MappedByteBuffer", {
 
 // ── charsets: NativeConverter (libcore_bridge's JNI over ICU's ucnv) over charset.ts's converters
 const converter = (h: bigint) => deref<Converter>(h);
-const CONVERTER_FINALIZER = handle((h: bigint) => release(h));
 /** ucnv_toUnicode/ucnv_fromUnicode through `data` ([input offset, output offset, invalid count]):
  *  the input offset comes back as the count consumed, the output one as the count produced when
  *  decoding and as the offset reached when encoding, as each native reports them. A failure other
@@ -161,7 +154,7 @@ function convert(c: Converter, code: number, sp: number, dp: number, data: Int32
   return code;
 }
 rt.registerJnis("com/android/icu/charset/NativeConverter", {
-  "getNativeFinalizer()J": () => CONVERTER_FINALIZER,
+  "getNativeFinalizer()J": () => FINALIZER,
   "openConverter(Ljava/lang/String;)J": (name: string) => {
     const cs = charsetNamed(name);
     if (!cs) throw rt.mkThrowable("java/lang/RuntimeException", "ucnv_open failed: U_FILE_ACCESS_ERROR");
