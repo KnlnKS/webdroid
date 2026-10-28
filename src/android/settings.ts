@@ -8,7 +8,7 @@
 // SettingsProvider.apk rather than on the boot class path. Answers are built in `driven`
 // generators, so each Java call runs on the asking thread (see binder.ts newStub).
 import { awaited, rt, driven, type JObj, type Gen } from "../jvm/runtime.ts";
-import { hexBytes } from "../jvm/abi.ts";
+import { concat, hexBytes } from "../jvm/abi.ts";
 import { vcall, scall, staticField, newObj, iof, after } from "../jvm/natives/jentry.ts";
 import { logUncaught, detached } from "../jvm/natives/jthrowable.ts";
 import { newArrayList, toJsArray, arrayMapEntries } from "../jvm/natives/jcoll.ts";
@@ -158,10 +158,7 @@ function ssaid(record: PackageRecord): Promise<string> {
       new DataView(prefix.buffer).setInt32(0, cert.length);
       parts.push(prefix, cert);
     }
-    const data = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
-    let at = 0;
-    for (const p of parts) { data.set(p, at); at += p.length; }
-    const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, data));
+    const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, concat(parts)));
     return mac.subarray(0, 8).toHex();
   })());
   return id;

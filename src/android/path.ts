@@ -226,13 +226,12 @@ function walk(ops: number[], pen: Pen) { for (let i = 0; i < ops.length; i += 1 
  *  `conics` as itself (CanvasKit's commands) */
 export function expand(ops: number[], conics = false): number[] {
   const out: number[] = [];
-  walk(ops, new Pen(conics ? {
-    moveTo: (x, y) => out.push(MOVE, x, y), lineTo: (x, y) => out.push(LINE, x, y), quadraticCurveTo: (a, b, x, y) => out.push(QUAD, a, b, x, y),
-    conicTo: (a, b, x, y, w) => out.push(CONIC, a, b, x, y, w), bezierCurveTo: (a, b, c, d, x, y) => out.push(CUBIC, a, b, c, d, x, y), closePath: () => out.push(CLOSE),
-  } : {
+  const sink: Sink = {
     moveTo: (x, y) => out.push(MOVE, x, y), lineTo: (x, y) => out.push(LINE, x, y), quadraticCurveTo: (a, b, x, y) => out.push(QUAD, a, b, x, y),
     bezierCurveTo: (a, b, c, d, x, y) => out.push(CUBIC, a, b, c, d, x, y), closePath: () => out.push(CLOSE),
-  }));
+  };
+  if (conics) sink.conicTo = (a, b, x, y, w) => out.push(CONIC, a, b, x, y, w);
+  walk(ops, new Pen(sink));
   return out;
 }
 const compound = (ops: number[]) => { for (let i = 0; i < ops.length; i += 1 + ARGS[ops[i]]) if (ops[i] > DONE) return true; return false; };
