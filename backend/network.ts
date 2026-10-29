@@ -10,13 +10,8 @@ import { isPublicHost } from "../src/native/net-address.ts";
 import type { ProxyOptions } from "../src/shell/proxy.ts";
 import { toWeb } from "../scripts/serve.ts";
 
-export interface Network extends Omit<ProxyOptions, "bridgeCall"> {
-  /** whether a connection may dial `host` at all: an address literal connects without `lookup` */
-  reachable(host: string): boolean;
-  /** a name's addresses for a connection */
-  lookup: LookupFunction;
-  fetchEncoded(url: string, init: RequestInit): Promise<Response>;
-}
+/** the proxy's upstream, and a name's addresses for the relays' connections */
+export type Network = Required<Omit<ProxyOptions, "bridgeCall">> & { lookup: LookupFunction };
 
 const unreachable = (host: string) => Object.assign(new Error(`${host} is not reachable from this server`), { code: "ECONNREFUSED" });
 
@@ -46,14 +41,15 @@ const encodedFetch = (lookup: LookupFunction) => async (url: string, init: Reque
   return new Response(empty ? null : toWeb(res), { status, statusText: res.statusMessage, headers });
 };
 
-export const localNetwork: Network = { reachable: () => true, lookup: dns.lookup, fetchEncoded: encodedFetch(dns.lookup) };
+function network(reachable: (host: string) => boolean, lookup: LookupFunction): Network {
+  const connect = buildConnector({ lookup });
+  // a redirect to an address literal reaches the connector without a lookup
+  const dispatcher = new Agent({ connections: 16, connect: (options, callback) =>
+    reachable(options.hostname) ? connect(options, callback) : callback(unreachable(options.hostname), null) });
+  return { reachable, lookup, fetchEncoded: encodedFetch(lookup),
+    // undici's own fetch, since Node's built-in one rejects this package's dispatcher; its Response is the web one in all but type
+    fetch: (url, init) => undiciFetch(url, { ...init, dispatcher } as UndiciInit) as unknown as Promise<Response> };
+}
 
-const connect = buildConnector({ lookup: publicLookup });
-// a redirect to an address literal reaches the connector without a lookup
-const dispatcher = new Agent({ connections: 16, connect: (options, callback) =>
-  isPublicHost(options.hostname) ? connect(options, callback) : callback(unreachable(options.hostname), null) });
-export const publicNetwork: Network = {
-  reachable: isPublicHost, lookup: publicLookup, fetchEncoded: encodedFetch(publicLookup),
-  // undici's own fetch, since Node's built-in one rejects this package's dispatcher; its Response is the web one in all but type
-  fetch: (url, init) => undiciFetch(url, { ...init, dispatcher } as UndiciInit) as unknown as Promise<Response>,
-};
+export const localNetwork = network(() => true, dns.lookup);
+export const publicNetwork = network(isPublicHost, publicLookup);
