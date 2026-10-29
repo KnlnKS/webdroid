@@ -1,4 +1,4 @@
-// What the dev server (server.ts) and the deployed Worker (worker/index.ts) both answer; each host lends its
+// What the dev server (server.ts) and the production backend (backend/index.ts) both answer; each host lends its
 // bridge sessions, its resolver, its renderer origin and its upstream fetch.
 import { WEB_FRAME, WEB_PROXY_WORKER } from "./webinject.ts";
 import { EMBEDDER, forwardDnsMessage, proxyRequest, type ProxyOptions } from "./proxy.ts";
@@ -22,14 +22,14 @@ export interface ServeHost {
    *  shell page at `url`; null when there is none */
   webviewOrigin(url: URL): string | null;
   /** whether a page of `origin` is the shell page for a request to `url`: the request's own origin on the dev server, the Pages
-   *  site's deployments for the Worker */
+   *  site's deployments for the backend */
   isApp(origin: string, url: URL): boolean;
   proxy?: Omit<ProxyOptions, "bridgeCall">;
 }
 type Route = (request: Request) => PromiseOrVal<Response>;
 
-/** what the app's page asks of its backend, which Pages forwards to the Worker (scripts/build-prod.ts) */
-export const BACKEND_PATHS = ["/proxy", "/dns", "/dns-query", "/webview-origin", "/tcp", "/webview-socket"];
+/** what the app's page asks of its backend, which Pages forwards to OCI (scripts/build-prod.ts) */
+export const BACKEND_PATHS = ["/proxy", "/dns", "/dns-query", "/webview-origin", "/tcp", "/udp", "/webview-socket"];
 
 type Header = (name: string) => string | null | undefined;
 /** the origin of the page a request comes from, as the browser that sent it says: the page's Origin (a WebSocket's, a POST's),

@@ -1,44 +1,24 @@
 // The dev server's own routes, as a Vite plugin: Vite serves the page and its modules, this answers what the page asks of a
 // server (packages, the reference build's files, the proxy, the WebView bridge) and lends it sockets. The routes the
-// deployed Worker answers alike are src/shell/serve-routes.ts's.
-import dns from "node:dns/promises";
+// production backend answers alike are src/shell/serve-routes.ts's.
 import { globSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import http, { type IncomingMessage } from "node:http";
-import https from "node:https";
 import type { Plugin } from "vite";
-import { WebSocketServer, type WebSocket } from "ws";
 import { webDocument } from "./src/shell/webhtml.ts";
 import { sandboxDocument } from "./src/shell/proxy.ts";
 import { openInstall } from "./src/shell/install.ts";
 import { gzipHeaders, mimeOf } from "./src/mime.ts";
-import { WebRelay } from "./src/shell/webrelay.ts";
+import { backendHost, attachSockets } from "./backend/server.ts";
+import { localNetwork } from "./backend/network.ts";
 import { prepareSystemPackages } from "./scripts/system-packages.ts";
 import { aotFile, aotManifest } from "./scripts/aot-serve.ts";
 import { bundle } from "./scripts/bundle.ts";
 import { runNode } from "./scripts/node.ts";
-import { fileResponse, respond, toWeb } from "./scripts/serve.ts";
+import { fileResponse, respond } from "./scripts/serve.ts";
 import { WORKER_SCRIPTS } from "./src/worker-scripts.ts";
-import { ISOLATION, bridgeSocket, fromApp, sharedRoute, type ServeHost } from "./src/shell/serve-routes.ts";
-import { tcpTarget } from "./src/shell/tcpwire.ts";
-import { relayTcp, relayUdp } from "./socket-relays.ts";
+import { ISOLATION, sharedRoute } from "./src/shell/serve-routes.ts";
 
 const apkDirectory = process.env.WEBDROID_APK_DIR ?? "apks";
-/** one exchange that leaves the body encoded: node's fetch always decodes, and a guest that asked for an encoding decodes it itself */
-async function fetchEncoded(url: string, init: RequestInit): Promise<Response> {
-  const res = await new Promise<IncomingMessage>((resolve, reject) => {
-    const body = init.body ? Buffer.from(init.body as ArrayBuffer) : undefined, headers = Object.fromEntries(init.headers as Headers);
-    if (body) headers["content-length"] ??= String(body.length);
-    const req = (url.startsWith("https:") ? https : http).request(url, { method: init.method, headers }, resolve);
-    req.once("error", reject).end(body);
-  });
-  const status = res.statusCode!, headers = new Headers();
-  for (let i = 0; i < res.rawHeaders.length; i += 2) headers.append(res.rawHeaders[i], res.rawHeaders[i + 1]);
-  const empty = init.method === "HEAD" || [204, 205, 304].includes(status);
-  if (empty) res.resume();
-  return new Response(empty ? null : toWeb(res), { status, statusText: res.statusMessage, headers });
-}
-
 const IMMUTABLE = "public, max-age=31536000, immutable";
 function serveFile(req: Request, dir: string, name: string, headers?: Record<string, string>): Response {
   if (!name || /[/\\]|\.\./.test(name)) return new Response("nope", { status: 400 });
@@ -98,16 +78,13 @@ const ROUTES: [RegExp, Route][] = [
   [/^\/apks$/, () => Response.json(globSync("*.{apk,xapk}", { cwd: apkDirectory }).sort())],
   [/^\/apks\/([^/]+)$/, (req, _, [name]) => serveFile(req, apkDirectory, decodeURIComponent(name))],
 ];
-const webRelay = new WebRelay();
-const host: ServeHost = {
-  bridge: (request, id) => webRelay.call(request, id),
-  nameExists: (name) => dns.lookup(name, { all: true }).then(() => true, (e: { code?: string }) => e.code === "ENOTFOUND" || e.code === "ENODATA" ? false : null),
+const host = backendHost({
+  network: localNetwork,
   // a browser resolves every *.localhost name to this loopback server, each its own site
   webviewOrigin: (url) => process.env.WEBDROID_WEBVIEW_ORIGIN
     ?? (url.hostname === "localhost" || url.hostname === "127.0.0.1" ? `${url.protocol}//*.localhost:${url.port}` : null),
   isApp: (origin, url) => origin === url.origin,
-  proxy: { fetchEncoded },
-};
+});
 export function devServer(): Plugin {
   return {
     name: "webdroid:dev-server",
@@ -123,30 +100,7 @@ export function devServer(): Plugin {
         }
         next();
       });
-      const sockets = new WebSocketServer({ noServer: true });
-      server.httpServer?.on("upgrade", (req, socket, head) => {
-        const url = URL.parse(req.url ?? "/", `http://${req.headers.host}`);
-        if (!url) return void socket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
-        // a socket's error (a frame past the size limit) closes it, which its relay ends with
-        const upgrade = (use: (ws: WebSocket) => void) => sockets.handleUpgrade(req, socket, head, (ws) => { ws.on("error", () => ws.terminate()); use(ws); });
-        const header = (name: string) => req.headers[name] as string | undefined;
-        if (url.pathname === "/webview-socket") {
-          const id = bridgeSocket(url, header, host);
-          if (id === null) return void socket.end("HTTP/1.1 403 Forbidden\r\n\r\nbad bridge");
-          return upgrade((ws) => {
-            webRelay.open(id, ws);
-            ws.on("message", (data, binary) => { if (!binary) webRelay.reply(ws, data.toString()); });
-            ws.once("close", () => webRelay.close(id, ws));
-          });
-        }
-        if (url.pathname !== "/udp" && url.pathname !== "/tcp") return void socket.end("HTTP/1.1 404 Not Found\r\n\r\n");
-        // a WebSocket skips CORS: a page of any site open in the browser could otherwise use this machine's network
-        if (!fromApp(url, header, host)) return void socket.end("HTTP/1.1 403 Forbidden\r\n\r\n");
-        if (url.pathname === "/udp") return upgrade(relayUdp);
-        const target = tcpTarget(url);
-        if (typeof target === "string") return void socket.end(`HTTP/1.1 400 Bad Request\r\n\r\n${target}`);
-        upgrade((ws) => relayTcp(ws, target));
-      });
+      if (server.httpServer) attachSockets(server.httpServer, host);
     },
   };
 }

@@ -5,12 +5,10 @@
   "scripts": {
     "dev": "vp dev --configLoader native",
     "build:prod": "vp build --configLoader native",
-    "worker:dev": "wrangler dev -c worker/wrangler.jsonc --var APP_ORIGIN:http://localhost:8788 --var WEBVIEW_ORIGIN:http://127.0.0.1:8787",
-    "pages:dev": "vp build --configLoader native && wrangler pages dev",
-    "deploy:check": "wrangler deploy -c worker/wrangler.jsonc --env=\"\" --dry-run && wrangler pages functions build --outdir .wrangler/pages-check",
+    "deploy:check": "pnpm backend:build && wrangler pages functions build --outdir .wrangler/pages-check",
     "release": "node scripts/deploy.ts",
     "generate": "node scripts/generated.ts --force",
-    "typecheck": "node scripts/generated.ts && wrangler types -c worker/wrangler.jsonc worker-configuration.d.ts && tsrs -p tsconfig.json && tsrs -p tsconfig.worker.json",
+    "typecheck": "node scripts/generated.ts && tsrs -p tsconfig.json && tsrs -p tsconfig.pages.json && tsrs -p infra/tsconfig.json",
     "test": "vp test run --configLoader native",
     "check": "scripts/node scripts/check.ts",
     "ts": "scripts/node",
@@ -34,7 +32,11 @@
     "lat": "scripts/node scripts/lat/run.ts",
     "conform": "scripts/node scripts/wasm/run.ts conform",
     "wasm": "scripts/node scripts/wasm/run.ts",
-    "aot": "scripts/node scripts/wasm/run.ts aot"
+    "aot": "scripts/node scripts/wasm/run.ts aot",
+    "backend:dev": "node --watch backend/index.ts",
+    "backend:build": "node scripts/generated.ts && node scripts/build-backend.ts",
+    "infra": "pulumi -C infra",
+    "backend:deploy": "pnpm backend:build && node scripts/deploy-backend.ts"
   },
   "dependencies": {
     "acorn": "^8.18.0",
@@ -49,6 +51,9 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260924.1",
+    "@pulumi/cloudflare": "^6.23.1",
+    "@pulumi/oci": "^5.5.0",
+    "@pulumi/pulumi": "^3.272.0",
     "@types/estree": "^1.0.9",
     "@types/node": "24.19.2",
     "@types/pngjs": "^6.0.5",
@@ -62,6 +67,7 @@
     "pngjs": "^7.0.0",
     "tsrs": "0.18.0-ts7.1.0-dev.20260929",
     "typescript": "^5.9.2",
+    "undici": "^8.12.3",
     "vite": "npm:@voidzero-dev/vite-plus-core@1.3.0",
     "vite-plus": "1.3.0",
     "wrangler": "^4.137.0",

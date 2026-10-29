@@ -22,7 +22,7 @@ export function sandboxDocument(request: Request, response: Response): Response 
 }
 
 export interface ProxyOptions {
-  /** whether this server may connect to `hostname`: the deployed Worker keeps off private networks */
+  /** whether this server may connect to `hostname`: the production backend keeps off private networks */
   reachable?: (hostname: string) => boolean;
   bridgeCall: (request: Request) => Promise<Response>;
   /** the upstream fetch, which follows a redirect unless told otherwise: the global one by default */
@@ -34,8 +34,9 @@ export interface ProxyOptions {
 
 /** The class of an upstream fetch failure, so the Java side can throw what a socket would. */
 function failureKind(error: unknown): string {
-  const e = error as { code?: string; name?: string };
-  const tag = `${e?.code ?? ""} ${e?.name ?? ""} ${error}`;
+  // Node's fetch fails as "fetch failed", with what failed as its cause
+  const e = ((error as { cause?: unknown })?.cause ?? error) as { code?: string; name?: string };
+  const tag = `${e?.code ?? ""} ${e?.name ?? ""} ${e}`;
   if (/ENOTFOUND|EAI_|getaddrinfo|DNS/i.test(tag)) return "host";
   if (/Refused|ECONNREFUSED/i.test(tag)) return "refused";
   if (/Timeout|ETIMEDOUT/i.test(tag)) return "timeout";
@@ -87,7 +88,7 @@ async function proxied(request: Request, options: ProxyOptions): Promise<Respons
       method: request.method, headers,
       // buffered: a redirect (307/308) must replay the body, which a stream cannot
       body,
-      redirect: manual ? "manual" : "follow",
+      redirect: manual ? "manual" : "follow", signal: request.signal,
     };
     const upstream = intercepted ?? await (encoded ? options.fetchEncoded! : options.fetch ?? fetch)(url, init);
     const contentType = upstream.headers.get("content-type") ?? "";

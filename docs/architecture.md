@@ -28,7 +28,7 @@ App DEX (unchanged)
         ├─► Binder / AIDL ....... system services in TS (IActivityManager, IWindowSession, IPackageManager, ...)
         └─► VM built-ins ........ TS: String, Object, Class, Thread, Throwable, reflection, java.lang.invoke,
                                   Unsafe, VMRuntime
-Browser: Canvas2D / WebGL, OPFS / IndexedDB, CORS proxy and TCP relay, Workers
+Browser: Canvas2D / WebGL, OPFS / IndexedDB, CORS proxy and TCP/UDP relays, Workers
 ```
 
 - **Bytecode by default.** AOSP's bytecode answers for every class; a spec implements natives only. `TS_SPECS`
@@ -151,7 +151,7 @@ are compute-bound runs them on a lane (`src/native/lanes.ts`): a nested Worker t
 its shared memory. Each lane exit returns to the process Worker, so host code stays single-threaded. 64-bit processes run
 the reference build's bionic as guest code (decision below). 32-bit processes keep the HLE libc
 (`src/native/libc32/`), because the reference build ships no 32-bit bionic. EGL/GLES (onto WebGL), Vulkan (onto WebGPU in
-`src/native/vulkan/`, which translates SPIR-V to WGSL), audio, media codecs and DRM stay high-level emulation. Networking goes through the dev server's or Worker's HTTP proxy, DNS lookup and TCP WebSocket relay.
+`src/native/vulkan/`, which translates SPIR-V to WGSL), audio, media codecs and DRM stay high-level emulation. Networking goes through the shared Node backend's HTTP proxy, DNS lookup and TCP/UDP WebSocket relays. Production runs on OCI Always Free compute; Cloudflare Pages serves the frontend and platform assets and forwards backend routes.
 
 ## Rendering and text
 

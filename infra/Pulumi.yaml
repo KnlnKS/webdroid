@@ -1,0 +1,8 @@
+name: webdroid
+runtime:
+  name: nodejs
+  options:
+    typescript: false
+    nodeargs: --experimental-strip-types
+main: index.ts
+description: Cloudflare Pages assets and an Always Free OCI networking backend

@@ -1,4 +1,4 @@
-// The /tcp relay's wire, between relay.ts and the relays (socket-relays.ts in dev, worker/tcp.ts deployed):
+// The /tcp relay's wire, between relay.ts and the relay (backend/relays.ts):
 // one WebSocket carries one TCP connection, its binary frames the bytes. The relay's first text frame says
 // it connected (and, when it can, its local endpoint); a close before it says why not. The client's
 // "shutdown" text frame is its shutdown(SHUT_WR).

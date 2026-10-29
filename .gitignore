@@ -22,7 +22,10 @@ src/native/native-core.wasm
 src/shell/webpage.gen.ts
 dist/
 .wrangler/
-worker-configuration.d.ts
 vendor/wasm-aot/
 .claude
 src/zlib.wasm.ts
+dist-backend/
+infra/.pulumi/
+infra/Pulumi.*.yaml
+__pycache__/
