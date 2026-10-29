@@ -1,6 +1,6 @@
 // The dev server's own routes, as a Vite plugin: Vite serves the page and its modules, this answers what the page asks of a
 // server (packages, the reference build's files, the proxy, the WebView bridge) and lends it sockets. The routes the
-// production backend answers alike are src/shell/serve-routes.ts's.
+// production backend answers alike are backend/routes.ts's.
 import { globSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import type { Plugin } from "vite";
@@ -8,7 +8,7 @@ import { webDocument } from "./src/shell/webhtml.ts";
 import { sandboxDocument } from "./src/shell/proxy.ts";
 import { openInstall } from "./src/shell/install.ts";
 import { gzipHeaders, mimeOf } from "./src/mime.ts";
-import { backendHost, attachSockets } from "./backend/server.ts";
+import { backend } from "./backend/routes.ts";
 import { localNetwork } from "./backend/network.ts";
 import { prepareSystemPackages } from "./scripts/system-packages.ts";
 import { aotFile, aotManifest } from "./scripts/aot-serve.ts";
@@ -16,7 +16,7 @@ import { bundle } from "./scripts/bundle.ts";
 import { runNode } from "./scripts/node.ts";
 import { fileResponse, respond } from "./scripts/serve.ts";
 import { WORKER_SCRIPTS } from "./src/worker-scripts.ts";
-import { ISOLATION, sharedRoute } from "./src/shell/serve-routes.ts";
+import { ISOLATION } from "./src/shell/serve-routes.ts";
 
 const apkDirectory = process.env.WEBDROID_APK_DIR ?? "apks";
 const IMMUTABLE = "public, max-age=31536000, immutable";
@@ -78,7 +78,7 @@ const ROUTES: [RegExp, Route][] = [
   [/^\/apks$/, () => Response.json(globSync("*.{apk,xapk}", { cwd: apkDirectory }).sort())],
   [/^\/apks\/([^/]+)$/, (req, _, [name]) => serveFile(req, apkDirectory, decodeURIComponent(name))],
 ];
-const host = backendHost({
+const routes = backend({
   network: localNetwork,
   // a browser resolves every *.localhost name to this loopback server, each its own site
   webviewOrigin: (url) => process.env.WEBDROID_WEBVIEW_ORIGIN
@@ -92,7 +92,7 @@ export function devServer(): Plugin {
       await prepareSystemPackages();
       server.watcher.on("all", () => workerBuild.clear());
       server.middlewares.use((req, res, next) => {
-        const url = new URL(req.url ?? "/", "http://localhost"), shared = sharedRoute(url, host);
+        const url = new URL(req.url ?? "/", "http://localhost"), shared = routes.route(url);
         if (shared) return void respond(req, res, shared);
         for (const [pattern, route] of ROUTES) {
           const match = pattern.exec(url.pathname);
@@ -100,7 +100,7 @@ export function devServer(): Plugin {
         }
         next();
       });
-      if (server.httpServer) attachSockets(server.httpServer, host);
+      if (server.httpServer) routes.attach(server.httpServer);
     },
   };
 }

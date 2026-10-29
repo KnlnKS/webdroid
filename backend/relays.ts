@@ -6,7 +6,7 @@ import dgram from "node:dgram";
 import net from "node:net";
 import tls from "node:tls";
 import type { WebSocket } from "ws";
-import { closeReason, MAX_PENDING_TCP_BYTES, TCP_CONNECT_FAILED, TCP_HANDSHAKE_FAILED, TCP_TOO_SLOW, tcpReady, udpFrame, type TcpTarget } from "../src/shell/tcpwire.ts";
+import { closeReason, MAX_PENDING_BYTES, TCP_CONNECT_FAILED, TCP_HANDSHAKE_FAILED, TCP_TOO_SLOW, tcpReady, udpFrame, type TcpTarget } from "../src/shell/tcpwire.ts";
 import type { Network } from "./network.ts";
 
 export function relayTcp(ws: WebSocket, { host, port, alpn, secure }: TcpTarget, { reachable, lookup }: Network): void {
@@ -47,7 +47,7 @@ export function relayTcp(ws: WebSocket, { host, port, alpn, secure }: TcpTarget,
     if (shut) return;
     const chunk = data as Buffer;
     if (ready) socket.write(chunk); else { pending.push(chunk); pendingBytes += chunk.length; }
-    if (socket.writableLength + pendingBytes > MAX_PENDING_TCP_BYTES) {
+    if (socket.writableLength + pendingBytes > MAX_PENDING_BYTES) {
       ws.close(TCP_TOO_SLOW, "TCP upstream is too slow");
       socket.destroy();
     }
@@ -73,11 +73,11 @@ export function relayUdp(ws: WebSocket, { lookup }: Network): void {
   const socket = dgram.createSocket("udp4");
   socket.on("message", (bytes, { port, address }) => {
     const name = peers.get(`${address}:${port}`);
-    if (name && ws.readyState === ws.OPEN && ws.bufferedAmount < MAX_PENDING_TCP_BYTES)
+    if (name && ws.readyState === ws.OPEN && ws.bufferedAmount < MAX_PENDING_BYTES)
       ws.send(udpFrame(utf8.encode(name), port, bytes));
   });
   let bound = false, closed = false, pending = 0;
-  socket.on("error", () => { if (!bound) ws.close(4000, "UDP bind failed"); });
+  socket.on("error", () => { if (!bound) ws.close(1011, "UDP bind failed"); });
   socket.bind(0, () => {
     bound = true;
     if (closed) socket.close(); else ws.send("ready");

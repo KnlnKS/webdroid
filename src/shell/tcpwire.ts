@@ -29,9 +29,9 @@ export function parseTcpReady(data: string): { local: RelayEndpoint | null; alpn
 
 /** the close codes before the ready frame: the connect failed (its reason leads with the errno when there
  *  is one, which the guest's connect(2) reports), or the TLS handshake did; and a client that sends faster
- *  than the upstream takes past MAX_PENDING_TCP_BYTES */
+ *  than the upstream takes past MAX_PENDING_BYTES */
 export const TCP_CONNECT_FAILED = 4000, TCP_HANDSHAKE_FAILED = 4001, TCP_TOO_SLOW = 4002;
-export const MAX_PENDING_TCP_BYTES = 8 * 1024 * 1024;
+export const MAX_PENDING_BYTES = 8 * 1024 * 1024;
 /** a WebSocket close reason, which holds 123 bytes: the message's printable ASCII */
 export const closeReason = (message: string) => message.replace(/[^ -~]/g, "?").slice(0, 123);
 

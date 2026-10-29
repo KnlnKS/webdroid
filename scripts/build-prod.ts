@@ -10,7 +10,8 @@ import { bundle } from "./bundle.ts";
 import { runNode } from "./node.ts";
 import { WORKER_SCRIPTS } from "../src/worker-scripts.ts";
 import { WEB_PROXY_WORKER } from "../src/shell/webinject.ts";
-import { BACKEND_PATHS, ISOLATED_PATHS, ISOLATION } from "../src/shell/serve-routes.ts";
+import { ISOLATED_PATHS, ISOLATION } from "../src/shell/serve-routes.ts";
+import { BACKEND_PATHS } from "../backend/routes.ts";
 
 const PART_SIZE = 24 * 1024 * 1024;
 const aospFiles = [...PLATFORM_JARS, "framework-res.apk", ...Object.keys(PLATFORM_DATA).map((path) => path.slice(1))];

@@ -3,13 +3,10 @@ import { webScript } from "./webscript.ts";
 import { isGuestHost } from "../native/net-address.ts";
 import type { BridgeCall, BridgeReply, WebResponse } from "./webpage/protocol.ts";
 import { failedAnswer, fromProxyHeaders, parseProxyQuery, writeAnswer } from "./webpage/proxywire.ts";
+import { EMBEDDER } from "./serve-routes.ts";
 
 const DROP = /^(content-encoding|transfer-encoding|set-cookie)$/i;
 const DROP_FRAME = /^(x-frame-options|content-security-policy(-report-only)?|cross-origin-(opener|embedder)-policy)$/i;
-
-/** what a frame inside the cross-origin isolated page embeds on (serve-routes.ts' ISOLATION). Credentialless embedding
- *  takes a WebView page's cross-origin subresources without their consent, as no-cors requests without credentials. */
-export const EMBEDDER = { "cross-origin-embedder-policy": "credentialless" };
 
 /** A WebView page reaches this server through its frame's fetches; a document loaded straight from it
  *  (a page's frame pointed at it) runs in an opaque origin, never as the origin that serves it. */
@@ -28,7 +25,7 @@ export interface ProxyOptions {
   /** the upstream fetch, which follows a redirect unless told otherwise: the global one by default */
   fetch?: (url: string, init: RequestInit) => Promise<Response>;
   /** one exchange whose body stays as the server encoded it, for a device that asked for an encoding and
-   *  decodes it itself; without it (a Worker's fetch decodes), the device gets the body decoded */
+   *  decodes it itself; without it, the device gets the body decoded */
   fetchEncoded?: (url: string, init: RequestInit) => Promise<Response>;
 }
 

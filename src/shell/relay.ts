@@ -43,8 +43,8 @@ export class DatagramRelay {
     if (name.length > 253 || bytes.length > 65507) throw new Error("UDP datagram is too large");
     transport.send(udpFrame(name, port, bytes));
   }
-  /** A guest's own resolver is answered over DNS-over-HTTPS, which needs no UDP relay (the deployed
-   *  Worker has none). A failed query is a lost datagram: the resolver's retry and timeout apply. */
+  /** A guest's own resolver is answered over DNS-over-HTTPS, whatever address it was configured with.
+   *  A failed query is a lost datagram: the resolver's retry and timeout apply. */
   private async resolve(host: string, query: Uint8Array): Promise<void> {
     try {
       const r = await fetch(`${pageOrigin()}/dns-query`, { method: "POST", body: query.slice(), headers: { "content-type": "application/dns-message" } });

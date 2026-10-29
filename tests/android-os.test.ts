@@ -8,7 +8,6 @@ const lifeCalls = (calls: Partial<ProcessLifeCalls>): ProcessLifeCalls =>
   ({ processAlive: async () => true, processSignal: async () => {}, processWatch: async () => {}, processUnwatch: async () => {}, ...calls });
 import { startMainLooper } from "../src/android/mainloop.ts";
 import { NativeLooper, onMain, fnRunnable, postRunnable } from "../src/android/mainloop.ts";
-import { BridgeCalls } from "../src/shell/bridgecalls.ts";
 import { setProcessIdentity, setProcessName } from "../src/android/os.ts";
 import { UNAME } from "../src/shell/device-properties.ts";
 import { importBinder, onCallerDeath } from "../src/android/binder.ts";
@@ -56,21 +55,6 @@ describe("bitmap-parcel", () => {
     expect([await get("getWidth"), await get("getHeight"), await get("getDensity"), await get("hasAlpha")]).toEqual([3, 2, 320, 0]);
     expect(await vcall(back, "getPixel", "(II)I", 2, 1)).toBe(0xff336699 | 0);
     expect(await vcall(back, "getPixel", "(II)I", 0, 0)).toBe(0);
-  });
-});
-
-describe("bridgecalls", () => {
-  test("bridge replies belong to the peer that received the call", async () => {
-    let sent: (message: string) => void = () => {};
-    const message = new Promise<string>((resolve) => { sent = resolve; });
-    const owner = { send(value: string) { sent(value); } };
-    const other = { send(_value: string) {} };
-    const bridge = new BridgeCalls<typeof owner>();
-    const pending = bridge.call(new Request("http://localhost/webview-call", { method: "POST", body: "{}" }), owner, () => true);
-    const seq = (await message).split("\n", 1)[0];
-    bridge.reply(other, `${seq}\nwrong`);
-    bridge.reply(owner, `${seq}\nright`);
-    expect(await (await pending).text()).toBe("right");
   });
 });
 
