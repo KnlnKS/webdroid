@@ -1,7 +1,7 @@
 // The shell page's Function, for the paths dist/_routes.json sends here (scripts/build-prod.ts): the platform files Pages'
 // static serving cannot answer as the page reads them, and the backend routes, forwarded on the page's own origin.
 import { gzipHeaders } from "../src/mime.ts";
-import { holding, release } from "../src/shell/pages-hop.ts";
+import { forward, release } from "../src/shell/pages-hop.ts";
 
 type Env = { ASSETS: Fetcher; BACKEND_ORIGIN: string };
 /** each file answered in ranges by its size, and for one build-prod split to fit the asset size limit, its parts' */
@@ -69,10 +69,7 @@ async function ranged(request: Request, env: Env, path: string, { size, partSize
 async function backend(request: Request, env: Env): Promise<Response> {
   const origin = URL.parse(env.BACKEND_ORIGIN);
   if (!origin || origin.protocol !== "https:") return new Response("Backend not configured", { status: 503 });
-  const url = new URL(request.url), headers = holding(new Headers(request.headers));
-  // the backend's own origin would stand for a same-origin request that names none (pageOrigin, serve-routes.ts)
-  if (!headers.has("origin") && headers.get("sec-fetch-site") === "same-origin") headers.set("origin", url.origin);
-  return release(await fetch(new Request(new URL(url.pathname + url.search, origin), new Request(request, { headers })), { redirect: "manual" }));
+  return release(await fetch(forward(request, origin), { redirect: "manual" }));
 }
 
 export const onRequest: PagesFunction<Env> = async ({ request, env }) => {

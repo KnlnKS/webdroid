@@ -7,6 +7,7 @@ import dns, { type LookupAddress } from "node:dns";
 import { WebSocket } from "ws";
 import { backend, pagesSite } from "../backend/routes.ts";
 import { localNetwork, publicNetwork, type Network } from "../backend/network.ts";
+import { forward, hold, release } from "../src/shell/pages-hop.ts";
 import { parseTcpReady, udpFrame } from "../src/shell/tcpwire.ts";
 
 const cleanup: (() => void)[] = [];
@@ -85,3 +86,11 @@ test("the app is the Pages site and, for pages.dev, its branch aliases and deplo
   expect(pagesSite(new URL("https://webdroid.example"))("https://preview.webdroid.example")).toBe(false);
 });
 
+test("the Pages hop names a same-origin page and keeps a 502's status", async () => {
+  const sent = forward(new Request("https://webdroid.pages.dev/proxy?url=x", { headers: { "sec-fetch-site": "same-origin" } }), new URL("https://backend.example"));
+  expect([sent.url, sent.headers.get("origin")]).toEqual(["https://backend.example/proxy?url=x", "https://webdroid.pages.dev"]);
+  const held = hold(sent, new Response("failed", { status: 502, headers: { "x-wd-error": "refused" } }));
+  expect(held.status).toBe(200);
+  const restored = release(held);
+  expect([restored.status, restored.headers.get("x-wd-error"), await restored.text()]).toEqual([502, "refused", "failed"]);
+});
