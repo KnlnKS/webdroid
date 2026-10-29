@@ -17,7 +17,6 @@ pulumi.log.info(`Always Free allocation after apply: ${inventory.allocation}`);
 const compartmentId = config.get("compartmentId") ?? tenancy;
 const availabilityDomain = config.get("availabilityDomain") ?? inventory.domains[0].name;
 const accountId = config.require("cloudflareAccountId"), project = config.get("pagesProject") ?? "webdroid";
-const appOrigin = `https://${project}.pages.dev`;
 const sshCidr = config.require("sshCidr");
 if (!sshCidr.endsWith("/32") || !isIPv4(sshCidr.slice(0, -3))) throw new Error("sshCidr must be the administrator's IPv4 /32");
 const tags = { "webdroid-stack": owner };
@@ -42,7 +41,7 @@ const image = images.images.find(i => !i.compartmentId);
 if (!image) throw new Error("No free Ubuntu platform image is available; refusing a marketplace or custom image");
 const instance = new oci.core.Instance("backend", {
   compartmentId, availabilityDomain, displayName: "webdroid-backend", shape: compute.shape,
-  shapeConfig: profile === "arm" ? { ocpus: compute.ocpus, memoryInGbs: compute.memoryGb } : undefined,
+  shapeConfig: compute.flex ? { ocpus: compute.ocpus, memoryInGbs: compute.memoryGb } : undefined,
   sourceDetails: { sourceType: "image", sourceId: image.id, bootVolumeSizeInGbs: String(DISK_GB), bootVolumeVpusPerGb: "10" },
   createVnicDetails: { subnetId: subnet.id, assignPublicIp: "true" },
   metadata: { ssh_authorized_keys: readFileSync(config.require("sshPublicKeyPath"), "utf8").trim(), user_data: Buffer.from(bootstrap(compute.arch)).toString("base64") },
@@ -51,7 +50,7 @@ const instance = new oci.core.Instance("backend", {
 }, { deleteBeforeReplace: true, protect: true, ignoreChanges: ["sourceDetails.sourceId"] });
 export const publicIp = instance.publicIp;
 export const backendOrigin = pulumi.interpolate`https://webdroid.${instance.publicIp}.sslip.io`;
-export const frontendOrigin = appOrigin;
+export const frontendOrigin = `https://${project}.pages.dev`;
 export const instanceId = instance.id;
 export const freeTier = { shape: compute.shape, ocpus: compute.ocpus, memoryGb: compute.memoryGb, diskGb: DISK_GB, egressMbps: EGRESS_MBIT };
 const environment = { compatibilityDate: "2026-10-28", envVars: { BACKEND_ORIGIN: { type: "plain_text", value: backendOrigin } }, serviceBindings: {} };

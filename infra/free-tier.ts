@@ -1,8 +1,8 @@
 import * as oci from "@pulumi/oci";
 
 export const COMPUTE = {
-  arm: { shape: "VM.Standard.A1.Flex", ocpus: 1, memoryGb: 6, arch: "arm64" },
-  micro: { shape: "VM.Standard.E2.1.Micro", ocpus: 0.125, memoryGb: 1, arch: "x64" },
+  arm: { shape: "VM.Standard.A1.Flex", ocpus: 1, memoryGb: 6, arch: "arm64", flex: true },
+  micro: { shape: "VM.Standard.E2.1.Micro", ocpus: 0.125, memoryGb: 1, arch: "x64", flex: false },
 } as const;
 export const DISK_GB = 50, EGRESS_MBIT = 20;
 /** the tenancy's Always Free allowance */
