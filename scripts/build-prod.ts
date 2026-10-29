@@ -57,7 +57,9 @@ async function copyAot(out: string): Promise<void> {
   await writeFile(join(out, "aot/current.json"), JSON.stringify(manifest));
 }
 /** Pages' _headers: the shell page and its Worker scripts isolated, and a platform build's files kept for good (copyAot) */
-const HEADERS = [...ISOLATED_PATHS.map((path) => [path, ISOLATION] as const), ["/aot/*/*", { "cache-control": "public, max-age=31536000, immutable" }] as const]
+const HEADERS = [...ISOLATED_PATHS.map((path) => [path, ISOLATION] as const),
+  ["/aot/current.json", { "cache-control": "no-cache" }] as const,
+  ["/aot/*/*", { "cache-control": "public, max-age=31536000, immutable" }] as const]
   .map(([path, headers]) => `${path}\n${Object.entries(headers).map(([name, value]) => `  ${name}: ${value}\n`).join("")}`).join("");
 
 /** what Pages runs its Function for (functions/): the platform files it answers in ranges or inflates, and the backend's routes */

@@ -120,7 +120,7 @@ preview dependency. Backend releases use SSH; frontend releases use Pages direct
 `.github/workflows/deploy.yml` builds and deploys each push to `main`. Manual runs are also
 restricted to `main`. A single production concurrency group lets an active release finish
 before the next starts. The workflow installs the lockfile, verifies the pinned AOSP/Zig
-archives, typechecks, runs the core backend tests, compiles Pages Functions and builds both
+archives, typechecks, runs the core backend tests, compiles Pages Functions and the platform AOT modules, and builds both
 components before changing production. It then deploys and health-checks OCI, removes its
 SSH rule, and publishes Pages. A failed backend deployment or SSH cleanup prevents the
 frontend upload. Infrastructure provisioning remains a separate Pulumi operation.

@@ -39,7 +39,7 @@ jobs:
           WEBDROID_AOSP_SHA256: ${{ vars.WEBDROID_AOSP_SHA256 }}
         run: >-
           sh scripts/build-cloudflare.sh sh -c
-          'pnpm typecheck && pnpm test tests/backend.test.ts && pnpm deploy:check && pnpm build:prod'
+          'pnpm typecheck && pnpm test tests/backend.test.ts && pnpm deploy:check && pnpm aot && pnpm build:prod'
       - name: Install OCI SDK and check firewall lifecycle
         run: |
           python3 -m venv "$RUNNER_TEMP/oci-sdk"
