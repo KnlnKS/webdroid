@@ -7,7 +7,8 @@ import { PLATFORM_JARS } from "../src/jvm/provenance.ts";
 import { PLATFORM_DATA } from "../src/jvm/bootclasspath.ts";
 import { AOT_ROOT, sourceKey, type AotManifest } from "./aot-key.ts";
 import { bundle } from "./bundle.ts";
-import { runNode } from "./node.ts";
+import { output, runNode } from "./node.ts";
+import { platformBuild } from "./wasm/parts.ts";
 import { WORKER_SCRIPTS } from "../src/worker-scripts.ts";
 import { WEB_PROXY_WORKER } from "../src/shell/webinject.ts";
 import { ISOLATED_PATHS, ISOLATION } from "../src/shell/serve-routes.ts";
@@ -46,14 +47,14 @@ async function copyRanged(out: string): Promise<void> {
   await writeFile(join(out, "asset-sizes.json"), JSON.stringify(sizes));
 }
 
-/** The Wasm tier's platform build (pnpm aot). It is optional, but one made from other sources than these would run code the compiler no longer produces.
- *  Every module is below the 25 MiB asset file limit, the files are far below the 20,000 of the free plan (docs: workers/platform/limits, static assets),
- *  and the files of a key never change, so they are cached for good; current.json names the key and must revalidate. */
-async function copyAot(out: string): Promise<void> {
-  const current = join(AOT_ROOT, "current.json");
-  if (!existsSync(current)) return;
-  const manifest = JSON.parse(await readFile(current, "utf8")) as AotManifest;
-  if (manifest.source !== sourceKey()) throw new Error("vendor/wasm-aot is a build of other sources; run pnpm aot");
+/** The Wasm tier's platform build (pnpm aot), made first when these sources have none: one made from other sources would run code the compiler
+ *  no longer produces. Every module is below the 25 MiB asset file limit, the files are far below the 20,000 of the free plan (docs: workers/platform/limits,
+ *  static assets), and the files of a key never change, so they are cached for good; current.json names the key and must revalidate. */
+async function copyAot(out: string, built: ReturnType<typeof platformBuild>): Promise<void> {
+  const ran = await built;
+  if (ran.status) throw new Error(`The platform build failed:\n${output(ran)}`);
+  const manifest = JSON.parse(await readFile(join(AOT_ROOT, "current.json"), "utf8")) as AotManifest;
+  if (manifest.source !== sourceKey()) throw new Error("vendor/wasm-aot is a build of other sources; unset WEBDROID_AOT_STALE");
   await cp(join(AOT_ROOT, manifest.key), join(out, "aot", manifest.key), { recursive: true });
   await writeFile(join(out, "aot/current.json"), JSON.stringify(manifest));
 }
@@ -70,20 +71,21 @@ const FUNCTION_ROUTES = ["/vendor/aosp/*", "/vendor/android-cacerts.pem", "/vend
 const WORKERS = Object.values(WORKER_SCRIPTS).map(({ entry, url }) => [entry, url.slice(1)] as const);
 
 export function prodAssets(): Plugin {
-  let out = "dist", systemPackages: Promise<string>, emitted: Promise<string[]>;
+  let out = "dist", systemPackages: Promise<string>, emitted: Promise<string[]>, aot: ReturnType<typeof platformBuild>;
   return {
     name: "webdroid:prod-assets",
     configResolved: (config) => { out = config.build.outDir; },
     buildStart() {
       for (const name of aospFiles) if (!existsSync(`vendor/aosp/${name}`)) throw new Error(`Missing vendor/aosp/${name}; run pnpm gen-framework`);
-      // beside the page's build: the workers and the font index are emitted with it, and the system packages (in node of their own, as
-      // they load the runtime) are copied after it. Each failure surfaces where its result is awaited.
+      // beside the page's build: the workers and the font index are emitted with it, and the system packages and the platform build (in
+      // node of their own, as they load the runtime) are copied after it. Each failure surfaces where its result is awaited.
       systemPackages = runNode("scripts/system-packages.ts");
+      aot = platformBuild(undefined);
       emitted = Promise.all([
         ...WORKERS.map(([entry]) => bundle(entry, { minify: true, define: PRODUCTION })),
         runNode("scripts/font-index.ts"),
       ]);
-      for (const pending of [systemPackages, emitted]) pending.catch(() => {});
+      for (const pending of [systemPackages, emitted, aot]) pending.catch(() => {});
     },
     async generateBundle() {
       const sources = await emitted;
@@ -99,7 +101,7 @@ export function prodAssets(): Plugin {
     async closeBundle(error) {
       if (error) return;
       process.stdout.write(await systemPackages);
-      await Promise.all([...STATIC.map(([from, to = from]) => cp(from, join(out, to), { recursive: true, dereference: true })), copyRanged(out), copyAot(out)]);
+      await Promise.all([...STATIC.map(([from, to = from]) => cp(from, join(out, to), { recursive: true, dereference: true })), copyRanged(out), copyAot(out, aot)]);
       console.log(`Production assets ready in ${out}/`);
     },
   };

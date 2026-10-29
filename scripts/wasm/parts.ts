@@ -57,7 +57,8 @@ let built: Promise<Ran & { dir: string }> | undefined;
 export function platformBuild(dir: string | undefined, show = false): Promise<Ran & { dir: string }> {
   if (dir) return Promise.resolve({ status: 0, stdout: "", stderr: "", dir });
   return built ??= (async () => {
-    const made = aotManifest().ok ? { status: 0, stdout: "", stderr: "" } : await exec("aot", [], process.env, show);
+    // without a Vite build's NODE_ENV, as runNode starts its scripts
+    const made = aotManifest().ok ? { status: 0, stdout: "", stderr: "" } : await exec("aot", [], { ...process.env, NODE_ENV: undefined }, show);
     const { key } = made.status ? { key: "" } : JSON.parse(readFileSync(join(AOT_ROOT, "current.json"), "utf8")) as AotManifest;
     return { ...made, dir: join(AOT_ROOT, key) };
   })();
