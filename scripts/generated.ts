@@ -9,9 +9,9 @@
 //   node scripts/generated.ts [--force]
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { cli } from "./args.ts";
 
@@ -85,6 +85,7 @@ async function zlibSources(): Promise<string> {
   if (existsSync(`${dir}/zlib.h`)) return dir;
   const archive = Buffer.from(await (await fetch(`https://github.com/madler/zlib/releases/download/v${ZLIB.version}/zlib-${ZLIB.version}.tar.gz`)).arrayBuffer());
   if (createHash("sha256").update(archive).digest("hex") !== ZLIB.sha256) throw new Error(`zlib ${ZLIB.version}: digest mismatch`);
+  mkdirSync(dirname(dir), { recursive: true });
   const work = mkdtempSync(`${dir}.`);
   writeFileSync(`${work}/src.tar.gz`, archive);
   await run("tar", ["xzf", `${work}/src.tar.gz`, "-C", work, "--strip-components=1"]);
