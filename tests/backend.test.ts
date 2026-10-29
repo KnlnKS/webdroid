@@ -8,6 +8,7 @@ import { WebSocket } from "ws";
 import { backend, pagesSite } from "../backend/routes.ts";
 import { localNetwork, publicNetwork, type Network } from "../backend/network.ts";
 import { forward, hold, release } from "../src/shell/pages-hop.ts";
+import { sshAccess, type SecurityLists } from "../scripts/firewall.ts";
 import { parseTcpReady, udpFrame } from "../src/shell/tcpwire.ts";
 
 const cleanup: (() => void)[] = [];
@@ -93,4 +94,28 @@ test("the Pages hop names a same-origin page and keeps a 502's status", async ()
   expect(held.status).toBe(200);
   const restored = release(held);
   expect([restored.status, restored.headers.get("x-wd-error"), await restored.text()]).toEqual([502, "refused", "failed"]);
+});
+
+test("the release's SSH rule replaces a lost one, survives a concurrent edit and leaves every other rule", async () => {
+  const admin = { protocol: "6", source: "8.8.8.8/32" }, concurrent = { protocol: "6", source: "9.9.9.9/32" };
+  let rules = [admin], etag = 0, conflict = false;
+  const lists: SecurityLists = {
+    getSecurityList: async () => ({ securityList: { ingressSecurityRules: [...rules] }, etag: String(etag) }),
+    updateSecurityList: async ({ ifMatch, updateSecurityListDetails }) => {
+      if (ifMatch !== String(etag) || conflict) {
+        if (conflict) { conflict = false; rules = [...rules, concurrent]; etag++; }
+        throw Object.assign(new Error("changed"), { statusCode: 412 });
+      }
+      rules = updateSecurityListDetails.ingressSecurityRules; etag++;
+    },
+  };
+  await sshAccess(lists, "list", "1.1.1.1");
+  conflict = true;
+  await sshAccess(lists, "list", "8.8.4.4");
+  expect(rules.map(r => r.source)).toEqual(["8.8.8.8/32", "9.9.9.9/32", "8.8.4.4/32"]);
+  await sshAccess(lists, "list");
+  expect(rules).toEqual([admin, concurrent]);
+  const settled = etag;
+  await sshAccess(lists, "list");
+  expect(etag).toBe(settled);
 });

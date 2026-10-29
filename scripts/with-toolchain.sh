@@ -1,8 +1,9 @@
 #!/bin/sh
 set -eu
 
-# vendor/aosp is pulled from the reference device (pnpm gen-framework), which a build machine has not: the build
-# variables name an archive of it (tar -C vendor -czhf aosp.tar.gz aosp) and that archive's digest.
+# Runs a command (the release workflow's build) with Zig 0.16 and vendor/aosp, which a build machine has not: vendor/aosp is pulled
+# from the reference device (pnpm gen-framework), so the build variables name an archive of it (tar -C vendor -czhf aosp.tar.gz aosp)
+# and that archive's digest.
 : "${WEBDROID_AOSP_URL:?set it to an archive of vendor/aosp (docs/deployment.md)}"
 : "${WEBDROID_AOSP_SHA256:?set it to the sha256 of the WEBDROID_AOSP_URL archive}"
 
@@ -24,5 +25,4 @@ tar -xzf "$tmp/aosp.tar.gz" -C vendor
 
 export WEBDROID_EMSDK="$tmp/emsdk"
 export PATH="$tmp/zig:$PATH"
-if [ "$#" -eq 0 ]; then set -- pnpm build:prod; fi
 "$@"

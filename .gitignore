@@ -25,7 +25,5 @@ dist/
 vendor/wasm-aot/
 .claude
 src/zlib.wasm.ts
-dist-backend/
 infra/.pulumi/
 infra/Pulumi.*.yaml
-__pycache__/

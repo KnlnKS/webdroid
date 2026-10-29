@@ -5,7 +5,6 @@
   "scripts": {
     "dev": "vp dev --configLoader native",
     "build:prod": "vp build --configLoader native",
-    "deploy:check": "pnpm backend:build && wrangler pages functions build --outdir .wrangler/pages-check",
     "release": "node scripts/deploy.ts",
     "generate": "node scripts/generated.ts --force",
     "typecheck": "node scripts/generated.ts && tsrs -p tsconfig.json && tsrs -p tsconfig.pages.json && tsrs -p infra/tsconfig.json",
@@ -34,9 +33,7 @@
     "wasm": "scripts/node scripts/wasm/run.ts",
     "aot": "scripts/node scripts/wasm/run.ts aot",
     "backend:dev": "node --watch backend/index.ts",
-    "backend:build": "node scripts/generated.ts && node scripts/build-backend.ts",
-    "infra": "pulumi -C infra",
-    "backend:deploy": "pnpm backend:build && node scripts/deploy-backend.ts"
+    "infra": "pulumi -C infra"
   },
   "dependencies": {
     "acorn": "^8.18.0",
@@ -62,6 +59,8 @@
     "binaryen": "^132.0.0",
     "fflate": "^0.8.2",
     "html-rewriter-wasm": "0.4.1",
+    "oci-common": "2.144.0",
+    "oci-core": "2.144.0",
     "pixelmatch": "^7.2.0",
     "playwright": "^1.64.1",
     "pngjs": "^7.0.0",

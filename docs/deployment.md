@@ -15,13 +15,12 @@ networks, including cloud metadata. Both use the same socket relays and WebView 
 pnpm install
 pnpm typecheck
 pnpm test tests/backend.test.ts
-pnpm deploy:check
 pnpm check
 ```
 
 `pnpm backend:dev` starts only the production backend on loopback port 8787. Set `APP_ORIGIN`
-and `WEBVIEW_ORIGIN` to the frontend and renderer origins. `pnpm backend:build` produces the
-standalone `dist-backend/server.mjs`; no APK, platform binary or user state goes to the VM.
+and `WEBVIEW_ORIGIN` to the frontend and renderer origins. A release bundles the backend into one
+standalone script; no APK, platform binary or user state goes to the VM.
 
 ## Free-tier constraints
 
@@ -91,39 +90,42 @@ Caddy. The instance has no OCI instance-principal policy.
 
 ```sh
 export WEBDROID_SSH_KEY=/absolute/path/to/private-key
-pnpm backend:deploy
-pulumi -C infra up
 pnpm build:prod
 pnpm release
 ```
 
-`backend:deploy` waits for cloud-init, installs the bundle and configuration over SSH, restarts
-Node/Caddy, and checks HTTPS health. SSH trusts a previously unseen host key on first use and
-rejects changes thereafter. Verify its fingerprint through the OCI console for a first deployment.
-`PULUMI_BIN` can name a CLI outside `PATH`. Backend updates restart live sockets and bridge
-sessions; reload active apps after an update. The VM holds no durable application state.
+`build:prod` builds the frontend with the platform's AOT modules, making them first when the
+sources have none. `release` ships that build. On `main` it compiles the Pages Function and
+the backend bundle, then deploys the backend: it waits for cloud-init, installs the bundle and
+configuration over SSH, restarts Node/Caddy and checks HTTPS health. A backend that fails to
+start or answer is replaced by the files it replaced, and the release stops before Pages. Then it
+uploads the frontend to Pages' production. Another branch only publishes a Pages preview;
+verify it, then `pnpm release --branch main` publishes the same build to production.
+`CLOUDFLARE_PAGES_PROJECT` overrides the project name.
 
-Verify the preview, then use `CF_PAGES_BRANCH=main pnpm release` to publish the same build to production.
-`release` uploads only the frontend to Pages. `main` publishes production; other branches
-publish previews. `CF_PAGES_BRANCH` overrides the Git branch; `CLOUDFLARE_PAGES_PROJECT` overrides the project name.
+SSH trusts a previously unseen host key on first use and rejects changes thereafter. Verify its
+fingerprint through the OCI console for a first deployment. `PULUMI_BIN` can name a CLI outside
+`PATH`. Backend updates restart live sockets and bridge sessions; reload active apps after an
+update. The VM holds no durable application state. Run `pulumi -C infra up` separately when
+the infrastructure changes.
 There is no Wrangler config file: a file with empty bindings would override Pulumi's Pages variables on upload. Both environments point to the
 same OCI backend, configured by Pulumi's `BACKEND_ORIGIN` variable. Previews therefore test
 against the deployed backend version; this stack does not allocate a VM for each branch.
-Optional `GITHUB_TOKEN` and `GITHUB_SHA` report preview deployments to GitHub.
 
 The build requires Node 24, pnpm, Zig 0.16 and `vendor/aosp` from `pnpm gen-framework`.
-`scripts/build-cloudflare.sh` can build in CI using a pinned AOSP archive supplied through
-`WEBDROID_AOSP_URL` and `WEBDROID_AOSP_SHA256`. There is no Workers Builds runtime or backend
-preview dependency. Backend releases use SSH; frontend releases use Pages direct uploads.
+`scripts/with-toolchain.sh` runs a command with Zig and a pinned AOSP archive supplied through
+`WEBDROID_AOSP_URL` and `WEBDROID_AOSP_SHA256`, for a build machine without them. Backend
+releases use SSH; frontend releases use Pages direct uploads.
 ### GitHub Actions
 
 `.github/workflows/deploy.yml` builds and deploys each push to `main`. Manual runs are also
 restricted to `main`. A single production concurrency group lets an active release finish
 before the next starts. The workflow installs the lockfile, verifies the pinned AOSP/Zig
-archives, typechecks, runs the core backend tests, compiles Pages Functions and the platform AOT modules, and builds both
-components before changing production. It then deploys and health-checks OCI, removes its
-SSH rule, and publishes Pages. A failed backend deployment or SSH cleanup prevents the
-frontend upload. Infrastructure provisioning remains a separate Pulumi operation.
+archives, typechecks, runs the core backend tests and builds the frontend with its AOT modules.
+It then runs `pnpm release` as a person would, which compiles both components before changing
+production, leases SSH to the runner around the backend deployment and publishes Pages. A failed
+backend deployment or SSH cleanup prevents the frontend upload. Infrastructure provisioning
+remains a separate Pulumi operation.
 
 Configure these GitHub Actions repository variables (or overrides in the `production` environment):
 
@@ -147,28 +149,28 @@ Configure these Actions secrets:
 | `WEBDROID_SSH_KNOWN_HOSTS` | Verified OpenSSH known-hosts entry for `publicIp` |
 
 The OCI API identity needs `GetSecurityList` and `UpdateSecurityList` access to the configured
-list; it does not need compute provisioning permissions. CI overrides the profile's `key_file`
-with its temporary key path. `WEBDROID_DEPLOYMENT` lets the existing backend deployer run
-without Pulumi, its state or its passphrase. Local releases still read Pulumi by default.
+list; it does not need compute provisioning permissions. CI signs with its temporary key
+(`OCI_KEY_FILE`) in place of the profile's `key_file`. `WEBDROID_DEPLOYMENT` lets the release
+deploy the backend without Pulumi, its state or its passphrase. Local releases read Pulumi.
 CI uses strict SSH host verification and batch mode; obtain the known-hosts entry through a
 trusted connection, not an unchecked `ssh-keyscan` during a release.
 
-Only the runner's public IPv4 `/32` gets temporary TCP/22 access. The firewall helper preserves
-all unrelated ingress and egress, uses the list's ETag to retry concurrent edits, and removes
-its marked rule in an `always()` step, including after deployment failure or cancellation.
-A forcibly lost runner can leave the rule behind: the next release replaces that stale rule.
-To remove it manually, set `OCI_SECURITY_LIST_ID` and run `python scripts/deploy-firewall.py`
-with the OCI Python SDK installed (`oci==2.189.0`). Do not overlap releases with manual backend
-deployments or Pulumi applies. A VM replacement requires refreshing the deployment JSON,
+When `OCI_SECURITY_LIST_ID` is set, the release gives the machine's public IPv4 `/32`
+temporary TCP/22 access (`scripts/firewall.ts`). It preserves all unrelated ingress and egress,
+uses the list's ETag to retry concurrent edits, and removes its marked rule after the backend
+deployment; an `always()` step removes it again after failure or cancellation. A forcibly lost
+runner can leave the rule behind: the next release replaces that stale rule. To remove it
+manually, set `OCI_SECURITY_LIST_ID` and run `node scripts/firewall.ts`. Do not overlap
+releases with manual backend deployments or Pulumi applies. A VM replacement requires refreshing the deployment JSON,
 security-list ID and verified SSH host key before another release.
 
 Backend restarts interrupt live sessions. If Pages upload fails after the backend succeeds,
 production temporarily runs the new backend with the old frontend; rerun the release once
-the failure is resolved. The workflow does not attempt to roll back either service.
+the failure is resolved. Only a backend that fails its health check is rolled back.
 
 ## Assets, origins and transport
 
-Pages serves `dist/`, including fonts, Wasm, reference framework files and optional AOT builds.
+Pages serves `dist/`, including fonts, Wasm, reference framework files and the platform's AOT build.
 Its small Function answers byte ranges, streams files larger than the 25-MiB asset limit from
 parts, serves gzip-encoded microG packages, and forwards the backend routes without buffering
 their bodies. `/udp` and `/tcp` upgrade to WebSockets; the VM opens the actual outbound UDP/TCP

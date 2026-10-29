@@ -38,14 +38,8 @@ jobs:
           WEBDROID_AOSP_URL: ${{ vars.WEBDROID_AOSP_URL }}
           WEBDROID_AOSP_SHA256: ${{ vars.WEBDROID_AOSP_SHA256 }}
         run: >-
-          sh scripts/build-cloudflare.sh sh -c
-          'pnpm typecheck && pnpm test tests/backend.test.ts && pnpm deploy:check && pnpm aot && pnpm build:prod'
-      - name: Install OCI SDK and check firewall lifecycle
-        run: |
-          python3 -m venv "$RUNNER_TEMP/oci-sdk"
-          "$RUNNER_TEMP/oci-sdk/bin/pip" install oci==2.189.0
-          "$RUNNER_TEMP/oci-sdk/bin/python" tests/deploy-firewall.test.py
-          echo "$RUNNER_TEMP/oci-sdk/bin" >> "$GITHUB_PATH"
+          sh scripts/with-toolchain.sh sh -c
+          'pnpm typecheck && pnpm test tests/backend.test.ts && pnpm build:prod'
       - name: Prepare deployment credentials
         id: credentials
         env:
@@ -72,22 +66,15 @@ jobs:
           for name in OCI_CONFIG_FILE OCI_KEY_FILE WEBDROID_SSH_KEY WEBDROID_SSH_KNOWN_HOSTS; do
             printf '%s=%s\n' "$name" "${!name}" >> "$GITHUB_ENV"
           done
-      - name: Allow runner SSH
-        run: |
-          runner_ip=$(curl -4 --fail --silent --show-error --retry 3 --max-time 30 https://api.ipify.org)
-          python scripts/deploy-firewall.py "$runner_ip"
-      - name: Deploy backend and check HTTPS health
-        run: node scripts/deploy-backend.ts
-      - name: Remove runner SSH
-        if: always() && steps.credentials.outcome == 'success'
-        run: python scripts/deploy-firewall.py
-      - name: Publish Pages
+      - name: Release backend and Pages
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_PAGES_PROJECT: ${{ vars.CLOUDFLARE_PAGES_PROJECT || 'webdroid' }}
-          CF_PAGES_BRANCH: main
+          CLOUDFLARE_PAGES_PROJECT: ${{ vars.CLOUDFLARE_PAGES_PROJECT }}
         run: pnpm release
+      - name: Remove runner SSH
+        if: always() && steps.credentials.outcome == 'success'
+        run: node scripts/firewall.ts
       - name: Remove credentials
         if: always()
         run: rm -rf "$RUNNER_TEMP/deploy-credentials"
